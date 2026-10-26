@@ -606,6 +606,17 @@ pub enum Tr {
     /// Remove a stale saved adapter/IP while keeping the cached list.
     NetworkForget,
 
+    // ---- UA discovery results tree (server → URL → security) ----
+    /// Server row summary. Substitutions: URL count, security option count.
+    UaTreeSummary,
+    /// Hover text of a URL whose security options were not reported
+    /// (LDS/mDNS discovery URL): they are resolved on connect (Auto).
+    UaTreeSecurityOnConnect,
+    /// Suffix of an advertised security option this client cannot use.
+    UaTreeUnsupported,
+    /// Server row body when the server reported no connection URL.
+    UaTreeNoEndpoints,
+
     // ---- UA session cap ----
     UaSessionCounter,
     UaSessionLimitReached,
@@ -1208,6 +1219,12 @@ fn ru(key: Tr) -> &'static str {
         NetworkRefreshFailed => "Не удалось обновить список",
         NetworkNoIp => "Нет IP",
         NetworkForget => "Забыть",
+        UaTreeSummary => "адресов: {0} · вариантов безопасности: {1}",
+        UaTreeSecurityOnConnect => {
+            "Сервер не сообщил варианты безопасности для этого адреса — они будут запрошены при подключении (Авто)"
+        }
+        UaTreeUnsupported => "не поддерживается клиентом",
+        UaTreeNoEndpoints => "Сервер не сообщил адресов подключения",
         UaSessionCounter => "UA-сессии: {0}/{1}",
         UaSessionLimitReached => "Достигнут предел UA-сессий ({0}). Удалите или закройте сессию.",
         SelectAdapterRequired => "Выберите сетевой адаптер",
@@ -1728,6 +1745,12 @@ fn en(key: Tr) -> &'static str {
         NetworkRefreshFailed => "Could not refresh the list",
         NetworkNoIp => "No IP",
         NetworkForget => "Forget",
+        UaTreeSummary => "URLs: {0} · security options: {1}",
+        UaTreeSecurityOnConnect => {
+            "The server did not report security options for this URL — they are requested on connect (Auto)"
+        }
+        UaTreeUnsupported => "not supported by this client",
+        UaTreeNoEndpoints => "The server reported no connection URL",
         UaSessionCounter => "UA sessions: {0}/{1}",
         UaSessionLimitReached => {
             "The UA session limit ({0}) is reached. Remove or close a session."
@@ -2230,6 +2253,10 @@ fn zh(key: Tr) -> &'static str {
         NetworkRefreshFailed => "无法刷新列表",
         NetworkNoIp => "无 IP",
         NetworkForget => "忘记",
+        UaTreeSummary => "地址：{0} · 安全配置：{1}",
+        UaTreeSecurityOnConnect => "服务器未报告此地址的安全配置 — 将在连接时请求（自动）",
+        UaTreeUnsupported => "此客户端不支持",
+        UaTreeNoEndpoints => "服务器未报告连接地址",
         UaSessionCounter => "UA 会话：{0}/{1}",
         UaSessionLimitReached => "已达到 UA 会话上限（{0}）。请删除或关闭一个会话。",
         SelectAdapterRequired => "请选择网络适配器",

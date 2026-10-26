@@ -168,7 +168,8 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                         } else {
                             "ua_server_list"
                         })
-                        .max_height(150.0)
+                        // The UA tree has three levels; give it more room.
+                        .max_height(if is_da { 150.0 } else { 240.0 })
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             if is_da {
@@ -230,134 +231,28 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                 ui.label(tr(lang, Tr::ListEmptyUrl));
                             }
                             if !is_da {
-                                let identity_ready = dialog.ua_identity_index != 1
-                                    || !dialog.ua_user.trim().is_empty();
-                                let mut identity_error = false;
-                                for server in &dialog.ua_search_results {
-                                    let title = if server.application_name.is_empty() {
-                                        server.application_uri.clone()
-                                    } else {
-                                        format!(
-                                            "{} — {}",
-                                            server.application_name, server.application_uri
-                                        )
-                                    };
-                                    egui::CollapsingHeader::new(title.clone())
-                                        .id_salt((&server.application_uri, dialog.ua_result_epoch))
-                                        .default_open(true)
-                                        .show(ui, |ui| {
-                                            for endpoint in &server.endpoints {
-                                                let label = if endpoint.url.is_empty() {
-                                                    title.clone()
-                                                } else {
-                                                    let sec = if endpoint.security_policy.is_empty()
-                                                    {
-                                                        String::new()
-                                                    } else {
-                                                        format!(
-                                                            " | {} / {}",
-                                                            endpoint.security_policy,
-                                                            endpoint.security_mode
-                                                        )
-                                                    };
-                                                    format!("{}{sec}", endpoint.url)
-                                                };
-                                                let hint = format!(
-                                                    "{}\n{}",
-                                                    endpoint.url,
-                                                    tr(lang, Tr::DoubleClickServerHint)
-                                                );
-                                                let is_selected = dialog.ua_url == endpoint.url
-                                                    && UaSecurityPolicy::from_advertised(
-                                                        &endpoint.security_policy,
-                                                    )
-                                                    .is_none_or(|value| {
-                                                        value == dialog.ua_security_policy
-                                                    })
-                                                    && UaSecurityMode::from_advertised(
-                                                        &endpoint.security_mode,
-                                                    )
-                                                    .is_none_or(|value| {
-                                                        value == dialog.ua_security_mode
-                                                    });
-                                                let response = ui
-                                                    .selectable_label(is_selected, label)
-                                                    .on_hover_text(&hint);
-                                                if response.double_clicked() {
-                                                    if identity_ready {
-                                                        dialog.ua_url = endpoint.url.clone();
-                                                        if let Some(policy) =
-                                                            UaSecurityPolicy::from_advertised(
-                                                                &endpoint.security_policy,
-                                                            )
-                                                        {
-                                                            dialog.ua_security_policy = policy;
-                                                        }
-                                                        if let Some(mode) =
-                                                            UaSecurityMode::from_advertised(
-                                                                &endpoint.security_mode,
-                                                            )
-                                                        {
-                                                            dialog.ua_security_mode = mode;
-                                                        }
-                                                        let mut ep =
-                                                            crate::bff::model::EndpointSpec::ua(
-                                                                endpoint.url.clone(),
-                                                            );
-                                                        ep = ep.with_advertised_name(Some(
-                                                            server.application_name.clone(),
-                                                        ));
-                                                        ep.ua_security_policy = Some(
-                                                            UaSecurityPolicy::from_advertised(
-                                                                &endpoint.security_policy,
-                                                            )
-                                                            .unwrap_or(dialog.ua_security_policy),
-                                                        );
-                                                        ep.ua_security_mode = Some(
-                                                            UaSecurityMode::from_advertised(
-                                                                &endpoint.security_mode,
-                                                            )
-                                                            .unwrap_or(dialog.ua_security_mode),
-                                                        );
-                                                        ep.ua_trust_server_cert =
-                                                            dialog.ua_trust_server_cert;
-                                                        ep.ua_session_timeout =
-                                                            Some(dialog.ua_session_timeout);
-                                                        if dialog.ua_identity_index == 1 {
-                                                            ep.user =
-                                                                dialog.ua_user.trim().to_string();
-                                                            ep.password =
-                                                                dialog.ua_password.clone();
-                                                        } else if dialog.ua_identity_index == 2 {
-                                                            ep.ua_use_certificate = true;
-                                                        }
-                                                        quick_connect = Some(ep);
-                                                    } else {
-                                                        identity_error = true;
-                                                    }
-                                                } else if response.clicked() {
-                                                    dialog.ua_url = endpoint.url.clone();
-                                                    if let Some(policy) =
-                                                        UaSecurityPolicy::from_advertised(
-                                                            &endpoint.security_policy,
-                                                        )
-                                                    {
-                                                        dialog.ua_security_policy = policy;
-                                                    }
-                                                    if let Some(mode) =
-                                                        UaSecurityMode::from_advertised(
-                                                            &endpoint.security_mode,
-                                                        )
-                                                    {
-                                                        dialog.ua_security_mode = mode;
-                                                    }
-                                                }
-                                            }
-                                        });
-                                }
-                                if identity_error {
-                                    dialog.error =
-                                        Some(tr(lang, Tr::UaUserNameRequired).to_string());
+                                // Server → URL → security tree. A pick never
+                                // inherits another row's security: URLs without
+                                // advertised security select Auto/Auto.
+                                if let Some(pick) = super::ua_tree::ua_server_tree(
+                                    ui,
+                                    lang,
+                                    &dialog.ua_search_results,
+                                    dialog.ua_result_epoch,
+                                    &dialog.ua_url,
+                                    dialog.ua_security_policy,
+                                    dialog.ua_security_mode,
+                                ) {
+                                    dialog.ua_url = pick.url;
+                                    dialog.ua_security_policy = pick.policy;
+                                    dialog.ua_security_mode = pick.mode;
+                                    dialog.error = None;
+                                    if pick.connect {
+                                        // Double-click = select + «Подключиться»:
+                                        // the same validation/dedup path as the
+                                        // button (identity, security, UA cap).
+                                        connect = Some(Protocol::OpcUa);
+                                    }
                                 }
                             }
                         });

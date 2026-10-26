@@ -267,6 +267,10 @@ fn ui_rs_has_no_hardcoded_cyrillic_ui_strings() {
             include_str!("../src/ui/dialogs/options.rs"),
         ),
         (
+            "src/ui/dialogs/ua_tree.rs",
+            include_str!("../src/ui/dialogs/ua_tree.rs"),
+        ),
+        (
             "src/ui/dialogs/write.rs",
             include_str!("../src/ui/dialogs/write.rs"),
         ),

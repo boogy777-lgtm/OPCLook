@@ -539,3 +539,105 @@ fn combined_ua_search_preserves_security_variants_at_same_url() {
     assert_eq!(app.dialogs.connect.ua_search_results.len(), 1);
     assert_eq!(app.dialogs.connect.ua_search_results[0].endpoints.len(), 2);
 }
+
+#[test]
+fn combined_ua_search_shows_a_loopback_server_once_while_running() {
+    use crate::bff::model::{UaEndpointInfo, UaServerInfo};
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    // LDS/mDNS + 127.0.0.1 + localhost; LDS has not answered yet.
+    app.dialogs.connect.ua_auto_pending = 3;
+    app.dialogs.connect.ua_searching = true;
+    for host in ["127.0.0.1", "localhost"] {
+        app.on_event_for_test(EventKind::UaServersFound {
+            host: host.to_string(),
+            port: 4840,
+            servers: vec![UaServerInfo {
+                application_name: "Simulator".to_string(),
+                application_uri: "urn:sim".to_string(),
+                endpoints: vec![UaEndpointInfo {
+                    url: "opc.tcp://127.0.0.1:4840".to_string(),
+                    security_policy: "None".to_string(),
+                    security_mode: "None".to_string(),
+                }],
+            }],
+        });
+    }
+    // Still searching (LDS pending), yet the visible list is already merged.
+    assert_eq!(app.dialogs.connect.ua_auto_pending, 1);
+    assert_eq!(app.dialogs.connect.ua_search_results.len(), 1);
+    assert_eq!(app.dialogs.connect.ua_search_results[0].endpoints.len(), 1);
+}
+
+#[test]
+fn lds_urls_merge_into_host_result_instead_of_being_dropped() {
+    use crate::bff::model::{UaEndpointInfo, UaNetworkInfo, UaServerInfo};
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.dialogs.connect.ua_auto_pending = 2;
+    app.on_event_for_test(EventKind::UaServersFound {
+        host: "127.0.0.1".to_string(),
+        port: 4840,
+        servers: vec![UaServerInfo {
+            application_name: "Simulator".to_string(),
+            application_uri: "urn:sim".to_string(),
+            endpoints: vec![UaEndpointInfo {
+                url: "opc.tcp://127.0.0.1:4840".to_string(),
+                security_policy: "None".to_string(),
+                security_mode: "None".to_string(),
+            }],
+        }],
+    });
+    app.on_event_for_test(EventKind::UaNetworkFound {
+        servers: vec![
+            // Same server (same URI) advertised on the LAN address.
+            UaNetworkInfo {
+                application_name: "Simulator".to_string(),
+                application_uri: "urn:sim".to_string(),
+                discovery_urls: vec!["opc.tcp://10.0.0.5:4840".to_string()],
+            },
+            // LDS record without URI for the loopback URL: merged by URL,
+            // its name must not become a fake application URI.
+            UaNetworkInfo {
+                application_name: "Simulator (LDS)".to_string(),
+                application_uri: String::new(),
+                discovery_urls: vec!["opc.tcp://127.0.0.1:4840/".to_string()],
+            },
+        ],
+    });
+    let results = &app.dialogs.connect.ua_search_results;
+    assert_eq!(results.len(), 1, "one server, not three rows: {results:?}");
+    assert_eq!(results[0].application_uri, "urn:sim");
+    assert!(
+        results[0]
+            .endpoints
+            .iter()
+            .any(|e| e.url == "opc.tcp://10.0.0.5:4840"),
+        "the LAN URL reported only by LDS/mDNS must be kept"
+    );
+}
+
+#[test]
+fn different_application_uris_are_never_merged_by_url() {
+    use crate::bff::model::{UaEndpointInfo, UaServerInfo};
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    for uri in ["urn:a", "urn:b"] {
+        super::search::merge_ua_servers(
+            &mut app.dialogs.connect,
+            vec![UaServerInfo {
+                application_name: uri.to_string(),
+                application_uri: uri.to_string(),
+                endpoints: vec![UaEndpointInfo {
+                    url: "opc.tcp://shared:4840".to_string(),
+                    security_policy: String::new(),
+                    security_mode: String::new(),
+                }],
+            }],
+        );
+    }
+    assert_eq!(app.dialogs.connect.ua_search_results.len(), 2);
+}

@@ -1,5 +1,5 @@
 use super::present::{compose_server_name, localize_scan_error, operation_label};
-use super::search::{merge_ua_scan_servers, refresh_ua_combos};
+use super::search::{merge_ua_scan_servers, merge_ua_servers, refresh_ua_combos};
 use super::tree::{insert_children, replace_roots};
 use super::*;
 use crate::bff::model::{
@@ -82,10 +82,12 @@ impl App {
                     return;
                 }
                 if self.dialogs.connect.ua_auto_pending > 0 {
-                    // A combined auto-search is running: accumulate this host's
-                    // result; merge once every sub-search has replied.
+                    // A combined auto-search is running: merge this host's
+                    // result right away (127.0.0.1 and localhost usually return
+                    // the same server; the visible tree must not show it twice
+                    // while the remaining sub-searches are still running).
                     self.ua_auto_step_done(|d| {
-                        d.ua_search_results.extend(servers);
+                        merge_ua_servers(d, servers);
                     });
                     return;
                 }

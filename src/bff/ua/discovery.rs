@@ -117,21 +117,40 @@ async fn find_servers_at(
         _ => Vec::new(),
     };
 
+    // Every described application keeps its own advertised DiscoveryUrls. An
+    // LDS answers FindServers with *other* servers; pointing those rows at the
+    // LDS URL (the old fallback) made a double-click connect to the LDS itself.
     let mut servers: Vec<UaServerInfo> = descriptions
         .iter()
-        .map(|d| UaServerInfo {
-            application_name: d.application_name.text.to_string(),
-            application_uri: d.application_uri.to_string(),
-            endpoints: Vec::new(),
+        .map(|d| {
+            let mut endpoints: Vec<UaEndpointInfo> = Vec::new();
+            for discovery_url in d.discovery_urls.iter().flatten() {
+                let discovery_url = discovery_url.to_string();
+                let discovery_url = discovery_url.trim();
+                // Only opc.tcp is supported by this client (no https/wss).
+                if !discovery_url.to_ascii_lowercase().starts_with("opc.tcp://") {
+                    continue;
+                }
+                if !endpoints.iter().any(|e| e.url == discovery_url) {
+                    endpoints.push(UaEndpointInfo {
+                        url: discovery_url.to_string(),
+                        security_policy: String::new(),
+                        security_mode: String::new(),
+                    });
+                }
+            }
+            UaServerInfo {
+                application_name: d.application_name.text.to_string(),
+                application_uri: d.application_uri.to_string(),
+                endpoints,
+            }
         })
         .collect();
 
-    // Attach the fetched endpoints to the matching server (by application_uri)
-    // so the row always carries at least one selectable URL.
+    // Attach the fetched endpoint descriptions (with security) to the server
+    // that actually answered at `url`, matched by application URI.
     if !endpoint_infos.is_empty() {
         let target = if discovery_uri.is_empty() {
-            // No descriptor matched: offer the discovery endpoint itself so the
-            // user always has a selectable URL.
             None
         } else {
             servers
@@ -153,15 +172,16 @@ async fn find_servers_at(
         }
     }
 
-    // Ensure every reported server has at least the discovery URL selectable.
-    for server in &mut servers {
-        if server.endpoints.is_empty() {
-            server.endpoints.push(UaEndpointInfo {
-                url: url.to_string(),
-                security_policy: String::new(),
-                security_mode: String::new(),
-            });
-        }
+    // The server that answered at `url` is always reachable there, even when
+    // it advertised no DiscoveryUrls and GetEndpoints failed.
+    if let Some(answering) = servers.iter_mut().find(|s| {
+        s.endpoints.is_empty() && (discovery_uri.is_empty() || s.application_uri == discovery_uri)
+    }) {
+        answering.endpoints.push(UaEndpointInfo {
+            url: url.to_string(),
+            security_policy: String::new(),
+            security_mode: String::new(),
+        });
     }
 
     Ok(servers)
@@ -266,10 +286,13 @@ async fn search_lds_servers(
             Ok(Ok(servers)) => {
                 for record in servers {
                     let discovery_url = record.discovery_url.to_string();
+                    // ServerOnNetwork carries no ApplicationUri. Never use the
+                    // URL as a fake URI: it would keep this row from merging
+                    // with the same server found by a host search (by URL).
                     let app_uri = if discovery_url.is_empty() {
-                        format!("urn:lsds-server-{}", record.record_id)
+                        format!("urn:lds-server-{}", record.record_id)
                     } else {
-                        discovery_url.clone()
+                        String::new()
                     };
                     let mut urls = vec![discovery_url];
                     urls.retain(|u| !u.is_empty());
@@ -316,17 +339,33 @@ async fn verify_mdns_services(
             match tokio::time::timeout(remaining, find_servers_at(client, &url, binding)).await {
                 Ok(Ok(servers)) if !servers.is_empty() => {
                     responded = true;
+                    // The URL may belong to an LDS that also lists other
+                    // servers: take only the entry for THIS mDNS service
+                    // (by URI, else the one reachable at the URL, else the
+                    // first) instead of folding every server into one row.
+                    let wanted_uri = application_uri.trim().to_ascii_lowercase();
+                    let index = servers
+                        .iter()
+                        .position(|server| {
+                            !wanted_uri.is_empty()
+                                && server.application_uri.trim().to_ascii_lowercase() == wanted_uri
+                        })
+                        .or_else(|| {
+                            servers.iter().position(|server| {
+                                server.endpoints.iter().any(|e| same_url(&e.url, &url))
+                            })
+                        })
+                        .unwrap_or(0);
+                    let server = servers.into_iter().nth(index).expect("index in range");
                     push_unique(&mut discovery_urls, url);
-                    for server in servers {
-                        if application_uri.is_empty() {
-                            application_uri = server.application_uri;
-                        }
-                        if application_name.is_empty() {
-                            application_name = server.application_name;
-                        }
-                        for endpoint in server.endpoints {
-                            push_unique(&mut discovery_urls, endpoint.url);
-                        }
+                    if application_uri.is_empty() {
+                        application_uri = server.application_uri;
+                    }
+                    if application_name.is_empty() {
+                        application_name = server.application_name;
+                    }
+                    for endpoint in server.endpoints {
+                        push_unique(&mut discovery_urls, endpoint.url);
                     }
                     break;
                 }
