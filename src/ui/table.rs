@@ -172,19 +172,14 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                             response
                                                 .on_hover_text(tr(lang, Tr::PkmMoveColumn))
                                                 .context_menu(|ui| {
-                                                    if ui
-                                                        .button(tr(lang, Tr::MoveLeft))
-                                                        .clicked()
-                                                    {
+                                                    if ui.button(tr(lang, Tr::MoveLeft)).clicked() {
                                                         actions.push(TableAction::MoveColumn(
                                                             *column,
                                                             ColumnDir::Left,
                                                         ));
                                                         ui.close();
                                                     }
-                                                    if ui
-                                                        .button(tr(lang, Tr::MoveRight))
-                                                        .clicked()
+                                                    if ui.button(tr(lang, Tr::MoveRight)).clicked()
                                                     {
                                                         actions.push(TableAction::MoveColumn(
                                                             *column,
