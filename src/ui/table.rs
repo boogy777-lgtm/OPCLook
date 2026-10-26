@@ -137,8 +137,10 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                             // A tree payload belongs to the outer table drop
                                             // zone. Do not let header drag widgets consume it.
                                             let dropping_tree =
-                                                egui::DragAndDrop::payload::<TreeDragPayload>(ui.ctx())
-                                                    .is_some();
+                                                egui::DragAndDrop::payload::<TreeDragPayload>(
+                                                    ui.ctx(),
+                                                )
+                                                .is_some();
                                             if !dropping_tree {
                                                 let response = ui.interact(
                                                     rect,
@@ -151,16 +153,23 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                 {
                                                     let after_midpoint = ui
                                                         .input(|i| i.pointer.hover_pos())
-                                                        .is_some_and(|pos| pos.x >= rect.center().x);
+                                                        .is_some_and(|pos| {
+                                                            pos.x >= rect.center().x
+                                                        });
                                                     actions.push(TableAction::DropColumn(
                                                         *payload,
                                                         index + usize::from(after_midpoint),
                                                     ));
                                                 }
-                                                if response.dnd_hover_payload::<ColumnId>().is_some() {
+                                                if response
+                                                    .dnd_hover_payload::<ColumnId>()
+                                                    .is_some()
+                                                {
                                                     let after_midpoint = ui
                                                         .input(|i| i.pointer.hover_pos())
-                                                        .is_some_and(|pos| pos.x >= rect.center().x);
+                                                        .is_some_and(|pos| {
+                                                            pos.x >= rect.center().x
+                                                        });
                                                     let x = if after_midpoint {
                                                         rect.right()
                                                     } else {
@@ -178,14 +187,19 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                 response
                                                     .on_hover_text(tr(lang, Tr::PkmMoveColumn))
                                                     .context_menu(|ui| {
-                                                        if ui.button(tr(lang, Tr::MoveLeft)).clicked() {
+                                                        if ui
+                                                            .button(tr(lang, Tr::MoveLeft))
+                                                            .clicked()
+                                                        {
                                                             actions.push(TableAction::MoveColumn(
                                                                 *column,
                                                                 ColumnDir::Left,
                                                             ));
                                                             ui.close();
                                                         }
-                                                        if ui.button(tr(lang, Tr::MoveRight)).clicked()
+                                                        if ui
+                                                            .button(tr(lang, Tr::MoveRight))
+                                                            .clicked()
                                                         {
                                                             actions.push(TableAction::MoveColumn(
                                                                 *column,
