@@ -20,6 +20,10 @@
 //! index for an IPv6 source, 0/all interfaces for loopback or an unbound
 //! search).
 
+// Only the Windows `dnsapi` backend consumes most of these helpers; on other
+// hosts they are exercised by unit tests only.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
+
 use crate::bff::net::{NetworkBinding, endpoint_url_for};
 use crate::constants::MDNS_WINDOW;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};

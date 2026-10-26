@@ -298,6 +298,7 @@ struct HelperLaunch {
 
 #[derive(Debug)]
 enum HelperLaunchError {
+    #[cfg_attr(not(windows), allow(dead_code))]
     Declined,
     Failed(String),
 }

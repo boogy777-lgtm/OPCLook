@@ -1635,6 +1635,10 @@ fn implicit_network_paths_do_not_refresh_inventory() {
 /// the runtime cache. This is the regression for the button that appeared to
 /// do nothing when all adapters shared the wrong identity.
 #[test]
+#[cfg_attr(
+    not(windows),
+    ignore = "Windows-only: adapter inventory comes from GetAdaptersAddresses (IP Helper)"
+)]
 fn network_tab_refresh_button_queries_windows_inventory() {
     with_settings_lock(|| {
         let ctx = egui::Context::default();

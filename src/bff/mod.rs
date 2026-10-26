@@ -1,9 +1,23 @@
+// OPC DA is COM-only: the real worker and the VARIANT layer exist on Windows;
+// other hosts (Linux check stand) get a worker that answers every command
+// with an "unsupported on this platform" error.
+#[cfg(windows)]
 pub mod da;
+#[cfg(not(windows))]
+#[path = "da_unsupported.rs"]
+pub mod da;
+#[cfg(windows)]
 pub mod da_variant;
+/// Non-Windows: only the platform-neutral part of the VARIANT layer.
+#[cfg(not(windows))]
+pub mod da_variant {
+    pub use super::vt::vt_name;
+}
 pub mod mdns;
 pub mod model;
 pub mod net;
 pub mod ua;
+pub mod vt;
 
 pub use model::*;
 
@@ -33,6 +47,17 @@ impl WorkerHandle {
         Self {
             tx: Some(tx),
             join: Some(join),
+            done,
+        }
+    }
+
+    /// A handle without a worker (thread creation failed): `send` reports a
+    /// closed gateway and `shutdown` has nothing to join.
+    #[cfg(not(windows))]
+    pub(crate) fn closed(done: Receiver<()>) -> Self {
+        Self {
+            tx: None,
+            join: None,
             done,
         }
     }
