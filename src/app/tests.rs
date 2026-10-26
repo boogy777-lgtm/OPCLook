@@ -426,3 +426,116 @@ fn starting_new_job_replaces_previous_for_same_session() {
     app.add_selected_children();
     assert!(app.add_children.is_some());
 }
+
+#[test]
+fn da_search_preserves_host_for_duplicate_progid() {
+    use crate::bff::model::ServerEntry;
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.dialogs.connect.da_auto_pending = 2;
+    app.dialogs.connect.da_pending = true;
+    for host in ["plant-a", "plant-b"] {
+        app.on_event_for_test(EventKind::Servers {
+            host: host.to_string(),
+            servers: vec![ServerEntry {
+                id: "Vendor.OPC".to_string(),
+                description: "Factory".to_string(),
+            }],
+        });
+    }
+    assert_eq!(app.dialogs.connect.da_servers.len(), 2);
+    assert_eq!(
+        app.dialogs.connect.da_server_hosts,
+        vec!["plant-a", "plant-b"]
+    );
+    assert!(!app.dialogs.connect.da_pending);
+}
+
+#[test]
+fn da_search_error_clears_pending_state() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.dialogs.connect.da_auto_pending = 1;
+    app.dialogs.connect.da_pending = true;
+    app.on_event_for_test(EventKind::Error {
+        operation: Operation::Discover,
+        message: "OPCEnum unavailable".to_string(),
+    });
+    assert_eq!(app.dialogs.connect.da_auto_pending, 0);
+    assert!(!app.dialogs.connect.da_pending);
+    assert!(app.dialogs.connect.error.is_some());
+}
+
+#[test]
+fn standalone_lds_results_become_visible() {
+    use crate::bff::model::UaNetworkInfo;
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.on_event_for_test(EventKind::UaNetworkFound {
+        servers: vec![UaNetworkInfo {
+            application_name: "Simulator".to_string(),
+            application_uri: "urn:sim".to_string(),
+            discovery_urls: vec!["opc.tcp://127.0.0.1:4840".to_string()],
+        }],
+    });
+    assert_eq!(app.dialogs.connect.ua_search_results.len(), 1);
+    assert_eq!(
+        app.dialogs.connect.ua_search_results[0].application_uri,
+        "urn:sim"
+    );
+}
+
+#[test]
+fn security_validation_applies_to_selected_url_only() {
+    use crate::bff::model::{UaEndpointInfo, UaSecurityMode, UaSecurityPolicy};
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.dialogs.connect.ua_url = "opc.tcp://server-a:4840".to_string();
+    app.dialogs.connect.ua_security_policy = UaSecurityPolicy::Basic256Sha256;
+    app.dialogs.connect.ua_security_mode = UaSecurityMode::SignAndEncrypt;
+    app.dialogs.connect.ua_discovered_endpoints = vec![
+        UaEndpointInfo {
+            url: "opc.tcp://server-a:4840".to_string(),
+            security_policy: "None".to_string(),
+            security_mode: "None".to_string(),
+        },
+        UaEndpointInfo {
+            url: "opc.tcp://server-b:4840".to_string(),
+            security_policy: "Basic256Sha256".to_string(),
+            security_mode: "SignAndEncrypt".to_string(),
+        },
+    ];
+    assert!(!app.validate_ua_security());
+    app.dialogs.connect.ua_url = "opc.tcp://server-b:4840".to_string();
+    assert!(app.validate_ua_security());
+}
+
+#[test]
+fn combined_ua_search_preserves_security_variants_at_same_url() {
+    use crate::bff::model::{UaEndpointInfo, UaServerInfo};
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.dialogs.connect.ua_auto_pending = 2;
+    for (policy, mode) in [("None", "None"), ("Basic256Sha256", "SignAndEncrypt")] {
+        app.on_event_for_test(EventKind::UaServersFound {
+            host: "localhost".to_string(),
+            port: 4840,
+            servers: vec![UaServerInfo {
+                application_name: "Simulator".to_string(),
+                application_uri: "urn:sim".to_string(),
+                endpoints: vec![UaEndpointInfo {
+                    url: "opc.tcp://localhost:4840".to_string(),
+                    security_policy: policy.to_string(),
+                    security_mode: mode.to_string(),
+                }],
+            }],
+        });
+    }
+    assert_eq!(app.dialogs.connect.ua_search_results.len(), 1);
+    assert_eq!(app.dialogs.connect.ua_search_results[0].endpoints.len(), 2);
+}

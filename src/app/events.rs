@@ -108,15 +108,17 @@ impl App {
                     return;
                 }
                 self.dialogs.connect.ua_network_searching = false;
+                let count = servers.len();
                 self.dialogs.connect.ua_network_results = servers;
-                if self.dialogs.connect.ua_network_results.is_empty() {
+                // The standalone LDS/mDNS action must publish its results to
+                // the list that the popup actually renders.
+                super::search::merge_ua_results(&mut self.dialogs.connect);
+                if count == 0 {
                     self.dialogs.connect.error =
                         Some(tr(lang, Tr::NetworkServersNotFound).to_string());
                 } else {
-                    self.journal.info_l(
-                        Tr::ServersFoundUa,
-                        &[&self.dialogs.connect.ua_network_results.len().to_string()],
-                    );
+                    self.journal
+                        .info_l(Tr::ServersFoundUa, &[&count.to_string()]);
                 }
             }
             EventKind::UaScanProgress {
@@ -146,6 +148,8 @@ impl App {
                     return;
                 }
                 d.ua_scan_servers.extend(servers);
+                // Show scan results as they arrive, not only at completion.
+                merge_ua_scan_servers(d);
             }
             EventKind::UaScanFinished {
                 scan_id,
@@ -189,11 +193,21 @@ impl App {
                 self.release_da_discovery_route(&host);
                 if self.dialogs.connect.open {
                     if self.dialogs.connect.da_auto_pending > 0 {
-                        // Combined DA discovery (local + remote hosts) is running:
-                        // merge this host's servers, deduplicated by ProgID.
+                        // A ProgID only identifies a server within a computer.
+                        // The host must survive discovery and row selection.
                         for s in servers {
-                            if !self.dialogs.connect.da_servers.iter().any(|e| e.id == s.id) {
+                            let duplicate = self
+                                .dialogs
+                                .connect
+                                .da_servers
+                                .iter()
+                                .zip(&self.dialogs.connect.da_server_hosts)
+                                .any(|(existing, existing_host)| {
+                                    existing.id == s.id && existing_host == &host
+                                });
+                            if !duplicate {
                                 self.dialogs.connect.da_servers.push(s);
+                                self.dialogs.connect.da_server_hosts.push(host.clone());
                             }
                         }
                         self.dialogs.connect.da_auto_pending =
@@ -208,6 +222,8 @@ impl App {
                                 .da_servers
                                 .first()
                                 .map(|s| s.id.clone());
+                            self.dialogs.connect.da_selected_host =
+                                self.dialogs.connect.da_server_hosts.first().cloned();
                         }
                         self.journal.info_l(
                             Tr::ServersFoundDa,
@@ -216,16 +232,17 @@ impl App {
                         return;
                     }
                     self.dialogs.connect.da_pending = false;
-                    self.dialogs.connect.da_host = host;
+                    self.dialogs.connect.da_host = host.clone();
+                    self.dialogs.connect.da_server_hosts = vec![host.clone(); servers.len()];
                     self.dialogs.connect.da_servers = servers;
-                    if self.dialogs.connect.da_selected.is_none() {
-                        self.dialogs.connect.da_selected = self
-                            .dialogs
-                            .connect
-                            .da_servers
-                            .first()
-                            .map(|s| s.id.clone());
-                    }
+                    self.dialogs.connect.da_selected = self
+                        .dialogs
+                        .connect
+                        .da_servers
+                        .first()
+                        .map(|s| s.id.clone());
+                    self.dialogs.connect.da_selected_host =
+                        self.dialogs.connect.da_server_hosts.first().cloned();
                     self.journal.info_l(
                         Tr::ServersFoundDa,
                         &[&self.dialogs.connect.da_servers.len().to_string()],
@@ -581,6 +598,16 @@ impl App {
                     | Operation::UaRuntime => {}
                     Operation::Discover => {
                         self.release_da_discovery_routes();
+                        let d = &mut self.dialogs.connect;
+                        if d.da_auto_pending > 0 {
+                            d.da_auto_pending -= 1;
+                        }
+                        if d.da_auto_pending == 0 {
+                            d.da_pending = false;
+                        }
+                        if d.open {
+                            d.error = Some(message);
+                        }
                     }
                 }
             }

@@ -8,7 +8,7 @@ use super::values::{
 use super::worker::{send, timeout_drain};
 use crate::bff::model::{
     EndpointSpec, Event, EventKind, ItemInfo, ItemKey, ItemSpec, SessionId, SubscriptionState,
-    UaEndpointInfo, UaSecurityMode, UaSecurityPolicy,
+    UaEndpointInfo, UaSecurityPolicy,
 };
 use crate::bff::net::{BoundConnectionSource, BoundConnectorBuilder, NetworkBinding};
 use crate::constants::{
@@ -21,7 +21,7 @@ use opcua::client::{
 use opcua::types::{
     AttributeId, DataValue as UaDataValue, EndpointDescription, MessageSecurityMode,
     MonitoredItemCreateRequest, MonitoringMode, MonitoringParameters, NodeId, NumericRange,
-    QualifiedName, ReadValueId, StatusCode, TimestampsToReturn, UserTokenPolicy,
+    QualifiedName, ReadValueId, StatusCode, TimestampsToReturn, UserTokenPolicy, UserTokenType,
     VariantScalarTypeId,
 };
 use std::collections::HashMap;
@@ -509,12 +509,13 @@ pub(super) async fn connect(
 
     let client = builder.client().map_err(|errors| errors.join("; "))?;
 
-    // 5. Decide the identity token. X509 when requested and supported.
-    let identity = resolve_identity_token(&endpoint, &discovered)?;
-
-    // 6. Build the endpoint description the session will connect with. See
-    //    [`endpoint_description_for`].
+    // 5. Reuse the selected server's full endpoint description, including its
+    //    actual user-token policies.
     let description = endpoint_description_for(&server_endpoints, url, &policy_uri, mode);
+
+    // 6. Validate identity against the selected endpoint, not a guessed
+    //    correlation between message security and certificate support.
+    let identity = resolve_identity_token(&endpoint, &description)?;
 
     // 7. Build the session (no network I/O), then start its event loop and wait
     //    for activation. The binding captured on the EndpointSpec is reused on
@@ -593,14 +594,15 @@ pub(super) fn endpoint_description_for(
 /// Determine the OPC UA user identity token for a connect. Supports Anonymous,
 /// UserName and (when the endpoint advertises Certificate tokens) X509 reusing
 /// the client certificate from the PKI store.
-fn resolve_identity_token(
+pub(super) fn resolve_identity_token(
     endpoint: &EndpointSpec,
-    discovered: &[UaEndpointInfo],
+    description: &EndpointDescription,
 ) -> Result<IdentityToken, String> {
-    let supports_cert = discovered_certificate_token(discovered);
-
     if endpoint.ua_use_certificate {
-        if !supports_cert {
+        if description
+            .find_policy(UserTokenType::Certificate)
+            .is_none()
+        {
             return Err(
                 "выбранная точка безопасности не поддерживает вход по сертификату (Certificate)"
                     .to_string(),
@@ -628,21 +630,6 @@ fn resolve_identity_token(
             Password(endpoint.password.clone()),
         ))
     }
-}
-
-/// Whether any discovered endpoint offers a Certificate user token. The
-/// `UaEndpointInfo` type carries only url + policy + mode (the endpoint
-/// descriptions' user-token list isn't plumbed through yet), so we enable the
-/// certificate identity when a signed (non-None) endpoint exists — the common
-/// case for Certificate-enabled servers. If the server doesn't actually offer
-/// Certificate tokens, ActivateSession fails with a clear error.
-fn discovered_certificate_token(discovered: &[UaEndpointInfo]) -> bool {
-    discovered.iter().any(|e| {
-        !matches!(
-            UaSecurityMode::from_advertised(&e.security_mode),
-            Some(UaSecurityMode::None)
-        )
-    })
 }
 
 /// Best-effort detection of certificate-related connect failures so we can tell

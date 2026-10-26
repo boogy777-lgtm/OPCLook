@@ -67,6 +67,8 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                 let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
                 let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
                 let opening_frame = dialog.focus_pending;
+                let mut focus_in_search_field = false;
+                let mut focus_in_url_field = false;
                 ui.horizontal(|ui| {
                     if ui
                         .selectable_label(
@@ -178,13 +180,25 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                 } else if dialog.da_servers.is_empty() {
                                     ui.label(tr(lang, Tr::ListEmptyManual));
                                 }
-                                for server in &dialog.da_servers {
-                                    let selected =
-                                        dialog.da_selected.as_deref() == Some(server.id.as_str());
+                                for (index, server) in dialog.da_servers.iter().enumerate() {
+                                    let host = dialog
+                                        .da_server_hosts
+                                        .get(index)
+                                        .cloned()
+                                        .unwrap_or_else(|| dialog.da_host.clone());
+                                    let selected = dialog.da_selected.as_deref()
+                                        == Some(server.id.as_str())
+                                        && dialog.da_selected_host.as_deref()
+                                            == Some(host.as_str());
                                     let label = if server.description.is_empty() {
                                         server.id.clone()
                                     } else {
                                         format!("{} — {}", server.id, server.description)
+                                    };
+                                    let label = if host.is_empty() {
+                                        label
+                                    } else {
+                                        format!("{label} @ {host}")
                                     };
                                     let hint = format!(
                                         "{}\n{}",
@@ -194,15 +208,16 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                     let response =
                                         ui.selectable_label(selected, label).on_hover_text(&hint);
                                     if response.double_clicked() {
-                                        let host = dialog.da_host.clone();
                                         let mut ep = crate::bff::model::EndpointSpec::da(
-                                            host,
+                                            host.clone(),
                                             server.id.clone(),
                                         );
                                         ep = ep.with_advertised_name(da_advertised_name(server));
                                         quick_connect = Some(ep);
                                     } else if response.clicked() {
                                         dialog.da_selected = Some(server.id.clone());
+                                        dialog.da_selected_host = Some(host.clone());
+                                        dialog.da_host = host;
                                         dialog.da_manual = server.id.clone();
                                     }
                                 }
@@ -227,58 +242,118 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                             server.application_name, server.application_uri
                                         )
                                     };
-                                    for endpoint in &server.endpoints {
-                                        let label = if endpoint.url.is_empty() {
-                                            title.clone()
-                                        } else {
-                                            let sec = if endpoint.security_policy.is_empty() {
-                                                String::new()
-                                            } else {
-                                                format!(
-                                                    " | {} / {}",
-                                                    endpoint.security_policy,
-                                                    endpoint.security_mode
-                                                )
-                                            };
-                                            format!("{}{sec}", endpoint.url)
-                                        };
-                                        let hint = format!(
-                                            "{}\n{}",
-                                            endpoint.url,
-                                            tr(lang, Tr::DoubleClickServerHint)
-                                        );
-                                        let response = ui
-                                            .selectable_label(dialog.ua_url == endpoint.url, label)
-                                            .on_hover_text(&hint);
-                                        if response.double_clicked() {
-                                            if identity_ready {
-                                                let mut ep = crate::bff::model::EndpointSpec::ua(
-                                                    endpoint.url.clone(),
+                                    egui::CollapsingHeader::new(title.clone())
+                                        .id_salt((&server.application_uri, dialog.ua_result_epoch))
+                                        .default_open(true)
+                                        .show(ui, |ui| {
+                                            for endpoint in &server.endpoints {
+                                                let label = if endpoint.url.is_empty() {
+                                                    title.clone()
+                                                } else {
+                                                    let sec = if endpoint.security_policy.is_empty()
+                                                    {
+                                                        String::new()
+                                                    } else {
+                                                        format!(
+                                                            " | {} / {}",
+                                                            endpoint.security_policy,
+                                                            endpoint.security_mode
+                                                        )
+                                                    };
+                                                    format!("{}{sec}", endpoint.url)
+                                                };
+                                                let hint = format!(
+                                                    "{}\n{}",
+                                                    endpoint.url,
+                                                    tr(lang, Tr::DoubleClickServerHint)
                                                 );
-                                                ep = ep.with_advertised_name(Some(
-                                                    server.application_name.clone(),
-                                                ));
-                                                ep.ua_security_policy =
-                                                    Some(dialog.ua_security_policy);
-                                                ep.ua_security_mode = Some(dialog.ua_security_mode);
-                                                ep.ua_trust_server_cert =
-                                                    dialog.ua_trust_server_cert;
-                                                ep.ua_session_timeout =
-                                                    Some(dialog.ua_session_timeout);
-                                                if dialog.ua_identity_index == 1 {
-                                                    ep.user = dialog.ua_user.trim().to_string();
-                                                    ep.password = dialog.ua_password.clone();
-                                                } else if dialog.ua_identity_index == 2 {
-                                                    ep.ua_use_certificate = true;
+                                                let is_selected = dialog.ua_url == endpoint.url
+                                                    && UaSecurityPolicy::from_advertised(
+                                                        &endpoint.security_policy,
+                                                    )
+                                                    .is_none_or(|value| {
+                                                        value == dialog.ua_security_policy
+                                                    })
+                                                    && UaSecurityMode::from_advertised(
+                                                        &endpoint.security_mode,
+                                                    )
+                                                    .is_none_or(|value| {
+                                                        value == dialog.ua_security_mode
+                                                    });
+                                                let response = ui
+                                                    .selectable_label(is_selected, label)
+                                                    .on_hover_text(&hint);
+                                                if response.double_clicked() {
+                                                    if identity_ready {
+                                                        dialog.ua_url = endpoint.url.clone();
+                                                        if let Some(policy) =
+                                                            UaSecurityPolicy::from_advertised(
+                                                                &endpoint.security_policy,
+                                                            )
+                                                        {
+                                                            dialog.ua_security_policy = policy;
+                                                        }
+                                                        if let Some(mode) =
+                                                            UaSecurityMode::from_advertised(
+                                                                &endpoint.security_mode,
+                                                            )
+                                                        {
+                                                            dialog.ua_security_mode = mode;
+                                                        }
+                                                        let mut ep =
+                                                            crate::bff::model::EndpointSpec::ua(
+                                                                endpoint.url.clone(),
+                                                            );
+                                                        ep = ep.with_advertised_name(Some(
+                                                            server.application_name.clone(),
+                                                        ));
+                                                        ep.ua_security_policy = Some(
+                                                            UaSecurityPolicy::from_advertised(
+                                                                &endpoint.security_policy,
+                                                            )
+                                                            .unwrap_or(dialog.ua_security_policy),
+                                                        );
+                                                        ep.ua_security_mode = Some(
+                                                            UaSecurityMode::from_advertised(
+                                                                &endpoint.security_mode,
+                                                            )
+                                                            .unwrap_or(dialog.ua_security_mode),
+                                                        );
+                                                        ep.ua_trust_server_cert =
+                                                            dialog.ua_trust_server_cert;
+                                                        ep.ua_session_timeout =
+                                                            Some(dialog.ua_session_timeout);
+                                                        if dialog.ua_identity_index == 1 {
+                                                            ep.user =
+                                                                dialog.ua_user.trim().to_string();
+                                                            ep.password =
+                                                                dialog.ua_password.clone();
+                                                        } else if dialog.ua_identity_index == 2 {
+                                                            ep.ua_use_certificate = true;
+                                                        }
+                                                        quick_connect = Some(ep);
+                                                    } else {
+                                                        identity_error = true;
+                                                    }
+                                                } else if response.clicked() {
+                                                    dialog.ua_url = endpoint.url.clone();
+                                                    if let Some(policy) =
+                                                        UaSecurityPolicy::from_advertised(
+                                                            &endpoint.security_policy,
+                                                        )
+                                                    {
+                                                        dialog.ua_security_policy = policy;
+                                                    }
+                                                    if let Some(mode) =
+                                                        UaSecurityMode::from_advertised(
+                                                            &endpoint.security_mode,
+                                                        )
+                                                    {
+                                                        dialog.ua_security_mode = mode;
+                                                    }
                                                 }
-                                                quick_connect = Some(ep);
-                                            } else {
-                                                identity_error = true;
                                             }
-                                        } else if response.clicked() {
-                                            dialog.ua_url = endpoint.url.clone();
-                                        }
-                                    }
+                                        });
                                 }
                                 if identity_error {
                                     dialog.error =
@@ -289,7 +364,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
 
                     ui.add_space(4.0);
 
-                    // 2. Address (host) + 3. Port (UA only) + 4. Search button.
+                    // 2. Host + 3. UA port; one UA search action below.
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new(if is_da {
@@ -315,39 +390,42 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                         if dialog.focus_pending && is_da {
                             host.request_focus();
                         }
+                        focus_in_search_field = host.has_focus();
+                        if is_da && host.changed() {
+                            // A selected server belongs to its original host;
+                            // never reuse that selection on another PC. Keep a
+                            // manually typed ProgID when the host is edited.
+                            if dialog.da_selected.as_deref() == Some(dialog.da_manual.as_str()) {
+                                dialog.da_manual.clear();
+                            }
+                            dialog.da_selected = None;
+                            dialog.da_selected_host = None;
+                        }
                         if !is_da {
                             ui.label(egui::RichText::new(tr(lang, Tr::PortLabel)).weak());
-                            ui.add(
+                            let port_field = ui.add(
                                 egui::TextEdit::singleline(&mut dialog.ua_search_port)
                                     .hint_text(tr(lang, Tr::UaPortHint))
                                     .desired_width(60.0),
                             );
+                            focus_in_search_field |= port_field.has_focus();
                         }
-                        let searching = if is_da {
-                            dialog.da_pending
-                        } else {
-                            dialog.ua_searching
-                        };
-                        let search_label = if is_da {
-                            tr(lang, Tr::SearchLan)
-                        } else {
-                            tr(lang, Tr::Search)
-                        };
-                        if ui
-                            .add_enabled(
-                                !searching && !(is_ua && ua_busy),
-                                egui::Button::new(search_label),
-                            )
-                            .clicked()
-                        {
-                            if is_da {
+                        // OPC UA discovery has one primary action below:
+                        // populated host => search host:port; empty host =>
+                        // local + subnet. DA retains its separate LAN search.
+                        if is_da {
+                            if ui
+                                .add_enabled(
+                                    !dialog.da_pending,
+                                    egui::Button::new(tr(lang, Tr::SearchLan)),
+                                )
+                                .clicked()
+                            {
                                 refresh = Some(dialog.da_host.clone());
-                            } else {
-                                app_search = true;
                             }
-                        }
-                        if searching {
-                            ui.spinner();
+                            if dialog.da_pending {
+                                ui.spinner();
+                            }
                         }
                     });
 
@@ -387,15 +465,19 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                         if dialog.ua_subnet_searching {
                             ui.horizontal(|ui| {
                                 ui.spinner();
-                                ui.label(fmt(
-                                    lang,
-                                    Tr::UaScanProgress,
-                                    &[
-                                        &dialog.ua_scan_checked.to_string(),
-                                        &dialog.ua_scan_total.to_string(),
-                                        &dialog.ua_scan_found.to_string(),
-                                    ],
-                                ));
+                                if dialog.ua_scan_total == 0 {
+                                    ui.label(tr(lang, Tr::SearchingUaSubnet));
+                                } else {
+                                    ui.label(fmt(
+                                        lang,
+                                        Tr::UaScanProgress,
+                                        &[
+                                            &dialog.ua_scan_checked.to_string(),
+                                            &dialog.ua_scan_total.to_string(),
+                                            &dialog.ua_scan_found.to_string(),
+                                        ],
+                                    ));
+                                }
                                 if ui.button(tr(lang, Tr::UaScanStop)).clicked() {
                                     app_subnet_cancel = true;
                                 }
@@ -442,11 +524,9 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
 
                     ui.add_space(4.0);
 
-                    // 5. DA credentials. UA credentials are shown only for the
-                    // UserName identity, after the identity selector below.
-                    if is_da {
-                        user_password_ui(ui, lang, &mut dialog.ua_user, &mut dialog.ua_password);
-                    }
+                    // OPC DA uses the process's Windows/DCOM identity; the
+                    // former username/password fields were not wired to COM.
+                    // Never present non-functional credential controls.
 
                     if !is_da {
                         ui.add_space(4.0);
@@ -494,22 +574,13 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                             &mut dialog.ua_trust_server_cert,
                             tr(lang, Tr::TrustServerCertCheck),
                         );
-                        let cert_supported = {
-                            let d = &*dialog;
-                            d.ua_identity_index == 2
-                                || d.ua_discovered_endpoints.iter().any(|e| {
-                                    !matches!(
-                                        UaSecurityMode::from_advertised(&e.security_mode),
-                                        Some(UaSecurityMode::None)
-                                    )
-                                })
-                        };
+                        // Discovery does not expose user-token policies yet.
+                        // Do not silently replace X509 with UserName based on
+                        // the endpoint's message security mode. The worker
+                        // validates the requested identity at Connect time.
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new(tr(lang, Tr::IdentityLabel)).weak());
                             let mut identity = dialog.ua_identity_index;
-                            if !cert_supported && identity >= 2 {
-                                identity = 1;
-                            }
                             egui::ComboBox::from_id_salt("ua_identity")
                                 .selected_text(match identity {
                                     0 => tr(lang, Tr::IdentityAnonymous),
@@ -528,19 +599,14 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                         1,
                                         tr(lang, Tr::IdentityUserName),
                                     );
-                                    ui.add_enabled_ui(cert_supported, |ui| {
-                                        ui.selectable_value(
-                                            &mut identity,
-                                            2,
-                                            tr(lang, Tr::IdentityCertificate),
-                                        );
-                                    });
+                                    ui.selectable_value(
+                                        &mut identity,
+                                        2,
+                                        tr(lang, Tr::IdentityCertificate),
+                                    );
                                 });
                             dialog.ua_identity_index = identity;
                         });
-                        if !cert_supported && dialog.ua_identity_index >= 2 {
-                            dialog.ua_identity_index = 1;
-                        }
                         if dialog.ua_identity_index == 1 {
                             user_password_ui(
                                 ui,
@@ -579,6 +645,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                         if dialog.focus_pending && !is_da {
                             url.request_focus();
                         }
+                        focus_in_url_field = url.has_focus();
                     });
 
                     if dialog.focus_pending {
@@ -598,9 +665,31 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                         Protocol::OpcDa => {
                                             dialog.da_host = endpoint.host.clone();
                                             dialog.da_manual = endpoint.address.clone();
+                                            dialog.da_selected = None;
+                                            dialog.da_selected_host = None;
                                         }
                                         Protocol::OpcUa => {
                                             dialog.ua_url = endpoint.address.clone();
+                                            dialog.ua_security_policy =
+                                                endpoint.ua_security_policy.unwrap_or_default();
+                                            dialog.ua_security_mode =
+                                                endpoint.ua_security_mode.unwrap_or_default();
+                                            dialog.ua_trust_server_cert =
+                                                endpoint.ua_trust_server_cert;
+                                            dialog.ua_session_timeout = endpoint
+                                                .ua_session_timeout
+                                                .unwrap_or(dialog.ua_session_timeout);
+                                            dialog.ua_identity_index =
+                                                if endpoint.ua_use_certificate {
+                                                    2
+                                                } else if !endpoint.user.is_empty() {
+                                                    1
+                                                } else {
+                                                    0
+                                                };
+                                            dialog.ua_user = endpoint.user.clone();
+                                            // Passwords are deliberately not persisted.
+                                            dialog.ua_password.clear();
                                         }
                                     }
                                 }
@@ -635,7 +724,19 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                             close = true;
                         }
                     });
-                    if enter && can_connect_dialog && !opening_frame {
+                    // Enter belongs to the focused field, not to an
+                    // unconditional popup-wide Connect shortcut.
+                    if enter && !opening_frame && focus_in_search_field {
+                        if is_da {
+                            refresh = Some(dialog.da_host.clone());
+                        } else {
+                            app_search = true;
+                        }
+                    } else if enter
+                        && !opening_frame
+                        && can_connect_dialog
+                        && (focus_in_url_field || ui.memory(|m| m.focused().is_none()))
+                    {
                         connect = Some(dialog.protocol);
                     } else if esc && !opening_frame {
                         close = true;
@@ -657,17 +758,21 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
         // Typed combos are the source of truth: persist the selection and
         // re-validate against the already-discovered endpoints (when any).
         // An invalid pair is reported immediately instead of only at connect.
-        app.settings.ua_security_policy = app.dialogs.connect.ua_security_policy;
-        app.settings.ua_security_mode = app.dialogs.connect.ua_security_mode;
-        app.settings.save();
+        // The popup owns an uncommitted draft. Cancel must not persist a
+        // security choice that was never used for a connection.
         app.validate_ua_security();
     }
     if let Some(host) = refresh {
         if host.trim().is_empty() {
             app.discover_da_all();
         } else {
-            app.discover_da(host);
+            app.restart_da_discovery(host);
         }
+    }
+    if app_subnet_search && !app.dialogs.connect.ua_search_host.trim().is_empty() {
+        // The same action searches only the chosen host when it is specified.
+        app_subnet_search = false;
+        app_search = true;
     }
     if app_search {
         // Auto-compose the editable URL from the search host:port.
@@ -688,7 +793,12 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
         app.confirm_ua_subnet_scan();
     }
     if app_subnet_search {
-        app.start_ua_subnet_scan();
+        if app.network.lease.is_some() {
+            app.start_ua_subnet_scan();
+        } else {
+            // A missing network selection must not disable local OPC UA.
+            app.search_ua_all();
+        }
     }
     if close {
         app.close_connect_dialog();
@@ -705,22 +815,21 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
         let endpoint = match protocol {
             Protocol::OpcDa => {
                 let dialog = &app.dialogs.connect;
-                let address = if !dialog.da_manual.trim().is_empty() {
-                    dialog.da_manual.trim().to_string()
-                } else {
-                    dialog.da_selected.clone().unwrap_or_default()
-                };
-                // Advertised name (description + ProgID) when the user picked a
-                // discovered server; None for a manually typed ProgID.
+                let (host, address) = da_connect_target(dialog);
+                // Description may only come from the same computer and ProgID.
                 let advertised = dialog
                     .da_servers
                     .iter()
-                    .find(|s| {
-                        s.id == address || dialog.da_selected.as_deref() == Some(s.id.as_str())
+                    .enumerate()
+                    .find(|(index, server)| {
+                        server.id == address
+                            && dialog
+                                .da_server_hosts
+                                .get(*index)
+                                .is_none_or(|saved_host| saved_host == &host)
                     })
-                    .and_then(da_advertised_name);
-                let mut ep =
-                    crate::bff::model::EndpointSpec::da(dialog.da_host.trim().to_string(), address);
+                    .and_then(|(_, server)| da_advertised_name(server));
+                let mut ep = crate::bff::model::EndpointSpec::da(host, address);
                 ep = ep.with_advertised_name(advertised);
                 Some(ep)
             }
@@ -775,8 +884,9 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                         .unwrap_or_else(crate::settings::default_session_timeout);
                     app.settings.save();
                 }
-                app.connect_endpoint(endpoint);
-                app.close_connect_dialog();
+                if app.connect_endpoint(endpoint) {
+                    app.close_connect_dialog();
+                }
             } else {
                 app.dialogs.connect.error = Some(tr(lang, Tr::ValueNotServer).to_string());
             }
@@ -792,8 +902,19 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
             {
                 return;
             }
-            app.open_tab_for_endpoint(endpoint);
-            app.close_connect_dialog();
+            if app.open_tab_for_endpoint(endpoint.clone()) {
+                if endpoint.protocol == Protocol::OpcUa {
+                    app.settings.ua_security_policy =
+                        endpoint.ua_security_policy.unwrap_or_default();
+                    app.settings.ua_security_mode = endpoint.ua_security_mode.unwrap_or_default();
+                    app.settings.ua_trust_server_cert = endpoint.ua_trust_server_cert;
+                    app.settings.ua_session_timeout_ms = endpoint
+                        .ua_session_timeout
+                        .unwrap_or_else(crate::settings::default_session_timeout);
+                    app.settings.save();
+                }
+                app.close_connect_dialog();
+            }
         }
     }
 }
@@ -831,6 +952,27 @@ fn user_password_ui(ui: &mut egui::Ui, lang: Lang, user: &mut String, password: 
     });
 }
 
+/// Resolve the source computer for Connect, including the automatically
+/// selected first search result (which has not yet been clicked).
+fn da_connect_target(dialog: &crate::app::ConnectDialog) -> (String, String) {
+    if !dialog.da_manual.trim().is_empty() {
+        (
+            dialog.da_host.trim().to_string(),
+            dialog.da_manual.trim().to_string(),
+        )
+    } else {
+        (
+            dialog
+                .da_selected_host
+                .as_deref()
+                .unwrap_or(&dialog.da_host)
+                .trim()
+                .to_string(),
+            dialog.da_selected.clone().unwrap_or_default(),
+        )
+    }
+}
+
 /// Compose the advertised display name for a discovered OPC DA server:
 /// the ProgID with a description suffix (when the server provides one).
 pub(super) fn da_advertised_name(server: &crate::bff::model::ServerEntry) -> Option<String> {
@@ -846,7 +988,25 @@ pub(super) fn da_advertised_name(server: &crate::bff::model::ServerEntry) -> Opt
 
 #[cfg(test)]
 mod tests {
-    use super::ua_search_url;
+    use super::{da_connect_target, ua_search_url};
+
+    #[test]
+    fn automatically_selected_da_server_uses_its_source_host() {
+        let mut dialog = crate::app::ConnectDialog::default();
+        dialog.da_selected = Some("Vendor.OPC".to_string());
+        dialog.da_selected_host = Some("plant-b".to_string());
+        assert_eq!(
+            da_connect_target(&dialog),
+            ("plant-b".to_string(), "Vendor.OPC".to_string())
+        );
+
+        dialog.da_host = "manual-pc".to_string();
+        dialog.da_manual = "Other.OPC".to_string();
+        assert_eq!(
+            da_connect_target(&dialog),
+            ("manual-pc".to_string(), "Other.OPC".to_string())
+        );
+    }
 
     #[test]
     fn search_url_uses_default_port_when_empty_or_invalid() {

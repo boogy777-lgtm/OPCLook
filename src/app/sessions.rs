@@ -10,17 +10,28 @@ impl App {
     /// DA, endpoint URL for UA); the DA `host` is just a computer-name filter,
     /// not part of the server's identity.
     fn dedup_key(endpoint: &EndpointSpec) -> (Protocol, String) {
-        (endpoint.protocol, endpoint.address.trim().to_string())
+        match endpoint.protocol {
+            Protocol::OpcDa => (
+                endpoint.protocol,
+                format!(
+                    "{}|{}",
+                    endpoint.host.trim().to_ascii_lowercase(),
+                    endpoint.address.trim().to_ascii_lowercase()
+                ),
+            ),
+            Protocol::OpcUa => (endpoint.protocol, endpoint.address.trim().to_string()),
+        }
     }
 
     /// Open (create or restore) the tab for an endpoint.
     ///
     /// Endpoint-dedup rule: if a container for the same endpoint already exists
     /// (connected, connecting or disconnected), do NOT create a duplicate
-    /// session — just make it visible + active (restore the view). Reopening a
-    /// still-connected container keeps its connection running and shows live
-    /// data. Only a brand-new endpoint creates a session and connects.
-    pub fn open_tab_for_endpoint(&mut self, endpoint: EndpointSpec) {
+    /// session — activate the existing view. If UA credentials or security
+    /// settings changed, reconnect the existing session with the new contract.
+    /// Return false when the requested operation was rejected so the caller
+    /// can keep its dialog open and show the error.
+    pub fn open_tab_for_endpoint(&mut self, endpoint: EndpointSpec) -> bool {
         let key = Self::dedup_key(&endpoint);
         if let Some(id) = self
             .sessions
@@ -28,12 +39,32 @@ impl App {
             .find(|s| Self::dedup_key(&s.endpoint) == key)
             .map(|s| s.id)
         {
+            let mut reconfigure = false;
             if let Some(view) = self.sessions.iter_mut().find(|s| s.id == id) {
                 view.visible = true;
+                if endpoint.protocol == Protocol::OpcUa {
+                    reconfigure = view.endpoint.user != endpoint.user
+                        || view.endpoint.password != endpoint.password
+                        || view.endpoint.ua_use_certificate != endpoint.ua_use_certificate
+                        || view.endpoint.ua_security_policy != endpoint.ua_security_policy
+                        || view.endpoint.ua_security_mode != endpoint.ua_security_mode
+                        || view.endpoint.ua_trust_server_cert != endpoint.ua_trust_server_cert
+                        || view.endpoint.ua_session_timeout != endpoint.ua_session_timeout;
+                    if reconfigure {
+                        let mut updated = endpoint;
+                        // Existing sessions keep their selected NIC until
+                        // explicitly removed; reauthentication does not rebind.
+                        updated.ua_bind = view.endpoint.ua_bind.clone();
+                        view.endpoint = updated;
+                    }
+                }
             }
             self.active_session = Some(id);
             self.selected_tree = None;
-            return;
+            if reconfigure {
+                self.reconnect_session(id);
+            }
+            return true;
         }
         // Hard UA session cap. Reopening/reconnecting an existing container is
         // handled above and is never rejected.
@@ -54,7 +85,7 @@ impl App {
             if self.dialogs.connect.open {
                 self.dialogs.connect.error = Some(message);
             }
-            return;
+            return false;
         }
 
         let mut endpoint = endpoint;
@@ -69,7 +100,7 @@ impl App {
                     if self.dialogs.connect.open {
                         self.dialogs.connect.error = Some(message);
                     }
-                    return;
+                    return false;
                 }
             }
         } else if endpoint.ua_bind.is_none() {
@@ -81,7 +112,7 @@ impl App {
                     if self.dialogs.connect.open {
                         self.dialogs.connect.error = Some(message);
                     }
-                    return;
+                    return false;
                 }
             }
         }
@@ -102,6 +133,7 @@ impl App {
         self.active_session = Some(id);
         self.selected_tree = None;
         self.send(id, endpoint.protocol, CommandKind::Connect { endpoint });
+        true
     }
 
     /// Binding for a UA endpoint: loopback always uses loopback, remote
@@ -128,8 +160,8 @@ impl App {
     /// Connect to an endpoint, opening its tab. Alias for `open_tab_for_endpoint`
     /// (the «Подключиться» button uses the same dedup/restore semantics as the
     /// double-click on a server row).
-    pub fn connect_endpoint(&mut self, endpoint: EndpointSpec) {
-        self.open_tab_for_endpoint(endpoint);
+    pub fn connect_endpoint(&mut self, endpoint: EndpointSpec) -> bool {
+        self.open_tab_for_endpoint(endpoint)
     }
 
     /// Disconnect a session from its server. The session container (endpoint,
@@ -466,4 +498,20 @@ pub(super) fn reconnect_delay(attempt: u32) -> Duration {
         .checked_shl(shift)
         .unwrap_or(u64::MAX);
     Duration::from_secs(secs)
+}
+
+#[cfg(test)]
+mod popup_identity_tests {
+    use super::*;
+
+    #[test]
+    fn da_progid_identity_includes_source_computer() {
+        let first = EndpointSpec::da("plant-a", "Vendor.OPC");
+        let second = EndpointSpec::da("plant-b", "Vendor.OPC");
+        assert_ne!(App::dedup_key(&first), App::dedup_key(&second));
+        assert_eq!(
+            App::dedup_key(&first),
+            App::dedup_key(&EndpointSpec::da("PLANT-A", "vendor.opc"))
+        );
+    }
 }

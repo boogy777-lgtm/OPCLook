@@ -1187,8 +1187,8 @@ fn connect_dialog_reopen_keeps_merged_subnet_scan_results() {
         scan_id,
         servers: vec![scan_server()],
     });
-    // Buffered until the scan finishes or is cancelled.
-    assert!(app.dialogs.connect.ua_search_results.is_empty());
+    // Scan results appear immediately instead of waiting for completion.
+    assert_eq!(app.dialogs.connect.ua_search_results.len(), 1);
 
     app.close_connect_dialog();
     assert_eq!(
@@ -1842,8 +1842,8 @@ fn connect_dialog_username_identity_requires_user() {
     });
 }
 
-/// The security combos are typed enums (not free text): choosing an option
-/// updates the dialog and immediately persists the selection in settings.
+/// The security combos are typed enums (not free text). Changes remain a
+/// dialog draft until a connection is accepted, so Cancel does not save them.
 #[test]
 fn connect_dialog_security_combos_are_typed_and_persist() {
     with_settings_lock(|| {
@@ -1869,8 +1869,8 @@ fn connect_dialog_security_combos_are_typed_and_persist() {
         );
         assert_eq!(
             h.state().settings.ua_security_policy,
-            UaSecurityPolicy::Basic256Sha256,
-            "selection must persist in settings without a connect attempt"
+            UaSecurityPolicy::Auto,
+            "uncommitted choice must not modify persisted settings"
         );
         // The mode combo is now the only Auto control.
         assert_eq!(h.query_all_by_value("Авто").count(), 1);
@@ -1882,7 +1882,7 @@ fn connect_dialog_security_combos_are_typed_and_persist() {
             h.state().dialogs.connect.ua_security_mode,
             UaSecurityMode::Sign
         );
-        assert_eq!(h.state().settings.ua_security_mode, UaSecurityMode::Sign);
+        assert_eq!(h.state().settings.ua_security_mode, UaSecurityMode::Auto);
     });
 }
 
@@ -2814,6 +2814,35 @@ fn connect_dialog_select_ua_result_fills_url() {
         "opc.tcp://127.0.0.1:4840",
         "selecting a UA result must fill the URL"
     );
+    assert_eq!(
+        h.state().dialogs.connect.ua_security_policy,
+        UaSecurityPolicy::None,
+        "selecting an endpoint must use that row's advertised policy"
+    );
+    assert_eq!(
+        h.state().dialogs.connect.ua_security_mode,
+        UaSecurityMode::None,
+        "selecting an endpoint must use that row's advertised mode"
+    );
+}
+
+#[test]
+fn rejected_ua_connect_keeps_popup_open_with_error() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.dialogs.connect.protocol = Protocol::OpcUa;
+    app.dialogs.connect.ua_url = "opc.tcp://192.0.2.77:4840".to_string();
+    let mut h = harness(app);
+    h.run_steps(4);
+    h.query_all_by_label("Подключиться")
+        .find(|n| !n.accesskit_node().is_disabled())
+        .expect("connect button")
+        .click();
+    h.run_steps(3);
+    assert!(h.state().dialogs.connect.open);
+    assert!(h.state().dialogs.connect.error.is_some());
+    assert!(h.state().sessions.is_empty());
 }
 
 // ---- Columns dialog ↑/↓ (Task 3) ----

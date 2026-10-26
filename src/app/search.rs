@@ -41,10 +41,29 @@ impl App {
         self.hold_da_route(0, &host, prepared);
     }
 
+    /// Start a direct DA host search, invalidating all previous popup
+    /// discovery requests. Used by the Search button and host-field Enter.
+    pub fn restart_da_discovery(&mut self, host: String) {
+        self.clear_pending_requests(0);
+        self.release_da_discovery_routes();
+        let d = &mut self.dialogs.connect;
+        d.da_pending = false;
+        d.da_auto_pending = 0;
+        d.da_servers.clear();
+        d.da_server_hosts.clear();
+        d.da_selected = None;
+        d.da_selected_host = None;
+        self.discover_da(host);
+    }
+
     /// Combined DA discovery: this computer (empty host) plus every known remote
     /// DA host from settings/history (best effort). Results are merged as the
     /// per-host `Servers` events arrive.
     pub fn discover_da_all(&mut self) {
+        // A new user search owns a new set of request IDs and result rows.
+        // Late replies from the previous search may not overwrite them.
+        self.clear_pending_requests(0);
+        self.release_da_discovery_routes();
         // Without an explicitly selected adapter only this computer is
         // discovered; remote search/connect is an explicit error instead of a
         // silent fallback to the default route.
@@ -64,7 +83,9 @@ impl App {
         hosts.dedup();
         self.dialogs.connect.da_auto_pending = 1 + hosts.len();
         self.dialogs.connect.da_servers.clear();
+        self.dialogs.connect.da_server_hosts.clear();
         self.dialogs.connect.da_selected = None;
+        self.dialogs.connect.da_selected_host = None;
         self.discover_da(String::new());
         for host in hosts {
             self.discover_da(host);
@@ -92,6 +113,7 @@ impl App {
         };
         self.dialogs.connect.ua_searching = true;
         self.dialogs.connect.ua_search_results.clear();
+        self.dialogs.connect.ua_result_epoch = self.dialogs.connect.ua_result_epoch.wrapping_add(1);
         self.dialogs.connect.error = None;
         self.journal
             .info_l(Tr::SearchingUaHost, &[&host, &port.to_string()]);
@@ -117,6 +139,7 @@ impl App {
         d.ua_network_searching = bind.is_some();
         d.error = None;
         d.ua_search_results.clear();
+        d.ua_result_epoch = d.ua_result_epoch.wrapping_add(1);
         d.ua_network_results.clear();
         d.ua_discovered_endpoints.clear();
         // With an adapter: LDS/mDNS + 127.0.0.1 + localhost. Without one only
@@ -200,11 +223,19 @@ impl App {
             ));
             return false;
         }
-        if !d.ua_discovered_endpoints.is_empty() {
+        // Search results may contain different servers. Validate only the
+        // selected URL, never a different server's security capabilities.
+        let selected: Vec<_> = d
+            .ua_discovered_endpoints
+            .iter()
+            .filter(|endpoint| endpoint.url == d.ua_url.trim())
+            .cloned()
+            .collect();
+        if !selected.is_empty() {
             if let Err(detail) = crate::bff::ua::resolve_security(
                 d.ua_security_policy,
                 d.ua_security_mode,
-                &d.ua_discovered_endpoints,
+                &selected,
             ) {
                 d.error = Some(fmt(lang, Tr::SecurityResolveFailed, &[&detail]));
                 return false;
@@ -237,6 +268,7 @@ impl App {
             return;
         };
         self.dialogs.connect.ua_network_searching = true;
+        self.dialogs.connect.ua_result_epoch = self.dialogs.connect.ua_result_epoch.wrapping_add(1);
         self.dialogs.connect.error = None;
         self.journal.info_l(Tr::SearchingUaNetwork, &[]);
         self.send(
@@ -322,6 +354,7 @@ impl App {
         d.ua_scan_confirm = None;
         d.ua_scan_servers.clear();
         d.ua_search_results.clear();
+        d.ua_result_epoch = d.ua_result_epoch.wrapping_add(1);
         d.ua_network_results.clear();
         d.ua_discovered_endpoints.clear();
         d.ua_auto_pending = 0;
@@ -392,7 +425,7 @@ fn merge_ua_server(dialog: &mut ConnectDialog, server: crate::bff::model::UaServ
                 if !existing
                     .endpoints
                     .iter()
-                    .any(|owned| normalized_ua_url(&owned.url) == normalized_ua_url(&endpoint.url))
+                    .any(|owned| same_ua_endpoint(owned, &endpoint))
                 {
                     existing.endpoints.push(endpoint);
                 }
@@ -406,9 +439,19 @@ fn normalized_ua_url(url: &str) -> String {
     url.trim().trim_end_matches('/').to_ascii_lowercase()
 }
 
+/// Same URL can advertise several distinct security configurations.
+fn same_ua_endpoint(
+    left: &crate::bff::model::UaEndpointInfo,
+    right: &crate::bff::model::UaEndpointInfo,
+) -> bool {
+    normalized_ua_url(&left.url) == normalized_ua_url(&right.url)
+        && left.security_policy == right.security_policy
+        && left.security_mode == right.security_mode
+}
+
 /// Fold the mDNS/LDS network results and the accumulated per-host results of a
 /// combined UA auto-search into a single, deduplicated server list.
-fn merge_ua_results(dialog: &mut ConnectDialog) {
+pub(super) fn merge_ua_results(dialog: &mut ConnectDialog) {
     use crate::bff::model::UaServerInfo;
     let mut merged: Vec<UaServerInfo> = std::mem::take(&mut dialog.ua_search_results);
     for network in std::mem::take(&mut dialog.ua_network_results) {
@@ -443,23 +486,12 @@ fn merge_ua_results(dialog: &mut ConnectDialog) {
             endpoints,
         });
     }
-    // Deduplicate server entries by application URI, keeping endpoints merged.
-    let mut dedup: Vec<UaServerInfo> = Vec::new();
+    // Use the same merge mechanism as streaming scan results. This keeps
+    // (URL, security policy, security mode) alternatives intact.
+    dialog.ua_search_results.clear();
     for server in merged {
-        if let Some(existing) = dedup
-            .iter_mut()
-            .find(|s: &&mut UaServerInfo| s.application_uri == server.application_uri)
-        {
-            for e in server.endpoints {
-                if !existing.endpoints.iter().any(|x| x.url == e.url) {
-                    existing.endpoints.push(e);
-                }
-            }
-        } else {
-            dedup.push(server);
-        }
+        merge_ua_server(dialog, server);
     }
-    dialog.ua_search_results = dedup;
     dialog.ua_network_results.clear();
     dialog.ua_auto_pending = 0;
     refresh_ua_combos(dialog);

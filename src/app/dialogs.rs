@@ -11,7 +11,10 @@ pub struct ConnectDialog {
     pub network_tab: bool,
     pub da_host: String,
     pub da_servers: Vec<ServerEntry>,
+    /// Computer for each DA result, indexed in parallel with da_servers.
+    pub da_server_hosts: Vec<String>,
     pub da_selected: Option<String>,
+    pub da_selected_host: Option<String>,
     pub da_manual: String,
     pub da_pending: bool,
     pub ua_url: String,
@@ -23,6 +26,8 @@ pub struct ConnectDialog {
     pub ua_search_port: String,
     pub ua_searching: bool,
     pub ua_search_results: Vec<crate::bff::model::UaServerInfo>,
+    /// Changes the collapse-state identity when a new search begins.
+    pub ua_result_epoch: u64,
     /// Request keyboard focus for the primary field on the next populated frame.
     pub focus_pending: bool,
     /// UA: chosen security policy (typed; `Auto` default).
@@ -71,7 +76,9 @@ impl Default for ConnectDialog {
             network_tab: false,
             da_host: String::new(),
             da_servers: Vec::new(),
+            da_server_hosts: Vec::new(),
             da_selected: None,
+            da_selected_host: None,
             da_manual: String::new(),
             da_pending: false,
             ua_url: String::new(),
@@ -82,6 +89,7 @@ impl Default for ConnectDialog {
             ua_search_port: String::new(),
             ua_searching: false,
             ua_search_results: Vec::new(),
+            ua_result_epoch: 0,
             focus_pending: false,
             ua_security_policy: UaSecurityPolicy::Auto,
             ua_security_mode: UaSecurityMode::Auto,

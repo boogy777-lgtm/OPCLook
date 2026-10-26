@@ -793,14 +793,16 @@ impl App {
         // fields. The servers list is what the user picks from.
         d.da_host.clear();
         d.da_manual.clear();
+        // Keep previously discovered DA results and their source hosts
+        // across close/reopen. A manual or explicit new search replaces them.
+        d.da_pending = false;
+        d.da_selected_host = None;
         d.ua_search_host.clear();
         d.ua_search_port.clear();
         d.ua_url.clear();
         d.ua_searching = false;
-        // Previously found servers survive closing/reopening the popup: only a
-        // new user-initiated search (search_ua_servers/search_ua_all) replaces
-        // the result lists. This covers the merged subnet-scan results and the
-        // security-combo source `ua_discovered_endpoints`.
+        // Reuse discovered UA results across popup visits. A new search
+        // explicitly replaces them; closing the popup does not.
         d.da_selected = None;
         d.ua_auto_pending = 0;
         d.da_auto_pending = 0;
@@ -820,8 +822,8 @@ impl App {
         d.ua_scan_found = 0;
         d.ua_scan_error = None;
         d.ua_scan_confirm = None;
+        // Reopening a populated list must not restart network discovery.
         if d.da_servers.is_empty() {
-            // DA tab is the default: start the combined DA discovery now.
             self.discover_da_all();
         }
     }
@@ -837,6 +839,8 @@ impl App {
         d.ua_searching = false;
         d.ua_network_searching = false;
         d.ua_auto_pending = 0;
+        d.da_auto_pending = 0;
+        d.da_pending = false;
         d.ua_scan_confirm = None;
     }
 

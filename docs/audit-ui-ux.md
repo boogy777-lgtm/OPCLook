@@ -122,3 +122,32 @@
 
 Эти пункты не ломают сценарий подключения и могут быть закрыты отдельным
 UX-проходом.
+
+## Повторный аудит popup (2026-10-26)
+
+- `Auto/Auto` сохраняет ранее принятое поведение: выбирает `None/None`
+  первым. Явный выбор endpoint в списке переносит его policy/mode в настройки
+  подключения.
+- OPC DA: результаты различаются по паре `(host, ProgID)`; вводимые ранее
+  имя и пароль удалены из интерфейса, поскольку DCOM работал от Windows-токена.
+- Standalone LDS/mDNS показывает найденные серверы; UA endpoint дедуплицируется
+  по `(URL, security policy, security mode)`.
+- Проверка UA policy/mode ограничена выбранным URL. Новая конфигурация UA
+  существующего URL инициирует переподключение, а отказ не закрывает popup.
+- Выбор сетевого адаптера можно сбросить в `Не выбран`.
+- Завершение DA discovery с ошибкой сбрасывает индикатор поиска.
+- Enter из полей host/port запускает поиск, а не скрытое подключение.
+
+Сохраняемые компромиссы: содержимое кэша адаптеров обновляется только
+явной кнопкой, реальные DCOM/UA соединения требуют Windows и сервера для
+сквозной проверки.
+
+### Discovery UX and settings transaction
+
+- The UA result list groups endpoints under a server (expanded by default).
+- The UA network-search button is context-sensitive: populated host/port
+  searches that host; blank host starts subnet discovery with a selected NIC
+  or a loopback-only search without one.
+- Streaming subnet results become selectable immediately.
+- UA security policy/mode form a draft. They are saved only when a connection
+  is accepted, so Cancel cannot silently change preferences.
