@@ -1,0 +1,7 @@
+# OPC DA is a 32-bit COM technology. OPCEnum.exe and most legacy OPC DA
+# servers are registered in the 32-bit (Wow6432Node) registry view only, so a
+# 64-bit process cannot instantiate them. The original OPCtools.exe is 32-bit.
+# Building the whole client as i686 keeps the legacy path working while the
+# OPC UA path is bitness-agnostic.
+[build]
+target = "i686-pc-windows-msvc"

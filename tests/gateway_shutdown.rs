@@ -1,0 +1,49 @@
+﻿//! Gateway lifecycle invariants: a closed command channel is reported instead
+//! of silently dropping commands, and shutdown joins the workers within a bound.
+
+mod support;
+
+use opcda_egui::bff::{Command, CommandKind, Gateway, Protocol};
+use std::time::{Duration, Instant};
+use support::dfb::Dfb;
+
+fn test_command() -> Command {
+    Command {
+        request_id: 1,
+        session: 1,
+        protocol: Protocol::OpcUa,
+        kind: CommandKind::Test,
+    }
+}
+
+#[test]
+fn send_after_shutdown_returns_error() {
+    let mut gateway = Gateway::new();
+    Dfb::shutdown(&mut gateway);
+
+    let error = gateway.input(test_command()).unwrap_err();
+    assert!(
+        error.contains("shut down"),
+        "expected a shutdown error, got: {error}"
+    );
+    assert!(
+        gateway.output(Duration::from_millis(10)).is_none(),
+        "a shut-down block must not emit protocol output"
+    );
+}
+
+#[test]
+fn shutdown_joins_workers_without_hanging_and_is_idempotent() {
+    let mut gateway = Gateway::new();
+
+    let started = Instant::now();
+    Dfb::shutdown(&mut gateway);
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "gateway shutdown took too long: {elapsed:?}"
+    );
+
+    // A second call is a no-op, not a panic or a second long wait.
+    Dfb::shutdown(&mut gateway);
+}

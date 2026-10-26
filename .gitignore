@@ -1,0 +1,48 @@
+# Rust build output
+/target/
+**/*.rs.bk
+*.pdb
+
+# Native and packaged artifacts
+*.exe
+*.dll
+*.lib
+*.exp
+*.ilk
+*.obj
+*.zip
+*.7z
+*.msi
+
+# Local logs and one-off console redirection
+*.log
+*.err
+/append.txt
+/check*.txt
+/t_panel.txt
+/[0-9]*
+/$null
+/'
+
+# Local screenshots and icon extraction
+/*.png
+
+# One-off codemod with a machine-specific absolute path
+/cleanup.py
+
+# Local application state and secrets
+/settings.json
+.env
+.env.local
+*.pem
+*.pfx
+*.p12
+
+# IDE / OS
+/.idea/
+/.vscode/
+*.swp
+*.swo
+Thumbs.db
+Desktop.ini
+.DS_Store
