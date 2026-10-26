@@ -793,6 +793,10 @@ impl App {
         // fields. The servers list is what the user picks from.
         d.da_host.clear();
         d.da_manual.clear();
+        d.da_servers.clear();
+        d.da_server_hosts.clear();
+        d.da_pending = false;
+        d.da_selected_host = None;
         d.ua_search_host.clear();
         d.ua_search_port.clear();
         d.ua_url.clear();
@@ -820,10 +824,8 @@ impl App {
         d.ua_scan_error = None;
         d.ua_scan_confirm = None;
         d.ua_scan_servers.clear();
-        if d.da_servers.is_empty() {
-            // DA tab is the default: start the combined DA discovery now.
-            self.discover_da_all();
-        }
+        // DA tab is the default: start a fresh, correctly host-scoped discovery.
+        self.discover_da_all();
     }
 
     /// Close the connect popup and invalidate all search results still in
@@ -837,6 +839,8 @@ impl App {
         d.ua_searching = false;
         d.ua_network_searching = false;
         d.ua_auto_pending = 0;
+        d.da_auto_pending = 0;
+        d.da_pending = false;
         d.ua_scan_confirm = None;
     }
 

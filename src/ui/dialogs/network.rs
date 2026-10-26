@@ -69,6 +69,11 @@ pub(super) fn network_settings_view(
             })
             .width(max_width)
             .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut chosen,
+                    None,
+                    tr(lang, Tr::NetworkNotSelected),
+                );
                 for adapter in &rows {
                     let is_selected = preferred_id.is_some() && preferred_id == Some(adapter.id);
                     ui.selectable_value(
@@ -79,10 +84,10 @@ pub(super) fn network_settings_view(
                 }
             });
         if chosen != preferred_id {
-            if let Some(id) = chosen {
-                // The app resolves and saves the IP from the selected adapter.
-                *action = Some((AdapterSelection::Adapter(id), None));
-            }
+            *action = Some(match chosen {
+                Some(id) => (AdapterSelection::Adapter(id), None),
+                None => (AdapterSelection::None, None),
+            });
         }
         if ui.button(tr(lang, Tr::NetworkRefresh)).clicked() {
             *refresh = true;

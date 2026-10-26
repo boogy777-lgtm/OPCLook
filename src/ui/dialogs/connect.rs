@@ -178,13 +178,24 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                 } else if dialog.da_servers.is_empty() {
                                     ui.label(tr(lang, Tr::ListEmptyManual));
                                 }
-                                for server in &dialog.da_servers {
-                                    let selected =
-                                        dialog.da_selected.as_deref() == Some(server.id.as_str());
+                                for (index, server) in dialog.da_servers.iter().enumerate() {
+                                    let host = dialog
+                                        .da_server_hosts
+                                        .get(index)
+                                        .cloned()
+                                        .unwrap_or_else(|| dialog.da_host.clone());
+                                    let selected = dialog.da_selected.as_deref()
+                                        == Some(server.id.as_str())
+                                        && dialog.da_selected_host.as_deref() == Some(host.as_str());
                                     let label = if server.description.is_empty() {
                                         server.id.clone()
                                     } else {
                                         format!("{} — {}", server.id, server.description)
+                                    };
+                                    let label = if host.is_empty() {
+                                        label
+                                    } else {
+                                        format!("{label} @ {host}")
                                     };
                                     let hint = format!(
                                         "{}\n{}",
@@ -194,15 +205,16 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                     let response =
                                         ui.selectable_label(selected, label).on_hover_text(&hint);
                                     if response.double_clicked() {
-                                        let host = dialog.da_host.clone();
                                         let mut ep = crate::bff::model::EndpointSpec::da(
-                                            host,
+                                            host.clone(),
                                             server.id.clone(),
                                         );
                                         ep = ep.with_advertised_name(da_advertised_name(server));
                                         quick_connect = Some(ep);
                                     } else if response.clicked() {
                                         dialog.da_selected = Some(server.id.clone());
+                                        dialog.da_selected_host = Some(host.clone());
+                                        dialog.da_host = host;
                                         dialog.da_manual = server.id.clone();
                                     }
                                 }
@@ -252,15 +264,25 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                             .on_hover_text(&hint);
                                         if response.double_clicked() {
                                             if identity_ready {
+                                                dialog.ua_url = endpoint.url.clone();
                                                 let mut ep = crate::bff::model::EndpointSpec::ua(
                                                     endpoint.url.clone(),
                                                 );
                                                 ep = ep.with_advertised_name(Some(
                                                     server.application_name.clone(),
                                                 ));
-                                                ep.ua_security_policy =
-                                                    Some(dialog.ua_security_policy);
-                                                ep.ua_security_mode = Some(dialog.ua_security_mode);
+                                                ep.ua_security_policy = Some(
+                                                    UaSecurityPolicy::from_advertised(
+                                                        &endpoint.security_policy,
+                                                    )
+                                                    .unwrap_or(dialog.ua_security_policy),
+                                                );
+                                                ep.ua_security_mode = Some(
+                                                    UaSecurityMode::from_advertised(
+                                                        &endpoint.security_mode,
+                                                    )
+                                                    .unwrap_or(dialog.ua_security_mode),
+                                                );
                                                 ep.ua_trust_server_cert =
                                                     dialog.ua_trust_server_cert;
                                                 ep.ua_session_timeout =
@@ -277,6 +299,16 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                             }
                                         } else if response.clicked() {
                                             dialog.ua_url = endpoint.url.clone();
+                                            if let Some(policy) =
+                                                UaSecurityPolicy::from_advertised(&endpoint.security_policy)
+                                            {
+                                                dialog.ua_security_policy = policy;
+                                            }
+                                            if let Some(mode) =
+                                                UaSecurityMode::from_advertised(&endpoint.security_mode)
+                                            {
+                                                dialog.ua_security_mode = mode;
+                                            }
                                         }
                                     }
                                 }
@@ -314,6 +346,11 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                         );
                         if dialog.focus_pending && is_da {
                             host.request_focus();
+                        }
+                        if is_da && host.changed() {
+                            dialog.da_selected = None;
+                            dialog.da_selected_host = None;
+                            dialog.da_manual.clear();
                         }
                         if !is_da {
                             ui.label(egui::RichText::new(tr(lang, Tr::PortLabel)).weak());
@@ -442,11 +479,9 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
 
                     ui.add_space(4.0);
 
-                    // 5. DA credentials. UA credentials are shown only for the
-                    // UserName identity, after the identity selector below.
-                    if is_da {
-                        user_password_ui(ui, lang, &mut dialog.ua_user, &mut dialog.ua_password);
-                    }
+                    // OPC DA uses the process's Windows/DCOM identity; the
+                    // former username/password fields were not wired to COM.
+                    // Never present non-functional credential controls.
 
                     if !is_da {
                         ui.add_space(4.0);
@@ -635,7 +670,9 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                             close = true;
                         }
                     });
-                    if enter && can_connect_dialog && !opening_frame {
+                    if enter && can_connect_dialog && !opening_frame
+                        && !ui.memory(|m| m.focused().is_some())
+                    {
                         connect = Some(dialog.protocol);
                     } else if esc && !opening_frame {
                         close = true;
@@ -775,8 +812,9 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                         .unwrap_or_else(crate::settings::default_session_timeout);
                     app.settings.save();
                 }
-                app.connect_endpoint(endpoint);
-                app.close_connect_dialog();
+                if app.connect_endpoint(endpoint) {
+                    app.close_connect_dialog();
+                }
             } else {
                 app.dialogs.connect.error = Some(tr(lang, Tr::ValueNotServer).to_string());
             }
@@ -792,8 +830,9 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
             {
                 return;
             }
-            app.open_tab_for_endpoint(endpoint);
-            app.close_connect_dialog();
+            if app.open_tab_for_endpoint(endpoint) {
+                app.close_connect_dialog();
+            }
         }
     }
 }
