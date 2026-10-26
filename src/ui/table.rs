@@ -134,60 +134,67 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                             let rect = ui.max_rect();
                                             #[cfg(test)]
                                             record_header_cell(*column, rect);
-                                            let response = ui.interact(
-                                                rect,
-                                                ui.id().with(("signal_column_header", *column)),
-                                                egui::Sense::click_and_drag(),
-                                            );
-                                            response.dnd_set_drag_payload(*column);
-                                            if let Some(payload) =
-                                                response.dnd_release_payload::<ColumnId>()
-                                            {
-                                                let after_midpoint = ui
-                                                    .input(|i| i.pointer.hover_pos())
-                                                    .is_some_and(|pos| pos.x >= rect.center().x);
-                                                actions.push(TableAction::DropColumn(
-                                                    *payload,
-                                                    index + usize::from(after_midpoint),
-                                                ));
-                                            }
-                                            if response.dnd_hover_payload::<ColumnId>().is_some() {
-                                                let after_midpoint = ui
-                                                    .input(|i| i.pointer.hover_pos())
-                                                    .is_some_and(|pos| pos.x >= rect.center().x);
-                                                let x = if after_midpoint {
-                                                    rect.right()
-                                                } else {
-                                                    rect.left()
-                                                };
-                                                ui.painter().vline(
-                                                    x,
-                                                    rect.y_range(),
-                                                    egui::Stroke::new(
-                                                        2.0,
-                                                        ui.visuals().selection.stroke.color,
-                                                    ),
+                                            // A tree payload belongs to the outer table drop
+                                            // zone. Do not let header drag widgets consume it.
+                                            let dropping_tree =
+                                                egui::DragAndDrop::payload::<TreeDragPayload>(ui.ctx())
+                                                    .is_some();
+                                            if !dropping_tree {
+                                                let response = ui.interact(
+                                                    rect,
+                                                    ui.id().with(("signal_column_header", *column)),
+                                                    egui::Sense::click_and_drag(),
                                                 );
+                                                response.dnd_set_drag_payload(*column);
+                                                if let Some(payload) =
+                                                    response.dnd_release_payload::<ColumnId>()
+                                                {
+                                                    let after_midpoint = ui
+                                                        .input(|i| i.pointer.hover_pos())
+                                                        .is_some_and(|pos| pos.x >= rect.center().x);
+                                                    actions.push(TableAction::DropColumn(
+                                                        *payload,
+                                                        index + usize::from(after_midpoint),
+                                                    ));
+                                                }
+                                                if response.dnd_hover_payload::<ColumnId>().is_some() {
+                                                    let after_midpoint = ui
+                                                        .input(|i| i.pointer.hover_pos())
+                                                        .is_some_and(|pos| pos.x >= rect.center().x);
+                                                    let x = if after_midpoint {
+                                                        rect.right()
+                                                    } else {
+                                                        rect.left()
+                                                    };
+                                                    ui.painter().vline(
+                                                        x,
+                                                        rect.y_range(),
+                                                        egui::Stroke::new(
+                                                            2.0,
+                                                            ui.visuals().selection.stroke.color,
+                                                        ),
+                                                    );
+                                                }
+                                                response
+                                                    .on_hover_text(tr(lang, Tr::PkmMoveColumn))
+                                                    .context_menu(|ui| {
+                                                        if ui.button(tr(lang, Tr::MoveLeft)).clicked() {
+                                                            actions.push(TableAction::MoveColumn(
+                                                                *column,
+                                                                ColumnDir::Left,
+                                                            ));
+                                                            ui.close();
+                                                        }
+                                                        if ui.button(tr(lang, Tr::MoveRight)).clicked()
+                                                        {
+                                                            actions.push(TableAction::MoveColumn(
+                                                                *column,
+                                                                ColumnDir::Right,
+                                                            ));
+                                                            ui.close();
+                                                        }
+                                                    });
                                             }
-                                            response
-                                                .on_hover_text(tr(lang, Tr::PkmMoveColumn))
-                                                .context_menu(|ui| {
-                                                    if ui.button(tr(lang, Tr::MoveLeft)).clicked() {
-                                                        actions.push(TableAction::MoveColumn(
-                                                            *column,
-                                                            ColumnDir::Left,
-                                                        ));
-                                                        ui.close();
-                                                    }
-                                                    if ui.button(tr(lang, Tr::MoveRight)).clicked()
-                                                    {
-                                                        actions.push(TableAction::MoveColumn(
-                                                            *column,
-                                                            ColumnDir::Right,
-                                                        ));
-                                                        ui.close();
-                                                    }
-                                                });
                                         });
                                     }
                                 })
