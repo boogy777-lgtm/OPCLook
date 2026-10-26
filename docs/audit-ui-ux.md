@@ -141,3 +141,13 @@ UX-проходом.
 Сохраняемые компромиссы: содержимое кэша адаптеров обновляется только
 явной кнопкой, реальные DCOM/UA соединения требуют Windows и сервера для
 сквозной проверки.
+
+### Discovery UX and settings transaction
+
+- The UA result list groups endpoints under a server (expanded by default).
+- The UA network-search button is context-sensitive: populated host/port
+  searches that host; blank host starts subnet discovery with a selected NIC
+  or a loopback-only search without one.
+- Streaming subnet results become selectable immediately.
+- UA security policy/mode form a draft. They are saved only when a connection
+  is accepted, so Cancel cannot silently change preferences.

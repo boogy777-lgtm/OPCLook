@@ -148,6 +148,8 @@ impl App {
                     return;
                 }
                 d.ua_scan_servers.extend(servers);
+                // Show scan results as they arrive, not only at completion.
+                merge_ua_scan_servers(d);
             }
             EventKind::UaScanFinished {
                 scan_id,

@@ -241,6 +241,10 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                             server.application_name, server.application_uri
                                         )
                                     };
+                                    egui::CollapsingHeader::new(title.clone())
+                                        .id_salt(server.application_uri.clone())
+                                        .default_open(true)
+                                        .show(ui, |ui| {
                                     for endpoint in &server.endpoints {
                                         let label = if endpoint.url.is_empty() {
                                             title.clone()
@@ -261,8 +265,17 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                             endpoint.url,
                                             tr(lang, Tr::DoubleClickServerHint)
                                         );
+                                        let is_selected = dialog.ua_url == endpoint.url
+                                            && UaSecurityPolicy::from_advertised(
+                                                &endpoint.security_policy,
+                                            )
+                                            .is_none_or(|value| value == dialog.ua_security_policy)
+                                            && UaSecurityMode::from_advertised(
+                                                &endpoint.security_mode,
+                                            )
+                                            .is_none_or(|value| value == dialog.ua_security_mode);
                                         let response = ui
-                                            .selectable_label(dialog.ua_url == endpoint.url, label)
+                                            .selectable_label(is_selected, label)
                                             .on_hover_text(&hint);
                                         if response.double_clicked() {
                                             if identity_ready {
@@ -313,6 +326,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                             }
                                         }
                                     }
+                                        });
                                 }
                                 if identity_error {
                                     dialog.error =
@@ -323,7 +337,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
 
                     ui.add_space(4.0);
 
-                    // 2. Address (host) + 3. Port (UA only) + 4. Search button.
+                    // 2. Host + 3. UA port; one UA search action below.
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new(if is_da {
@@ -364,31 +378,22 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                             );
                             focus_in_search_field |= port_field.has_focus();
                         }
-                        let searching = if is_da {
-                            dialog.da_pending
-                        } else {
-                            dialog.ua_searching
-                        };
-                        let search_label = if is_da {
-                            tr(lang, Tr::SearchLan)
-                        } else {
-                            tr(lang, Tr::Search)
-                        };
-                        if ui
-                            .add_enabled(
-                                !searching && !(is_ua && ua_busy),
-                                egui::Button::new(search_label),
-                            )
-                            .clicked()
-                        {
-                            if is_da {
+                        // OPC UA discovery has one primary action below:
+                        // populated host => search host:port; empty host =>
+                        // local + subnet. DA retains its separate LAN search.
+                        if is_da {
+                            if ui
+                                .add_enabled(
+                                    !dialog.da_pending,
+                                    egui::Button::new(tr(lang, Tr::SearchLan)),
+                                )
+                                .clicked()
+                            {
                                 refresh = Some(dialog.da_host.clone());
-                            } else {
-                                app_search = true;
                             }
-                        }
-                        if searching {
-                            ui.spinner();
+                            if dialog.da_pending {
+                                ui.spinner();
+                            }
                         }
                     });
 
@@ -730,9 +735,8 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
         // Typed combos are the source of truth: persist the selection and
         // re-validate against the already-discovered endpoints (when any).
         // An invalid pair is reported immediately instead of only at connect.
-        app.settings.ua_security_policy = app.dialogs.connect.ua_security_policy;
-        app.settings.ua_security_mode = app.dialogs.connect.ua_security_mode;
-        app.settings.save();
+        // The popup owns an uncommitted draft. Cancel must not persist a
+        // security choice that was never used for a connection.
         app.validate_ua_security();
     }
     if let Some(host) = refresh {
@@ -741,6 +745,11 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
         } else {
             app.discover_da(host);
         }
+    }
+    if app_subnet_search && !app.dialogs.connect.ua_search_host.trim().is_empty() {
+        // The same action searches only the chosen host when it is specified.
+        app_subnet_search = false;
+        app_search = true;
     }
     if app_search {
         // Auto-compose the editable URL from the search host:port.
@@ -761,7 +770,12 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
         app.confirm_ua_subnet_scan();
     }
     if app_subnet_search {
-        app.start_ua_subnet_scan();
+        if app.network.lease.is_some() {
+            app.start_ua_subnet_scan();
+        } else {
+            // A missing network selection must not disable local OPC UA.
+            app.search_ua_all();
+        }
     }
     if close {
         app.close_connect_dialog();
@@ -866,7 +880,18 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
             {
                 return;
             }
-            if app.open_tab_for_endpoint(endpoint) {
+            if app.open_tab_for_endpoint(endpoint.clone()) {
+                if endpoint.protocol == Protocol::OpcUa {
+                    app.settings.ua_security_policy =
+                        endpoint.ua_security_policy.unwrap_or_default();
+                    app.settings.ua_security_mode =
+                        endpoint.ua_security_mode.unwrap_or_default();
+                    app.settings.ua_trust_server_cert = endpoint.ua_trust_server_cert;
+                    app.settings.ua_session_timeout_ms = endpoint
+                        .ua_session_timeout
+                        .unwrap_or_else(crate::settings::default_session_timeout);
+                    app.settings.save();
+                }
                 app.close_connect_dialog();
             }
         }

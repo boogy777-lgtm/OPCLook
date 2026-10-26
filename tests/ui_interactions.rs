@@ -1740,8 +1740,8 @@ fn connect_dialog_username_identity_requires_user() {
     });
 }
 
-/// The security combos are typed enums (not free text): choosing an option
-/// updates the dialog and immediately persists the selection in settings.
+/// The security combos are typed enums (not free text). Changes are staged
+/// locally until the connection is accepted; Cancel does not persist them.
 #[test]
 fn connect_dialog_security_combos_are_typed_and_persist() {
     with_settings_lock(|| {
@@ -1767,8 +1767,8 @@ fn connect_dialog_security_combos_are_typed_and_persist() {
         );
         assert_eq!(
             h.state().settings.ua_security_policy,
-            UaSecurityPolicy::Basic256Sha256,
-            "selection must persist in settings without a connect attempt"
+            UaSecurityPolicy::Auto,
+            "uncommitted choice must not modify persisted settings"
         );
         // The mode combo is now the only Auto control.
         assert_eq!(h.query_all_by_value("Авто").count(), 1);
@@ -1780,7 +1780,7 @@ fn connect_dialog_security_combos_are_typed_and_persist() {
             h.state().dialogs.connect.ua_security_mode,
             UaSecurityMode::Sign
         );
-        assert_eq!(h.state().settings.ua_security_mode, UaSecurityMode::Sign);
+        assert_eq!(h.state().settings.ua_security_mode, UaSecurityMode::Auto);
     });
 }
 
