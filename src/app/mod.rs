@@ -793,8 +793,8 @@ impl App {
         // fields. The servers list is what the user picks from.
         d.da_host.clear();
         d.da_manual.clear();
-        d.da_servers.clear();
-        d.da_server_hosts.clear();
+        // Keep previously discovered DA results and their source hosts
+        // across close/reopen. A manual or explicit new search replaces them.
         d.da_pending = false;
         d.da_selected_host = None;
         d.ua_search_host.clear();
@@ -822,8 +822,10 @@ impl App {
         d.ua_scan_found = 0;
         d.ua_scan_error = None;
         d.ua_scan_confirm = None;
-        // DA tab is the default: start a fresh, correctly host-scoped discovery.
-        self.discover_da_all();
+        // Reopening a populated list must not restart network discovery.
+        if d.da_servers.is_empty() {
+            self.discover_da_all();
+        }
     }
 
     /// Close the connect popup and invalidate all search results still in

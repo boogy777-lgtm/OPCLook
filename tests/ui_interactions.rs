@@ -1187,8 +1187,8 @@ fn connect_dialog_reopen_keeps_merged_subnet_scan_results() {
         scan_id,
         servers: vec![scan_server()],
     });
-    // Buffered until the scan finishes or is cancelled.
-    assert!(app.dialogs.connect.ua_search_results.is_empty());
+    // Scan results appear immediately instead of waiting for completion.
+    assert_eq!(app.dialogs.connect.ua_search_results.len(), 1);
 
     app.close_connect_dialog();
     assert_eq!(
