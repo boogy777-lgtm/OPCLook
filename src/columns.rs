@@ -173,10 +173,9 @@ impl ColumnSet {
         let Some(src) = self.order.iter().position(|c| *c == id) else {
             return false;
         };
-        let mut target = before;
-        if src < before {
-            target -= 1;
-        }
+        // A stale/invalid insertion index must never panic or duplicate a column.
+        let before = before.min(self.order.len());
+        let target = if src < before { before - 1 } else { before };
         if target == src {
             return false;
         }
@@ -397,6 +396,15 @@ mod tests {
         let mut t = ColumnSet::default();
         assert!(t.move_to_insert(ColumnId::Status, t.order.len()));
         assert_eq!(t.order[8], ColumnId::Status);
+    }
+
+    #[test]
+    fn move_to_insert_out_of_range_goes_to_end() {
+        let mut s = ColumnSet::default();
+        assert!(s.move_to_insert(ColumnId::FullName, usize::MAX));
+        assert_eq!(s.order.last(), Some(&ColumnId::FullName));
+        assert_eq!(s.order.len(), ColumnId::ALL.len());
+        assert!(!s.move_to_insert(ColumnId::FullName, usize::MAX));
     }
 
     #[test]
