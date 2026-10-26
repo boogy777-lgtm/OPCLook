@@ -2814,6 +2814,35 @@ fn connect_dialog_select_ua_result_fills_url() {
         "opc.tcp://127.0.0.1:4840",
         "selecting a UA result must fill the URL"
     );
+    assert_eq!(
+        h.state().dialogs.connect.ua_security_policy,
+        UaSecurityPolicy::None,
+        "selecting an endpoint must use that row's advertised policy"
+    );
+    assert_eq!(
+        h.state().dialogs.connect.ua_security_mode,
+        UaSecurityMode::None,
+        "selecting an endpoint must use that row's advertised mode"
+    );
+}
+
+#[test]
+fn rejected_ua_connect_keeps_popup_open_with_error() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.dialogs.connect.protocol = Protocol::OpcUa;
+    app.dialogs.connect.ua_url = "opc.tcp://192.0.2.77:4840".to_string();
+    let mut h = harness(app);
+    h.run_steps(4);
+    h.query_all_by_label("Подключиться")
+        .find(|n| !n.accesskit_node().is_disabled())
+        .expect("connect button")
+        .click();
+    h.run_steps(3);
+    assert!(h.state().dialogs.connect.open);
+    assert!(h.state().dialogs.connect.error.is_some());
+    assert!(h.state().sessions.is_empty());
 }
 
 // ---- Columns dialog ↑/↓ (Task 3) ----
