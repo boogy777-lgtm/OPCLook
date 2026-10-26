@@ -801,8 +801,8 @@ impl App {
         d.ua_search_port.clear();
         d.ua_url.clear();
         d.ua_searching = false;
-        d.ua_search_results.clear();
-        d.ua_network_results.clear();
+        // Reuse discovered UA results across popup visits. A new search
+        // explicitly replaces them; closing the popup does not.
         d.da_selected = None;
         d.ua_auto_pending = 0;
         d.da_auto_pending = 0;
@@ -811,7 +811,6 @@ impl App {
         d.ua_password.clear();
         d.ua_security_policy = self.settings.ua_security_policy;
         d.ua_security_mode = self.settings.ua_security_mode;
-        d.ua_discovered_endpoints.clear();
         d.ua_trust_server_cert = self.settings.ua_trust_server_cert;
         d.ua_identity_index = 0;
         d.ua_session_timeout = self.settings.ua_session_timeout_ms;
@@ -823,7 +822,6 @@ impl App {
         d.ua_scan_found = 0;
         d.ua_scan_error = None;
         d.ua_scan_confirm = None;
-        d.ua_scan_servers.clear();
         // DA tab is the default: start a fresh, correctly host-scoped discovery.
         self.discover_da_all();
     }

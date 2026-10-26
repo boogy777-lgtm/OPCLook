@@ -19,9 +19,9 @@ use crate::net::SubnetSpec;
 use chrono::TimeZone;
 use opcua::types::VariantScalarTypeId as Vt;
 use opcua::types::{
-    DataChangeFilter, DataChangeTrigger, DeadbandType, LocalizedText, MessageSecurityMode,
-    MonitoringParameters, NodeId, QualifiedName, StatusCode, UAString, Variant,
-    VariantScalarTypeId,
+    DataChangeFilter, DataChangeTrigger, DeadbandType, EndpointDescription, LocalizedText,
+    MessageSecurityMode, MonitoringParameters, NodeId, QualifiedName, StatusCode, UAString,
+    UserTokenPolicy, UserTokenType, Variant, VariantScalarTypeId,
 };
 use std::collections::VecDeque;
 use std::net::IpAddr;
@@ -996,4 +996,61 @@ fn scanner_unions_endpoints_for_the_same_application_uri() {
     assert_eq!(fresh[0].endpoints[0].url, "opc.tcp://NTBK700582:4840");
     let merged = seen.values().next().unwrap();
     assert_eq!(merged.endpoints.len(), 2);
+}
+
+#[test]
+fn connect_description_reuses_advertised_user_token_policy() {
+    // CODESYS advertises the anonymous policy as "Anonymous", not the crate
+    // default "anonymous". The connect endpoint must keep the server's policy.
+    let server = EndpointDescription {
+        endpoint_url: UAString::from("opc.tcp://codesys-host:4840"),
+        security_policy_uri: UAString::from("http://opcfoundation.org/UA/SecurityPolicy#None"),
+        security_mode: MessageSecurityMode::None,
+        user_identity_tokens: Some(vec![UserTokenPolicy {
+            policy_id: UAString::from("Anonymous"),
+            token_type: UserTokenType::Anonymous,
+            ..Default::default()
+        }]),
+        ..Default::default()
+    };
+
+    let description = super::session::endpoint_description_for(
+        std::slice::from_ref(&server),
+        "opc.tcp://127.0.0.1:4840",
+        "http://opcfoundation.org/UA/SecurityPolicy#None",
+        MessageSecurityMode::None,
+    );
+
+    // The user's URL wins, the server's token policy is reused.
+    assert_eq!(
+        description.endpoint_url.as_ref(),
+        "opc.tcp://127.0.0.1:4840"
+    );
+    let policy = description
+        .find_policy(UserTokenType::Anonymous)
+        .expect("anonymous policy");
+    assert_eq!(policy.policy_id.as_ref(), "Anonymous");
+}
+
+#[test]
+fn connect_description_falls_back_to_default_anonymous_policy() {
+    let description = super::session::endpoint_description_for(
+        &[],
+        "opc.tcp://127.0.0.1:4840",
+        "http://opcfoundation.org/UA/SecurityPolicy#None",
+        MessageSecurityMode::None,
+    );
+
+    assert_eq!(
+        description.endpoint_url.as_ref(),
+        "opc.tcp://127.0.0.1:4840"
+    );
+    assert_eq!(
+        description
+            .find_policy(UserTokenType::Anonymous)
+            .expect("anonymous policy")
+            .policy_id
+            .as_ref(),
+        "anonymous"
+    );
 }

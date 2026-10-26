@@ -6,14 +6,24 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn first_party_sources(root: &Path) -> Vec<PathBuf> {
-    let mut files = vec![root.join("src").join("app.rs")];
-    for entry in fs::read_dir(root.join("src").join("bff")).expect("read src/bff") {
+    let mut files = Vec::new();
+    collect_rs(&root.join("src").join("app"), &mut files);
+    collect_rs(&root.join("src").join("bff"), &mut files);
+    files
+}
+
+/// Collect every `.rs` file under `dir`. Both modules are directories since
+/// `src/app.rs` / flat `src/bff` were split into `mod.rs` plus submodules.
+fn collect_rs(dir: &Path, files: &mut Vec<PathBuf>) {
+    for entry in fs::read_dir(dir).unwrap_or_else(|error| panic!("read {}: {error}", dir.display()))
+    {
         let path = entry.expect("dir entry").path();
-        if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
+        if path.is_dir() {
+            collect_rs(&path, files);
+        } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
             files.push(path);
         }
     }
-    files
 }
 
 /// True when `needle` occurs as an identifier token (so `ManuallyDrop::new`

@@ -455,11 +455,23 @@ pub(super) async fn connect(
     let binding = endpoint.ua_bind.clone();
 
     // 1. Fetch the server's actual endpoints so we can pick a security policy
-    //    and mode the server really offers instead of guessing blindly.
-    let discovered = match discover_endpoints(url, binding.as_ref()).await {
+    //    and mode the server really offers instead of guessing blindly. The full
+    //    descriptions are kept so the connect description can reuse the server's
+    //    own user-token policies (CODESYS advertises "Anonymous", not the
+    //    crate's hardcoded "anonymous", and rejects ActivateSession otherwise
+    //    with BadIdentityTokenInvalid).
+    let server_endpoints = match discover_endpoints(url, binding.as_ref()).await {
         Ok(list) => list,
         Err(message) => return Err(message),
     };
+    let discovered: Vec<UaEndpointInfo> = server_endpoints
+        .iter()
+        .map(|e| UaEndpointInfo {
+            url: e.endpoint_url.to_string(),
+            security_policy: e.security_policy_uri.to_string(),
+            security_mode: format!("{:?}", e.security_mode),
+        })
+        .collect();
 
     // 2. Resolve the requested policy/mode (Auto default) against what the
     //    server advertises. An unsupported explicit choice is a hard error: no
@@ -500,10 +512,11 @@ pub(super) async fn connect(
     // 5. Decide the identity token. X509 when requested and supported.
     let identity = resolve_identity_token(&endpoint, &discovered)?;
 
-    let description: EndpointDescription =
-        (url, policy_uri.as_str(), mode, UserTokenPolicy::anonymous()).into();
+    // 6. Build the endpoint description the session will connect with. See
+    //    [`endpoint_description_for`].
+    let description = endpoint_description_for(&server_endpoints, url, &policy_uri, mode);
 
-    // 6. Build the session (no network I/O), then start its event loop and wait
+    // 7. Build the session (no network I/O), then start its event loop and wait
     //    for activation. The binding captured on the EndpointSpec is reused on
     //    every reconnect so a session never silently moves to another card.
     let (session, event_loop) = if let Some(binding) = binding {
@@ -549,6 +562,32 @@ pub(super) async fn connect(
         deadband: 0.0,
         timed_out: false,
     })
+}
+
+/// Choose the endpoint description the session connects with: the server's own
+/// advertised entry for the resolved policy/mode, so its user-token policies
+/// (and certificate) are reused, with the endpoint URL replaced by the
+/// user-supplied one. Falls back to a minimal anonymous description when no
+/// advertised entry matches.
+///
+/// The hand-built fallback pins `UserTokenPolicy::anonymous()`, whose
+/// `policy_id` is the crate default `"anonymous"`. CODESYS advertises its
+/// anonymous policy as `"Anonymous"` and answers ActivateSession with
+/// `BadIdentityTokenInvalid` on a mismatch, so a matching advertised endpoint
+/// must be preferred.
+pub(super) fn endpoint_description_for(
+    server_endpoints: &[EndpointDescription],
+    url: &str,
+    policy_uri: &str,
+    mode: MessageSecurityMode,
+) -> EndpointDescription {
+    let mut description = server_endpoints
+        .iter()
+        .find(|e| e.security_policy_uri.as_ref() == policy_uri && e.security_mode == mode)
+        .cloned()
+        .unwrap_or_else(|| (url, policy_uri, mode, UserTokenPolicy::anonymous()).into());
+    description.endpoint_url = url.into();
+    description
 }
 
 /// Determine the OPC UA user identity token for a connect. Supports Anonymous,
@@ -616,10 +655,12 @@ fn certification_error(message: &str) -> bool {
 /// Fetches the server's advertised endpoints via `GetEndpoints`. The client is
 /// built with a permissive trust setting so discovery works even when the
 /// server cert is not yet trusted (GetEndpoints runs over an anonymous channel).
+/// The full descriptions are returned so the connect description can reuse the
+/// server's own user-token policies.
 async fn discover_endpoints(
     url: &str,
     binding: Option<&NetworkBinding>,
-) -> Result<Vec<UaEndpointInfo>, String> {
+) -> Result<Vec<EndpointDescription>, String> {
     let client = build_discovery_client()?;
     let request = if let Some(binding) = binding {
         let connector = BoundConnectorBuilder::new(url, binding.clone());
@@ -639,14 +680,7 @@ async fn discover_endpoints(
         .map_err(|_| format!("таймаут запроса точек безопасности у {url}"))?
         .map_err(|e| format!("не удалось получить точки безопасности от {url}: {e}"))?;
 
-    Ok(endpoints
-        .iter()
-        .map(|e| UaEndpointInfo {
-            url: e.endpoint_url.to_string(),
-            security_policy: e.security_policy_uri.to_string(),
-            security_mode: format!("{:?}", e.security_mode),
-        })
-        .collect())
+    Ok(endpoints)
 }
 
 pub(super) fn pki_dir() -> PathBuf {

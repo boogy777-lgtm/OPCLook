@@ -144,7 +144,8 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                             if !dropping_tree {
                                                 let response = ui.interact(
                                                     rect,
-                                                    ui.id().with(("signal_column_header", *column)),
+                                                    ui.scope_id()
+                                                        .with(("signal_column_header", *column)),
                                                     egui::Sense::click_and_drag(),
                                                 );
                                                 response.dnd_set_drag_payload(*column);

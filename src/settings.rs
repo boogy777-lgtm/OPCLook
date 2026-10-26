@@ -361,14 +361,113 @@ impl Settings {
 }
 
 pub fn app_dir() -> PathBuf {
-    std::env::var_os("APPDATA")
+    // Unit tests must never touch the developer's real settings: in test builds
+    // the base directory is a per-test override or a private per-process temp
+    // directory (see `test_isolation`). The real `%APPDATA%` is only read by the
+    // non-test build (the application and the integration tests, which redirect
+    // `APPDATA` themselves).
+    #[cfg(test)]
+    let base = test_isolation::current_override().unwrap_or_else(test_isolation::fallback_dir);
+    #[cfg(not(test))]
+    let base = std::env::var_os("APPDATA")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("opcda-egui")
+        .unwrap_or_else(|| PathBuf::from("."));
+    base.join("opcda-egui")
 }
 
 pub fn settings_path() -> PathBuf {
     app_dir().join("settings.json")
+}
+
+/// Test-only settings-directory isolation.
+///
+/// `Settings::load()`/`save()` resolve their directory through `app_dir()`,
+/// which in test builds never returns the developer's real `%APPDATA%`. Tests
+/// that need a specific directory opt in with [`with_appdata_dir`] (or hold a
+/// [`ScopedDir`]); a single process-wide lock serializes those tests so they
+/// cannot interleave each other's directories under parallel execution.
+#[cfg(test)]
+pub mod test_isolation {
+    use std::cell::RefCell;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    // Serializes every lib test that reads/writes settings. Poisoning (a
+    // panicking test) is recovered so the rest of the suite keeps running.
+    static IO_LOCK: Mutex<()> = Mutex::new(());
+
+    thread_local! {
+        // The directory the current test redirected settings to. Thread-local
+        // so parallel tests cannot see (and clobber) each other's directory.
+        static OVERRIDE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    }
+
+    pub(super) fn current_override() -> Option<PathBuf> {
+        OVERRIDE.with(|cell| cell.borrow().clone())
+    }
+
+    /// A private per-process directory used when a test saves without opting
+    /// into its own directory. Never the real `%APPDATA%`.
+    pub(super) fn fallback_dir() -> PathBuf {
+        static FALLBACK: OnceLock<PathBuf> = OnceLock::new();
+        FALLBACK
+            .get_or_init(|| {
+                let dir =
+                    std::env::temp_dir().join(format!("opcda-egui-libtest-{}", std::process::id()));
+                let _ = std::fs::create_dir_all(&dir);
+                dir
+            })
+            .clone()
+    }
+
+    /// Holds the settings lock and redirects settings to `dir` until dropped.
+    /// Restores the previous redirect (and releases the lock) even on panic.
+    pub struct ScopedDir {
+        dir: PathBuf,
+        owned: bool,
+        previous: Option<PathBuf>,
+        #[allow(dead_code)]
+        _guard: MutexGuard<'static, ()>,
+    }
+
+    impl ScopedDir {
+        fn at(dir: PathBuf, owned: bool) -> Self {
+            let guard = IO_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let previous = OVERRIDE.with(|cell| cell.replace(Some(dir.clone())));
+            Self {
+                dir,
+                owned,
+                previous,
+                _guard: guard,
+            }
+        }
+
+        /// Create a fresh private temp directory owned by this guard.
+        pub fn temp(label: &str) -> Self {
+            let dir = std::env::temp_dir()
+                .join(format!("opcda-egui-libtest-{label}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let _ = std::fs::create_dir_all(&dir);
+            Self::at(dir, true)
+        }
+    }
+
+    impl Drop for ScopedDir {
+        fn drop(&mut self) {
+            OVERRIDE.with(|cell| cell.borrow_mut().clone_from(&self.previous));
+            if self.owned {
+                let _ = std::fs::remove_dir_all(&self.dir);
+            }
+        }
+    }
+
+    /// Run `f` with settings redirected to `dir` under the settings lock.
+    pub fn with_appdata_dir<T>(dir: &Path, f: impl FnOnce() -> T) -> T {
+        let _scope = ScopedDir::at(dir.to_path_buf(), false);
+        f()
+    }
 }
 
 #[cfg(test)]
@@ -376,24 +475,11 @@ mod tests {
     use super::*;
     use crate::bff::model::{EndpointSpec, Protocol};
     use crate::columns::ColumnId;
-    use std::sync::{Mutex, MutexGuard};
 
-    // load()/save() read APPDATA at call time; serialize those tests and
-    // restore the previous value so parallel tests can't clobber each other.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
+    // load()/save() resolve `app_dir()`; serialize and redirect those tests so
+    // they never touch the real user settings (see `test_isolation`).
     fn with_appdata<T>(dir: &PathBuf, f: impl FnOnce() -> T) -> T {
-        unsafe {
-            let _guard: MutexGuard<'_, ()> = ENV_LOCK.lock().unwrap();
-            let previous = std::env::var_os("APPDATA");
-            std::env::set_var("APPDATA", dir);
-            let result = f();
-            match previous {
-                Some(v) => std::env::set_var("APPDATA", v),
-                None => std::env::remove_var("APPDATA"),
-            }
-            result
-        }
+        super::test_isolation::with_appdata_dir(dir, f)
     }
 
     #[test]
