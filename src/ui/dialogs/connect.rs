@@ -395,9 +395,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                             // A selected server belongs to its original host;
                             // never reuse that selection on another PC. Keep a
                             // manually typed ProgID when the host is edited.
-                            if dialog.da_selected.as_deref()
-                                == Some(dialog.da_manual.as_str())
-                            {
+                            if dialog.da_selected.as_deref() == Some(dialog.da_manual.as_str()) {
                                 dialog.da_manual.clear();
                             }
                             dialog.da_selected = None;
@@ -825,9 +823,10 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                     .enumerate()
                     .find(|(index, server)| {
                         server.id == address
-                            && dialog.da_server_hosts.get(*index).is_none_or(|saved_host| {
-                                saved_host == &host
-                            })
+                            && dialog
+                                .da_server_hosts
+                                .get(*index)
+                                .is_none_or(|saved_host| saved_host == &host)
                     })
                     .and_then(|(_, server)| da_advertised_name(server));
                 let mut ep = crate::bff::model::EndpointSpec::da(host, address);
