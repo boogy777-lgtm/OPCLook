@@ -1,0 +1,23 @@
+name: Windows x86 Rust checks
+
+on:
+  push:
+    branches: [main, "fix/**"]
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: i686-pc-windows-msvc
+          components: rustfmt
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Build and run library tests
+        run: cargo test --lib --target i686-pc-windows-msvc
+      - name: Run UI interactions
+        run: cargo test --test ui_interactions --target i686-pc-windows-msvc
