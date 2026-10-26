@@ -94,8 +94,7 @@ impl App {
         };
         self.dialogs.connect.ua_searching = true;
         self.dialogs.connect.ua_search_results.clear();
-        self.dialogs.connect.ua_result_epoch =
-            self.dialogs.connect.ua_result_epoch.wrapping_add(1);
+        self.dialogs.connect.ua_result_epoch = self.dialogs.connect.ua_result_epoch.wrapping_add(1);
         self.dialogs.connect.error = None;
         self.journal
             .info_l(Tr::SearchingUaHost, &[&host, &port.to_string()]);
@@ -250,8 +249,7 @@ impl App {
             return;
         };
         self.dialogs.connect.ua_network_searching = true;
-        self.dialogs.connect.ua_result_epoch =
-            self.dialogs.connect.ua_result_epoch.wrapping_add(1);
+        self.dialogs.connect.ua_result_epoch = self.dialogs.connect.ua_result_epoch.wrapping_add(1);
         self.dialogs.connect.error = None;
         self.journal.info_l(Tr::SearchingUaNetwork, &[]);
         self.send(

@@ -69,11 +69,7 @@ pub(super) fn network_settings_view(
             })
             .width(max_width)
             .show_ui(ui, |ui| {
-                ui.selectable_value(
-                    &mut chosen,
-                    None,
-                    tr(lang, Tr::NetworkNotSelected),
-                );
+                ui.selectable_value(&mut chosen, None, tr(lang, Tr::NetworkNotSelected));
                 for adapter in &rows {
                     let is_selected = preferred_id.is_some() && preferred_id == Some(adapter.id);
                     ui.selectable_value(
