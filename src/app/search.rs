@@ -428,7 +428,7 @@ fn same_ua_endpoint(
 
 /// Fold the mDNS/LDS network results and the accumulated per-host results of a
 /// combined UA auto-search into a single, deduplicated server list.
-fn merge_ua_results(dialog: &mut ConnectDialog) {
+pub(super) fn merge_ua_results(dialog: &mut ConnectDialog) {
     let mut merged: Vec<crate::bff::model::UaServerInfo> = std::mem::take(&mut dialog.ua_search_results);
     for network in std::mem::take(&mut dialog.ua_network_results) {
         let endpoints = network

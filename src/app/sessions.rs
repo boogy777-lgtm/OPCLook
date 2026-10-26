@@ -499,3 +499,19 @@ pub(super) fn reconnect_delay(attempt: u32) -> Duration {
         .unwrap_or(u64::MAX);
     Duration::from_secs(secs)
 }
+
+#[cfg(test)]
+mod popup_identity_tests {
+    use super::*;
+
+    #[test]
+    fn da_progid_identity_includes_source_computer() {
+        let first = EndpointSpec::da("plant-a", "Vendor.OPC");
+        let second = EndpointSpec::da("plant-b", "Vendor.OPC");
+        assert_ne!(App::dedup_key(&first), App::dedup_key(&second));
+        assert_eq!(
+            App::dedup_key(&first),
+            App::dedup_key(&EndpointSpec::da("PLANT-A", "vendor.opc"))
+        );
+    }
+}

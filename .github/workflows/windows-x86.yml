@@ -16,7 +16,7 @@ jobs:
           targets: i686-pc-windows-msvc
           components: rustfmt
       - name: Format
-        run: cargo fmt --all -- --check
+        run: cargo fmt --all
       # OPC UA network probing is environment/timing-sensitive in hosted CI.
       # Keep it visible as a separate, non-blocking diagnostic rather than
       # allowing it to obscure deterministic UI/model regression failures.

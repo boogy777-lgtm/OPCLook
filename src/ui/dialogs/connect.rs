@@ -67,6 +67,8 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                 let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
                 let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
                 let opening_frame = dialog.focus_pending;
+                let mut focus_in_search_field = false;
+                let mut focus_in_url_field = false;
                 ui.horizontal(|ui| {
                     if ui
                         .selectable_label(
@@ -347,6 +349,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                         if dialog.focus_pending && is_da {
                             host.request_focus();
                         }
+                        focus_in_search_field = host.has_focus();
                         if is_da && host.changed() {
                             dialog.da_selected = None;
                             dialog.da_selected_host = None;
@@ -354,11 +357,12 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                         }
                         if !is_da {
                             ui.label(egui::RichText::new(tr(lang, Tr::PortLabel)).weak());
-                            ui.add(
+                            let port_field = ui.add(
                                 egui::TextEdit::singleline(&mut dialog.ua_search_port)
                                     .hint_text(tr(lang, Tr::UaPortHint))
                                     .desired_width(60.0),
                             );
+                            focus_in_search_field |= port_field.has_focus();
                         }
                         let searching = if is_da {
                             dialog.da_pending
@@ -614,6 +618,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                         if dialog.focus_pending && !is_da {
                             url.request_focus();
                         }
+                        focus_in_url_field = url.has_focus();
                     });
 
                     if dialog.focus_pending {
@@ -633,9 +638,30 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                         Protocol::OpcDa => {
                                             dialog.da_host = endpoint.host.clone();
                                             dialog.da_manual = endpoint.address.clone();
+                                            dialog.da_selected = None;
+                                            dialog.da_selected_host = None;
                                         }
                                         Protocol::OpcUa => {
                                             dialog.ua_url = endpoint.address.clone();
+                                            dialog.ua_security_policy =
+                                                endpoint.ua_security_policy.unwrap_or_default();
+                                            dialog.ua_security_mode =
+                                                endpoint.ua_security_mode.unwrap_or_default();
+                                            dialog.ua_trust_server_cert =
+                                                endpoint.ua_trust_server_cert;
+                                            dialog.ua_session_timeout = endpoint
+                                                .ua_session_timeout
+                                                .unwrap_or(dialog.ua_session_timeout);
+                                            dialog.ua_identity_index = if endpoint.ua_use_certificate {
+                                                2
+                                            } else if !endpoint.user.is_empty() {
+                                                1
+                                            } else {
+                                                0
+                                            };
+                                            dialog.ua_user = endpoint.user.clone();
+                                            // Passwords are deliberately not persisted.
+                                            dialog.ua_password.clear();
                                         }
                                     }
                                 }
@@ -670,8 +696,18 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                             close = true;
                         }
                     });
-                    if enter && can_connect_dialog && !opening_frame
-                        && !ui.memory(|m| m.focused().is_some())
+                    // Enter belongs to the focused field, not to an
+                    // unconditional popup-wide Connect shortcut.
+                    if enter && !opening_frame && focus_in_search_field {
+                        if is_da {
+                            refresh = Some(dialog.da_host.clone());
+                        } else {
+                            app_search = true;
+                        }
+                    } else if enter
+                        && !opening_frame
+                        && can_connect_dialog
+                        && (focus_in_url_field || ui.memory(|m| m.focused().is_none()))
                     {
                         connect = Some(dialog.protocol);
                     } else if esc && !opening_frame {
