@@ -26,6 +26,7 @@ pub(super) enum TableAction {
     AddSelectedTree,
     AddChildren,
     MoveColumn(ColumnId, ColumnDir),
+    DropColumn(ColumnId, usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
