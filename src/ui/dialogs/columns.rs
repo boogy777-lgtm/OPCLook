@@ -1,7 +1,7 @@
 use super::super::colors::yellow;
 use super::super::paint::paint_column_grip;
 #[cfg(test)]
-use super::super::test_hooks::{record_column_gap, record_column_grip};
+use super::super::test_hooks::{record_column_gap, record_column_grip, record_column_row};
 use super::dialog_spacing;
 use crate::app::App;
 use crate::columns::ColumnId;
@@ -139,6 +139,8 @@ pub(super) fn columns_dialog(app: &mut App, ui: &mut egui::Ui) {
                 // A user can release on the row itself, not only on the thin
                 // insertion gaps. Top half inserts before; bottom half after.
                 let row_rect = row_ui.response.rect;
+                #[cfg(test)]
+                record_column_row(column, row_rect);
                 let after_midpoint = ui
                     .input(|i| i.pointer.hover_pos())
                     .is_some_and(|pos| pos.y >= row_rect.center().y);
