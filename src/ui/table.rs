@@ -4,7 +4,7 @@ use super::files::save_tree_csv;
 use super::navigation::tags_context_menu;
 use super::servers::session_tab_strip;
 #[cfg(test)]
-use super::test_hooks::{record_table_scroll, set_tags_rect_for_test};
+use super::test_hooks::{record_header_cell, record_table_scroll, set_tags_rect_for_test};
 use super::tree::refresh_selected;
 use crate::app::App;
 use crate::columns::ColumnId;
@@ -30,8 +30,11 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
             // background (no transparent defaults leaking a black band between
             // panels, and no extra padding shifting the table).
             let drop_frame = egui::Frame::NONE.fill(ui.style().visuals.panel_fill);
+            // The drop target must cover unused space below an empty/short table.
+            let drop_height = ui.available_height();
             let (dropped_zone, dropped) =
                 ui.dnd_drop_zone::<TreeDragPayload, _>(drop_frame, |ui| {
+                    ui.set_min_height(drop_height);
                     let mut actions = Vec::new();
                     let mut columns: Vec<ColumnId> = app.settings.columns.visible().collect();
 
@@ -119,20 +122,69 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                             }
                             table
                                 .header(TABLE_HEADER_HEIGHT, |mut header| {
-                                    for column in &table_columns {
-                                        // Only the Status indicator column has no header title; every
-                                        // other column (regardless of position) shows its title, so a
-                                        // non-Status first column keeps its header.
-                                        if *column == ColumnId::Status {
-                                            header.col(|ui| {
+                                    for (index, column) in table_columns.iter().enumerate() {
+                                        header.col(|ui| {
+                                            // The entire header cell is a drag source and target.
+                                            // Column widths and the body stay owned by TableBuilder.
+                                            if *column == ColumnId::Status {
                                                 ui.label("");
-                                            });
-                                        } else {
-                                            header.col(|ui| {
-                                                let response =
-                                                    ui.strong(tr(lang, column.title_tr()));
+                                            } else {
+                                                ui.strong(tr(lang, column.title_tr()));
+                                            }
+                                            let rect = ui.max_rect();
+                                            #[cfg(test)]
+                                            record_header_cell(*column, rect);
+                                            // A tree payload belongs to the outer table drop
+                                            // zone. Do not let header drag widgets consume it.
+                                            let dropping_tree =
+                                                egui::DragAndDrop::payload::<TreeDragPayload>(
+                                                    ui.ctx(),
+                                                )
+                                                .is_some();
+                                            if !dropping_tree {
+                                                let response = ui.interact(
+                                                    rect,
+                                                    ui.id().with(("signal_column_header", *column)),
+                                                    egui::Sense::click_and_drag(),
+                                                );
+                                                response.dnd_set_drag_payload(*column);
+                                                if let Some(payload) =
+                                                    response.dnd_release_payload::<ColumnId>()
+                                                {
+                                                    let after_midpoint = ui
+                                                        .input(|i| i.pointer.hover_pos())
+                                                        .is_some_and(|pos| {
+                                                            pos.x >= rect.center().x
+                                                        });
+                                                    actions.push(TableAction::DropColumn(
+                                                        *payload,
+                                                        index + usize::from(after_midpoint),
+                                                    ));
+                                                }
+                                                if response
+                                                    .dnd_hover_payload::<ColumnId>()
+                                                    .is_some()
+                                                {
+                                                    let after_midpoint = ui
+                                                        .input(|i| i.pointer.hover_pos())
+                                                        .is_some_and(|pos| {
+                                                            pos.x >= rect.center().x
+                                                        });
+                                                    let x = if after_midpoint {
+                                                        rect.right()
+                                                    } else {
+                                                        rect.left()
+                                                    };
+                                                    ui.painter().vline(
+                                                        x,
+                                                        rect.y_range(),
+                                                        egui::Stroke::new(
+                                                            2.0,
+                                                            ui.visuals().selection.stroke.color,
+                                                        ),
+                                                    );
+                                                }
                                                 response
-                                                    .clone()
                                                     .on_hover_text(tr(lang, Tr::PkmMoveColumn))
                                                     .context_menu(|ui| {
                                                         if ui
@@ -156,8 +208,8 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                             ui.close();
                                                         }
                                                     });
-                                            });
-                                        }
+                                            }
+                                        });
                                     }
                                 })
                                 .body(|mut body| {
@@ -414,27 +466,31 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                     TableAction::AddSelectedTree => app.add_selected_tree(),
                     TableAction::AddChildren => app.add_selected_children(),
                     TableAction::MoveColumn(column, dir) => {
-                        let mut order = app.settings.resolved_order();
+                        let order = app.settings.resolved_order();
                         let Some(index) = order.iter().position(|c| *c == column) else {
-                            break;
+                            continue;
                         };
-                        match dir {
-                            ColumnDir::Left if index > 0 => {
-                                order.swap(index, index - 1);
-                            }
-                            ColumnDir::Right if index + 1 < order.len() => {
-                                order.swap(index, index + 1);
-                            }
-                            _ => {}
+                        let before = match dir {
+                            ColumnDir::Left if index > 0 => index - 1,
+                            ColumnDir::Right if index + 1 < order.len() => index + 2,
+                            _ => continue,
+                        };
+                        if app.settings.move_column_to_insert(column, before) {
+                            app.settings.save();
+                            let title = tr(app.lang(), column.title_tr());
+                            app.status = if dir == ColumnDir::Left {
+                                fmt(app.lang(), Tr::ColumnMovedLeft, &[&title])
+                            } else {
+                                fmt(app.lang(), Tr::ColumnMovedRight, &[&title])
+                            };
                         }
-                        app.settings.persist_column_order(&order);
-                        app.settings.save();
-                        let title = tr(app.lang(), column.title_tr());
-                        app.status = if dir == ColumnDir::Left {
-                            fmt(app.lang(), Tr::ColumnMovedLeft, &[&title])
-                        } else {
-                            fmt(app.lang(), Tr::ColumnMovedRight, &[&title])
-                        };
+                    }
+                    TableAction::DropColumn(column, before) => {
+                        if app.settings.move_column_to_insert(column, before) {
+                            app.settings.save();
+                            let title = tr(app.lang(), column.title_tr());
+                            app.status = fmt(app.lang(), Tr::MovedFormat, &[&title]);
+                        }
                     }
                 }
             }

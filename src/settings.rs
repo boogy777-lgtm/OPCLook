@@ -249,37 +249,52 @@ impl Settings {
         serde_json::from_str::<ColumnId>(&format!("\"{trimmed}\"")).ok()
     }
 
-    /// Effective column order used by the table. Prefers the persisted
-    /// `column_order` snapshot; falls back to the legacy `columns.order`.
+    /// The single normalized order for table headers, the setup dialog and DnD.
+    /// Reject unknown/duplicate saved ids and restore missing canonical columns.
     pub fn resolved_order(&self) -> Vec<ColumnId> {
-        if let Some(list) = &self.column_order {
-            let parsed: Vec<ColumnId> = list
-                .iter()
-                .filter_map(|s| Self::parse_column_name(s))
-                .collect();
-            if !parsed.is_empty() {
-                // Ensure every canonical column is present exactly once, in
-                // the stored relative order, so hiding/reshow stays consistent.
-                let mut order = parsed.clone();
-                for id in ColumnId::ALL {
-                    if !order.contains(&id) {
-                        order.push(id);
-                    }
-                }
-                return order;
+        let saved = self
+            .column_order
+            .as_ref()
+            .map(|list| {
+                list.iter()
+                    .filter_map(|raw| Self::parse_column_name(raw))
+                    .collect::<Vec<_>>()
+            })
+            .filter(|order| !order.is_empty())
+            .unwrap_or_else(|| self.columns.order.clone());
+        let mut order = Vec::with_capacity(ColumnId::ALL.len());
+        for id in saved.into_iter().chain(ColumnId::ALL) {
+            if !order.contains(&id) {
+                order.push(id);
             }
         }
-        self.columns.order.clone()
+        order
     }
 
-    /// Record a new column order from the header context menu and keep the
-    /// legacy `columns.order` in sync for the columns dialog. Persisted entries
-    /// are plain variant names (no JSON quotes), so `settings.json` stores
-    /// `["Server", ...]` instead of a double-encoded `["\"Server\"", ...]`.
+    /// Apply the same move semantics to the effective order no matter whether
+    /// it originated in the header menu, dialog, or legacy settings.
+    pub fn move_column_to_insert(&mut self, id: ColumnId, before: usize) -> bool {
+        let mut columns = self.columns.clone();
+        columns.order = self.resolved_order();
+        if !columns.move_to_insert(id, before) {
+            return false;
+        }
+        self.persist_column_order(&columns.order);
+        true
+    }
+
+    /// Keep the legacy order and the persisted header order identical.
+    /// A malformed caller-provided order is repaired using the canonical ids.
     pub fn persist_column_order(&mut self, order: &[ColumnId]) {
-        self.columns.order = order.to_vec();
+        let mut normalized = Vec::with_capacity(ColumnId::ALL.len());
+        for id in order.iter().copied().chain(ColumnId::ALL) {
+            if !normalized.contains(&id) {
+                normalized.push(id);
+            }
+        }
+        self.columns.order = normalized.clone();
         self.column_order = Some(
-            order
+            normalized
                 .iter()
                 .map(|id| {
                     serde_json::to_string(id)
@@ -782,6 +797,35 @@ mod tests {
         for id in ColumnId::ALL {
             assert!(resolved.contains(&id), "missing {id:?}");
         }
+    }
+
+    #[test]
+    fn column_order_deduplicates_and_repairs_legacy_entries() {
+        let mut s = Settings::default();
+        s.column_order = Some(vec![
+            "Value".into(),
+            "Value".into(),
+            "Status".into(),
+            "Unknown".into(),
+        ]);
+        s.columns.order = vec![ColumnId::Value, ColumnId::Value];
+        let resolved = s.resolved_order();
+        assert_eq!(resolved.len(), ColumnId::ALL.len());
+        assert_eq!(&resolved[..2], &[ColumnId::Value, ColumnId::Status]);
+        s.persist_column_order(&[ColumnId::Status, ColumnId::Status]);
+        assert_eq!(s.columns.order.len(), ColumnId::ALL.len());
+        assert_eq!(s.column_order.as_ref().unwrap().len(), ColumnId::ALL.len());
+    }
+
+    #[test]
+    fn column_drag_uses_resolved_order_and_persists() {
+        let mut s = Settings::default();
+        s.column_order = Some(vec!["Value".into(), "Status".into()]);
+        assert!(s.move_column_to_insert(ColumnId::Status, 0));
+        assert_eq!(s.resolved_order()[0], ColumnId::Status);
+        assert_eq!(s.resolved_order()[1], ColumnId::Value);
+        assert_eq!(s.columns.order, s.resolved_order());
+        assert!(!s.move_column_to_insert(ColumnId::Status, 0));
     }
 
     #[test]

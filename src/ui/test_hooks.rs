@@ -92,12 +92,22 @@ mod columns_hook {
 
     static GRIPS: OnceLock<Mutex<HashMap<ColumnId, egui::Rect>>> = OnceLock::new();
     static GAPS: OnceLock<Mutex<HashMap<usize, egui::Rect>>> = OnceLock::new();
+    static ROWS: OnceLock<Mutex<HashMap<ColumnId, egui::Rect>>> = OnceLock::new();
 
     fn grips() -> &'static Mutex<HashMap<ColumnId, egui::Rect>> {
         GRIPS.get_or_init(|| Mutex::new(HashMap::new()))
     }
     fn gaps() -> &'static Mutex<HashMap<usize, egui::Rect>> {
         GAPS.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+    fn rows() -> &'static Mutex<HashMap<ColumnId, egui::Rect>> {
+        ROWS.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+    pub fn set_row(column: ColumnId, rect: egui::Rect) {
+        rows().lock().unwrap().insert(column, rect);
+    }
+    pub fn row(column: ColumnId) -> Option<egui::Rect> {
+        rows().lock().unwrap().get(&column).copied()
     }
     pub fn set_grip(column: ColumnId, rect: egui::Rect) {
         grips().lock().unwrap().insert(column, rect);
@@ -114,6 +124,7 @@ mod columns_hook {
     pub fn clear() {
         grips().lock().unwrap().clear();
         gaps().lock().unwrap().clear();
+        rows().lock().unwrap().clear();
     }
 }
 
@@ -128,6 +139,11 @@ pub(super) fn record_column_gap(index: usize, rect: egui::Rect) {
 }
 
 #[cfg(test)]
+pub(super) fn record_column_row(column: crate::columns::ColumnId, rect: egui::Rect) {
+    columns_hook::set_row(column, rect);
+}
+
+#[cfg(test)]
 pub mod columns_hook_api {
     pub fn grip(c: crate::columns::ColumnId) -> Option<egui::Rect> {
         super::columns_hook::grip(c)
@@ -135,9 +151,45 @@ pub mod columns_hook_api {
     pub fn gap(i: usize) -> Option<egui::Rect> {
         super::columns_hook::gap(i)
     }
+    pub fn row(c: crate::columns::ColumnId) -> Option<egui::Rect> {
+        super::columns_hook::row(c)
+    }
     pub fn clear() {
         super::columns_hook::clear();
     }
+}
+
+// Header cells are captured independently of dialog rows for real-pointer
+// reorder tests (the table and dialog may both be present in one frame).
+#[cfg(test)]
+mod header_hook {
+    use crate::columns::ColumnId;
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    static CELLS: OnceLock<Mutex<HashMap<ColumnId, egui::Rect>>> = OnceLock::new();
+
+    fn cells() -> &'static Mutex<HashMap<ColumnId, egui::Rect>> {
+        CELLS.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    pub fn record(id: ColumnId, rect: egui::Rect) {
+        cells().lock().unwrap().insert(id, rect);
+    }
+
+    pub fn get(id: ColumnId) -> Option<egui::Rect> {
+        cells().lock().unwrap().get(&id).copied()
+    }
+}
+
+#[cfg(test)]
+pub(super) fn record_header_cell(column: crate::columns::ColumnId, rect: egui::Rect) {
+    header_hook::record(column, rect);
+}
+
+#[cfg(test)]
+pub fn header_cell_for_test(column: crate::columns::ColumnId) -> Option<egui::Rect> {
+    header_hook::get(column)
 }
 
 #[cfg(test)]
@@ -329,6 +381,46 @@ mod dnd_proof {
             "dropping an Item must add exactly one row"
         );
         assert_eq!(app.rows[0].item_id, "ns=1;s=item");
+    }
+
+    /// The drop target includes the unused central-panel space, even when
+    /// the table has no rows. A user should not have to aim at its header.
+    #[test]
+    fn drag_item_to_empty_table_background_adds_row() {
+        let _guard = test_lock();
+        let (ctx, mut app) = setup();
+        let (tree, tags) = capture_rects(&ctx, &mut app);
+        assert!(tags.height() > 250.0, "drop zone must fill empty panel");
+
+        let start = tree.center();
+        let mut press = base_input();
+        press.events = vec![
+            Event::PointerMoved(start),
+            Event::PointerButton {
+                pos: start,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            },
+        ];
+        frame(&ctx, &mut app, press);
+        frame(
+            &ctx,
+            &mut app,
+            base_input_with_move(Pos2::new(start.x + 30.0, start.y + 40.0)),
+        );
+        assert!(egui::DragAndDrop::has_any_payload(&ctx));
+        let over = Pos2::new(tags.center().x, tags.bottom() - 20.0);
+        frame(&ctx, &mut app, base_input_with_move(over));
+        let mut release = base_input();
+        release.events = vec![Event::PointerButton {
+            pos: over,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        }];
+        frame(&ctx, &mut app, release);
+        assert_eq!(app.rows.len(), 1, "blank background must accept a drop");
     }
 
     #[test]
@@ -584,6 +676,101 @@ mod dnd_proof {
         let mut input = base_input();
         input.events = vec![Event::PointerMoved(pos)];
         input
+    }
+
+    /// The header is both a drag source and a drop target. Moving FullName
+    /// before Type inserts it after WriteType and preserves persistence.
+    #[test]
+    fn header_drag_reorders_visible_columns() {
+        use crate::columns::ColumnId;
+        let _guard = test_lock();
+        let (ctx, mut app) = setup();
+        for _ in 0..3 {
+            frame(&ctx, &mut app, base_input());
+        }
+        let source = header_cell_for_test(ColumnId::FullName).expect("source header");
+        let target = header_cell_for_test(ColumnId::Type).expect("target header");
+        let start = source.center();
+        let mut press = base_input();
+        press.events = vec![
+            Event::PointerMoved(start),
+            Event::PointerButton {
+                pos: start,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            },
+        ];
+        frame(&ctx, &mut app, press);
+        frame(
+            &ctx,
+            &mut app,
+            base_input_with_move(Pos2::new(start.x + 20.0, start.y)),
+        );
+        assert!(egui::DragAndDrop::has_any_payload(&ctx));
+        let over = Pos2::new(target.left() + 5.0, target.center().y);
+        frame(&ctx, &mut app, base_input_with_move(over));
+        let mut release = base_input();
+        release.events = vec![Event::PointerButton {
+            pos: over,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        }];
+        frame(&ctx, &mut app, release);
+        let order = app.settings.resolved_order();
+        assert_eq!(order[2], ColumnId::FullName, "header drop must reorder");
+        assert_eq!(order, app.settings.columns.order);
+        assert!(app.settings.column_order.is_some());
+    }
+
+    /// Releasing the grip on the middle of a dialog row must work too:
+    /// a user should not have to hit the 14px insertion gap exactly.
+    #[test]
+    fn dialog_drag_onto_row_reorders() {
+        use crate::columns::ColumnId;
+        let _guard = test_lock();
+        columns_hook_api::clear();
+        let ctx = egui::Context::default();
+        ctx.set_visuals(egui::Visuals::dark());
+        let mut app = App::new_test(&ctx);
+        app.settings.set_lang(crate::i18n::Lang::Ru);
+        app.seed_session(1, crate::bff::model::EndpointSpec::da("", "Srv.Test"));
+        app.dialogs.columns.open = true;
+        for _ in 0..3 {
+            frame(&ctx, &mut app, base_input());
+        }
+        let grip = columns_hook_api::grip(ColumnId::FullName).expect("source grip");
+        let target = columns_hook_api::row(ColumnId::Type).expect("destination row");
+        let start = grip.center();
+        let mut press = base_input();
+        press.events = vec![
+            Event::PointerMoved(start),
+            Event::PointerButton {
+                pos: start,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            },
+        ];
+        frame(&ctx, &mut app, press);
+        frame(
+            &ctx,
+            &mut app,
+            base_input_with_move(Pos2::new(start.x + 30.0, start.y + 20.0)),
+        );
+        assert!(egui::DragAndDrop::has_any_payload(&ctx));
+        let over = Pos2::new(target.center().x, target.top() + 2.0);
+        frame(&ctx, &mut app, base_input_with_move(over));
+        let mut release = base_input();
+        release.events = vec![Event::PointerButton {
+            pos: over,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        }];
+        frame(&ctx, &mut app, release);
+        assert_eq!(app.settings.resolved_order()[2], ColumnId::FullName);
     }
 
     /// Headless proof that dragging a columns-dialog row by its grip onto an

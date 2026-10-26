@@ -1,7 +1,7 @@
 use super::super::colors::yellow;
 use super::super::paint::paint_column_grip;
 #[cfg(test)]
-use super::super::test_hooks::{record_column_gap, record_column_grip};
+use super::super::test_hooks::{record_column_gap, record_column_grip, record_column_row};
 use super::dialog_spacing;
 use crate::app::App;
 use crate::columns::ColumnId;
@@ -136,7 +136,29 @@ pub(super) fn columns_dialog(app: &mut App, ui: &mut egui::Ui) {
                         ui.label(egui::RichText::new(tr(lang, column.hint_tr())).weak());
                     }
                 });
-                let _ = row_ui;
+                // A user can release on the row itself, not only on the thin
+                // insertion gaps. Top half inserts before; bottom half after.
+                let row_rect = row_ui.response.rect;
+                #[cfg(test)]
+                record_column_row(column, row_rect);
+                let after_midpoint = ui
+                    .input(|i| i.pointer.hover_pos())
+                    .is_some_and(|pos| pos.y >= row_rect.center().y);
+                if let Some(payload) = row_ui.response.dnd_release_payload::<ColumnId>() {
+                    drop_at = Some((*payload, idx + usize::from(after_midpoint)));
+                }
+                if row_ui.response.dnd_hover_payload::<ColumnId>().is_some() {
+                    let y = if after_midpoint {
+                        row_rect.bottom()
+                    } else {
+                        row_rect.top()
+                    };
+                    ui.painter().hline(
+                        row_rect.x_range(),
+                        y,
+                        egui::Stroke::new(2.0, ui.visuals().selection.stroke.color),
+                    );
+                }
             }
 
             if let Some(dir) = move_focus {
@@ -153,7 +175,7 @@ pub(super) fn columns_dialog(app: &mut App, ui: &mut egui::Ui) {
                 }
             }
             if let Some((dropped, gap_idx)) = drop_at {
-                if app.settings.columns.move_to_insert(dropped, gap_idx) {
+                if app.settings.move_column_to_insert(dropped, gap_idx) {
                     order = app.settings.columns.order.clone();
                     changed = true;
                     moved = Some((dropped, gap_idx));
