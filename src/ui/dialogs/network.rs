@@ -57,7 +57,8 @@ pub(super) fn network_settings_view(
         .iter()
         .copied()
         .find(|adapter| preferred_id.is_some() && preferred_id == Some(adapter.id));
-    let max_width = ui.available_width().min(380.0);
+    // Reserve room for the label and Refresh control in a 560px popup.
+    let max_width = (ui.available_width() - 230.0).clamp(160.0, 330.0);
 
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tr(lang, Tr::NetworkAdapterCombo)).strong());

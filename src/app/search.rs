@@ -41,10 +41,29 @@ impl App {
         self.hold_da_route(0, &host, prepared);
     }
 
+    /// Start a direct DA host search, invalidating all previous popup
+    /// discovery requests. Used by the Search button and host-field Enter.
+    pub fn restart_da_discovery(&mut self, host: String) {
+        self.clear_pending_requests(0);
+        self.release_da_discovery_routes();
+        let d = &mut self.dialogs.connect;
+        d.da_pending = false;
+        d.da_auto_pending = 0;
+        d.da_servers.clear();
+        d.da_server_hosts.clear();
+        d.da_selected = None;
+        d.da_selected_host = None;
+        self.discover_da(host);
+    }
+
     /// Combined DA discovery: this computer (empty host) plus every known remote
     /// DA host from settings/history (best effort). Results are merged as the
     /// per-host `Servers` events arrive.
     pub fn discover_da_all(&mut self) {
+        // A new user search owns a new set of request IDs and result rows.
+        // Late replies from the previous search may not overwrite them.
+        self.clear_pending_requests(0);
+        self.release_da_discovery_routes();
         // Without an explicitly selected adapter only this computer is
         // discovered; remote search/connect is an explicit error instead of a
         // silent fallback to the default route.

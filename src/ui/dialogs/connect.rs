@@ -392,9 +392,16 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                         }
                         focus_in_search_field = host.has_focus();
                         if is_da && host.changed() {
+                            // A selected server belongs to its original host;
+                            // never reuse that selection on another PC. Keep a
+                            // manually typed ProgID when the host is edited.
+                            if dialog.da_selected.as_deref()
+                                == Some(dialog.da_manual.as_str())
+                            {
+                                dialog.da_manual.clear();
+                            }
                             dialog.da_selected = None;
                             dialog.da_selected_host = None;
-                            dialog.da_manual.clear();
                         }
                         if !is_da {
                             ui.label(egui::RichText::new(tr(lang, Tr::PortLabel)).weak());
@@ -761,7 +768,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
         if host.trim().is_empty() {
             app.discover_da_all();
         } else {
-            app.discover_da(host);
+            app.restart_da_discovery(host);
         }
     }
     if app_subnet_search && !app.dialogs.connect.ua_search_host.trim().is_empty() {
@@ -810,22 +817,20 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
         let endpoint = match protocol {
             Protocol::OpcDa => {
                 let dialog = &app.dialogs.connect;
-                let address = if !dialog.da_manual.trim().is_empty() {
-                    dialog.da_manual.trim().to_string()
-                } else {
-                    dialog.da_selected.clone().unwrap_or_default()
-                };
-                // Advertised name (description + ProgID) when the user picked a
-                // discovered server; None for a manually typed ProgID.
+                let (host, address) = da_connect_target(dialog);
+                // Description may only come from the same computer and ProgID.
                 let advertised = dialog
                     .da_servers
                     .iter()
-                    .find(|s| {
-                        s.id == address || dialog.da_selected.as_deref() == Some(s.id.as_str())
+                    .enumerate()
+                    .find(|(index, server)| {
+                        server.id == address
+                            && dialog.da_server_hosts.get(*index).is_none_or(|saved_host| {
+                                saved_host == &host
+                            })
                     })
-                    .and_then(da_advertised_name);
-                let mut ep =
-                    crate::bff::model::EndpointSpec::da(dialog.da_host.trim().to_string(), address);
+                    .and_then(|(_, server)| da_advertised_name(server));
+                let mut ep = crate::bff::model::EndpointSpec::da(host, address);
                 ep = ep.with_advertised_name(advertised);
                 Some(ep)
             }
@@ -948,6 +953,27 @@ fn user_password_ui(ui: &mut egui::Ui, lang: Lang, user: &mut String, password: 
     });
 }
 
+/// Resolve the source computer for Connect, including the automatically
+/// selected first search result (which has not yet been clicked).
+fn da_connect_target(dialog: &crate::app::ConnectDialog) -> (String, String) {
+    if !dialog.da_manual.trim().is_empty() {
+        (
+            dialog.da_host.trim().to_string(),
+            dialog.da_manual.trim().to_string(),
+        )
+    } else {
+        (
+            dialog
+                .da_selected_host
+                .as_deref()
+                .unwrap_or(&dialog.da_host)
+                .trim()
+                .to_string(),
+            dialog.da_selected.clone().unwrap_or_default(),
+        )
+    }
+}
+
 /// Compose the advertised display name for a discovered OPC DA server:
 /// the ProgID with a description suffix (when the server provides one).
 pub(super) fn da_advertised_name(server: &crate::bff::model::ServerEntry) -> Option<String> {
@@ -963,7 +989,25 @@ pub(super) fn da_advertised_name(server: &crate::bff::model::ServerEntry) -> Opt
 
 #[cfg(test)]
 mod tests {
-    use super::ua_search_url;
+    use super::{da_connect_target, ua_search_url};
+
+    #[test]
+    fn automatically_selected_da_server_uses_its_source_host() {
+        let mut dialog = crate::app::ConnectDialog::default();
+        dialog.da_selected = Some("Vendor.OPC".to_string());
+        dialog.da_selected_host = Some("plant-b".to_string());
+        assert_eq!(
+            da_connect_target(&dialog),
+            ("plant-b".to_string(), "Vendor.OPC".to_string())
+        );
+
+        dialog.da_host = "manual-pc".to_string();
+        dialog.da_manual = "Other.OPC".to_string();
+        assert_eq!(
+            da_connect_target(&dialog),
+            ("manual-pc".to_string(), "Other.OPC".to_string())
+        );
+    }
 
     #[test]
     fn search_url_uses_default_port_when_empty_or_invalid() {
