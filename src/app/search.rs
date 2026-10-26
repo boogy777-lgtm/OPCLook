@@ -94,6 +94,8 @@ impl App {
         };
         self.dialogs.connect.ua_searching = true;
         self.dialogs.connect.ua_search_results.clear();
+        self.dialogs.connect.ua_result_epoch =
+            self.dialogs.connect.ua_result_epoch.wrapping_add(1);
         self.dialogs.connect.error = None;
         self.journal
             .info_l(Tr::SearchingUaHost, &[&host, &port.to_string()]);
@@ -119,6 +121,7 @@ impl App {
         d.ua_network_searching = bind.is_some();
         d.error = None;
         d.ua_search_results.clear();
+        d.ua_result_epoch = d.ua_result_epoch.wrapping_add(1);
         d.ua_network_results.clear();
         d.ua_discovered_endpoints.clear();
         // With an adapter: LDS/mDNS + 127.0.0.1 + localhost. Without one only
@@ -247,6 +250,8 @@ impl App {
             return;
         };
         self.dialogs.connect.ua_network_searching = true;
+        self.dialogs.connect.ua_result_epoch =
+            self.dialogs.connect.ua_result_epoch.wrapping_add(1);
         self.dialogs.connect.error = None;
         self.journal.info_l(Tr::SearchingUaNetwork, &[]);
         self.send(
@@ -332,6 +337,7 @@ impl App {
         d.ua_scan_confirm = None;
         d.ua_scan_servers.clear();
         d.ua_search_results.clear();
+        d.ua_result_epoch = d.ua_result_epoch.wrapping_add(1);
         d.ua_network_results.clear();
         d.ua_discovered_endpoints.clear();
         d.ua_auto_pending = 0;

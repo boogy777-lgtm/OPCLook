@@ -26,6 +26,8 @@ pub struct ConnectDialog {
     pub ua_search_port: String,
     pub ua_searching: bool,
     pub ua_search_results: Vec<crate::bff::model::UaServerInfo>,
+    /// Changes the collapse-state identity when a new search begins.
+    pub ua_result_epoch: u64,
     /// Request keyboard focus for the primary field on the next populated frame.
     pub focus_pending: bool,
     /// UA: chosen security policy (typed; `Auto` default).
@@ -87,6 +89,7 @@ impl Default for ConnectDialog {
             ua_search_port: String::new(),
             ua_searching: false,
             ua_search_results: Vec::new(),
+            ua_result_epoch: 0,
             focus_pending: false,
             ua_security_policy: UaSecurityPolicy::Auto,
             ua_security_mode: UaSecurityMode::Auto,

@@ -242,7 +242,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                         )
                                     };
                                     egui::CollapsingHeader::new(title.clone())
-                                        .id_salt(server.application_uri.clone())
+                                        .id_salt((&server.application_uri, dialog.ua_result_epoch))
                                         .default_open(true)
                                         .show(ui, |ui| {
                                     for endpoint in &server.endpoints {
@@ -280,6 +280,16 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                         if response.double_clicked() {
                                             if identity_ready {
                                                 dialog.ua_url = endpoint.url.clone();
+                                                if let Some(policy) = UaSecurityPolicy::from_advertised(
+                                                    &endpoint.security_policy,
+                                                ) {
+                                                    dialog.ua_security_policy = policy;
+                                                }
+                                                if let Some(mode) = UaSecurityMode::from_advertised(
+                                                    &endpoint.security_mode,
+                                                ) {
+                                                    dialog.ua_security_mode = mode;
+                                                }
                                                 let mut ep = crate::bff::model::EndpointSpec::ua(
                                                     endpoint.url.clone(),
                                                 );
@@ -433,15 +443,19 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                         if dialog.ua_subnet_searching {
                             ui.horizontal(|ui| {
                                 ui.spinner();
-                                ui.label(fmt(
-                                    lang,
-                                    Tr::UaScanProgress,
-                                    &[
-                                        &dialog.ua_scan_checked.to_string(),
-                                        &dialog.ua_scan_total.to_string(),
-                                        &dialog.ua_scan_found.to_string(),
-                                    ],
-                                ));
+                                if dialog.ua_scan_total == 0 {
+                                    ui.label(tr(lang, Tr::SearchingUaSubnet));
+                                } else {
+                                    ui.label(fmt(
+                                        lang,
+                                        Tr::UaScanProgress,
+                                        &[
+                                            &dialog.ua_scan_checked.to_string(),
+                                            &dialog.ua_scan_total.to_string(),
+                                            &dialog.ua_scan_found.to_string(),
+                                        ],
+                                    ));
+                                }
                                 if ui.button(tr(lang, Tr::UaScanStop)).clicked() {
                                     app_subnet_cancel = true;
                                 }
@@ -538,22 +552,13 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                             &mut dialog.ua_trust_server_cert,
                             tr(lang, Tr::TrustServerCertCheck),
                         );
-                        let cert_supported = {
-                            let d = &*dialog;
-                            d.ua_identity_index == 2
-                                || d.ua_discovered_endpoints.iter().any(|e| {
-                                    !matches!(
-                                        UaSecurityMode::from_advertised(&e.security_mode),
-                                        Some(UaSecurityMode::None)
-                                    )
-                                })
-                        };
+                        // Discovery does not expose user-token policies yet.
+                        // Do not silently replace X509 with UserName based on
+                        // the endpoint's message security mode. The worker
+                        // validates the requested identity at Connect time.
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new(tr(lang, Tr::IdentityLabel)).weak());
                             let mut identity = dialog.ua_identity_index;
-                            if !cert_supported && identity >= 2 {
-                                identity = 1;
-                            }
                             egui::ComboBox::from_id_salt("ua_identity")
                                 .selected_text(match identity {
                                     0 => tr(lang, Tr::IdentityAnonymous),
@@ -572,19 +577,14 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                         1,
                                         tr(lang, Tr::IdentityUserName),
                                     );
-                                    ui.add_enabled_ui(cert_supported, |ui| {
-                                        ui.selectable_value(
-                                            &mut identity,
-                                            2,
-                                            tr(lang, Tr::IdentityCertificate),
-                                        );
-                                    });
+                                    ui.selectable_value(
+                                        &mut identity,
+                                        2,
+                                        tr(lang, Tr::IdentityCertificate),
+                                    );
                                 });
                             dialog.ua_identity_index = identity;
                         });
-                        if !cert_supported && dialog.ua_identity_index >= 2 {
-                            dialog.ua_identity_index = 1;
-                        }
                         if dialog.ua_identity_index == 1 {
                             user_password_ui(
                                 ui,
