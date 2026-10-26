@@ -1054,3 +1054,22 @@ fn connect_description_falls_back_to_default_anonymous_policy() {
         "anonymous"
     );
 }
+
+#[test]
+fn x509_identity_requires_actual_advertised_certificate_token() {
+    let description = EndpointDescription {
+        user_identity_tokens: Some(vec![UserTokenPolicy {
+            policy_id: UAString::from("Anonymous"),
+            token_type: UserTokenType::Anonymous,
+            ..Default::default()
+        }]),
+        ..Default::default()
+    };
+    let mut endpoint = EndpointSpec::ua("opc.tcp://codesys-host:4840");
+    endpoint.ua_use_certificate = true;
+    let err = match super::session::resolve_identity_token(&endpoint, &description) {
+        Err(message) => message,
+        Ok(_) => panic!("a signed endpoint is not evidence of an X509 user-token policy"),
+    };
+    assert!(err.contains("не поддерживает"), "unexpected error: {err}");
+}
