@@ -39,6 +39,10 @@ try {
     Copy-Item $app, $helper -Destination $package
     Copy-Item (Join-Path $root "nethelper\nethelper.manifest") -Destination $package
     Copy-Item (Join-Path $root "README.md") -Destination $package
+    Copy-Item (Join-Path $root "LICENSE") -Destination $package
+    $images = Join-Path $package "docs\images"
+    New-Item -ItemType Directory -Path $images -Force | Out-Null
+    Copy-Item (Join-Path $root "docs\images\*") -Destination $images
     Write-Host "Package ready: $package"
     Write-Host "  opcda-egui.exe (32-bit)"
     Write-Host "  opcda-nethelper.exe (32-bit, requireAdministrator)"
