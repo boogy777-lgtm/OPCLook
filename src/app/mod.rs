@@ -797,8 +797,10 @@ impl App {
         d.ua_search_port.clear();
         d.ua_url.clear();
         d.ua_searching = false;
-        d.ua_search_results.clear();
-        d.ua_network_results.clear();
+        // Previously found servers survive closing/reopening the popup: only a
+        // new user-initiated search (search_ua_servers/search_ua_all) replaces
+        // the result lists. This covers the merged subnet-scan results and the
+        // security-combo source `ua_discovered_endpoints`.
         d.da_selected = None;
         d.ua_auto_pending = 0;
         d.da_auto_pending = 0;
@@ -807,7 +809,6 @@ impl App {
         d.ua_password.clear();
         d.ua_security_policy = self.settings.ua_security_policy;
         d.ua_security_mode = self.settings.ua_security_mode;
-        d.ua_discovered_endpoints.clear();
         d.ua_trust_server_cert = self.settings.ua_trust_server_cert;
         d.ua_identity_index = 0;
         d.ua_session_timeout = self.settings.ua_session_timeout_ms;
@@ -819,7 +820,6 @@ impl App {
         d.ua_scan_found = 0;
         d.ua_scan_error = None;
         d.ua_scan_confirm = None;
-        d.ua_scan_servers.clear();
         if d.da_servers.is_empty() {
             // DA tab is the default: start the combined DA discovery now.
             self.discover_da_all();

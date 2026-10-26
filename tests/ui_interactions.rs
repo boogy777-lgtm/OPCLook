@@ -1105,6 +1105,108 @@ fn ua_servers_found_populates_results_state() {
     );
 }
 
+/// Closing and reopening the connect popup keeps previously discovered DA
+/// servers and UA search results, and does not restart DA discovery once the
+/// DA list is already populated.
+#[test]
+fn connect_dialog_reopen_keeps_discovered_servers() {
+    use opcda_egui::bff::model::{ServerEntry, UaEndpointInfo, UaServerInfo};
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+
+    // Opening starts the combined DA discovery; deliver its local result.
+    assert!(app.dialogs.connect.da_auto_pending > 0);
+    app.on_event_for_test(EventKind::Servers {
+        host: String::new(),
+        servers: vec![ServerEntry {
+            id: "Matrikon.OPC.Simulation".to_string(),
+            description: "Simulation".to_string(),
+        }],
+    });
+    assert_eq!(app.dialogs.connect.da_servers.len(), 1);
+
+    // A completed single-host UA search populates the result list as well as the
+    // security-combo endpoint source.
+    app.on_event_for_test(EventKind::UaServersFound {
+        host: "127.0.0.1".to_string(),
+        port: 4840,
+        servers: vec![UaServerInfo {
+            application_name: "CODESYS".to_string(),
+            application_uri: "urn:test".to_string(),
+            endpoints: vec![UaEndpointInfo {
+                url: "opc.tcp://127.0.0.1:4840".to_string(),
+                security_policy: "None".to_string(),
+                security_mode: "None".to_string(),
+            }],
+        }],
+    });
+    assert_eq!(app.dialogs.connect.ua_search_results.len(), 1);
+    assert_eq!(app.dialogs.connect.ua_discovered_endpoints.len(), 1);
+
+    // Close cancels in-flight searches (keeping the found servers), then reopen.
+    app.close_connect_dialog();
+    app.open_connect_dialog();
+
+    assert_eq!(
+        app.dialogs.connect.da_servers.len(),
+        1,
+        "DA servers must survive a close/reopen"
+    );
+    assert_eq!(
+        app.dialogs.connect.ua_search_results.len(),
+        1,
+        "UA search results must survive a close/reopen"
+    );
+    assert_eq!(
+        app.dialogs.connect.ua_discovered_endpoints.len(),
+        1,
+        "the security-combo endpoints must survive a close/reopen"
+    );
+    // The DA list is already populated: reopening must not start a new
+    // discovery (no fresh pending request on session 0).
+    assert_eq!(app.dialogs.connect.da_auto_pending, 0);
+    assert!(
+        app.pending_request_ids_for_test(0).is_empty(),
+        "reopening with a populated DA list must not restart discovery"
+    );
+}
+
+/// A subnet scan cancelled by closing the popup merges its buffered servers;
+/// those merged results must then survive the next reopen too.
+#[test]
+fn connect_dialog_reopen_keeps_merged_subnet_scan_results() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.network.loaded = true;
+    app.network.lease = Some(lease_with_subnet("10.0.0.5", 30));
+    app.start_ua_subnet_scan();
+    let scan_id = app.dialogs.connect.ua_scan_id.expect("subnet scan id");
+    app.on_event_for_test(EventKind::UaScanFound {
+        scan_id,
+        servers: vec![scan_server()],
+    });
+    // Buffered until the scan finishes or is cancelled.
+    assert!(app.dialogs.connect.ua_search_results.is_empty());
+
+    app.close_connect_dialog();
+    assert_eq!(
+        app.dialogs.connect.ua_search_results.len(),
+        1,
+        "closing must cancel the scan and merge its buffer"
+    );
+
+    app.open_connect_dialog();
+    assert_eq!(
+        app.dialogs.connect.ua_search_results.len(),
+        1,
+        "merged subnet-scan results must survive a reopen"
+    );
+    assert_eq!(app.dialogs.connect.ua_discovered_endpoints.len(), 1);
+    assert!(!app.dialogs.connect.ua_subnet_searching);
+}
+
 /// UA connect dialog renders the security controls with the Auto defaults.
 #[test]
 fn connect_dialog_ua_security_controls_render() {

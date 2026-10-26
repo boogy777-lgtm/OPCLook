@@ -592,6 +592,10 @@ mod dnd_proof {
     #[test]
     fn columns_dialog_drag_row_reorders_and_persists() {
         use crate::columns::ColumnId;
+        // This test drives the production DnD path, which persists the column
+        // order through `settings.save()`; redirect settings to a private temp
+        // dir so it never overwrites the developer's real settings.json.
+        let _settings = crate::settings::test_isolation::ScopedDir::temp("columns-dnd");
         let _guard = test_lock();
         columns_hook_api::clear();
         let ctx = egui::Context::default();
