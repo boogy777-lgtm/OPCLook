@@ -208,10 +208,10 @@ impl Host {
                     }
                 });
             }
-            CommandKind::SearchUaNetwork { bind } => {
+            CommandKind::SearchUaNetwork { bind, lds } => {
                 let tx = self.event_tx.clone();
                 self.tasks.spawn(async move {
-                    match search_network_servers(bind.as_ref()).await {
+                    match search_network_servers(bind.as_ref(), lds.as_ref()).await {
                         Ok(searched) => {
                             send_notes(&tx, session, searched.notes);
                             send(

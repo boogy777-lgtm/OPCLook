@@ -1234,6 +1234,63 @@ fn connect_dialog_ua_security_controls_render() {
     assert_eq!(h.query_all_by_label("Поиск через LDS/mDNS").count(), 1);
 }
 
+/// U15: the UA tab has an optional «LDS-хост» field; a named host is what
+/// «Поиск через LDS/mDNS» asks, and it is remembered in the settings.
+#[test]
+fn u15_connect_dialog_has_an_lds_host_field_used_by_the_lds_search() {
+    with_settings_lock(|| {
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        app.open_connect_dialog();
+        let mut h = harness(app);
+        h.run_steps(5);
+        assert_eq!(
+            h.query_all_by_label("LDS-хост").count(),
+            0,
+            "the field belongs to the OPC UA tab"
+        );
+        h.get_by_label("OPC UA").click();
+        h.run_steps(5);
+        assert_eq!(h.query_all_by_label("LDS-хост").count(), 1);
+
+        h.state_mut().dialogs.connect.ua_lds_host = "127.0.0.1:48690".to_string();
+        h.run_steps(2);
+        h.get_by_label("Поиск через LDS/mDNS").click();
+        h.run_steps(5);
+        let state = h.state();
+        assert!(state.dialogs.connect.ua_network_searching);
+        assert!(state.dialogs.connect.error.is_none());
+        assert_eq!(state.settings.ua_lds_host, "127.0.0.1:48690");
+        assert_eq!(
+            opcda_egui::settings::Settings::load().ua_lds_host,
+            "127.0.0.1:48690",
+            "the field is persisted"
+        );
+    });
+}
+
+/// U15: a malformed LDS host is reported in the dialog and nothing is searched.
+#[test]
+fn u15_connect_dialog_rejects_a_malformed_lds_host() {
+    with_settings_lock(|| {
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        app.open_connect_dialog();
+        let mut h = harness(app);
+        h.run_steps(5);
+        h.get_by_label("OPC UA").click();
+        h.run_steps(5);
+        h.state_mut().dialogs.connect.ua_lds_host = "host:0".to_string();
+        h.run_steps(2);
+        h.get_by_label("Поиск через LDS/mDNS").click();
+        h.run_steps(5);
+        assert!(!h.state().dialogs.connect.ua_network_searching);
+        assert!(h.state().dialogs.connect.error.is_some());
+        assert!(h.query_all_by_label_contains("LDS-хост:").count() >= 1);
+        assert_eq!(h.state().settings.ua_lds_host, "");
+    });
+}
+
 /// The third popup tab renders a single adapter ComboBox. There is no
 /// automatic mode, no diagnostic detail fields and opening the tab does not
 /// rewrite the saved selection.
@@ -2632,8 +2689,8 @@ fn tab_strip_is_in_tags_area_not_top_panel() {
     assert!(h.query_all_by_label("DA: Srv.One").count() >= 1);
 }
 
-/// An empty UA host without a selected adapter searches only the two loopback
-/// endpoints. LDS/mDNS and subnet discovery require an explicit adapter.
+/// An empty UA host without a selected adapter searches only the loopback
+/// endpoint (one request). mDNS and subnet discovery require an adapter.
 #[test]
 fn connect_dialog_ua_empty_host_without_adapter_searches_loopback_only() {
     let ctx = egui::Context::default();
@@ -2647,11 +2704,8 @@ fn connect_dialog_ua_empty_host_without_adapter_searches_loopback_only() {
         !d.ua_network_searching,
         "LDS/mDNS must not run without a selected adapter"
     );
-    assert_eq!(d.ua_auto_pending, 2, "127.0.0.1 + localhost");
-    let hosts = [
-        ("127.0.0.1".to_string(), 4840),
-        ("localhost".to_string(), 4840),
-    ];
+    assert_eq!(d.ua_auto_pending, 1, "one loopback request");
+    let hosts = [("127.0.0.1".to_string(), 4840)];
     for (h_name, p) in hosts {
         app.on_event_for_test(EventKind::UaServersFound {
             host: h_name.clone(),
@@ -2671,8 +2725,8 @@ fn connect_dialog_ua_empty_host_without_adapter_searches_loopback_only() {
     assert!(!app.dialogs.connect.ua_network_searching);
     assert_eq!(app.dialogs.connect.ua_auto_pending, 0);
     assert!(
-        app.dialogs.connect.ua_search_results.len() >= 2,
-        "the loopback results must be merged into one list"
+        app.dialogs.connect.ua_search_results.len() == 1,
+        "the loopback result must be in the list"
     );
 }
 

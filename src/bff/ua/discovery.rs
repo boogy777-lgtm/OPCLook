@@ -1,6 +1,6 @@
 use super::session::pki_dir;
 use crate::bff::mdns::{self, MdnService};
-use crate::bff::model::{BackendMsg, UaEndpointInfo, UaNetworkInfo, UaServerInfo};
+use crate::bff::model::{BackendMsg, LdsTarget, UaEndpointInfo, UaNetworkInfo, UaServerInfo};
 use crate::bff::net::{BoundConnectorBuilder, NetworkBinding, endpoint_url_for};
 use crate::constants::{DISCOVERY_GUARD_TIMEOUT, DISCOVERY_URLS, MDNS_WINDOW, UA_SEARCH_TIMEOUT};
 use opcua::client::ClientBuilder;
@@ -389,15 +389,37 @@ async fn find_servers_at(
 /// returned in [`Searched::notes`] for the journal.
 pub(super) async fn search_network_servers(
     binding: Option<&NetworkBinding>,
+    lds: Option<&LdsTarget>,
 ) -> Result<Searched<UaNetworkInfo>, BackendMsg> {
+    // An explicit LDS host with no adapter chosen: ask only that host, mDNS
+    // would run on every interface.
+    let mdns_enabled = lds.is_none() || binding.is_some();
     let mdns_binding = binding.cloned();
-    let mdns_task = tokio::task::spawn_blocking(move || mdns::discover(mdns_binding.as_ref()));
+    let mdns_task = tokio::task::spawn_blocking(move || {
+        if mdns_enabled {
+            mdns::discover(mdns_binding.as_ref())
+        } else {
+            mdns::MdnsOutcome {
+                services: Vec::new(),
+                notes: Vec::new(),
+            }
+        }
+    });
 
     let client = build_discovery_client();
-    let lds = async {
+    let lds_search = async {
         match &client {
             Ok(client) => {
-                let search = search_lds_servers(client, binding, &DISCOVERY_URLS);
+                let search = async {
+                    match lds {
+                        Some(target) => {
+                            let url = target.url();
+                            let urls = [url.as_str()];
+                            search_lds_servers(client, Some(&target.bind), &urls).await
+                        }
+                        None => search_lds_servers(client, binding, &DISCOVERY_URLS).await,
+                    }
+                };
                 match tokio::time::timeout(DISCOVERY_GUARD_TIMEOUT, search).await {
                     Ok(search) => search,
                     Err(_) => LdsSearch {
@@ -431,7 +453,7 @@ pub(super) async fn search_network_servers(
             },
         }
     };
-    let (lds, mdns_outcome) = tokio::join!(lds, mdns_result);
+    let (lds, mdns_outcome) = tokio::join!(lds_search, mdns_result);
     let mut found = lds.found;
     let mut notes = lds.notes;
     notes.extend(mdns_outcome.notes);

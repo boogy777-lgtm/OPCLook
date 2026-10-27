@@ -294,6 +294,16 @@ pub enum Tr {
     UaHostHint,
     /// UA-only placeholder for the port field (empty defaults to 4840).
     UaPortHint,
+    /// Label of the optional "LDS host" field of the UA search.
+    LdsHostLabel,
+    /// Placeholder of the LDS host field.
+    LdsHostHint,
+    /// Tooltip of the LDS host field.
+    LdsHostTip,
+    /// The LDS host text is not a host name / address with an optional port.
+    LdsHostInvalid,
+    /// Journal line: the LDS/mDNS search also asks this LDS (`{0}` = host:port).
+    SearchingUaLds,
     UserLabel,
     PasswordLabel,
     UrlLabel,
@@ -948,6 +958,15 @@ fn ru(key: Tr) -> &'static str {
         EmptySearchHint => "Пусто — поиск на этом компьютере и в локальной сети",
         UaHostHint => "адрес или пусто",
         UaPortHint => "порт (по умолчанию 4840)",
+        LdsHostLabel => "LDS-хост",
+        LdsHostHint => "необязательно, хост[:порт]",
+        LdsHostTip => {
+            "Сервер обнаружения (LDS), у которого «Поиск через LDS/mDNS» спрашивает список серверов. Порт по умолчанию 4840. Пусто — только этот компьютер и mDNS."
+        }
+        LdsHostInvalid => {
+            "LDS-хост: ожидается имя или адрес, при необходимости с портом (хост:порт)"
+        }
+        SearchingUaLds => "Поиск OPC UA серверов у LDS {0} (и mDNS)...",
         UserLabel => "Пользователь:",
         PasswordLabel => "Пароль:",
         UrlLabel => "URL:",
@@ -1515,6 +1534,15 @@ fn en(key: Tr) -> &'static str {
         EmptySearchHint => "Empty — search this computer and the local network",
         UaHostHint => "address or empty",
         UaPortHint => "port (defaults to 4840)",
+        LdsHostLabel => "LDS host",
+        LdsHostHint => "optional, host[:port]",
+        LdsHostTip => {
+            "Discovery server (LDS) that \"Search via LDS/mDNS\" asks for the server list. The port defaults to 4840. Empty: this computer and mDNS only."
+        }
+        LdsHostInvalid => {
+            "LDS host: expected a name or address, optionally with a port (host:port)"
+        }
+        SearchingUaLds => "Searching for OPC UA servers at LDS {0} (and mDNS)...",
         UserLabel => "User:",
         PasswordLabel => "Password:",
         UrlLabel => "URL:",
@@ -2066,6 +2094,13 @@ fn zh(key: Tr) -> &'static str {
         EmptySearchHint => "留空 — 搜索此计算机和本地网络",
         UaHostHint => "地址或留空",
         UaPortHint => "端口（默认 4840）",
+        LdsHostLabel => "LDS 主机",
+        LdsHostHint => "可选，主机[:端口]",
+        LdsHostTip => {
+            "“通过 LDS/mDNS 搜索”向其查询服务器列表的发现服务器 (LDS)。端口默认为 4840。留空：仅查询本机和 mDNS。"
+        }
+        LdsHostInvalid => "LDS 主机：应为名称或地址，可带端口（主机:端口）",
+        SearchingUaLds => "正在向 LDS {0} 搜索 OPC UA 服务器（及 mDNS）...",
         UserLabel => "用户:",
         PasswordLabel => "密码:",
         UrlLabel => "URL:",

@@ -1219,6 +1219,27 @@ pub struct Command {
     pub kind: CommandKind,
 }
 
+/// A discovery server the user named explicitly (the dialog's "LDS host").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LdsTarget {
+    pub host: String,
+    pub port: u16,
+    /// Binding for the request to this host (loopback for a local host).
+    pub bind: crate::bff::net::NetworkBinding,
+}
+
+impl LdsTarget {
+    /// `opc.tcp://host:port` with an IPv6 literal bracketed.
+    pub fn url(&self) -> String {
+        let host = self.host.trim();
+        if host.contains(':') && !host.starts_with('[') {
+            format!("opc.tcp://[{host}]:{}", self.port)
+        } else {
+            format!("opc.tcp://{host}:{}", self.port)
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum CommandKind {
     Discover {
@@ -1231,10 +1252,13 @@ pub enum CommandKind {
         /// `DirectConnectionSource` behavior.
         bind: Option<crate::bff::net::NetworkBinding>,
     },
-    /// Discover OPC UA servers advertized via `FindServersOnNetwork` (mDNS/LDS)
-    /// using the standard discovery endpoints. No user args beyond the binding.
+    /// Discover OPC UA servers advertized via `FindServersOnNetwork` (mDNS/LDS).
+    /// Without `lds` the machine's standard discovery endpoints are asked; with
+    /// it, that host's LDS is asked instead. Without `bind` and with `lds`
+    /// only the LDS is asked (mDNS needs an adapter).
     SearchUaNetwork {
         bind: Option<crate::bff::net::NetworkBinding>,
+        lds: Option<LdsTarget>,
     },
     /// Streaming N+1 subnet scan: loopback first, then the local address and the
     /// subnet hosts. Results arrive as `UaScan*` events with `request_id: 0`.

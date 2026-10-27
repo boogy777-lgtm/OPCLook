@@ -163,6 +163,10 @@ pub struct Settings {
     /// UA connect dialog: last selected message security mode.
     #[serde(default)]
     pub ua_security_mode: UaSecurityMode,
+    /// UA connect dialog: the optional "LDS host" (`host[:port]`) that the
+    /// LDS/mDNS search asks for the server list. Empty = not used.
+    #[serde(default)]
+    pub ua_lds_host: String,
     /// Preferred network adapter GUID. `None` means no adapter is selected.
     /// Old settings files without this field load as unselected.
     #[serde(default)]
@@ -202,6 +206,7 @@ impl Default for Settings {
             ua_session_timeout_ms: default_session_timeout(),
             ua_security_policy: UaSecurityPolicy::Auto,
             ua_security_mode: UaSecurityMode::Auto,
+            ua_lds_host: String::new(),
             preferred_adapter: None,
             selected_local_ip: None,
             cached_adapters: CachedAdapters::default(),
@@ -322,6 +327,15 @@ impl Settings {
     /// Current UI language, falling back to Russian for an unknown/missing code.
     pub fn lang(&self) -> Lang {
         Lang::from_str(&self.lang).unwrap_or(Lang::default())
+    }
+
+    /// Remember the LDS host of the connect dialog; saves only on a change.
+    pub fn set_ua_lds_host(&mut self, text: &str) {
+        let text = text.trim();
+        if self.ua_lds_host != text {
+            self.ua_lds_host = text.to_string();
+            self.save();
+        }
     }
 
     /// Set the UI language and normalize its stored code.
@@ -1306,6 +1320,23 @@ mod tests {
             assert_eq!(loaded.adapter_selection(), AdapterSelection::Adapter(id));
             assert_eq!(loaded.selected_local_ip(), Some(ip));
         });
+    }
+
+    #[test]
+    fn u15_lds_host_persists_and_old_files_load_without_it() {
+        let dir = std::env::temp_dir().join("opcda-egui-settings-lds-host");
+        let _ = std::fs::remove_dir_all(&dir);
+        with_appdata(&dir, || {
+            let mut s = Settings::default();
+            s.set_ua_lds_host("  lds.plant:4850 ");
+            assert_eq!(Settings::load().ua_lds_host, "lds.plant:4850");
+            s.set_ua_lds_host("");
+            assert_eq!(Settings::load().ua_lds_host, "");
+        });
+        let mut value = serde_json::to_value(Settings::default()).unwrap();
+        value.as_object_mut().unwrap().remove("ua_lds_host");
+        let old: Settings = serde_json::from_value(value).unwrap();
+        assert_eq!(old.ua_lds_host, "");
     }
 
     #[test]

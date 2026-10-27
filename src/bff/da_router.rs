@@ -914,7 +914,14 @@ mod tests {
         let (host, _r, _d) = MockHost::new();
         let (mut router, rx) = router_with(host);
         router.dispatch(command(1, 1, CommandKind::BrowseViews));
-        router.dispatch(command(2, 1, CommandKind::SearchUaNetwork { bind: None }));
+        router.dispatch(command(
+            2,
+            1,
+            CommandKind::SearchUaNetwork {
+                bind: None,
+                lds: None,
+            },
+        ));
         router.dispatch(command(3, 1, CommandKind::CancelUaScan { scan_id: 1 }));
         assert!(matches!(
             next(&rx).kind,

@@ -1,5 +1,5 @@
 use super::*;
-use crate::bff::model::{CommandKind, Protocol};
+use crate::bff::model::{CommandKind, LdsTarget, Protocol};
 use crate::bff::net::NetworkBinding;
 use crate::constants::{DEFAULT_UA_HOST, DEFAULT_UA_PORT};
 use crate::i18n::{Tr, fmt, tr};
@@ -130,47 +130,58 @@ impl App {
     }
 
     /// Combined "empty host" UA search: `FindServersOnNetwork` (mDNS/LDS) plus
-    /// `FindServers` on the two local endpoints (127.0.0.1:4840 and
-    /// localhost:4840). Partial results accumulate and are merged when all
-    /// sub-searches complete.
+    /// ONE `FindServers` on this computer's loopback endpoint (`127.0.0.1` and
+    /// `localhost` are the same endpoint, asking both only doubles the wait).
+    /// Partial results accumulate and are merged when all sub-searches
+    /// complete.
     pub fn search_ua_all(&mut self) {
+        let Ok(lds) = self.lds_target_from_dialog() else {
+            self.dialogs.connect.ua_searching = false;
+            self.dialogs.connect.ua_network_searching = false;
+            return;
+        };
         let bind = self.current_network_binding();
+        // An explicitly named LDS is asked even when no adapter is chosen.
+        let network = bind.is_some() || lds.is_some();
         let d = &mut self.dialogs.connect;
         d.ua_searching = true;
-        d.ua_network_searching = bind.is_some();
+        d.ua_network_searching = network;
         d.error = None;
         d.ua_search_results.clear();
         d.ua_result_epoch = d.ua_result_epoch.wrapping_add(1);
         d.ua_network_results.clear();
         d.ua_discovered_endpoints.clear();
-        // With an adapter: LDS/mDNS + 127.0.0.1 + localhost. Without one only
-        // the two loopback endpoints are searched; subnet/LDS require a choice.
-        d.ua_auto_pending = if bind.is_some() { 3 } else { 2 };
-        if let Some(bind) = bind {
-            self.send(
-                0,
-                Protocol::OpcUa,
-                CommandKind::SearchUaNetwork { bind: Some(bind) },
-            );
+        let commands = ua_all_commands(bind, lds);
+        d.ua_auto_pending = commands.len();
+        for kind in commands {
+            self.send(0, Protocol::OpcUa, kind);
         }
-        self.send(
-            0,
-            Protocol::OpcUa,
-            CommandKind::SearchUaServers {
-                host: DEFAULT_UA_HOST.to_string(),
-                port: DEFAULT_UA_PORT,
-                bind: Some(NetworkBinding::loopback()),
-            },
-        );
-        self.send(
-            0,
-            Protocol::OpcUa,
-            CommandKind::SearchUaServers {
-                host: "localhost".to_string(),
-                port: DEFAULT_UA_PORT,
-                bind: Some(NetworkBinding::loopback()),
-            },
-        );
+    }
+
+    /// The dialog's optional LDS host as a search target. `Ok(None)` when the
+    /// field is empty. An unusable text or a missing adapter (for a non-local
+    /// host) leaves a localized error in the dialog and returns `Err`. The
+    /// text is remembered in the settings.
+    fn lds_target_from_dialog(&mut self) -> Result<Option<LdsTarget>, ()> {
+        let text = self.dialogs.connect.ua_lds_host.trim().to_string();
+        let parsed = match parse_lds_host(&text) {
+            Ok(parsed) => parsed,
+            Err(()) => {
+                self.dialogs.connect.error = Some(tr(self.lang(), Tr::LdsHostInvalid).to_string());
+                return Err(());
+            }
+        };
+        let Some((host, port)) = parsed else {
+            self.settings.set_ua_lds_host("");
+            return Ok(None);
+        };
+        let Some(bind) = self.search_binding(&host) else {
+            self.dialogs.connect.error =
+                Some(tr(self.lang(), Tr::SelectAdapterRequired).to_string());
+            return Err(());
+        };
+        self.settings.set_ua_lds_host(&text);
+        Ok(Some(LdsTarget { host, port, bind }))
     }
 
     /// Fold one completed sub-search into the combined UA auto-search. Called
@@ -261,21 +272,34 @@ impl App {
     }
 
     /// Search for OPC UA servers advertized via mDNS/LDS (`FindServersOnNetwork`).
+    /// With an "LDS host" in the dialog that host's LDS is asked (and mDNS when
+    /// an adapter is chosen); without one, this computer's own LDS and mDNS.
     pub fn search_ua_network(&mut self) {
-        let Some(bind) = self.current_network_binding() else {
+        let Ok(lds) = self.lds_target_from_dialog() else {
+            self.dialogs.connect.ua_network_searching = false;
+            return;
+        };
+        let bind = self.current_network_binding();
+        if bind.is_none() && lds.is_none() {
             let message = tr(self.lang(), Tr::SelectAdapterRequired).to_string();
             self.dialogs.connect.ua_network_searching = false;
             self.dialogs.connect.error = Some(message);
             return;
-        };
+        }
         self.dialogs.connect.ua_network_searching = true;
         self.dialogs.connect.ua_result_epoch = self.dialogs.connect.ua_result_epoch.wrapping_add(1);
         self.dialogs.connect.error = None;
-        self.journal.info_l(Tr::SearchingUaNetwork, &[]);
+        match &lds {
+            Some(target) => {
+                let place = format!("{}:{}", target.host, target.port);
+                self.journal.info_l(Tr::SearchingUaLds, &[&place]);
+            }
+            None => self.journal.info_l(Tr::SearchingUaNetwork, &[]),
+        }
         self.send(
             0,
             Protocol::OpcUa,
-            CommandKind::SearchUaNetwork { bind: Some(bind) },
+            CommandKind::SearchUaNetwork { bind, lds },
         );
     }
 
@@ -532,4 +556,70 @@ pub(super) fn refresh_ua_combos(dialog: &mut ConnectDialog) {
         }
     }
     dialog.ua_discovered_endpoints = eps;
+}
+
+/// Parse the LDS host field: empty -> `Ok(None)`; otherwise `host[:port]` (an
+/// IPv6 literal in brackets, an optional `opc.tcp://` prefix and trailing `/`
+/// are tolerated). The port defaults to 4840.
+pub(crate) fn parse_lds_host(text: &str) -> Result<Option<(String, u16)>, ()> {
+    let mut rest = text.trim();
+    if rest.is_empty() {
+        return Ok(None);
+    }
+    if rest.len() >= 10 && rest[..10].eq_ignore_ascii_case("opc.tcp://") {
+        rest = &rest[10..];
+    }
+    let rest = rest.trim_end_matches('/');
+    let parse_port = |port: &str| -> Result<u16, ()> {
+        match port.parse::<u16>() {
+            Ok(port) if port > 0 => Ok(port),
+            _ => Err(()),
+        }
+    };
+    let (host, port) = if let Some(inner) = rest.strip_prefix('[') {
+        let (host, tail) = inner.split_once(']').ok_or(())?;
+        if host.parse::<std::net::Ipv6Addr>().is_err() {
+            return Err(());
+        }
+        match tail.strip_prefix(':') {
+            Some(port) => (host.to_string(), parse_port(port)?),
+            None if tail.is_empty() => (host.to_string(), DEFAULT_UA_PORT),
+            None => return Err(()),
+        }
+    } else if rest.parse::<std::net::Ipv6Addr>().is_ok() {
+        (rest.to_string(), DEFAULT_UA_PORT)
+    } else if let Some((host, port)) = rest.rsplit_once(':') {
+        (host.to_string(), parse_port(port)?)
+    } else {
+        (rest.to_string(), DEFAULT_UA_PORT)
+    };
+    let valid_host = !host.is_empty()
+        && host
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | ':'));
+    if valid_host {
+        Ok(Some((host, port)))
+    } else {
+        Err(())
+    }
+}
+
+/// The requests of the combined "empty host" UA search: LDS/mDNS when an
+/// adapter is chosen or an LDS host is named, and always exactly ONE
+/// `FindServers` on the loopback endpoint (`127.0.0.1`; `localhost` is the same
+/// endpoint under another name).
+pub(crate) fn ua_all_commands(
+    bind: Option<NetworkBinding>,
+    lds: Option<LdsTarget>,
+) -> Vec<CommandKind> {
+    let mut commands = Vec::new();
+    if bind.is_some() || lds.is_some() {
+        commands.push(CommandKind::SearchUaNetwork { bind, lds });
+    }
+    commands.push(CommandKind::SearchUaServers {
+        host: DEFAULT_UA_HOST.to_string(),
+        port: DEFAULT_UA_PORT,
+        bind: Some(NetworkBinding::loopback()),
+    });
+    commands
 }

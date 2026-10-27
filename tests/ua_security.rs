@@ -175,7 +175,10 @@ fn server_network_search_reaches_server() {
             request_id: next_id(),
             session,
             protocol: Protocol::OpcUa,
-            kind: CommandKind::SearchUaNetwork { bind: None },
+            kind: CommandKind::SearchUaNetwork {
+                bind: None,
+                lds: None,
+            },
         },
         Duration::from_secs(60),
         |kind| matches!(kind, EventKind::UaNetworkFound { .. }),

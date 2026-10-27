@@ -979,6 +979,7 @@ impl App {
         d.da_selected_host = None;
         d.ua_search_host.clear();
         d.ua_search_port.clear();
+        d.ua_lds_host = self.settings.ua_lds_host.clone();
         d.ua_url.clear();
         d.ua_searching = false;
         // Reuse discovered UA results across popup visits. A new search
