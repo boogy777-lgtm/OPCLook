@@ -1,4 +1,4 @@
-use super::super::csv::{remaining_len, resolve_csv_session};
+use super::super::csv::{CsvServer, remaining_len, report_csv_server_problem, resolve_csv_session};
 use super::dialog_spacing;
 use crate::app::App;
 use crate::i18n::{Tr, fmt, tr};
@@ -89,15 +89,15 @@ pub(super) fn csv_import_dialog(app: &mut App, ui: &mut egui::Ui) {
             let Some(row) = app.csv_import.as_mut().and_then(|j| j.remaining.pop()) else {
                 break;
             };
-            if let Some(session) = resolve_csv_session(app, &row.server) {
-                if let Some(entry) = session_items.iter_mut().find(|e| e.0 == session) {
-                    entry.1.push((row.item_id, row.name));
-                } else {
-                    session_items.push((session, vec![(row.item_id, row.name)]));
+            match resolve_csv_session(app, &row.server) {
+                CsvServer::Session(session) => {
+                    if let Some(entry) = session_items.iter_mut().find(|e| e.0 == session) {
+                        entry.1.push((row.item_id, row.name));
+                    } else {
+                        session_items.push((session, vec![(row.item_id, row.name)]));
+                    }
                 }
-            } else {
-                app.journal
-                    .warn(fmt(lang, Tr::CsvServerNotConnected, &[&row.server]));
+                problem => report_csv_server_problem(app, &row, problem),
             }
             if let Some(job) = app.csv_import.as_mut() {
                 job.processed += 1;
