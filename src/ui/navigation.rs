@@ -275,7 +275,14 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
 
             ui.separator();
             let Some(session_id) = app.active_session else {
-                ui.label(tr(lang, Tr::ConnectPrompt));
+                // UI10: no session at all - the hint and the way out (Ctrl+N).
+                if empty_state(
+                    ui,
+                    tr(lang, Tr::ConnectPrompt),
+                    tr(lang, Tr::ConnectCtrlNButton),
+                ) {
+                    app.open_connect_dialog();
+                }
                 return;
             };
             let Some(view) = app.sessions.iter().find(|s| s.id == session_id) else {
@@ -372,6 +379,7 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
             ui.separator();
 
             let mut actions = Vec::new();
+            let mut refresh_root = false;
             {
                 let Some(view) = app.sessions.iter().find(|s| s.id == session_id) else {
                     return;
@@ -383,7 +391,23 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                             ui.label(tr(lang, Tr::LoadingTree));
                         });
                     } else if connected {
-                        ui.label(tr(lang, Tr::TreeNotLoaded));
+                        // UI10: the hint and the same action as F5. An empty tree
+                        // has no node to carry the tree keyboard focus, so the
+                        // tree's own F5 handler never runs here; the key is
+                        // taken here instead, unless the table, a text field or a
+                        // dialog owns the keyboard (the table has its own F5).
+                        let f5 = ui.input(|i| i.key_pressed(egui::Key::F5))
+                            && app.table_focus.is_none()
+                            && !app.dialogs.any_open()
+                            && !ui.ctx().text_edit_focused();
+                        if empty_state(
+                            ui,
+                            tr(lang, Tr::TreeNotLoaded),
+                            tr(lang, Tr::RefreshF5Button),
+                        ) || f5
+                        {
+                            refresh_root = true;
+                        }
                     } else {
                         ui.label(tr(lang, Tr::NoConnection));
                     }
@@ -426,6 +450,9 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                     }
                 }
             }
+            if refresh_root {
+                refresh_selected(app);
+            }
             for action in actions {
                 match action {
                     TreeAction::Toggle(id) => toggle_tree_item(app, session_id, id),
@@ -450,6 +477,19 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                 }
             }
         });
+}
+
+/// UI10: a quiet empty state - the hint, then one button with the action (and
+/// its shortcut). Returns true when the button was clicked.
+fn empty_state(ui: &mut egui::Ui, hint: &str, action: &str) -> bool {
+    let mut clicked = false;
+    ui.vertical_centered(|ui| {
+        ui.add_space(16.0);
+        ui.label(egui::RichText::new(hint).weak());
+        ui.add_space(8.0);
+        clicked = ui.button(action).clicked();
+    });
+    clicked
 }
 
 /// Who paints the selection / hover band of a `flat_row`.

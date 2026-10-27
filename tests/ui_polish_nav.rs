@@ -384,3 +384,82 @@ fn ui6_clicking_a_server_row_selects_it() {
     h.run_steps(3);
     assert_eq!(h.state().active_session, Some(1));
 }
+
+// ---------------------------------------------------------------- UI10
+
+fn connected_with_empty_tree() -> App {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app
+}
+
+/// UI10: an empty tree of a live session offers «Обновить (F5)»; the button
+/// re-reads the root exactly like F5 does.
+#[test]
+fn ui10_empty_tree_offers_refresh_and_does_what_f5_does() {
+    let mut h = harness(connected_with_empty_tree());
+    h.run_steps(4);
+    assert!(h.query_by_label_contains("Дерево не загружено").is_some());
+    let buttons = left(h.query_all_by_label("Обновить (F5)"));
+    assert_eq!(buttons.len(), 1, "one action button");
+    assert!(!h.state().sessions[0].root_loading);
+    buttons[0].click();
+    h.run_steps(3);
+    let by_button = h.state().sessions[0].root_loading;
+    assert!(by_button, "the button re-reads the root");
+
+    let mut h = harness(connected_with_empty_tree());
+    h.run_steps(4);
+    h.key_press(egui::Key::F5);
+    h.run_steps(3);
+    // Same effect (and same code path) as the button.
+    assert_eq!(h.state().sessions[0].root_loading, by_button);
+}
+
+/// UI10: while the root is being read the empty state gives way to the
+/// spinner (no second request can be started from the button).
+#[test]
+fn ui10_no_refresh_button_while_the_tree_loads() {
+    let mut app = connected_with_empty_tree();
+    app.sessions[0].root_loading = true;
+    let mut h = harness(app);
+    h.run_steps(4);
+    assert_eq!(h.query_all_by_label("Обновить (F5)").count(), 0);
+    assert!(h.query_by_label_contains("Загрузка дерева").is_some());
+}
+
+/// UI10: a lost connection shows the plain message, not a refresh action.
+#[test]
+fn ui10_no_refresh_button_without_a_connection() {
+    let mut app = connected_with_empty_tree();
+    app.sessions[0].state = SessionState::Disconnected;
+    let mut h = harness(app);
+    h.run_steps(4);
+    assert_eq!(h.query_all_by_label("Обновить (F5)").count(), 0);
+    assert!(h.query_by_label_contains("Нет соединения").is_some());
+}
+
+/// UI10: no session at all - the hint and «Подключиться (Ctrl+N)», which
+/// opens the connect dialog like Ctrl+N.
+#[test]
+fn ui10_no_sessions_offers_connect_like_ctrl_n() {
+    let ctx = egui::Context::default();
+    let app = App::new_test(&ctx);
+    let mut h = harness(app);
+    h.run_steps(4);
+    assert!(h.query_by_label_contains("Подключитесь к OPC").is_some());
+    let buttons = left(h.query_all_by_label("Подключиться (Ctrl+N)"));
+    assert_eq!(buttons.len(), 1);
+    assert!(!h.state().dialogs.connect.open);
+    buttons[0].click();
+    h.run_steps(3);
+    assert!(h.state().dialogs.connect.open);
+
+    let ctx = egui::Context::default();
+    let mut h = harness(App::new_test(&ctx));
+    h.run_steps(4);
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::N);
+    h.run_steps(3);
+    assert!(h.state().dialogs.connect.open, "Ctrl+N does the same");
+}
