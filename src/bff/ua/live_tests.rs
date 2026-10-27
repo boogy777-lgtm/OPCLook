@@ -1075,6 +1075,74 @@ fn u13_trusting_a_certificate_lasts_only_for_the_session() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// U15 / A9: searches report through the journal, not stderr
+// ---------------------------------------------------------------------------
+
+#[test]
+fn u15_host_search_on_loopback_finds_the_server_without_lds_noise() {
+    let server = TestServer::start(48671);
+    let mut app = Harness::new();
+    let id = app.send(
+        0,
+        CommandKind::SearchUaServers {
+            host: "127.0.0.1".to_string(),
+            port: server.port,
+            bind: None,
+        },
+    );
+    match app.reply(id, Duration::from_secs(30)) {
+        Some(Event {
+            kind: EventKind::UaServersFound { servers, .. },
+            ..
+        }) => assert!(
+            servers.iter().any(|s| s
+                .endpoints
+                .iter()
+                .any(|e| e.url.contains(&server.port.to_string()))),
+            "{servers:?}"
+        ),
+        other => panic!("unexpected search reply: {other:?}"),
+    }
+    let noise = app.wait(Duration::from_millis(300), |event| match &event.kind {
+        EventKind::Log { message } if message.contains("LDS") => Some(message.clone()),
+        _ => None,
+    });
+    assert!(
+        noise.is_none(),
+        "loopback is not asked for an LDS: {noise:?}"
+    );
+}
+
+#[test]
+fn a9_network_search_reports_its_problems_as_journal_lines() {
+    let mut app = Harness::new();
+    let id = app.send(0, CommandKind::SearchUaNetwork { bind: None });
+    assert!(matches!(
+        app.reply(id, Duration::from_secs(60)),
+        Some(Event {
+            kind: EventKind::UaNetworkFound { .. },
+            ..
+        })
+    ));
+    // Linux has no mDNS backend: that must be a journal line, not a stderr line.
+    let mut lines = Vec::new();
+    while let Some(message) = app.wait(Duration::from_millis(200), |event| match &event.kind {
+        EventKind::Log { message } if event.request_id == 0 => Some(message.clone()),
+        _ => None,
+    }) {
+        lines.push(message);
+    }
+    assert!(
+        lines.iter().any(|line| line.starts_with("mDNS")),
+        "the skipped mDNS step is reported: {lines:?}"
+    );
+    assert!(
+        lines.iter().filter(|line| line.starts_with("LDS")).count() <= 1,
+        "the loopback LDS is reported at most once: {lines:?}"
+    );
+}
+
 #[test]
 fn u1_a_retry_right_after_a_failed_connect_never_meets_a_stale_connecting_slot() {
     // The application retries as soon as it sees the Connect error. The slot of

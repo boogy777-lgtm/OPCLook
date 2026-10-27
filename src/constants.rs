@@ -28,8 +28,10 @@ pub const GRACEFUL_CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::fro
 /// finish, so the library normally closes the temporary channel itself before
 /// the future is dropped.
 pub const DISCOVERY_GUARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
-/// Standard mDNS/LDS discovery endpoints queried by `FindServersOnNetwork`.
-pub const DISCOVERY_URLS: [&str; 2] = ["opc.tcp://localhost:4840", "opc.tcp://127.0.0.1:4840"];
+/// Standard LDS discovery endpoints queried by `FindServersOnNetwork`. Both are
+/// spellings of this machine's own LDS: the numeric one goes first (no name
+/// resolution, no IPv6 detour) and `localhost` is only tried when it is unreachable.
+pub const DISCOVERY_URLS: [&str; 2] = ["opc.tcp://127.0.0.1:4840", "opc.tcp://localhost:4840"];
 
 // ---------------------------------------------------------------------------
 // UA sessions / network discovery

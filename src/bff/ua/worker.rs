@@ -187,18 +187,21 @@ impl Host {
                 let tx = self.event_tx.clone();
                 self.tasks.spawn(async move {
                     match search_servers(&host, port, bind.as_ref()).await {
-                        Ok(servers) => send(
-                            &tx,
-                            Event {
-                                request_id,
-                                session,
-                                kind: EventKind::UaServersFound {
-                                    host,
-                                    port,
-                                    servers,
+                        Ok(searched) => {
+                            send_notes(&tx, session, searched.notes);
+                            send(
+                                &tx,
+                                Event {
+                                    request_id,
+                                    session,
+                                    kind: EventKind::UaServersFound {
+                                        host,
+                                        port,
+                                        servers: searched.found,
+                                    },
                                 },
-                            },
-                        ),
+                            );
+                        }
                         Err(message) => {
                             send_error(&tx, request_id, session, Operation::SearchServers, message)
                         }
@@ -209,14 +212,19 @@ impl Host {
                 let tx = self.event_tx.clone();
                 self.tasks.spawn(async move {
                     match search_network_servers(bind.as_ref()).await {
-                        Ok(servers) => send(
-                            &tx,
-                            Event {
-                                request_id,
-                                session,
-                                kind: EventKind::UaNetworkFound { servers },
-                            },
-                        ),
+                        Ok(searched) => {
+                            send_notes(&tx, session, searched.notes);
+                            send(
+                                &tx,
+                                Event {
+                                    request_id,
+                                    session,
+                                    kind: EventKind::UaNetworkFound {
+                                        servers: searched.found,
+                                    },
+                                },
+                            );
+                        }
                         Err(message) => {
                             send_error(&tx, request_id, session, Operation::SearchNetwork, message)
                         }
@@ -1045,6 +1053,21 @@ impl Actor {
 
 pub(super) fn send(tx: &Sender<Event>, event: Event) {
     let _ = tx.send(event);
+}
+
+/// Diagnostics of a search or scan as journal lines. They are unsolicited
+/// (request id 0), so they never take the place of the request's own reply.
+fn send_notes(tx: &Sender<Event>, session: SessionId, notes: Vec<String>) {
+    for message in notes {
+        send(
+            tx,
+            Event {
+                request_id: 0,
+                session,
+                kind: EventKind::Log { message },
+            },
+        );
+    }
 }
 
 fn send_error(
