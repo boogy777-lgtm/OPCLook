@@ -3850,10 +3850,10 @@ fn servers_row_reconnect_counter_and_stop_resume_toggle() {
 fn toolbar_enable_states_follow_active_session() {
     let ctx = egui::Context::default();
     let app = App::new_test(&ctx);
-    // No active session: everything disabled.
+    // No active session: only «Подключиться» is enabled (A7: first start).
     let mut h = harness(app);
     h.run_steps(3);
-    assert!(!widget_enabled(&h, "Подключиться"));
+    assert!(widget_enabled(&h, "Подключиться"));
     assert!(!widget_enabled(&h, "Отключиться"));
     assert!(!widget_enabled(&h, "Переподключиться"));
 
@@ -3873,12 +3873,51 @@ fn toolbar_enable_states_follow_active_session() {
     assert!(!widget_enabled(&h, "Отключиться"));
     assert!(widget_enabled(&h, "Переподключиться"));
 
-    // Connecting: disconnect + reconnect enabled, connect disabled.
+    // Connecting: disconnect + reconnect enabled; connect stays available.
     h.state_mut().sessions[0].state = SessionState::Connecting;
     h.run_steps(3);
-    assert!(!widget_enabled(&h, "Подключиться"));
+    assert!(widget_enabled(&h, "Подключиться"));
     assert!(widget_enabled(&h, "Отключиться"));
     assert!(widget_enabled(&h, "Переподключиться"));
+}
+
+/// A7: «Подключиться» works on a fresh start (no sessions) and opens the
+/// connect dialog.
+#[test]
+fn a7_toolbar_connect_opens_the_dialog_on_first_start() {
+    let ctx = egui::Context::default();
+    let mut h = harness(App::new_test(&ctx));
+    h.run_steps(3);
+    assert!(!h.state().dialogs.connect.open);
+    h.get_by_label("Подключиться").click();
+    h.run_steps(3);
+    assert!(h.state().dialogs.connect.open);
+}
+
+/// A7: with a disconnected active session the button reconnects it instead of
+/// opening the dialog; with a connected one it opens the dialog (new server).
+#[test]
+fn a7_toolbar_connect_reconnects_a_disconnected_active_session() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.activate_session(1);
+    app.sessions[0].state = SessionState::Disconnected;
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.get_by_label("Подключиться").click();
+    h.run_steps(3);
+    assert!(
+        !h.state().dialogs.connect.open,
+        "no dialog for a known server"
+    );
+    assert_eq!(h.state().sessions[0].state, SessionState::Connecting);
+
+    h.state_mut().sessions[0].state = SessionState::Connected;
+    h.run_steps(3);
+    h.get_by_label("Подключиться").click();
+    h.run_steps(3);
+    assert!(h.state().dialogs.connect.open);
 }
 
 /// A fresh app (no persisted language) defaults to Russian.

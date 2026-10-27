@@ -35,18 +35,20 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                 .active_session
                 .and_then(|id| app.sessions.iter().find(|s| s.id == id))
                 .map(|s| s.state);
-            let (can_connect, can_disconnect, can_reconnect) = match active_state {
-                None => (false, false, false),
-                Some(SessionState::Connecting) => (false, true, true),
-                Some(SessionState::Connected) => (true, true, true),
-                Some(SessionState::Disconnected) => (true, false, true),
+            // «Подключиться» is always available (first start: no sessions yet).
+            let can_connect = true;
+            let (can_disconnect, can_reconnect) = match active_state {
+                None => (false, false),
+                Some(SessionState::Connecting) => (true, true),
+                Some(SessionState::Connected) => (true, true),
+                Some(SessionState::Disconnected) => (false, true),
             };
             ui.horizontal(|ui| {
                 if ui
                     .add_enabled(can_connect, egui::Button::new(tr(lang, Tr::Connect)))
                     .clicked()
                 {
-                    app.open_connect_dialog();
+                    app.toolbar_connect();
                 }
                 if ui
                     .add_enabled(can_disconnect, egui::Button::new(tr(lang, Tr::Disconnect)))

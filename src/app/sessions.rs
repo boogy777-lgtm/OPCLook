@@ -399,6 +399,22 @@ impl App {
             .info_l(Tr::AutoReconnectAtt, &[&attempt.to_string()]);
     }
 
+    /// The toolbar «Подключиться» (A7). Always available: with a disconnected
+    /// active session it reconnects that session (the dialog would only make the
+    /// user retype what is already known); in every other case, including the
+    /// first start with no sessions, it opens the connect dialog.
+    pub fn toolbar_connect(&mut self) {
+        let disconnected = self
+            .active_session
+            .and_then(|id| self.sessions.iter().find(|s| s.id == id))
+            .filter(|s| s.state == SessionState::Disconnected)
+            .map(|s| s.id);
+        match disconnected {
+            Some(id) => self.reconnect_session(id),
+            None => self.open_connect_dialog(),
+        }
+    }
+
     pub fn reconnect_session(&mut self, session: SessionId) {
         let Some(endpoint) = self
             .sessions
