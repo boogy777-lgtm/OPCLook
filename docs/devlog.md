@@ -77,3 +77,14 @@
   (`use_private_pki_dir`), создание клиента под замком (`build_client`).
 - Измерено: Linux-гейт 500 → 522 passed, 0 failed, 24 ignored.
 - Не проверено компиляцией: Windows-части A9 (см. «Открыто» в `docs/status.md`).
+
+## 2026-10-27 — CI под Windows на PR #4
+- Аннотации CI теперь снимают ANSI-цвета cargo и показывают хвост лога, если
+  шаблоны не совпали (ba6f807) — без этого ошибка компиляции не была видна.
+- A9, Windows-часть: `da.rs:578` клал `String` в `Result<_, BackendMsg>` (E0308)
+  — 20e5291.
+- F1/D3: `CoInitializeSecurity` один раз на процесс (0e475a4). Каждый `Gateway`
+  вызывал его заново; второй получал `RPC_E_TOO_LATE` и писал строку журнала,
+  которую ловил `gateway_shutdown::send_after_shutdown_returns_error` в зависимости
+  от порядка старта двух параллельных тестов. Регрессионный тест — сам этот
+  Windows-тест (код только под Windows).
