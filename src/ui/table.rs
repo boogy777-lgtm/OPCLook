@@ -455,17 +455,20 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                         });
                     let table_out = table_out.inner;
 
-                    // Localized hint INSIDE the (otherwise empty) table body. Painted, not
-                    // a widget, so it cannot swallow drops.
+                    // UI10: the empty-table prompt, INSIDE the (otherwise empty)
+                    // table body: a big hint, a second line and (without a
+                    // session) a connect button. Only the button takes the
+                    // pointer; everything else is painted / non-interactive,
+                    // so the area stays a drop zone and Enter stays the table's.
                     if empty {
-                        let rect = table_out.inner_rect;
-                        ui.painter().text(
-                            rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            tr(lang, Tr::TableEmptyInner),
-                            egui::FontId::proportional(15.0),
-                            ui.visuals().weak_text_color(),
+                        let area = egui::Rect::from_x_y_ranges(
+                            ui.max_rect().x_range(),
+                            (table_out.inner_rect.top() + TABLE_HEADER_HEIGHT)
+                                ..=ui.max_rect().bottom(),
                         );
+                        if empty_table_prompt(ui, lang, area, app.active_session.is_some()) {
+                            app.open_connect_dialog();
+                        }
                     }
 
                     #[cfg(test)]
@@ -567,6 +570,64 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
             }
         });
 }
+/// Height reserved for the empty-table prompt (hint, second line, button).
+const EMPTY_PROMPT_HEIGHT: f32 = 110.0;
+
+/// UI10: the prompt of an empty table, centred in `area`. Without an active
+/// session it offers «Connect (Ctrl+N)» (returns true when pressed); with one
+/// it says how to fill the table. Never keeps the keyboard focus, so Enter and
+/// the arrows stay with the table / tree.
+fn empty_table_prompt(
+    ui: &mut egui::Ui,
+    lang: crate::i18n::Lang,
+    area: egui::Rect,
+    has_session: bool,
+) -> bool {
+    let rect = egui::Rect::from_center_size(
+        area.center(),
+        egui::vec2(area.width(), EMPTY_PROMPT_HEIGHT.min(area.height())),
+    );
+    let mut connect = false;
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::top_down(egui::Align::Center)),
+        |ui| {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(tr(lang, Tr::TableEmptyInner))
+                        .size(18.0)
+                        .color(ui.visuals().weak_text_color()),
+                )
+                .selectable(false),
+            );
+            ui.add_space(6.0);
+            let second = if has_session {
+                Tr::TableEmptyDragHint
+            } else {
+                Tr::TableEmptyKeys
+            };
+            ui.add(
+                egui::Label::new(egui::RichText::new(tr(lang, second)).weak()).selectable(false),
+            );
+            if !has_session {
+                ui.add_space(12.0);
+                let button = ui.add(
+                    egui::Button::new(tr(lang, Tr::TableEmptyConnect))
+                        .min_size(egui::vec2(180.0, 28.0)),
+                );
+                // A pressed button must not keep egui's focus: Enter would press
+                // it again (the table owns Enter).
+                if button.has_focus() {
+                    button.surrender_focus();
+                }
+                connect = button.clicked();
+            }
+        },
+    );
+    connect
+}
+
 /// UI4: the accent-coloured glow behind a value that has just changed. `flash`
 /// runs from 1.0 (just changed) to 0.0; while it fades the table keeps asking
 /// for new frames, so the glow dies out smoothly even with no other input.

@@ -465,3 +465,115 @@ fn ui4_changed_value_cell_glows_and_requests_repaints_until_it_fades() {
     assert_eq!(rect_fills(&flat_shapes(&h)), calm, "glow is gone");
     assert_ne!(repaint_delay(&h), std::time::Duration::ZERO, "idle again");
 }
+
+const CONNECT_BUTTON: &str = "Подключиться (Ctrl+N)";
+const DRAG_HINT: &str = "Перетащите теги из дерева или нажмите Enter на узле";
+
+fn empty_harness(with_session: bool) -> Harness<'static, App> {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    if with_session {
+        app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+        app.activate_session(1);
+    }
+    let mut h = harness(app);
+    h.run_steps(3);
+    h
+}
+
+/// UI10: no session: the hint, the keys line and a connect button that opens
+/// the connect dialog.
+#[test]
+fn ui10_empty_table_without_session_offers_connect() {
+    let mut h = empty_harness(false);
+    assert!(h.query_by_label_contains("Нет сигналов").is_some());
+    assert!(
+        h.query_by_label_contains("Ctrl+N — подключиться к серверу")
+            .is_some(),
+        "keys line"
+    );
+    assert!(h.query_by_label(DRAG_HINT).is_none());
+    assert!(!h.state().dialogs.connect.open);
+    let at = h.get_by_label(CONNECT_BUTTON).rect().center();
+    pointer_click(&h, at);
+    h.run_steps(3);
+    assert!(
+        h.state().dialogs.connect.open,
+        "the button opens the dialog"
+    );
+}
+
+/// UI10: with a session the table says how to fill it and has no button.
+#[test]
+fn ui10_empty_table_with_session_explains_how_to_fill_it() {
+    let h = empty_harness(true);
+    assert!(h.query_by_label_contains("Нет сигналов").is_some());
+    assert!(h.query_by_label(DRAG_HINT).is_some());
+    assert!(h.query_by_label(CONNECT_BUTTON).is_none());
+}
+
+/// UI10: the hint is bigger than the old 15 pt painted text.
+#[test]
+fn ui10_empty_hint_is_larger() {
+    let h = empty_harness(true);
+    let size = flat_shapes(&h)
+        .iter()
+        .find_map(|s| match s {
+            egui::Shape::Text(t) if t.galley.text().starts_with("Нет сигналов") => t
+                .galley
+                .job
+                .sections
+                .first()
+                .map(|sec| sec.format.font_id.size),
+            _ => None,
+        })
+        .expect("hint is drawn");
+    assert!(size >= 17.0, "hint size {size}");
+}
+
+/// UI10: the button never keeps egui's focus after a press, so Enter does not
+/// press it again (Enter belongs to the table), and a click beside it on the
+/// hint text does nothing.
+#[test]
+fn ui10_connect_button_does_not_keep_the_keyboard() {
+    let mut h = empty_harness(false);
+    // A click on the hint text opens nothing.
+    let hint = h.get_by_label_contains("Нет сигналов").rect();
+    pointer_click(&h, hint.center());
+    h.run_steps(3);
+    assert!(!h.state().dialogs.connect.open, "text is not a button");
+
+    let at = h.get_by_label(CONNECT_BUTTON).rect().center();
+    pointer_click(&h, at);
+    h.run_steps(3);
+    assert!(h.state().dialogs.connect.open);
+    h.state_mut().dialogs.connect.open = false;
+    h.run_steps(3);
+    assert!(h.ctx.memory(|m| m.focused()).is_none(), "no focused widget");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert!(!h.state().dialogs.connect.open, "Enter did not re-press it");
+}
+
+/// UI10: even when egui focuses the button (an accessibility focus request),
+/// it gives the focus back at once, so Enter cannot press it.
+#[test]
+fn ui10_a_focused_connect_button_gives_the_focus_back() {
+    let mut h = empty_harness(false);
+    h.get_by_label(CONNECT_BUTTON).focus();
+    h.run_steps(3);
+    assert!(h.ctx.memory(|m| m.focused()).is_none(), "focus surrendered");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert!(!h.state().dialogs.connect.open, "Enter did not press it");
+}
+
+/// UI10: Enter in the table area with no rows still does nothing harmful.
+#[test]
+fn ui10_enter_with_an_empty_table_opens_nothing() {
+    let mut h = empty_harness(true);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert!(!h.state().dialogs.connect.open);
+    assert!(!h.state().dialogs.any_open());
+}
