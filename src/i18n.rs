@@ -550,6 +550,10 @@ pub enum Tr {
     RemoveFromListConfirmText,
     /// Empty-state hint under the tab bar when no tab is open.
     EmptyTabsHint,
+    /// Accessible name of a tree node's expander when the node is collapsed.
+    TreeExpandLabel,
+    /// Accessible name of a tree node's expander when the node is expanded.
+    TreeCollapseLabel,
 
     // ---- Servers area (left panel) ----
     /// Full-width button that opens the connect dialog.
@@ -1231,6 +1235,8 @@ fn ru(key: Tr) -> &'static str {
         RemoveFromListConfirmTitle => "Удаление сессии",
         RemoveFromListConfirmText => "Удалить сессию \"{0}\" и все её сигналы из списка?",
         EmptyTabsHint => "Двойной щелчок по серверу в диалоге подключения открывает вкладку",
+        TreeExpandLabel => "Развернуть",
+        TreeCollapseLabel => "Свернуть",
 
         // ---- Servers area (left panel) ----
         AddServer => "Добавить сервер",
@@ -1798,6 +1804,8 @@ fn en(key: Tr) -> &'static str {
         RemoveFromListConfirmTitle => "Remove session",
         RemoveFromListConfirmText => "Remove session \"{0}\" and all its signals from the list?",
         EmptyTabsHint => "Double-click a server in the connect dialog to open a tab",
+        TreeExpandLabel => "Expand",
+        TreeCollapseLabel => "Collapse",
 
         // ---- Servers area (left panel) ----
         AddServer => "Add server",
@@ -2345,6 +2353,8 @@ fn zh(key: Tr) -> &'static str {
         RemoveFromListConfirmTitle => "删除会话",
         RemoveFromListConfirmText => "从列表中删除会话 \"{0}\" 及其所有信号？",
         EmptyTabsHint => "在连接对话框中双击服务器可打开选项卡",
+        TreeExpandLabel => "展开",
+        TreeCollapseLabel => "折叠",
 
         // ---- Servers area (left panel) ----
         AddServer => "添加服务器",

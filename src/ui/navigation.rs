@@ -2,7 +2,8 @@ use super::actions::{TreeAction, TreeDragPayload};
 use super::colors::yellow;
 use super::files::save_tree_csv;
 use super::paint::{
-    paint_pause_icon, paint_play_icon, paint_reconnect_icon, painter_icon_button, painter_x_button,
+    paint_expander, paint_pause_icon, paint_play_icon, paint_reconnect_icon, painter_icon_button,
+    painter_x_button,
 };
 use super::servers::{request_remove_session, security_suffix, server_state_color, state_text};
 use super::test_hooks::record_server_row_rect;
@@ -410,6 +411,55 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
         });
 }
 
+/// A single-line, left-aligned list row: soft fill when selected (with an
+/// accent bar on the left when `bar`), a faint fill under the pointer, the text
+/// truncated to the row. `label` is the accessible name. Used by the tag tree
+/// and the servers list instead of a centred selectable button.
+fn flat_row(
+    ui: &mut egui::Ui,
+    size: egui::Vec2,
+    sense: egui::Sense,
+    selected: bool,
+    text: egui::RichText,
+    label: &str,
+    bar: bool,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(size, sense);
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.visuals();
+        let fill = if selected {
+            visuals.selection.bg_fill.gamma_multiply(0.45)
+        } else if response.hovered() {
+            visuals.widgets.hovered.weak_bg_fill
+        } else {
+            egui::Color32::TRANSPARENT
+        };
+        if fill != egui::Color32::TRANSPARENT {
+            ui.painter().rect_filled(rect, 3.0, fill);
+        }
+        if selected && bar {
+            let stripe =
+                egui::Rect::from_min_size(rect.min, egui::vec2(SELECTION_BAR_WIDTH, rect.height()));
+            ui.painter()
+                .rect_filled(stripe, 1.5, visuals.selection.stroke.color);
+        }
+        let inset = if bar { SELECTION_BAR_WIDTH + 5.0 } else { 4.0 };
+        let galley = egui::WidgetText::from(text).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            (rect.width() - inset - 4.0).max(1.0),
+            egui::TextStyle::Button,
+        );
+        let pos = egui::pos2(rect.min.x + inset, rect.center().y - galley.size().y / 2.0);
+        ui.painter().galley(pos, galley, ui.visuals().text_color());
+    }
+    response
+}
+
+/// Width of the accent bar on the left of a selected list row.
+const SELECTION_BAR_WIDTH: f32 = 3.0;
+
 /// Height of one tree row without the spacing between rows (virtualized list).
 const TREE_ROW_HEIGHT: f32 = 20.0;
 
@@ -424,15 +474,30 @@ pub(super) fn draw_tree_item(
     ui.horizontal(|ui| {
         ui.add_space(item.depth as f32 * 14.0);
         if item.node.has_children {
-            let arrow = if item.expanded { "v" } else { ">" };
-            if ui
-                .add_sized([DOT_LEAF, DOT_LEAF], egui::Button::new(arrow).frame(false))
-                .clicked()
-            {
+            // UI1: a painted triangle that turns smoothly (no «>» / «v» glyph).
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(DOT_LEAF, DOT_LEAF), egui::Sense::click());
+            let label = tr(
+                lang,
+                if item.expanded {
+                    Tr::TreeCollapseLabel
+                } else {
+                    Tr::TreeExpandLabel
+                },
+            );
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+            let openness = ui.ctx().animate_bool(response.id, item.expanded);
+            let color = if response.hovered() {
+                ui.visuals().strong_text_color()
+            } else {
+                ui.visuals().weak_text_color()
+            };
+            paint_expander(ui.painter(), rect, openness, color);
+            if response.clicked() {
                 actions.push(TreeAction::Toggle(item.id));
             }
         } else {
-            ui.add_space(18.0);
+            ui.add_space(DOT_LEAF);
         }
 
         let is_selected = selected == Some((session, item.id));
@@ -442,16 +507,20 @@ pub(super) fn draw_tree_item(
             }
             NodeKind::Item => egui::RichText::new(&item.node.name),
         };
-        // A full-width row button is both clickable/queryable and a reliable
-        // drag source: the whole row (not just the label glyphs) senses
+        // A full-width row is both clickable/queryable and a reliable drag
+        // source: the whole row (not just the label glyphs) senses
         // click_and_drag, so a mouse grab anywhere on the row starts a drag.
         // This is what the headless RawInput DnD proof drives.
-        let response = ui
-            .add_sized(
-                [ui.available_width(), 20.0],
-                egui::Button::selectable(is_selected, text).sense(egui::Sense::click_and_drag()),
-            )
-            .on_hover_text(&item.node.node_id);
+        let response = flat_row(
+            ui,
+            egui::vec2(ui.available_width(), TREE_ROW_HEIGHT),
+            egui::Sense::click_and_drag(),
+            is_selected,
+            text,
+            &item.node.name,
+            false,
+        )
+        .on_hover_text(&item.node.node_id);
         if item.loading {
             ui.spinner();
         }
