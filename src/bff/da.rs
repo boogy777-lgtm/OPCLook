@@ -24,7 +24,8 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use windows::Win32::System::Com::{
     CLSCTX_LOCAL_SERVER, CLSCTX_REMOTE_SERVER, CLSCTX_SERVER, CLSIDFromProgID,
     COINIT_MULTITHREADED, COSERVERINFO, CoCreateInstance, CoCreateInstanceEx, CoInitializeEx,
-    CoTaskMemFree, CoUninitialize, MULTI_QI,
+    CoInitializeSecurity, CoTaskMemFree, CoUninitialize, EOAC_NONE, MULTI_QI,
+    RPC_C_AUTHN_LEVEL_NONE, RPC_C_IMP_LEVEL_IDENTIFY,
 };
 use windows::Win32::System::Variant::VARIANT;
 use windows::core::{GUID, HRESULT, IUnknown, Interface, PCWSTR, PWSTR};
@@ -104,14 +105,53 @@ impl DaHost for WinDaHost {
     }
 }
 
+/// `CoInitializeSecurity` with no authentication and `IDENTIFY` impersonation,
+/// as OPC clients do: without it remote DCOM calls fail with `E_ACCESSDENIED`
+/// or `RPC_S_SERVER_UNAVAILABLE` (D3). It may be called once per process and
+/// fails with `RPC_E_TOO_LATE` when the process already configured COM
+/// security; that is reported in the journal and is not fatal.
+fn init_dcom_security() -> Result<(), String> {
+    // SAFETY: a null security descriptor and null reserved/list pointers are
+    // the documented way to ask COM for the default security settings.
+    unsafe {
+        CoInitializeSecurity(
+            None,
+            -1,
+            None,
+            None,
+            RPC_C_AUTHN_LEVEL_NONE,
+            RPC_C_IMP_LEVEL_IDENTIFY,
+            None,
+            EOAC_NONE,
+            None,
+        )
+    }
+    .map_err(|e| format!("{e}"))
+}
+
 pub(crate) fn spawn(event_tx: Sender<Event>) -> super::WorkerHandle {
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
     let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
     let join = std::thread::Builder::new()
         .name("opc-da".to_string())
         .spawn(move || {
-            // The router thread is a member of the MTA for as long as it runs.
+            // Keep the router thread in the MTA for as long as it runs, so the
+            // process-wide COM security settings stay in force.
             let _com = ComGuard::new();
+            if let Err(e) = init_dcom_security() {
+                send(
+                    &event_tx,
+                    Event {
+                        request_id: 0,
+                        session: 0,
+                        kind: EventKind::Log {
+                            message: format!(
+                                "параметры безопасности DCOM не заданы (уже настроены процессом): {e}"
+                            ),
+                        },
+                    },
+                );
+            }
             run_router(Arc::new(WinDaHost), cmd_rx, event_tx, SESSION_JOIN_BUDGET);
             let _ = done_tx.send(());
         });
