@@ -70,8 +70,30 @@ impl App {
         let mut ctx = PendingCtx::None;
         if event.request_id != 0 {
             match self.pending_requests.remove(&(session, event.request_id)) {
-                Some(pending) => ctx = pending.ctx,
-                None => return,
+                Some(pending) => {
+                    if self.settings.options.diagnostic_trace {
+                        let latency = pending.sent.elapsed().as_millis();
+                        self.journal.info_l(
+                            Tr::TraceReply,
+                            &[
+                                &event.request_id.to_string(),
+                                &operation_label(self.lang(), pending.operation),
+                                &session.to_string(),
+                                &latency.to_string(),
+                            ],
+                        );
+                    }
+                    ctx = pending.ctx;
+                }
+                None => {
+                    if self.settings.options.diagnostic_trace {
+                        self.journal.info_l(
+                            Tr::TraceDropped,
+                            &[&event.request_id.to_string(), &session.to_string()],
+                        );
+                    }
+                    return;
+                }
             }
         }
         let request_id = event.request_id;

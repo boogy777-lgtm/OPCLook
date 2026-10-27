@@ -42,6 +42,9 @@ pub struct Options {
     /// push subscription when it is (re)created.
     #[serde(default)]
     pub ua_deadband: f64,
+    /// K2: journal every request/reply pair with its latency (off by default).
+    #[serde(default)]
+    pub diagnostic_trace: bool,
 }
 
 impl Default for Options {
@@ -56,6 +59,7 @@ impl Default for Options {
             show_script: true,
             show_log: false,
             ua_deadband: 0.0,
+            diagnostic_trace: false,
         }
     }
 }
@@ -767,6 +771,27 @@ mod tests {
         let s: Settings = serde_json::from_value(value).unwrap();
         assert_eq!(s.ua_security_policy, UaSecurityPolicy::Auto);
         assert_eq!(s.ua_security_mode, UaSecurityMode::Auto);
+    }
+
+    #[test]
+    fn k2_diagnostic_trace_defaults_off_and_survives_old_files() {
+        assert!(!Options::default().diagnostic_trace);
+        let mut s = Settings::default();
+        s.options.diagnostic_trace = true;
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            serde_json::from_str::<Settings>(&json)
+                .unwrap()
+                .options
+                .diagnostic_trace
+        );
+        let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        value["options"]
+            .as_object_mut()
+            .unwrap()
+            .remove("diagnostic_trace");
+        let legacy: Settings = serde_json::from_value(value).unwrap();
+        assert!(!legacy.options.diagnostic_trace);
     }
 
     #[test]

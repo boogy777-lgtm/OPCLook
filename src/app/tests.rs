@@ -1344,3 +1344,60 @@ fn k1_disconnect_and_subscription_expire_silently() {
     assert_eq!(no_reply_lines(&app), 0);
     assert_eq!(app.sessions[0].state, SessionState::Connected);
 }
+
+fn trace_lines(app: &App) -> Vec<String> {
+    journal_lines(app)
+        .into_iter()
+        .filter(|l| l.contains('#'))
+        .collect()
+}
+
+#[test]
+fn k2_trace_is_off_by_default() {
+    let (_ctx, mut app) = tree_app();
+    app.browse(1, String::new());
+    let request = app.pending_request_ids_for_test(1)[0];
+    app.on_event_for_test_with_request(
+        1,
+        request,
+        EventKind::Browse {
+            node_id: String::new(),
+            children: Vec::new(),
+        },
+    );
+    assert!(trace_lines(&app).is_empty(), "{:?}", journal_lines(&app));
+}
+
+#[test]
+fn k2_trace_logs_request_reply_latency_and_dropped_replies() {
+    let (_ctx, mut app) = tree_app();
+    app.settings.options.diagnostic_trace = true;
+    app.browse(1, String::new());
+    let request = app.pending_request_ids_for_test(1)[0];
+    let lines = trace_lines(&app);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].contains(&format!("#{request}")), "{lines:?}");
+    app.on_event_for_test_with_request(
+        1,
+        request,
+        EventKind::Browse {
+            node_id: String::new(),
+            children: Vec::new(),
+        },
+    );
+    let lines = trace_lines(&app);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines[1].contains("мс"), "latency is shown: {lines:?}");
+    // The same reply again has no outstanding request: reported as dropped.
+    app.on_event_for_test_with_request(
+        1,
+        request,
+        EventKind::Browse {
+            node_id: String::new(),
+            children: Vec::new(),
+        },
+    );
+    let lines = trace_lines(&app);
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert!(lines[2].contains("отброшен"), "{lines:?}");
+}

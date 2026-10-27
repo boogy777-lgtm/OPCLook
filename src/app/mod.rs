@@ -572,6 +572,16 @@ impl App {
         let request_id = self.next_request;
         self.next_request += 1;
         let operation = kind.operation();
+        if self.settings.options.diagnostic_trace {
+            self.journal.info_l(
+                Tr::TraceSent,
+                &[
+                    &request_id.to_string(),
+                    &operation_label(self.lang(), operation),
+                    &session.to_string(),
+                ],
+            );
+        }
         // Scan commands report progress/termination through their own
         // `scan_id`-correlated streaming events (request_id 0), so they must not
         // reserve a request-id pending slot that no reply will ever consume.

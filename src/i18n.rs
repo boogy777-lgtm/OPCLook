@@ -71,6 +71,11 @@ impl std::fmt::Display for Lang {
 pub enum Tr {
     // ---- Top menu ----
     MenuClient,
+    TraceDropped,
+    TraceReply,
+    TraceSent,
+    DiagnosticTraceHint,
+    DiagnosticTraceCheck,
     NoReplyFromServer,
     CsvServerAmbiguous,
     CsvServerEmpty,
@@ -724,6 +729,13 @@ fn ru(key: Tr) -> &'static str {
     match key {
         // ---- Top menu ----
         MenuClient => "OPC клиент",
+        TraceDropped => "← #{0} (сессия {1}): нет ожидающего запроса, ответ отброшен",
+        TraceReply => "← #{0} {1} (сессия {2}): {3} мс",
+        TraceSent => "→ #{0} {1} (сессия {2})",
+        DiagnosticTraceHint => {
+            "Номер запроса, операция, сессия и время ответа в мс; для разбора зависаний. Журнал растёт быстро."
+        }
+        DiagnosticTraceCheck => "Диагностика: писать запросы и ответы в журнал",
         NoReplyFromServer => "Нет ответа от сервера за {0} с",
         CsvServerAmbiguous => {
             "Строка CSV пропущена: имени сервера «{0}» соответствует несколько подключений, укажите точное имя"
@@ -1281,6 +1293,13 @@ fn en(key: Tr) -> &'static str {
     match key {
         // ---- Top menu ----
         MenuClient => "OPC client",
+        TraceDropped => "← #{0} (session {1}): no outstanding request, reply dropped",
+        TraceReply => "← #{0} {1} (session {2}): {3} ms",
+        TraceSent => "→ #{0} {1} (session {2})",
+        DiagnosticTraceHint => {
+            "Request id, operation, session and reply time in ms, for diagnosing hangs. The journal grows quickly."
+        }
+        DiagnosticTraceCheck => "Diagnostics: log requests and replies",
         NoReplyFromServer => "No reply from the server within {0} s",
         CsvServerAmbiguous => {
             "CSV row skipped: server name \"{0}\" matches several connections, give the exact name"
@@ -1828,6 +1847,13 @@ fn zh(key: Tr) -> &'static str {
     match key {
         // ---- Top menu ----
         MenuClient => "OPC 客户端",
+        TraceDropped => "← #{0}（会话 {1}）：无待处理请求，响应已丢弃",
+        TraceReply => "← #{0} {1}（会话 {2}）：{3} 毫秒",
+        TraceSent => "→ #{0} {1}（会话 {2}）",
+        DiagnosticTraceHint => {
+            "请求编号、操作、会话和响应耗时（毫秒），用于排查卡死。日志增长很快。"
+        }
+        DiagnosticTraceCheck => "诊断：将请求和响应写入日志",
         NoReplyFromServer => "服务器 {0} 秒内无响应",
         CsvServerAmbiguous => "已跳过 CSV 行：服务器名“{0}”匹配多个连接，请指定准确名称",
         CsvServerEmpty => "已跳过 CSV 行：信号“{0}”未指定服务器",
