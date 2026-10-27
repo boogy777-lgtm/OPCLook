@@ -42,6 +42,9 @@ pub struct Options {
     /// push subscription when it is (re)created.
     #[serde(default)]
     pub ua_deadband: f64,
+    /// K2: journal every request/reply pair with its latency (off by default).
+    #[serde(default)]
+    pub diagnostic_trace: bool,
 }
 
 impl Default for Options {
@@ -56,6 +59,7 @@ impl Default for Options {
             show_script: true,
             show_log: false,
             ua_deadband: 0.0,
+            diagnostic_trace: false,
         }
     }
 }
@@ -107,6 +111,25 @@ impl<'de> Deserialize<'de> for CachedAdapters {
     }
 }
 
+/// Something the settings layer wants the user to see. `Settings` has no
+/// journal of its own, so load/save problems are queued here and the app moves
+/// them into the journal (`App::drain_settings_notices`). Nothing is lost
+/// silently: `eprintln!` is invisible in the release (windows-subsystem) build.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SettingsNotice {
+    /// The file exists but could not be read.
+    ReadFailed { path: String, error: String },
+    /// The file was read but is not valid settings. `backup` is the copy the
+    /// damaged file was saved to (`Err` carries why that copy failed).
+    ParseFailed {
+        path: String,
+        error: String,
+        backup: Result<String, String>,
+    },
+    /// Writing the settings failed (or was refused to protect a damaged file).
+    SaveFailed { path: String, error: String },
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Settings {
     pub options: Options,
@@ -152,6 +175,13 @@ pub struct Settings {
     /// in an old settings file means an empty list until the user refreshes.
     #[serde(default)]
     pub cached_adapters: CachedAdapters,
+    /// Pending load/save diagnostics (never persisted).
+    #[serde(skip)]
+    pub notices: std::sync::Arc<std::sync::Mutex<Vec<SettingsNotice>>>,
+    /// Set when a damaged settings file could not be backed up: saving would
+    /// destroy the only copy, so `save()` refuses until the app restarts.
+    #[serde(skip)]
+    pub save_blocked: bool,
 }
 
 impl Default for Settings {
@@ -175,37 +205,98 @@ impl Default for Settings {
             preferred_adapter: None,
             selected_local_ip: None,
             cached_adapters: CachedAdapters::default(),
+            notices: Default::default(),
+            save_blocked: false,
         }
     }
 }
 
 impl Settings {
+    /// Load `settings.json`. A missing file is a normal first start. Any other
+    /// problem (unreadable, malformed, unknown enum value) never resets the
+    /// settings silently: the damaged file is copied to
+    /// `settings.json.bad-<time>` before defaults are used, and a
+    /// [`SettingsNotice`] is queued for the journal.
     pub fn load() -> Self {
         let path = settings_path();
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            return Self::default();
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Self::default(),
+            Err(err) => {
+                let mut settings = Self::default();
+                // Unreadable file: do not overwrite what we could not read.
+                settings.save_blocked = true;
+                settings.push_notice(SettingsNotice::ReadFailed {
+                    path: path.display().to_string(),
+                    error: err.to_string(),
+                });
+                return settings;
+            }
         };
-        match serde_json::from_str::<Settings>(&text) {
+        match serde_json::from_slice::<Settings>(&bytes) {
             Ok(settings) => settings,
             Err(err) => {
-                eprintln!("settings {}: {err}", path.display());
-                Self::default()
+                let mut settings = Self::default();
+                let backup = backup_damaged_file(&path);
+                if backup.is_err() {
+                    settings.save_blocked = true;
+                }
+                settings.push_notice(SettingsNotice::ParseFailed {
+                    path: path.display().to_string(),
+                    error: err.to_string(),
+                    backup,
+                });
+                settings
             }
         }
     }
 
+    /// Queue a diagnostic for the journal.
+    pub fn push_notice(&self, notice: SettingsNotice) {
+        self.notices
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(notice);
+    }
+
+    /// Take every queued diagnostic (oldest first).
+    pub fn take_notices(&self) -> Vec<SettingsNotice> {
+        std::mem::take(
+            &mut *self
+                .notices
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+
+    /// Persist the settings atomically (temporary file in the same directory,
+    /// then rename), so a crash or a full disk never leaves a half-written
+    /// `settings.json`. Failures are queued as [`SettingsNotice::SaveFailed`].
     pub fn save(&self) {
         let path = settings_path();
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+        let shown = path.display().to_string();
+        if self.save_blocked {
+            self.push_notice(SettingsNotice::SaveFailed {
+                path: shown,
+                error: "the existing settings file is damaged or unreadable and could not be backed up; it is not overwritten".to_string(),
+            });
+            return;
         }
-        match serde_json::to_string_pretty(self) {
-            Ok(text) => {
-                if let Err(err) = std::fs::write(&path, text) {
-                    eprintln!("settings save {}: {err}", path.display());
-                }
+        let text = match serde_json::to_string_pretty(self) {
+            Ok(text) => text,
+            Err(err) => {
+                self.push_notice(SettingsNotice::SaveFailed {
+                    path: shown,
+                    error: err.to_string(),
+                });
+                return;
             }
-            Err(err) => eprintln!("settings serialize: {err}"),
+        };
+        if let Err(err) = write_atomic(&path, text.as_bytes()) {
+            self.push_notice(SettingsNotice::SaveFailed {
+                path: shown,
+                error: err.to_string(),
+            });
         }
     }
 
@@ -358,6 +449,51 @@ impl Settings {
         self.normalize_network();
         self.save();
     }
+}
+
+/// Write `bytes` to `path` through a sibling temporary file and a rename.
+fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    let written = (|| {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()
+    })();
+    if let Err(err) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(err);
+    }
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
+}
+
+/// Copy a damaged settings file to `settings.json.bad-<YYYYMMDD-HHMMSS>` (a
+/// numeric suffix keeps repeated failures within one second apart). Returns
+/// the backup path.
+fn backup_damaged_file(path: &std::path::Path) -> Result<String, String> {
+    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+    for attempt in 0..100u32 {
+        let mut name = path.as_os_str().to_owned();
+        name.push(format!(".bad-{stamp}"));
+        if attempt > 0 {
+            name.push(format!("-{attempt}"));
+        }
+        let target = PathBuf::from(name);
+        if target.exists() {
+            continue;
+        }
+        return std::fs::copy(path, &target)
+            .map(|_| target.display().to_string())
+            .map_err(|err| err.to_string());
+    }
+    Err("no free backup file name".to_string())
 }
 
 pub fn app_dir() -> PathBuf {
@@ -635,6 +771,27 @@ mod tests {
         let s: Settings = serde_json::from_value(value).unwrap();
         assert_eq!(s.ua_security_policy, UaSecurityPolicy::Auto);
         assert_eq!(s.ua_security_mode, UaSecurityMode::Auto);
+    }
+
+    #[test]
+    fn k2_diagnostic_trace_defaults_off_and_survives_old_files() {
+        assert!(!Options::default().diagnostic_trace);
+        let mut s = Settings::default();
+        s.options.diagnostic_trace = true;
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            serde_json::from_str::<Settings>(&json)
+                .unwrap()
+                .options
+                .diagnostic_trace
+        );
+        let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        value["options"]
+            .as_object_mut()
+            .unwrap()
+            .remove("diagnostic_trace");
+        let legacy: Settings = serde_json::from_value(value).unwrap();
+        assert!(!legacy.options.diagnostic_trace);
     }
 
     #[test]
@@ -1171,6 +1328,121 @@ mod tests {
             assert_eq!(loaded.last_da_host, "box");
             assert_eq!(loaded.recent_endpoints.len(), 1);
             assert_eq!(loaded.lang(), crate::i18n::Lang::En);
+        });
+    }
+
+    // ---- A2: no silent loss, atomic writes ----
+
+    fn fresh_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("opcda-egui-settings-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn corrupt_file_is_backed_up_and_reported_not_silently_reset() {
+        let dir = fresh_dir("corrupt");
+        with_appdata(&dir, || {
+            let path = settings_path();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "{ not json").unwrap();
+
+            let loaded = Settings::load();
+            assert_eq!(loaded.options.update_interval_secs, 1, "defaults are used");
+            let notices = loaded.take_notices();
+            assert_eq!(notices.len(), 1, "{notices:?}");
+            let SettingsNotice::ParseFailed { backup, .. } = &notices[0] else {
+                panic!("expected ParseFailed, got {notices:?}");
+            };
+            let backup = backup.as_ref().expect("backup must succeed");
+            assert!(backup.contains("settings.json.bad-"), "{backup}");
+            assert_eq!(std::fs::read_to_string(backup).unwrap(), "{ not json");
+            // The damaged original is still there until the next save.
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ not json");
+            loaded.save();
+            assert!(Settings::load().take_notices().is_empty());
+            assert_eq!(std::fs::read_to_string(backup).unwrap(), "{ not json");
+        });
+    }
+
+    #[test]
+    fn unknown_security_policy_is_reported_with_a_backup() {
+        let dir = fresh_dir("unknown-policy");
+        with_appdata(&dir, || {
+            let mut value = serde_json::to_value(Settings::default()).unwrap();
+            value["ua_security_policy"] = serde_json::json!("Quantum9000");
+            let path = settings_path();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
+
+            let loaded = Settings::load();
+            let notices = loaded.take_notices();
+            assert!(
+                matches!(&notices[..], [SettingsNotice::ParseFailed { error, backup: Ok(_), .. }] if error.contains("Quantum9000")),
+                "{notices:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn save_replaces_the_file_atomically_and_leaves_no_temp_file() {
+        let dir = fresh_dir("atomic");
+        with_appdata(&dir, || {
+            let mut s = Settings::default();
+            s.last_da_host = "first".to_string();
+            s.save();
+            s.last_da_host = "second".to_string();
+            s.save();
+            let tmp = {
+                let mut t = settings_path().into_os_string();
+                t.push(".tmp");
+                PathBuf::from(t)
+            };
+            assert!(!tmp.exists(), "temporary file must be renamed away");
+            assert_eq!(Settings::load().last_da_host, "second");
+            assert!(s.take_notices().is_empty());
+        });
+    }
+
+    #[test]
+    fn failed_save_is_reported_and_cleans_up_the_temp_file() {
+        let dir = fresh_dir("save-fails");
+        with_appdata(&dir, || {
+            // A directory squatting on the target makes the final rename fail.
+            std::fs::create_dir_all(settings_path()).unwrap();
+            let s = Settings::default();
+            s.save();
+            let notices = s.take_notices();
+            assert!(
+                matches!(&notices[..], [SettingsNotice::SaveFailed { .. }]),
+                "{notices:?}"
+            );
+            let mut tmp = settings_path().into_os_string();
+            tmp.push(".tmp");
+            assert!(!PathBuf::from(tmp).exists());
+        });
+    }
+
+    #[test]
+    fn unreadable_file_is_reported_and_never_overwritten() {
+        let dir = fresh_dir("unreadable");
+        with_appdata(&dir, || {
+            // Reading a directory fails with a non-NotFound error.
+            std::fs::create_dir_all(settings_path()).unwrap();
+            let loaded = Settings::load();
+            assert!(loaded.save_blocked);
+            let notices = loaded.take_notices();
+            assert!(
+                matches!(&notices[..], [SettingsNotice::ReadFailed { .. }]),
+                "{notices:?}"
+            );
+            loaded.save();
+            let notices = loaded.take_notices();
+            assert!(
+                matches!(&notices[..], [SettingsNotice::SaveFailed { .. }]),
+                "a blocked save must say so: {notices:?}"
+            );
+            assert!(settings_path().is_dir(), "nothing was overwritten");
         });
     }
 }

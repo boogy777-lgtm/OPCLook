@@ -71,6 +71,23 @@ impl std::fmt::Display for Lang {
 pub enum Tr {
     // ---- Top menu ----
     MenuClient,
+    TabsNotAFilterHint,
+    TraceDropped,
+    TraceReply,
+    TraceSent,
+    DiagnosticTraceHint,
+    DiagnosticTraceCheck,
+    NoReplyFromServer,
+    CsvServerAmbiguous,
+    CsvServerEmpty,
+    CjkFontMissing,
+    CjkFontLoaded,
+    ResolvingName,
+    SettingsReadFailed,
+    SettingsParseFailed,
+    SettingsParseNoBackup,
+    SettingsSaveFailed,
+    ConnectInProgress,
     MenuServers,
     MenuSignals,
     MenuScript,
@@ -713,6 +730,37 @@ fn ru(key: Tr) -> &'static str {
     match key {
         // ---- Top menu ----
         MenuClient => "OPC клиент",
+        TabsNotAFilterHint => {
+            "Вкладки выбирают дерево слева, это не фильтр: в таблице сигналы всех серверов"
+        }
+        TraceDropped => "← #{0} (сессия {1}): нет ожидающего запроса, ответ отброшен",
+        TraceReply => "← #{0} {1} (сессия {2}): {3} мс",
+        TraceSent => "→ #{0} {1} (сессия {2})",
+        DiagnosticTraceHint => {
+            "Номер запроса, операция, сессия и время ответа в мс; для разбора зависаний. Журнал растёт быстро."
+        }
+        DiagnosticTraceCheck => "Диагностика: писать запросы и ответы в журнал",
+        NoReplyFromServer => "Нет ответа от сервера за {0} с",
+        CsvServerAmbiguous => {
+            "Строка CSV пропущена: имени сервера «{0}» соответствует несколько подключений, укажите точное имя"
+        }
+        CsvServerEmpty => "Строка CSV пропущена: для сигнала «{0}» не указан сервер",
+        CjkFontMissing => {
+            "Не найден шрифт для китайского текста (msyh.ttc, simsun.ttc): интерфейс на 中文 будет показан квадратами"
+        }
+        CjkFontLoaded => "Шрифт для китайского текста: {0}",
+        ResolvingName => "Поиск узла…",
+        SettingsReadFailed => {
+            "Не удалось прочитать файл настроек {0}: {1}. Файл не будет перезаписан"
+        }
+        SettingsParseFailed => {
+            "Файл настроек {0} повреждён ({1}). Копия сохранена: {2}. Используются значения по умолчанию"
+        }
+        SettingsParseNoBackup => {
+            "Файл настроек {0} повреждён ({1}), копию сделать не удалось ({2}). Файл не будет перезаписан, используются значения по умолчанию"
+        }
+        SettingsSaveFailed => "Не удалось сохранить настройки {0}: {1}",
+        ConnectInProgress => "Подключение…",
         MenuServers => "Серверы",
         MenuSignals => "Сигналы",
         MenuScript => "Скрипт",
@@ -1249,6 +1297,35 @@ fn en(key: Tr) -> &'static str {
     match key {
         // ---- Top menu ----
         MenuClient => "OPC client",
+        TabsNotAFilterHint => {
+            "Tabs pick the tree on the left; they are not a filter: the table lists signals of all servers"
+        }
+        TraceDropped => "← #{0} (session {1}): no outstanding request, reply dropped",
+        TraceReply => "← #{0} {1} (session {2}): {3} ms",
+        TraceSent => "→ #{0} {1} (session {2})",
+        DiagnosticTraceHint => {
+            "Request id, operation, session and reply time in ms, for diagnosing hangs. The journal grows quickly."
+        }
+        DiagnosticTraceCheck => "Diagnostics: log requests and replies",
+        NoReplyFromServer => "No reply from the server within {0} s",
+        CsvServerAmbiguous => {
+            "CSV row skipped: server name \"{0}\" matches several connections, give the exact name"
+        }
+        CsvServerEmpty => "CSV row skipped: no server given for signal \"{0}\"",
+        CjkFontMissing => {
+            "No font for Chinese text was found (msyh.ttc, simsun.ttc): the 中文 interface will show boxes"
+        }
+        CjkFontLoaded => "Font for CJK text: {0}",
+        ResolvingName => "Resolving node…",
+        SettingsReadFailed => "Could not read settings file {0}: {1}. It will not be overwritten",
+        SettingsParseFailed => {
+            "Settings file {0} is damaged ({1}). A copy was saved to {2}. Defaults are used"
+        }
+        SettingsParseNoBackup => {
+            "Settings file {0} is damaged ({1}) and could not be backed up ({2}). It will not be overwritten; defaults are used"
+        }
+        SettingsSaveFailed => "Could not save settings {0}: {1}",
+        ConnectInProgress => "Connecting…",
         MenuServers => "Servers",
         MenuSignals => "Signals",
         MenuScript => "Script",
@@ -1777,6 +1854,27 @@ fn zh(key: Tr) -> &'static str {
     match key {
         // ---- Top menu ----
         MenuClient => "OPC 客户端",
+        TabsNotAFilterHint => "标签页用于选择左侧的树，不是过滤器：表格显示所有服务器的信号",
+        TraceDropped => "← #{0}（会话 {1}）：无待处理请求，响应已丢弃",
+        TraceReply => "← #{0} {1}（会话 {2}）：{3} 毫秒",
+        TraceSent => "→ #{0} {1}（会话 {2}）",
+        DiagnosticTraceHint => {
+            "请求编号、操作、会话和响应耗时（毫秒），用于排查卡死。日志增长很快。"
+        }
+        DiagnosticTraceCheck => "诊断：将请求和响应写入日志",
+        NoReplyFromServer => "服务器 {0} 秒内无响应",
+        CsvServerAmbiguous => "已跳过 CSV 行：服务器名“{0}”匹配多个连接，请指定准确名称",
+        CsvServerEmpty => "已跳过 CSV 行：信号“{0}”未指定服务器",
+        CjkFontMissing => "未找到可显示中文的字体（msyh.ttc、simsun.ttc）：界面文字可能显示为方块",
+        CjkFontLoaded => "中文字体：{0}",
+        ResolvingName => "正在解析节点…",
+        SettingsReadFailed => "无法读取设置文件 {0}：{1}。不会覆盖该文件",
+        SettingsParseFailed => "设置文件 {0} 已损坏（{1}）。副本已保存到 {2}。使用默认值",
+        SettingsParseNoBackup => {
+            "设置文件 {0} 已损坏（{1}），且无法备份（{2}）。不会覆盖该文件，使用默认值"
+        }
+        SettingsSaveFailed => "无法保存设置 {0}：{1}",
+        ConnectInProgress => "连接中…",
         MenuServers => "服务器",
         MenuSignals => "信号",
         MenuScript => "脚本",

@@ -1,5 +1,6 @@
 use crate::bff::model::{
-    ItemKey, Protocol, ServerEntry, SessionId, UaSecurityMode, UaSecurityPolicy, WriteRequest,
+    ItemKey, Protocol, RequestId, ServerEntry, SessionId, UaSecurityMode, UaSecurityPolicy,
+    WriteRequest,
 };
 use crate::settings::Options;
 
@@ -66,6 +67,10 @@ pub struct ConnectDialog {
     /// Outstanding sub-searches of the DA auto-discovery (local + known remote
     /// hosts). When it drops to zero the merged list is complete.
     pub da_auto_pending: usize,
+    /// Session whose `Connect` attempt the dialog is waiting for. While `Some`
+    /// the dialog stays open with a spinner; `Connected` closes it, `Error`
+    /// shows the message inside it and «Отмена» aborts the wait (U9).
+    pub connecting: Option<SessionId>,
 }
 
 impl Default for ConnectDialog {
@@ -109,6 +114,7 @@ impl Default for ConnectDialog {
             ua_scan_servers: Vec::new(),
             ua_auto_pending: 0,
             da_auto_pending: 0,
+            connecting: None,
         }
     }
 }
@@ -120,6 +126,11 @@ pub struct AddSignalDialog {
     pub display_name: String,
     pub error: Option<String>,
     pub focus_pending: bool,
+    /// UA «Добавить по имени»: the `(session, request_id)` of the
+    /// `ResolveBrowsePath` the dialog is waiting for (U14). While `Some` the
+    /// dialog stays open with a spinner; the answer closes it or shows its
+    /// error inline.
+    pub resolving: Option<(SessionId, RequestId)>,
 }
 
 impl Default for AddSignalDialog {
@@ -131,6 +142,7 @@ impl Default for AddSignalDialog {
             display_name: String::new(),
             error: None,
             focus_pending: false,
+            resolving: None,
         }
     }
 }

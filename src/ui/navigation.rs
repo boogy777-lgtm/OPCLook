@@ -35,18 +35,20 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                 .active_session
                 .and_then(|id| app.sessions.iter().find(|s| s.id == id))
                 .map(|s| s.state);
-            let (can_connect, can_disconnect, can_reconnect) = match active_state {
-                None => (false, false, false),
-                Some(SessionState::Connecting) => (false, true, true),
-                Some(SessionState::Connected) => (true, true, true),
-                Some(SessionState::Disconnected) => (true, false, true),
+            // «Подключиться» is always available (first start: no sessions yet).
+            let can_connect = true;
+            let (can_disconnect, can_reconnect) = match active_state {
+                None => (false, false),
+                Some(SessionState::Connecting) => (true, true),
+                Some(SessionState::Connected) => (true, true),
+                Some(SessionState::Disconnected) => (false, true),
             };
             ui.horizontal(|ui| {
                 if ui
                     .add_enabled(can_connect, egui::Button::new(tr(lang, Tr::Connect)))
                     .clicked()
                 {
-                    app.open_connect_dialog();
+                    app.toolbar_connect();
                 }
                 if ui
                     .add_enabled(can_disconnect, egui::Button::new(tr(lang, Tr::Disconnect)))
@@ -252,6 +254,7 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
             let root_loading = view.root_loading;
             let connected = view.state == SessionState::Connected;
 
+            let mut vars_only_changed: Option<bool> = None;
             ui.horizontal_wrapped(|ui| {
                 if ui
                     .add_enabled(
@@ -281,16 +284,21 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                     open_add_signal(app);
                 }
                 if protocol == Protocol::OpcUa {
-                    let mut fallback = false;
                     let mut only = app
                         .sessions
-                        .iter_mut()
+                        .iter()
                         .find(|s| s.id == session_id)
-                        .map(|s| &mut s.ua_browse_vars_only)
-                        .unwrap_or(&mut fallback);
-                    ui.checkbox(&mut only, tr(lang, Tr::OnlyVars));
+                        .is_some_and(|s| s.ua_browse_vars_only);
+                    if ui.checkbox(&mut only, tr(lang, Tr::OnlyVars)).changed() {
+                        // U5: the filter applies to what is loaded, so the
+                        // tree is re-read.
+                        vars_only_changed = Some(only);
+                    }
                 }
             });
+            if let Some(only) = vars_only_changed {
+                app.set_ua_browse_vars_only(session_id, only);
+            }
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(fmt(lang, Tr::BrowseProto, &[&protocol.to_string()]))
@@ -334,13 +342,25 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                     }
                 } else {
                     let selected = app.selected_tree;
+                    // A12: only the rows inside the viewport are built (a branch
+                    // can hold thousands of nodes and the panel repaints every
+                    // 200 ms).
+                    let visible = visible_tree_indices(view);
                     let scroll_out = egui::ScrollArea::vertical()
                         .id_salt("tree_scroll")
                         .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            for index in visible_tree_indices(view) {
-                                let item = &view.tree[index];
-                                draw_tree_item(ui, item, session_id, selected, &mut actions, lang);
+                        .show_rows(ui, TREE_ROW_HEIGHT, visible.len(), |ui, range| {
+                            for index in visible.get(range).into_iter().flatten() {
+                                if let Some(item) = view.tree.get(*index) {
+                                    draw_tree_item(
+                                        ui,
+                                        item,
+                                        session_id,
+                                        selected,
+                                        &mut actions,
+                                        lang,
+                                    );
+                                }
                             }
                         });
                     // Clicking anywhere in the tree pane (including empty space
@@ -384,6 +404,9 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
             }
         });
 }
+
+/// Height of one tree row without the spacing between rows (virtualized list).
+const TREE_ROW_HEIGHT: f32 = 20.0;
 
 pub(super) fn draw_tree_item(
     ui: &mut egui::Ui,

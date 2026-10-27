@@ -70,6 +70,11 @@ pub(super) fn options_dialog(app: &mut App, ui: &mut egui::Ui) {
                 );
                 ui.label(tr(lang, Tr::DeadbandLabel));
                 ui.label(egui::RichText::new(tr(lang, Tr::DeadbandHint)).weak());
+                ui.checkbox(
+                    &mut draft.diagnostic_trace,
+                    tr(lang, Tr::DiagnosticTraceCheck),
+                );
+                ui.label(egui::RichText::new(tr(lang, Tr::DiagnosticTraceHint)).weak());
                 ui.separator();
                 ui.horizontal(|ui| {
                     if ui.button(tr(lang, Tr::Save)).clicked() {
