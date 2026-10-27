@@ -1,3 +1,34 @@
+/// UI1: the expand / collapse triangle shared by the tag tree and the signal
+/// table, drawn with the painter (no font glyph). `openness` runs from 0.0
+/// (closed, pointing right) to 1.0 (open, pointing down); pass the value of
+/// `ctx.animate_bool(id, expanded)` for a smooth turn.
+#[allow(dead_code)]
+pub(super) fn paint_expander(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    openness: f32,
+    color: egui::Color32,
+) {
+    let openness = openness.clamp(0.0, 1.0);
+    let center = rect.center();
+    let r = rect.width().min(rect.height()) * 0.3;
+    // Right-pointing triangle, rotated by 90° * openness around the center.
+    let angle = openness * std::f32::consts::FRAC_PI_2;
+    let rot = egui::emath::Rot2::from_angle(angle);
+    let points = [
+        egui::vec2(-r * 0.6, -r),
+        egui::vec2(r, 0.0),
+        egui::vec2(-r * 0.6, r),
+    ]
+    .map(|v| center + rot * v)
+    .to_vec();
+    painter.add(egui::Shape::convex_polygon(
+        points,
+        color,
+        egui::Stroke::NONE,
+    ));
+}
+
 /// Small clickable square painted with `paint`. No rendered text, so no tofu
 /// glyphs; the `name` string becomes the accessible node label and the tooltip.
 /// Returns true when clicked (only while `enabled`).
