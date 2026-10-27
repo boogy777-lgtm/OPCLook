@@ -135,17 +135,29 @@ pub const SESSION_TIMEOUT_MAX_MS: u32 = 3_600_000;
 /// Default width of the left «Серверы» panel.
 pub const LEFT_PANEL_DEFAULT_WIDTH: f32 = 340.0;
 /// Default height of the bottom panels panel.
-pub const BOTTOM_PANEL_DEFAULT_HEIGHT: f32 = 230.0;
+pub const BOTTOM_PANEL_DEFAULT_HEIGHT: f32 = 160.0;
 /// Lower bound for the bottom panels panel height.
 pub const BOTTOM_PANEL_MIN_HEIGHT: f32 = 120.0;
 /// Upper bound for the bottom panels panel height.
 pub const BOTTOM_PANEL_MAX_HEIGHT: f32 = 420.0;
 /// Height of the status bar at the bottom of the window.
 pub const STATUS_BAR_HEIGHT: f32 = 24.0;
+/// UI8 type scale: `Small`.
+pub const TEXT_SIZE_SMALL: f32 = 12.0;
+/// UI8 type scale: `Body`, `Button` and `Monospace`.
+pub const TEXT_SIZE_BODY: f32 = 13.0;
+/// UI8 type scale: `Heading`.
+pub const TEXT_SIZE_HEADING: f32 = 15.0;
+/// UI8 spacing scale: gap between neighbouring widgets (x, y).
+pub const ITEM_SPACING: (f32, f32) = (8.0, 6.0);
+/// UI8 spacing scale: padding inside buttons (x, y).
+pub const BUTTON_PADDING: (f32, f32) = (8.0, 4.0);
+/// UI8 spacing scale: inner margin of windows and dialogs.
+pub const WINDOW_MARGIN: i8 = 12;
 /// Height of one signal-table row.
-pub const TABLE_ROW_HEIGHT: f32 = 22.0;
+pub const TABLE_ROW_HEIGHT: f32 = 24.0;
 /// Height of the signal-table header row.
-pub const TABLE_HEADER_HEIGHT: f32 = 20.0;
+pub const TABLE_HEADER_HEIGHT: f32 = 22.0;
 /// A table column can never shrink below this width.
 pub const MIN_COLUMN_WIDTH: f32 = 20.0;
 
