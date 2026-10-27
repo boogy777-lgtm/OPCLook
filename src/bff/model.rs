@@ -367,6 +367,11 @@ pub enum BackendMsg {
     },
     /// V3: the server's structure types could not be loaded; structures stay
     /// shown as text.
+    /// P1: count of items read by polling because the server's subscription
+    /// limits are reached.
+    PollOnlyItems {
+        count: usize,
+    },
     StructTypesUnavailable {
         cause: Box<BackendMsg>,
     },
@@ -1491,6 +1496,11 @@ pub enum EventKind {
     },
     Values {
         values: Vec<(ItemKey, DataValue)>,
+    },
+    /// P1 (UA): these items are registered but no subscription takes them
+    /// (server limits), so the app must keep reading them by polling.
+    PollOnly {
+        keys: Vec<ItemKey>,
     },
     /// UA-only: current push-subscription state. `Active` stops the periodic
     /// Read for that UA session (values arrive via DataChange push); `Inactive`

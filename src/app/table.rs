@@ -49,6 +49,7 @@ impl App {
                 timestamp: None,
                 description: String::new(),
                 pending: true,
+                poll_only: false,
             });
             specs.push(ItemSpec { key, item_id });
             added += 1;
@@ -75,6 +76,8 @@ impl App {
         let mut specs = Vec::new();
         for row in self.rows.iter_mut().filter(|r| r.session == session) {
             row.pending = true;
+            // The new session decides again which items it can push (P1).
+            row.poll_only = false;
             specs.push(ItemSpec {
                 key: row.key,
                 item_id: row.item_id.clone(),
