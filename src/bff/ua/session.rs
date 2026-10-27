@@ -13,7 +13,7 @@ use crate::bff::model::{
 use crate::bff::net::{BoundConnectionSource, BoundConnectorBuilder, NetworkBinding};
 use crate::constants::{
     CONNECT_TIMEOUT, DISCOVERY_GUARD_TIMEOUT, GRACEFUL_CLOSE_TIMEOUT, IO_TIMEOUT,
-    READ_MAX_ITEMS_PER_CALL,
+    READ_MAX_ITEMS_PER_CALL, UA_SAMPLING_INTERVAL_MS,
 };
 use opcua::client::{
     ClientBuilder, DataChangeCallback, IdentityToken, MonitoredItem, Password, Session,
@@ -59,6 +59,26 @@ pub(super) struct UaSession {
     /// a response in flight, so the session is poisoned: the command loop must
     /// close it gracefully instead of issuing another request on it.
     pub(super) timed_out: bool,
+}
+
+/// Monitoring parameters of one item: single-slot queue that discards the
+/// oldest value, sampled at the subscription's publishing interval.
+pub(super) fn monitoring_parameters(
+    key: ItemKey,
+    deadband: f64,
+    with_filter: bool,
+) -> MonitoringParameters {
+    MonitoringParameters {
+        client_handle: key,
+        sampling_interval: UA_SAMPLING_INTERVAL_MS,
+        filter: if with_filter {
+            data_change_filter(deadband)
+        } else {
+            ExtensionObject::null()
+        },
+        queue_size: 1,
+        discard_oldest: true,
+    }
 }
 
 /// Status codes with which a server refuses a monitoring filter (deadband) for
@@ -380,17 +400,7 @@ impl UaSession {
                 data_encoding: QualifiedName::null(),
             },
             monitoring_mode: MonitoringMode::Reporting,
-            requested_parameters: MonitoringParameters {
-                client_handle: key,
-                sampling_interval: 0.0,
-                filter: if with_filter {
-                    data_change_filter(self.deadband)
-                } else {
-                    ExtensionObject::null()
-                },
-                queue_size: 1,
-                discard_oldest: true,
-            },
+            requested_parameters: monitoring_parameters(key, self.deadband, with_filter),
         }
     }
 

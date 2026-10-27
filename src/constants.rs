@@ -37,6 +37,12 @@ pub const DISCOVERY_URLS: [&str; 2] = ["opc.tcp://localhost:4840", "opc.tcp://12
 
 /// Hard cap on concurrently open OPC UA sessions (DA sessions are not counted).
 pub const MAX_UA_SESSIONS: usize = 100;
+/// `samplingInterval` of every monitored item. `-1` means "use the subscription's
+/// publishing interval" (OPC UA Part 4, 5.12.2): the sampling rate then follows
+/// the interval the user picks (and `ConfigureUaSubscription` changes) and no
+/// server is asked to sample at "its fastest rate" (`0`), which a PLC-class
+/// server may take as a request to sample every cycle.
+pub const UA_SAMPLING_INTERVAL_MS: f64 = -1.0;
 /// Maximum number of address checks the subnet scanner runs at once.
 pub const SCAN_PARALLELISM: usize = 32;
 /// A subnet larger than this many addresses requires explicit confirmation.

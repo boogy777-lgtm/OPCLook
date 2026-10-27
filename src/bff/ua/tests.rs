@@ -296,21 +296,24 @@ fn parsed_absolute_deadband_matches() {
 
 #[test]
 fn subscription_monitoring_parameters_shape() {
-    // ItemKey is used directly as the client handle; the request uses a
-    // single-slot queue that always discards the oldest value, sampling at
-    // the server's fastest rate (0), reporting mode.
-    let params = MonitoringParameters {
-        client_handle: 42,
-        sampling_interval: 0.0,
-        filter: data_change_filter(0.0),
-        queue_size: 1,
-        discard_oldest: true,
-    };
+    // ItemKey is the client handle; single-slot queue discarding the oldest
+    // value; sampling follows the publishing interval (-1), not "as fast as
+    // the server can" (0).
+    let params = super::session::monitoring_parameters(42, 0.0, true);
     assert_eq!(params.client_handle, 42);
-    assert_eq!(params.sampling_interval, 0.0);
+    assert_eq!(params.sampling_interval, -1.0);
     assert_eq!(params.queue_size, 1);
     assert!(params.discard_oldest);
-    assert!(params.filter.is_null());
+    assert!(params.filter.is_null(), "no deadband, no filter");
+
+    let with_deadband = super::session::monitoring_parameters(7, 2.5, true);
+    assert!(!with_deadband.filter.is_null());
+    let retry = super::session::monitoring_parameters(7, 2.5, false);
+    assert!(
+        retry.filter.is_null(),
+        "the filterless retry carries no filter"
+    );
+    assert_eq!(retry.sampling_interval, -1.0);
 }
 
 #[test]
