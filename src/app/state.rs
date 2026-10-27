@@ -186,6 +186,9 @@ pub struct Row {
     pub timestamp: Option<DateTime<Utc>>,
     pub description: String,
     pub pending: bool,
+    /// P1 (UA): no subscription takes this item (server limits), so it is
+    /// polled even while the session's push subscription is active.
+    pub poll_only: bool,
 }
 
 impl Row {

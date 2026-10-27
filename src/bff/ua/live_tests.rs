@@ -54,6 +54,11 @@ pub(super) struct TestServer {
 
 impl TestServer {
     pub fn start(port: u16) -> Self {
+        Self::start_limited(port, |_| {})
+    }
+
+    /// Like [`Self::start`] with server limits adjusted by `limits`.
+    pub fn start_limited(port: u16, limits: impl FnOnce(&mut opcua::server::Limits)) -> Self {
         init_pki();
         let dir =
             std::env::temp_dir().join(format!("opclook-ua-server-{}-{port}", std::process::id()));
@@ -66,7 +71,9 @@ impl TestServer {
         let url = format!("opc.tcp://127.0.0.1:{port}/");
         // `build()` spawns background samplers: it needs the runtime context.
         let guard = rt.enter();
-        let (server, handle) = ServerBuilder::new_sample()
+        let mut builder = ServerBuilder::new_sample();
+        limits(builder.limits_mut());
+        let (server, handle) = builder
             .host("127.0.0.1")
             .port(port)
             .pki_dir(&dir)
@@ -1400,4 +1407,142 @@ fn v3_custom_structure_reads_as_named_fields() {
         unresolved.is_none(),
         "a known structure is not an unresolved type"
     );
+}
+
+// ---------------------------------------------------------------------------
+// P1: a large dropped tree must keep pushing every tag
+// ---------------------------------------------------------------------------
+
+impl TestServer {
+    /// `count` Int32 variables `Big0..` (value 0) in a `Big` folder.
+    fn add_many(&self, count: usize) -> Vec<String> {
+        let space = self.nm.address_space();
+        let mut space = space.write();
+        let folder = NodeId::new(self.ns, "Big");
+        space.add_folder(&folder, "Big", "Big", &ObjectId::ObjectsFolder.into());
+        let rw = AccessLevel::CURRENT_READ | AccessLevel::CURRENT_WRITE;
+        let vars = (0..count)
+            .map(|i| {
+                let name = format!("Big{i}");
+                VariableBuilder::new(&NodeId::new(self.ns, name.as_str()), &name, &name)
+                    .data_type(DataTypeId::Int32)
+                    .value(Variant::Int32(0))
+                    .access_level(rw)
+                    .user_access_level(rw)
+                    .build()
+            })
+            .collect();
+        space.add_variables(vars, &folder);
+        (0..count).map(|i| self.node(&format!("Big{i}"))).collect()
+    }
+}
+
+/// P1 scenario: `total` tags added in batches of 100 without waiting (like
+/// «add children»), then every tag must show its initial value and a change.
+/// Returns how many keys got each, plus the poll-only keys reported.
+fn p1_run(server: &TestServer, total: usize, pushed: usize) -> (usize, usize, Vec<ItemKey>) {
+    let nodes = server.add_many(total);
+    let mut app = Harness::new();
+    app.connect(1, Harness::endpoint(&server.url))
+        .expect("connect");
+    app.send(
+        1,
+        CommandKind::ConfigureUaSubscription {
+            publishing_interval_ms: 500,
+            deadband: 0.0,
+        },
+    );
+    let mut requests = Vec::new();
+    for (batch, chunk) in nodes.chunks(100).enumerate() {
+        let items = chunk
+            .iter()
+            .enumerate()
+            .map(|(i, node)| ItemSpec {
+                key: (batch * 100 + i + 1) as ItemKey,
+                item_id: node.clone(),
+            })
+            .collect();
+        requests.push(app.send(1, CommandKind::AddItems { items }));
+    }
+    for id in requests {
+        let reply = app
+            .reply(id, Duration::from_secs(90))
+            .expect("AddItems reply");
+        match reply.kind {
+            EventKind::AddItems { results } => {
+                assert!(results.iter().all(|(_, r)| r.is_ok()), "{results:?}")
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    let poll_only: Vec<ItemKey> = std::iter::from_fn(|| {
+        app.wait(Duration::from_millis(300), |event| match &event.kind {
+            EventKind::PollOnly { keys } => Some(keys.clone()),
+            _ => None,
+        })
+    })
+    .flatten()
+    .collect();
+    let seen = |app: &mut Harness, want: Value, secs: u64| {
+        let mut got = std::collections::HashSet::new();
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        while got.len() < pushed && Instant::now() < deadline {
+            let _ = app.wait(Duration::from_millis(200), |event| match &event.kind {
+                EventKind::Values { values } => {
+                    for (k, v) in values {
+                        if v.value == want {
+                            got.insert(*k);
+                        }
+                    }
+                    Some(())
+                }
+                _ => None,
+            });
+        }
+        got.len()
+    };
+    let initial = seen(&mut app, Value::I64(0), 30);
+    for i in 0..total {
+        server.set(&format!("Big{i}"), Variant::Int32(7));
+    }
+    let changed = seen(&mut app, Value::I64(7), 30);
+    (initial, changed, poll_only)
+}
+
+/// P1 regression: the sample server takes 1000 monitored items per
+/// subscription; tags past that were refused (BadTooManyMonitoredItems) and
+/// never updated. Now they go to a second subscription.
+#[test]
+fn p1_tags_past_the_per_subscription_limit_still_push() {
+    let server = TestServer::start(48701);
+    let (initial, changed, poll_only) = p1_run(&server, 1500, 1500);
+    assert!(poll_only.is_empty(), "two subscriptions take them all");
+    assert_eq!(initial, 1500, "initial values pushed");
+    assert_eq!(changed, 1500, "changed values pushed");
+}
+
+/// P1: a server that takes fewer items per call than the client sends
+/// (BadTooManyOperations) gets smaller calls instead of failing every item.
+#[test]
+fn p1_too_many_operations_per_call_shrinks_the_call() {
+    let server = TestServer::start_limited(48702, |l| {
+        l.operational.max_monitored_items_per_call = 30;
+    });
+    let (initial, changed, poll_only) = p1_run(&server, 300, 300);
+    assert!(poll_only.is_empty());
+    assert_eq!(initial, 300);
+    assert_eq!(changed, 300);
+}
+
+/// P1: when no subscription can take more items (one subscription of 200
+/// allowed), the rest is reported poll-only, never left silent.
+#[test]
+fn p1_tags_past_every_limit_are_reported_poll_only() {
+    let server = TestServer::start_limited(48703, |l| {
+        l.subscriptions.max_monitored_items_per_sub = 200;
+        l.subscriptions.max_subscriptions_per_session = 1;
+    });
+    let (initial, _changed, poll_only) = p1_run(&server, 300, 200);
+    assert_eq!(poll_only.len(), 100, "the 100 over the limit");
+    assert_eq!(initial, 200, "the monitored ones push");
 }

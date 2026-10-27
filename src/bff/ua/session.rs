@@ -48,8 +48,10 @@ pub(super) struct UaSession {
     pub(super) info: BackendMsg,
     /// The owning session id, used by the DataChange callback to tag pushes.
     pub(super) session_id: SessionId,
-    /// Server-assigned subscription id, created lazily on the first AddItems.
-    pub(super) subscription_id: Option<u32>,
+    /// P1: server-assigned subscription ids, the first created lazily on the
+    /// first AddItems. A server limits the monitored items of ONE subscription
+    /// (`BadTooManyMonitoredItems`), so a large tag list spreads over several.
+    pub(super) subscriptions: Vec<u32>,
     /// Requested publishing interval (ms) for the push subscription; mirrors the
     /// app's update interval. 0 until ConfigureUaSubscription arrives.
     pub(super) publishing_interval_ms: u64,
@@ -63,7 +65,14 @@ pub(super) struct UaSession {
     /// Server-assigned monitored item id of every item that is really monitored
     /// (created with a Good status). `delete`/`modify` address items by this id,
     /// NOT by the client handle (`ItemKey`).
-    pub(super) monitored: HashMap<ItemKey, u32>,
+    /// Value: (subscription id, monitored item id).
+    pub(super) monitored: HashMap<ItemKey, (u32, u32)>,
+    /// P1: items the server would not monitor on any subscription (its limits
+    /// are reached). They stay registered and the app polls them with Read.
+    pub(super) poll_only: HashSet<ItemKey>,
+    /// P1: items per `CreateMonitoredItems` call; halved when the server
+    /// answers `BadTooManyOperations`.
+    pub(super) monitor_chunk: usize,
     /// Items monitored WITHOUT the deadband filter because the server refused it
     /// for their attribute/type (for example a Boolean or String node).
     pub(super) unfiltered: HashSet<ItemKey>,
@@ -107,6 +116,28 @@ pub(super) fn is_filter_refusal(status: StatusCode) -> bool {
         status.bits() & 0xFFFF_0000,
         0x8043_0000 | 0x8044_0000 | 0x8045_0000
     )
+}
+
+/// P1: the subscription holds as many monitored items as the server allows.
+pub(super) fn is_too_many_monitored(status: StatusCode) -> bool {
+    status.bits() & 0xFFFF_0000 == StatusCode::BadTooManyMonitoredItems.bits() & 0xFFFF_0000
+}
+
+/// P1: the call carried more operations than the server takes in one call.
+pub(super) fn is_too_many_operations(status: StatusCode) -> bool {
+    status.bits() & 0xFFFF_0000 == StatusCode::BadTooManyOperations.bits() & 0xFFFF_0000
+}
+
+/// P1: subscriptions one session may open for its tags.
+pub(super) const MAX_SUBSCRIPTIONS_PER_SESSION: usize = 32;
+
+/// Result of monitoring a batch of items.
+#[derive(Default)]
+pub(super) struct MonitorOutcome {
+    /// Refused for a reason of their own (shown on the row).
+    pub(super) rejected: Vec<(ItemKey, BackendMsg)>,
+    /// Over every server limit: registered, but read by polling.
+    pub(super) poll_only: Vec<ItemKey>,
 }
 
 /// The node does not exist or is not a variable: the server answered the very
@@ -399,19 +430,38 @@ impl UaSession {
         // values into the shared event channel so rows update without polling.
         match self.ensure_subscription(tx).await {
             Ok(()) => {
-                if let Some(sub_id) = self.subscription_id {
-                    for (key, reason) in self.monitor_items(tx, sub_id, &plan).await {
-                        rejected.insert(key, reason);
-                    }
-                    // Push is live as soon as at least one item is really
-                    // monitored. When none is, the app keeps polling.
-                    let state = if self.monitored.is_empty() {
-                        SubscriptionState::Failed
-                    } else {
-                        SubscriptionState::Active
-                    };
-                    self.report_subscription_state(tx, state);
+                let outcome = self.monitor_items(tx, &plan).await;
+                for (key, reason) in outcome.rejected {
+                    rejected.insert(key, reason);
                 }
+                if !outcome.poll_only.is_empty() {
+                    // P1: over the server's limits: still read, by polling.
+                    self.poll_only.extend(outcome.poll_only.iter().copied());
+                    self.log(
+                        tx,
+                        BackendMsg::PollOnlyItems {
+                            count: outcome.poll_only.len(),
+                        },
+                    );
+                    send(
+                        tx,
+                        Event {
+                            request_id: 0,
+                            session: self.session_id,
+                            kind: EventKind::PollOnly {
+                                keys: outcome.poll_only,
+                            },
+                        },
+                    );
+                }
+                // Push is live as soon as at least one item is really
+                // monitored. When none is, the app keeps polling.
+                let state = if self.monitored.is_empty() {
+                    SubscriptionState::Failed
+                } else {
+                    SubscriptionState::Active
+                };
+                self.report_subscription_state(tx, state);
             }
             Err(message) => {
                 let not_created = BackendMsg::SubscriptionNotCreated {
@@ -428,13 +478,18 @@ impl UaSession {
         (merge_add_results(items, infos, &rejected), warning)
     }
 
-    /// Create the single per-session subscription on its first use. Publishing
-    /// interval mirrors the app update interval (default 1000 ms) and the
-    /// DataChange callback forwards quality/timestamp-mapped values to the UI.
+    /// Create the first subscription of the session on its first use.
     async fn ensure_subscription(&mut self, tx: &Sender<Event>) -> Result<(), BackendMsg> {
-        if self.subscription_id.is_some() {
+        if !self.subscriptions.is_empty() {
             return Ok(());
         }
+        self.create_subscription(tx).await.map(|_| ())
+    }
+
+    /// Create one more subscription. Publishing interval mirrors the app update
+    /// interval (default 1000 ms) and the DataChange callback forwards
+    /// quality/timestamp-mapped values to the UI.
+    async fn create_subscription(&mut self, tx: &Sender<Event>) -> Result<u32, BackendMsg> {
         let interval_ms = self.publishing_interval_ms.clamp(100, 3600_000);
         let interval = Duration::from_millis(interval_ms);
         let session_id = self.session_id;
@@ -474,10 +529,12 @@ impl UaSession {
         let sub_id = created.map_err(|e| BackendMsg::CreateSubscriptionFailed {
             detail: e.to_string(),
         })?;
-        self.subscription_id = Some(sub_id);
-        self.applied_interval_ms = interval_ms;
-        self.applied_deadband = self.deadband;
-        Ok(())
+        if self.subscriptions.is_empty() {
+            self.applied_interval_ms = interval_ms;
+            self.applied_deadband = self.deadband;
+        }
+        self.subscriptions.push(sub_id);
+        Ok(sub_id)
     }
 
     /// Applies new update-interval / deadband settings to the LIVE subscription
@@ -497,52 +554,79 @@ impl UaSession {
         };
         self.publishing_interval_ms = interval_ms;
         self.deadband = deadband;
-        let Some(sub_id) = self.subscription_id else {
+        if self.subscriptions.is_empty() {
             return Vec::new();
-        };
+        }
         let mut problems = Vec::new();
 
         if interval_ms != self.applied_interval_ms {
-            let (modified, timed_out) = timeout_drain(
-                self.session.modify_subscription(
-                    sub_id,
-                    Duration::from_millis(interval_ms),
-                    UA_SUBSCRIPTION_LIFETIME_COUNT,
-                    UA_SUBSCRIPTION_KEEPALIVE_COUNT,
-                    0,
-                    0,
-                ),
-                IO_TIMEOUT,
-            )
-            .await;
-            if timed_out {
-                self.timed_out = true;
-                problems.push(BackendMsg::SubscriptionProblem {
-                    cause: Box::new(BackendMsg::TimeoutPublishingInterval),
-                });
-                return problems;
+            let mut all_applied = true;
+            for sub_id in self.subscriptions.clone() {
+                let (modified, timed_out) = timeout_drain(
+                    self.session.modify_subscription(
+                        sub_id,
+                        Duration::from_millis(interval_ms),
+                        UA_SUBSCRIPTION_LIFETIME_COUNT,
+                        UA_SUBSCRIPTION_KEEPALIVE_COUNT,
+                        0,
+                        0,
+                    ),
+                    IO_TIMEOUT,
+                )
+                .await;
+                if timed_out {
+                    self.timed_out = true;
+                    problems.push(BackendMsg::SubscriptionProblem {
+                        cause: Box::new(BackendMsg::TimeoutPublishingInterval),
+                    });
+                    return problems;
+                }
+                match modified {
+                    Some(Ok(())) => {}
+                    Some(Err(e)) => {
+                        all_applied = false;
+                        problems.push(BackendMsg::SubscriptionProblem {
+                            cause: Box::new(BackendMsg::ChangeIntervalFailed {
+                                detail: e.to_string(),
+                            }),
+                        });
+                    }
+                    None => all_applied = false,
+                }
             }
-            match modified {
-                Some(Ok(())) => self.applied_interval_ms = interval_ms,
-                Some(Err(e)) => problems.push(BackendMsg::SubscriptionProblem {
-                    cause: Box::new(BackendMsg::ChangeIntervalFailed {
-                        detail: e.to_string(),
-                    }),
-                }),
-                None => {}
+            if all_applied {
+                self.applied_interval_ms = interval_ms;
             }
         }
 
         if deadband != self.applied_deadband {
-            let mut targets: Vec<(ItemKey, u32)> = self
+            let mut targets: Vec<(u32, ItemKey, u32)> = self
                 .monitored
                 .iter()
                 .filter(|(key, _)| !self.unfiltered.contains(key))
-                .map(|(key, id)| (*key, *id))
+                .map(|(key, (sub, id))| (*sub, *key, *id))
                 .collect();
             targets.sort_unstable();
             let mut failed = 0usize;
-            for chunk in targets.chunks(READ_MAX_ITEMS_PER_CALL.max(1)) {
+            // One ModifyMonitoredItems per subscription (and per chunk).
+            let mut groups: Vec<(u32, Vec<(ItemKey, u32)>)> = Vec::new();
+            for (sub, key, id) in targets {
+                match groups.last_mut() {
+                    Some((last, items)) if *last == sub => items.push((key, id)),
+                    _ => groups.push((sub, vec![(key, id)])),
+                }
+            }
+            let chunks: Vec<(u32, Vec<(ItemKey, u32)>)> = groups
+                .into_iter()
+                .flat_map(|(sub, items)| {
+                    items
+                        .chunks(READ_MAX_ITEMS_PER_CALL.max(1))
+                        .map(|c| (sub, c.to_vec()))
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            for (sub_id, chunk) in &chunks {
+                let sub_id = *sub_id;
                 let requests: Vec<MonitoredItemModifyRequest> = chunk
                     .iter()
                     .map(|(key, id)| MonitoredItemModifyRequest {
@@ -636,6 +720,11 @@ impl UaSession {
     /// Sends one `CreateMonitoredItems` round (chunked) and returns, in request
     /// order, either the server-assigned monitored item id or the Bad status the
     /// server gave that item. A failure of the whole call is an `Err`.
+    ///
+    /// P1: a call refused with `BadTooManyOperations` is retried with half the
+    /// chunk (the size is kept for later rounds); a call refused with
+    /// `BadTooManyMonitoredItems` reports that status for every remaining item,
+    /// so the caller can move them to another subscription.
     async fn create_round(
         &mut self,
         subscription_id: u32,
@@ -643,7 +732,12 @@ impl UaSession {
         tx: &Sender<Event>,
     ) -> Vec<(ItemKey, Result<u32, ItemFailure>)> {
         let mut out: Vec<(ItemKey, Result<u32, ItemFailure>)> = Vec::with_capacity(round.len());
-        for chunk in round.chunks(READ_MAX_ITEMS_PER_CALL.max(1)) {
+        let mut start = 0usize;
+        while start < round.len() {
+            let size = self.monitor_chunk.max(1).min(round.len() - start);
+            let Some(chunk) = round.get(start..start + size) else {
+                break;
+            };
             let requests: Vec<MonitoredItemCreateRequest> =
                 chunk.iter().map(|(_, request)| request.clone()).collect();
             let (created, timed_out) = timeout_drain(
@@ -667,7 +761,18 @@ impl UaSession {
                             .map(|item| (item.result.status_code, item.result.monitored_item_id))
                             .collect();
                         out.extend(create_outcomes(&keys, &statuses));
+                        start += size;
                         None
+                    }
+                    Some(Err(e)) if is_too_many_operations(e.status()) && size > 1 => {
+                        self.monitor_chunk = (size / 2).max(1);
+                        continue;
+                    }
+                    Some(Err(e)) if is_too_many_monitored(e.status()) => {
+                        for (key, _) in round.iter().skip(start) {
+                            out.push((*key, Err(ItemFailure::Status(e.status()))));
+                        }
+                        break;
                     }
                     Some(Err(e)) => Some(BackendMsg::MonitorFailed {
                         detail: e.to_string(),
@@ -684,8 +789,7 @@ impl UaSession {
                         cause: Box::new(reason.clone()),
                     },
                 );
-                let done = out.len();
-                for (key, _) in round.iter().skip(done) {
+                for (key, _) in round.iter().skip(start) {
                     out.push((*key, Err(ItemFailure::Call(reason.clone()))));
                 }
                 break;
@@ -694,43 +798,93 @@ impl UaSession {
         out
     }
 
-    /// Create monitored items for `nodes` on the session subscription, mapping
-    /// each ItemKey to the monitored item's client handle and applying the
-    /// configured absolute deadband filter (0 = none). Every item's own
-    /// `status_code` is checked: a Bad item is NOT monitored and is returned with
-    /// the server's reason, so the caller can show it instead of leaving the row
-    /// "waiting for a value" forever. An item refused only because of the
-    /// deadband filter (Boolean/String nodes) is monitored again without it.
+    /// Create monitored items for `nodes`, mapping each ItemKey to the monitored
+    /// item's client handle and applying the configured absolute deadband
+    /// filter (0 = none). Every item's own `status_code` is checked: a Bad item
+    /// is NOT monitored and is returned with the server's reason, so the caller
+    /// can show it instead of leaving the row "waiting for a value" forever. An
+    /// item refused only because of the deadband filter (Boolean/String nodes)
+    /// is monitored again without it.
+    ///
+    /// P1: items refused because the subscription is full go to a new
+    /// subscription; when the server refuses one more subscription too (or a
+    /// fresh one takes nothing), they become poll-only instead of silent.
     async fn monitor_items(
+        &mut self,
+        tx: &Sender<Event>,
+        nodes: &[(ItemKey, NodeId)],
+    ) -> MonitorOutcome {
+        let mut outcome = MonitorOutcome::default();
+        let mut pending: Vec<(ItemKey, NodeId)> = nodes.to_vec();
+        let mut fresh = false;
+        // Each pass either monitors something or ends; the bound is a guard.
+        for _ in 0..=MAX_SUBSCRIPTIONS_PER_SESSION {
+            let Some(&sub_id) = self.subscriptions.last() else {
+                break;
+            };
+            let overflow = self.monitor_on(tx, sub_id, &pending, &mut outcome).await;
+            if overflow.is_empty() || self.timed_out {
+                pending.clear();
+                break;
+            }
+            let progressed = overflow.len() < pending.len();
+            if fresh && !progressed {
+                // A brand-new subscription took nothing: the limit is the
+                // session's, not the subscription's.
+                pending = overflow;
+                break;
+            }
+            pending = overflow;
+            if self.subscriptions.len() >= MAX_SUBSCRIPTIONS_PER_SESSION {
+                break;
+            }
+            match self.create_subscription(tx).await {
+                Ok(_) => fresh = true,
+                Err(_) => break,
+            }
+        }
+        outcome
+            .poll_only
+            .extend(pending.into_iter().map(|(key, _)| key));
+        outcome
+    }
+
+    /// One pass of [`Self::monitor_items`] on one subscription. Returns the
+    /// items refused because that subscription is full.
+    async fn monitor_on(
         &mut self,
         tx: &Sender<Event>,
         subscription_id: u32,
         nodes: &[(ItemKey, NodeId)],
-    ) -> Vec<(ItemKey, BackendMsg)> {
+        outcome: &mut MonitorOutcome,
+    ) -> Vec<(ItemKey, NodeId)> {
         let round: Vec<(ItemKey, MonitoredItemCreateRequest)> = nodes
             .iter()
             .map(|(key, node)| (*key, self.monitor_request(*key, node, true)))
             .collect();
-        let mut rejected: Vec<(ItemKey, BackendMsg)> = Vec::new();
+        let mut overflow: Vec<(ItemKey, NodeId)> = Vec::new();
         let mut retry: Vec<(ItemKey, NodeId)> = Vec::new();
-        for (key, outcome) in self.create_round(subscription_id, &round, tx).await {
-            match outcome {
+        for (key, result) in self.create_round(subscription_id, &round, tx).await {
+            let node = nodes.iter().find(|(k, _)| *k == key).map(|(_, n)| n);
+            match result {
                 Ok(id) => {
-                    self.monitored.insert(key, id);
+                    self.monitored.insert(key, (subscription_id, id));
                 }
-                Err(failure) => {
-                    let node = nodes.iter().find(|(k, _)| *k == key).map(|(_, n)| n);
-                    match node {
-                        Some(node)
-                            if failure.is_filter_refusal()
-                                && self.deadband > 0.0
-                                && !self.timed_out =>
-                        {
-                            retry.push((key, node.clone()));
-                        }
-                        _ => rejected.push((key, failure.text())),
+                Err(ItemFailure::Status(status)) if is_too_many_monitored(status) => {
+                    if let Some(node) = node {
+                        overflow.push((key, node.clone()));
                     }
                 }
+                Err(failure) => match node {
+                    Some(node)
+                        if failure.is_filter_refusal()
+                            && self.deadband > 0.0
+                            && !self.timed_out =>
+                    {
+                        retry.push((key, node.clone()));
+                    }
+                    _ => outcome.rejected.push((key, failure.text())),
+                },
             }
         }
 
@@ -739,17 +893,22 @@ impl UaSession {
                 .iter()
                 .map(|(key, node)| (*key, self.monitor_request(*key, node, false)))
                 .collect();
-            for (key, outcome) in self.create_round(subscription_id, &round, tx).await {
-                match outcome {
+            for (key, result) in self.create_round(subscription_id, &round, tx).await {
+                match result {
                     Ok(id) => {
-                        self.monitored.insert(key, id);
+                        self.monitored.insert(key, (subscription_id, id));
                         self.unfiltered.insert(key);
                     }
-                    Err(failure) => rejected.push((key, failure.text())),
+                    Err(ItemFailure::Status(status)) if is_too_many_monitored(status) => {
+                        if let Some((_, node)) = retry.iter().find(|(k, _)| *k == key) {
+                            overflow.push((key, node.clone()));
+                        }
+                    }
+                    Err(failure) => outcome.rejected.push((key, failure.text())),
                 }
             }
         }
-        rejected
+        overflow
     }
 
     /// Report the current subscription state so the app knows whether to poll.
@@ -795,11 +954,17 @@ impl UaSession {
             return problems;
         }
         let mut poisoned = false;
-        if let Some(sub_id) = self.subscription_id {
-            let ids: Vec<u32> = known
-                .iter()
-                .filter_map(|key| self.monitored.get(key).copied())
-                .collect();
+        // Monitored item ids grouped by their subscription.
+        let mut by_sub: Vec<(u32, Vec<u32>)> = Vec::new();
+        for key in &known {
+            if let Some((sub, id)) = self.monitored.get(key).copied() {
+                match by_sub.iter_mut().find(|(s, _)| *s == sub) {
+                    Some((_, ids)) => ids.push(id),
+                    None => by_sub.push((sub, vec![id])),
+                }
+            }
+        }
+        'subs: for (sub_id, ids) in by_sub {
             for chunk in ids.chunks(READ_MAX_ITEMS_PER_CALL.max(1)) {
                 let (delete_result, timed_out) = timeout_drain(
                     self.session.delete_monitored_items(sub_id, chunk),
@@ -809,7 +974,7 @@ impl UaSession {
                 if timed_out {
                     self.timed_out = true;
                     poisoned = true;
-                    break;
+                    break 'subs;
                 }
                 match delete_result {
                     Some(Ok(statuses)) => {
@@ -833,9 +998,9 @@ impl UaSession {
                                 detail: e.to_string(),
                             }),
                         });
-                        break;
+                        break 'subs;
                     }
-                    None => break,
+                    None => break 'subs,
                 }
             }
         }
@@ -846,6 +1011,7 @@ impl UaSession {
             self.node_types.remove(key);
             self.monitored.remove(key);
             self.unfiltered.remove(key);
+            self.poll_only.remove(key);
         }
 
         // A timed-out delete may still have a response in flight; the caller
@@ -862,7 +1028,10 @@ impl UaSession {
 
     /// Best-effort cleanup: delete the subscription and report it inactive.
     pub(super) async fn teardown_subscription(&mut self, tx: &Sender<Event>) {
-        if let Some(sub_id) = self.subscription_id.take() {
+        for sub_id in std::mem::take(&mut self.subscriptions) {
+            if self.timed_out {
+                break;
+            }
             let (_, timed_out) =
                 timeout_drain(self.session.delete_subscription(sub_id), IO_TIMEOUT).await;
             if timed_out {
@@ -871,6 +1040,7 @@ impl UaSession {
         }
         self.monitored.clear();
         self.unfiltered.clear();
+        self.poll_only.clear();
         self.report_subscription_state(tx, SubscriptionState::Inactive);
     }
 }
@@ -1069,12 +1239,14 @@ pub(super) async fn connect(
         node_types: HashMap::new(),
         info: security_summary(url, &policy_short, mode, secure_was_available),
         session_id,
-        subscription_id: None,
+        subscriptions: Vec::new(),
         publishing_interval_ms: 0,
         deadband: 0.0,
         applied_interval_ms: 0,
         applied_deadband: 0.0,
         monitored: HashMap::new(),
+        poll_only: HashSet::new(),
+        monitor_chunk: READ_MAX_ITEMS_PER_CALL,
         unfiltered: HashSet::new(),
         timed_out: false,
         trust,

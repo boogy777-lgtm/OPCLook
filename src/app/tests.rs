@@ -1813,3 +1813,40 @@ fn u15_lds_texts_exist_in_every_language() {
         assert!(ru != en && en != zh);
     }
 }
+
+/// P1: with an active UA push subscription the app does not poll, except the
+/// items the server would not take on any subscription (poll-only).
+#[test]
+fn p1_poll_only_rows_are_polled_while_push_is_active() {
+    let (_ctx, mut app) = tree_app();
+    app.seed_row(1, "ns=2;s=A", "A", Value::I64(1));
+    let b = app.seed_row(1, "ns=2;s=B", "B", Value::I64(2));
+    app.sessions[0].root_loading = false;
+    app.on_event_for_test_at(
+        1,
+        EventKind::SubscriptionState {
+            state: SubscriptionState::Active,
+        },
+    );
+    app.sessions[0].last_poll = Instant::now() - Duration::from_secs(3600);
+    app.tick_for_test();
+    assert!(
+        !app.sessions[0].read_in_flight,
+        "everything is pushed: no Read"
+    );
+
+    app.on_event_for_test_at(1, EventKind::PollOnly { keys: vec![b] });
+    assert!(app.rows.iter().any(|r| r.key == b && r.poll_only));
+    app.tick_for_test();
+    assert!(app.sessions[0].read_in_flight, "the poll-only row is read");
+}
+
+/// P1: a reconnect lets the new session decide again what it can push.
+#[test]
+fn p1_reconnect_clears_poll_only() {
+    let (_ctx, mut app) = tree_app();
+    let b = app.seed_row(1, "ns=2;s=B", "B", Value::I64(2));
+    app.on_event_for_test_at(1, EventKind::PollOnly { keys: vec![b] });
+    app.register_rows_for_test(1);
+    assert!(app.rows.iter().all(|r| !r.poll_only));
+}
