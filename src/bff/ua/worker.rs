@@ -86,8 +86,15 @@ pub(super) fn spawn(event_tx: Sender<Event>) -> crate::bff::WorkerHandle {
 enum Internal {
     /// A connect attempt succeeded; the session is up and its actor is running.
     Ready(Box<Ready>),
-    /// A connect attempt ended without a session (its error was already sent).
-    ConnectEnded { session: SessionId, generation: u64 },
+    /// A connect attempt ended without a session. The HOST answers the `Connect`
+    /// with the error, after it has released the slot: the application reacts to
+    /// that reply (a retry), and the retry must not find a stale "connecting" slot.
+    ConnectEnded {
+        session: SessionId,
+        generation: u64,
+        request_id: u64,
+        message: String,
+    },
     /// An actor has finished and released its session.
     Closed { session: SessionId, generation: u64 },
 }
@@ -375,6 +382,8 @@ impl Host {
             Internal::ConnectEnded {
                 session,
                 generation,
+                request_id,
+                message,
             } => {
                 let current = matches!(
                     self.slots.get(&session),
@@ -387,6 +396,13 @@ impl Host {
                         }
                     }
                 }
+                send_error(
+                    &self.event_tx,
+                    request_id,
+                    session,
+                    Operation::Connect,
+                    message,
+                );
             }
             Internal::Closed {
                 session,
@@ -462,6 +478,37 @@ impl Host {
         }
     }
 
+    /// A message from a connect/actor task while the host is shutting down: a
+    /// session handed over late is closed at once, a failed connect is answered.
+    fn settle_during_shutdown(&self, message: Internal, pending: &mut Vec<JoinHandle<()>>) {
+        match message {
+            Internal::Ready(ready) => {
+                let _ = ready.commands.send(ActorMsg::Shutdown);
+                send_error(
+                    &self.event_tx,
+                    ready.request_id,
+                    ready.session,
+                    Operation::Connect,
+                    "подключение отменено",
+                );
+                pending.push(ready.join);
+            }
+            Internal::ConnectEnded {
+                session,
+                request_id,
+                message,
+                ..
+            } => send_error(
+                &self.event_tx,
+                request_id,
+                session,
+                Operation::Connect,
+                message,
+            ),
+            Internal::Closed { .. } => {}
+        }
+    }
+
     /// The command channel is closed (gateway shutdown): stop everything and
     /// close every session on the wire, in parallel, before the thread exits.
     async fn shutdown(&mut self, internal_rx: &mut UnboundedReceiver<Internal>) {
@@ -491,27 +538,14 @@ impl Host {
         while !pending.iter().all(|task| task.is_finished()) {
             tokio::select! {
                 Some(message) = internal_rx.recv() => {
-                    if let Internal::Ready(ready) = message {
-                        let _ = ready.commands.send(ActorMsg::Shutdown);
-                        send_error(
-                            &self.event_tx,
-                            ready.request_id,
-                            ready.session,
-                            Operation::Connect,
-                            "подключение отменено",
-                        );
-                        pending.push(ready.join);
-                    }
+                    self.settle_during_shutdown(message, &mut pending);
                 }
                 _ = tokio::time::sleep(Duration::from_millis(20)) => {}
             }
         }
         // Whatever a late connect handed over after the last check.
         while let Ok(message) = internal_rx.try_recv() {
-            if let Internal::Ready(ready) = message {
-                let _ = ready.commands.send(ActorMsg::Shutdown);
-                pending.push(ready.join);
-            }
+            self.settle_during_shutdown(message, &mut pending);
         }
         for task in pending {
             let _ = task.await;
@@ -569,16 +603,11 @@ impl ConnectJob {
             Ok(mut ua_session) => {
                 if cancel.is_cancelled() {
                     ua_session.close().await;
-                    send_error(
-                        &event_tx,
-                        request_id,
-                        session,
-                        Operation::Connect,
-                        "подключение отменено",
-                    );
                     let _ = internal_tx.send(Internal::ConnectEnded {
                         session,
                         generation,
+                        request_id,
+                        message: "подключение отменено".to_string(),
                     });
                     return;
                 }
@@ -609,10 +638,11 @@ impl ConnectJob {
                 let _ = internal_tx.send(Internal::Ready(Box::new(ready)));
             }
             Err(message) => {
-                send_error(&event_tx, request_id, session, Operation::Connect, message);
                 let _ = internal_tx.send(Internal::ConnectEnded {
                     session,
                     generation,
+                    request_id,
+                    message,
                 });
             }
         }

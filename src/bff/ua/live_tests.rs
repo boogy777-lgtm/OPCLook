@@ -1074,3 +1074,19 @@ fn u13_trusting_a_certificate_lasts_only_for_the_session() {
         "the earlier session's trust must not carry over"
     );
 }
+
+#[test]
+fn u1_a_retry_right_after_a_failed_connect_never_meets_a_stale_connecting_slot() {
+    // The application retries as soon as it sees the Connect error. The slot of
+    // the failed attempt must already be gone by then.
+    let mut app = Harness::new();
+    for attempt in 0..15 {
+        let message = app
+            .connect(9, Harness::endpoint("opc.tcp://127.0.0.1:48679/"))
+            .expect_err("nothing listens there");
+        assert!(
+            !message.contains("уже выполняется") && !message.contains("уже подключена"),
+            "attempt {attempt}: {message}"
+        );
+    }
+}
