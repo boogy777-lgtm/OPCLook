@@ -635,7 +635,7 @@ fn paint_change_flash(ui: &egui::Ui, flash: f32) {
     if flash <= 0.0 {
         return;
     }
-    let accent = ui.visuals().selection.stroke.color;
+    let accent = ui.visuals().selection.bg_fill;
     ui.painter().rect_filled(
         ui.max_rect(),
         2.0,
@@ -645,7 +645,10 @@ fn paint_change_flash(ui: &egui::Ui, flash: f32) {
 }
 
 /// The glow's opacity right after a change.
-const CHANGE_FLASH_MAX_ALPHA: f32 = 0.4;
+const CHANGE_FLASH_MAX_ALPHA: f32 = 0.8;
+
+/// Gap between a right-aligned number and the right edge of its cell.
+const NUMBER_RIGHT_PADDING: f32 = 8.0;
 
 /// UI5: a value in the «Value» column. A number is monospace and sticks to the
 /// right edge of the cell; strings, structure summaries, dates and the rest
@@ -659,6 +662,8 @@ fn value_text_cell(
     let text = text.into();
     if numeric {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            // A little air before the next column (the quality pill).
+            ui.add_space(NUMBER_RIGHT_PADDING);
             ui.label(egui::RichText::new(text).monospace().color(color))
         })
         .inner

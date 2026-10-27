@@ -305,7 +305,7 @@ fn ui5_numbers_are_right_aligned_and_monospace() {
         );
         let width = right - name_left;
         assert!(
-            (160.0..=175.0).contains(&width),
+            (152.0..=167.0).contains(&width),
             "{number} ends at the cell's right edge, got {width}"
         );
     }
@@ -337,7 +337,7 @@ fn ui5_field_lines_follow_the_same_alignment() {
     let (speed_left, speed_right, speed_mono) = text_extent(&shapes, "12.5");
     assert!(!label_mono && speed_mono);
     assert!(speed_left > label_left + 100.0);
-    assert!((160.0..=175.0).contains(&(speed_right - label_left)));
+    assert!((152.0..=167.0).contains(&(speed_right - label_left)));
 }
 
 fn changed_at(app: &App, key: ItemKey) -> Option<std::time::Instant> {
@@ -443,7 +443,7 @@ fn ui4_changed_value_cell_glows_and_requests_repaints_until_it_fades() {
     push_value(h.state_mut(), key, Value::F64(2.0), QualityKind::Good);
     h.step();
     let glow = rect_fills(&flat_shapes(&h));
-    let accent = h.ctx.global_style().visuals.selection.stroke.color;
+    let accent = h.ctx.global_style().visuals.selection.bg_fill;
     let new_fills: Vec<_> = glow.iter().filter(|c| !calm.contains(c)).collect();
     assert!(
         new_fills
