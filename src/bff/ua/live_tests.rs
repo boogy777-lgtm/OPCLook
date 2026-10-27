@@ -58,7 +58,27 @@ impl TestServer {
     }
 
     /// Like [`Self::start`] with server limits adjusted by `limits`.
-    pub fn start_limited(port: u16, limits: impl FnOnce(&mut opcua::server::Limits)) -> Self {
+    pub fn start_limited(port: u16, limits: impl Fn(&mut opcua::server::Limits)) -> Self {
+        // The fixed test ports lie in Linux's ephemeral range (32768-60999):
+        // an outgoing connection of a parallel test may already hold the port
+        // as its local end, and the server's bind then fails. Such a start is
+        // retried on a port the OS picks as free; tests read `server.port`.
+        let mut port = port;
+        for _ in 0..4 {
+            match Self::try_start(port, &limits) {
+                Ok(server) => return server,
+                Err(taken) => {
+                    eprintln!("test server port {taken} taken, retrying on a free port");
+                    port = free_port();
+                }
+            }
+        }
+        panic!("test server could not start on any port");
+    }
+
+    /// One start attempt; `Err(port)` when the server task ended before it
+    /// listened (the port is taken).
+    fn try_start(port: u16, limits: &impl Fn(&mut opcua::server::Limits)) -> Result<Self, u16> {
         init_pki();
         let dir =
             std::env::temp_dir().join(format!("opclook-ua-server-{}-{port}", std::process::id()));
@@ -131,17 +151,29 @@ impl TestServer {
         // that already ended (e.g. the port is taken) fails at once instead.
         let deadline = Instant::now() + Duration::from_secs(90);
         while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
-            assert!(
-                !running.is_finished(),
-                "test server on port {port} stopped before listening"
-            );
+            if running.is_finished() {
+                handle.cancel();
+                let _ = std::fs::remove_dir_all(&dir);
+                return Err(port);
+            }
             assert!(
                 Instant::now() < deadline,
                 "test server on port {port} did not start within 90 s"
             );
             std::thread::sleep(Duration::from_millis(50));
         }
-        Self {
+        // Something else may answer on the port while our bind failed: the
+        // server task then ends right away. Give it a moment to show that.
+        let settle = Instant::now() + Duration::from_millis(300);
+        while Instant::now() < settle {
+            if running.is_finished() {
+                handle.cancel();
+                let _ = std::fs::remove_dir_all(&dir);
+                return Err(port);
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        Ok(Self {
             rt,
             handle,
             nm,
@@ -149,7 +181,7 @@ impl TestServer {
             port,
             ns,
             dir,
-        }
+        })
     }
 
     /// NodeId text of a `Plant` variable, as the application writes it.
@@ -265,6 +297,14 @@ fn add_pump_structure(space: &mut opcua::server::address_space::AddressSpace, ns
         .user_access_level(rw)
         .build();
     space.add_variables(vec![pump], &ObjectId::ObjectsFolder.into());
+}
+
+/// A loopback port the OS reports free right now.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind(("127.0.0.1", 0))
+        .and_then(|listener| listener.local_addr())
+        .map(|addr| addr.port())
+        .expect("a free loopback port")
 }
 
 /// The application side of the worker: sends commands, collects events.
@@ -1545,4 +1585,16 @@ fn p1_tags_past_every_limit_are_reported_poll_only() {
     let (initial, _changed, poll_only) = p1_run(&server, 300, 200);
     assert_eq!(poll_only.len(), 100, "the 100 over the limit");
     assert_eq!(initial, 200, "the monitored ones push");
+}
+
+/// CI flake (PR #7): a fixed test port already held by another socket made
+/// the server stop before listening. The start moves to a free port.
+#[test]
+fn test_server_moves_off_a_taken_port() {
+    let _holder = std::net::TcpListener::bind(("127.0.0.1", 48710)).expect("hold the port");
+    let server = TestServer::start(48710);
+    assert_ne!(server.port, 48710);
+    let mut app = Harness::new();
+    app.connect(1, Harness::endpoint(&server.url))
+        .expect("connect on the moved port");
 }
