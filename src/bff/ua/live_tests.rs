@@ -9,8 +9,8 @@ use super::session::TEST_PKI_DIR;
 use super::worker::spawn;
 use crate::bff::WorkerHandle;
 use crate::bff::model::{
-    Command, CommandKind, EndpointSpec, Event, EventKind, ItemInfo, ItemKey, ItemSpec, Protocol,
-    SessionId, UaSecurityMode, UaSecurityPolicy, Value,
+    Command, CommandKind, EndpointSpec, Event, EventKind, ItemInfo, ItemKey, ItemSpec, Operation,
+    Protocol, SessionId, UaSecurityMode, UaSecurityPolicy, Value,
 };
 use opcua::server::ServerBuilder;
 use opcua::server::ServerHandle;
@@ -46,6 +46,7 @@ pub(super) struct TestServer {
     pub handle: ServerHandle,
     nm: Arc<SimpleNodeManager>,
     pub url: String,
+    #[allow(dead_code)]
     pub port: u16,
     pub ns: u16,
     dir: PathBuf,
@@ -301,6 +302,7 @@ impl Harness {
         })
     }
 
+    #[allow(dead_code)]
     pub fn disconnect(&mut self, session: SessionId) {
         let _ = self.send(session, CommandKind::Disconnect);
         let _ = self.wait(Duration::from_secs(20), |event| {
@@ -424,3 +426,362 @@ fn u2_removing_one_item_keeps_the_other_subscribed() {
 }
 
 const PROMPT_LONG: Duration = Duration::from_secs(20);
+
+// ---------------------------------------------------------------------------
+// U1: sessions must not block each other
+// ---------------------------------------------------------------------------
+
+/// A TCP listener that accepts connections and never answers: a host that is up
+/// at the TCP level but never completes the OPC UA handshake. `Connect` to it
+/// hangs for as long as the client's own timeouts allow.
+struct SilentServer {
+    port: u16,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl SilentServer {
+    fn start(port: u16) -> Self {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", port)).expect("bind stub");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        let thread = std::thread::spawn(move || {
+            let mut held = Vec::new();
+            while !flag.load(std::sync::atomic::Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((stream, _)) => held.push(stream),
+                    Err(_) => std::thread::sleep(Duration::from_millis(20)),
+                }
+            }
+        });
+        Self {
+            port,
+            stop,
+            thread: Some(thread),
+        }
+    }
+
+    fn url(&self) -> String {
+        format!("opc.tcp://127.0.0.1:{}/", self.port)
+    }
+}
+
+impl Drop for SilentServer {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Generous bound for an operation that takes milliseconds when nothing blocks
+/// it and 10+ seconds behind a hung connect (the client's discovery timeout).
+const PROMPT: Duration = Duration::from_secs(4);
+
+#[test]
+fn u1_hung_connect_does_not_block_other_sessions() {
+    let server = TestServer::start(48611);
+    let silent = SilentServer::start(48612);
+    let mut app = Harness::new();
+    app.connect(1, Harness::endpoint(&server.url))
+        .expect("connect to the live server");
+    let added = app.add_items(1, &[(1, server.node("Level"))]);
+    assert!(matches!(added.first(), Some((1, Ok(_)))));
+
+    // Session 2 connects to a host that never answers.
+    let hung = app.send(
+        2,
+        CommandKind::Connect {
+            endpoint: Harness::endpoint(&silent.url()),
+        },
+    );
+    std::thread::sleep(Duration::from_millis(500));
+
+    let started = Instant::now();
+    let browse = app.send(
+        1,
+        CommandKind::Browse {
+            node_id: "i=85".to_string(),
+            filter: None,
+            view_id: None,
+        },
+    );
+    let reply = app.reply(browse, PROMPT);
+    assert!(
+        matches!(
+            reply,
+            Some(Event {
+                kind: EventKind::Browse { .. },
+                ..
+            })
+        ),
+        "Browse of a live session must answer while another Connect hangs: {reply:?} after {:?}",
+        started.elapsed()
+    );
+
+    let read = app.send(1, CommandKind::Read { keys: vec![1] });
+    let reply = app.reply(read, PROMPT);
+    assert!(
+        matches!(
+            reply,
+            Some(Event {
+                kind: EventKind::Values { .. },
+                ..
+            })
+        ),
+        "Read of a live session must answer while another Connect hangs: {reply:?}"
+    );
+
+    // A third session can connect to a healthy server in the meantime.
+    app.connect(3, Harness::endpoint(&server.url))
+        .expect("a second healthy connect must not wait for the hung one");
+
+    // The hung connect has not produced a reply yet (it is still running).
+    assert!(
+        app.reply(hung, Duration::from_millis(50)).is_none(),
+        "the silent host cannot have answered"
+    );
+}
+
+#[test]
+fn u1_disconnect_cancels_a_pending_connect_with_one_error_reply() {
+    let silent = SilentServer::start(48613);
+    let mut app = Harness::new();
+    let connect = app.send(
+        7,
+        CommandKind::Connect {
+            endpoint: Harness::endpoint(&silent.url()),
+        },
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    let _ = app.send(7, CommandKind::Disconnect);
+
+    let reply = app
+        .reply(connect, PROMPT)
+        .expect("Connect must be answered");
+    assert!(
+        matches!(
+            reply.kind,
+            EventKind::Error {
+                operation: Operation::Connect,
+                ..
+            }
+        ),
+        "a cancelled connect is reported as a Connect error: {reply:?}"
+    );
+    assert!(
+        app.reply(connect, Duration::from_millis(300)).is_none(),
+        "exactly one reply per command"
+    );
+}
+
+#[test]
+fn u1_commands_for_a_session_without_connection_get_exactly_one_error_each() {
+    let mut app = Harness::new();
+    let browse = app.send(
+        5,
+        CommandKind::Browse {
+            node_id: String::new(),
+            filter: None,
+            view_id: None,
+        },
+    );
+    let read = app.send(5, CommandKind::Read { keys: vec![1, 2] });
+    let write = app.send(
+        5,
+        CommandKind::Write {
+            request: crate::bff::model::WriteRequest {
+                key: 1,
+                value: Value::I64(1),
+                type_hint: None,
+            },
+        },
+    );
+    let add = app.send(5, CommandKind::AddItems { items: Vec::new() });
+    let test = app.send(5, CommandKind::Test);
+
+    let browse_reply = app.reply(browse, PROMPT).expect("browse");
+    assert!(matches!(
+        browse_reply.kind,
+        EventKind::Error {
+            operation: Operation::Browse,
+            ..
+        }
+    ));
+    let read_reply = app.reply(read, PROMPT).expect("read");
+    match read_reply.kind {
+        EventKind::Values { values } => {
+            assert_eq!(values.len(), 2);
+            assert!(values.iter().all(|(_, v)| v.quality.code == 0));
+        }
+        other => panic!("Read of a missing session answers with Bad values: {other:?}"),
+    }
+    assert!(matches!(
+        app.reply(write, PROMPT).expect("write").kind,
+        EventKind::Error {
+            operation: Operation::Write,
+            ..
+        }
+    ));
+    assert!(matches!(
+        app.reply(add, PROMPT).expect("add").kind,
+        EventKind::Error {
+            operation: Operation::Add,
+            ..
+        }
+    ));
+    assert!(matches!(
+        app.reply(test, PROMPT).expect("test").kind,
+        EventKind::Error {
+            operation: Operation::Test,
+            ..
+        }
+    ));
+    for id in [browse, read, write, add, test] {
+        assert!(
+            app.reply(id, Duration::from_millis(100)).is_none(),
+            "request {id} answered twice"
+        );
+    }
+}
+
+#[test]
+fn u1_disconnect_is_reported_before_the_next_connect_of_the_same_session() {
+    // The application reconnects with `Disconnect` immediately followed by
+    // `Connect`. Its state machine relies on `Disconnected` coming first.
+    let server = TestServer::start(48614);
+    let mut app = Harness::new();
+    app.connect(1, Harness::endpoint(&server.url))
+        .expect("first connect");
+
+    let disconnect = app.send(1, CommandKind::Disconnect);
+    let connect = app.send(
+        1,
+        CommandKind::Connect {
+            endpoint: Harness::endpoint(&server.url),
+        },
+    );
+    let connected_at = |app: &Harness| {
+        app.seen.iter().position(|(e, _)| {
+            matches!(e.kind, EventKind::Connected { .. }) && e.request_id == connect
+        })
+    };
+    let reply = app
+        .reply(connect, Duration::from_secs(60))
+        .expect("reconnect");
+    assert!(
+        matches!(reply.kind, EventKind::Connected { .. }),
+        "{reply:?}"
+    );
+    let disconnected_at = app
+        .seen
+        .iter()
+        .position(|(e, _)| {
+            matches!(e.kind, EventKind::Disconnected { .. }) && e.request_id == disconnect
+        })
+        .expect("Disconnected was reported");
+    let connected_at = connected_at(&app).expect("Connected was reported");
+    assert!(
+        disconnected_at < connected_at,
+        "Disconnected ({disconnected_at}) must precede Connected ({connected_at})"
+    );
+}
+
+#[test]
+fn u1_commands_sent_while_connecting_are_delivered_after_the_connect() {
+    let server = TestServer::start(48615);
+    let mut app = Harness::new();
+    let connect = app.send(
+        1,
+        CommandKind::Connect {
+            endpoint: Harness::endpoint(&server.url),
+        },
+    );
+    // Sent before the session is ready: must wait, not fail with "no connection".
+    let browse = app.send(
+        1,
+        CommandKind::Browse {
+            node_id: "i=85".to_string(),
+            filter: None,
+            view_id: None,
+        },
+    );
+    assert!(matches!(
+        app.reply(connect, Duration::from_secs(60))
+            .expect("connect")
+            .kind,
+        EventKind::Connected { .. }
+    ));
+    let reply = app.reply(browse, PROMPT).expect("browse reply");
+    assert!(
+        matches!(reply.kind, EventKind::Browse { .. }),
+        "a command queued during Connect is served by the new session: {reply:?}"
+    );
+}
+
+#[test]
+fn u1_a_failed_connect_answers_the_commands_queued_behind_it() {
+    let mut app = Harness::new();
+    // Nothing listens on this port: the connect fails.
+    let connect = app.send(
+        1,
+        CommandKind::Connect {
+            endpoint: Harness::endpoint("opc.tcp://127.0.0.1:48619/"),
+        },
+    );
+    let browse = app.send(
+        1,
+        CommandKind::Browse {
+            node_id: String::new(),
+            filter: None,
+            view_id: None,
+        },
+    );
+    assert!(matches!(
+        app.reply(connect, Duration::from_secs(60))
+            .expect("connect")
+            .kind,
+        EventKind::Error {
+            operation: Operation::Connect,
+            ..
+        }
+    ));
+    assert!(matches!(
+        app.reply(browse, PROMPT).expect("browse").kind,
+        EventKind::Error {
+            operation: Operation::Browse,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn u1_shutdown_closes_live_sessions_and_pending_connects_promptly() {
+    let server = TestServer::start(48616);
+    let silent = SilentServer::start(48617);
+    let mut app = Harness::new();
+    app.connect(1, Harness::endpoint(&server.url))
+        .expect("connect");
+    app.connect(2, Harness::endpoint(&server.url))
+        .expect("connect");
+    let _ = app.send(
+        3,
+        CommandKind::Connect {
+            endpoint: Harness::endpoint(&silent.url()),
+        },
+    );
+    std::thread::sleep(Duration::from_millis(300));
+
+    let started = Instant::now();
+    assert!(
+        app.worker.shutdown(Duration::from_secs(10)),
+        "worker must finish within the shutdown budget"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(8),
+        "shutdown took {:?}",
+        started.elapsed()
+    );
+}

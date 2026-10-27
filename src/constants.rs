@@ -43,6 +43,13 @@ pub const MAX_UA_SESSIONS: usize = 100;
 /// server is asked to sample at "its fastest rate" (`0`), which a PLC-class
 /// server may take as a request to sample every cycle.
 pub const UA_SAMPLING_INTERVAL_MS: f64 = -1.0;
+/// Worker threads of the OPC UA runtime. Sessions, searches and connects are
+/// separate tasks; a couple of threads keep the CPU-bound part of a secure
+/// handshake (RSA) of one session from stalling the I/O of the others.
+pub const UA_HOST_RUNTIME_THREADS: usize = 2;
+/// Commands the host keeps for a session whose `Connect` is still running; more
+/// are answered "not connected" at once so a stuck connect cannot grow memory.
+pub const UA_SESSION_BACKLOG_LIMIT: usize = 256;
 /// Maximum number of address checks the subnet scanner runs at once.
 pub const SCAN_PARALLELISM: usize = 32;
 /// A subnet larger than this many addresses requires explicit confirmation.

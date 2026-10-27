@@ -8,7 +8,7 @@ use super::security::{
     security_error_detail,
 };
 use super::values::{data_change_filter, ua_type_name, value_to_ua_variant, variant_to_value};
-use super::worker::{is_control_command, partition_commands};
+use super::worker::{CommandQueue, is_control_command};
 use crate::bff::model::{
     Command, CommandKind, EndpointSpec, EventKind, Protocol, UaEndpointInfo, UaNetworkInfo,
     UaSecurityMode, UaSecurityPolicy, UaServerInfo, Value, WriteRequest,
@@ -20,10 +20,9 @@ use chrono::TimeZone;
 use opcua::types::VariantScalarTypeId as Vt;
 use opcua::types::{
     DataChangeFilter, DataChangeTrigger, DeadbandType, EndpointDescription, LocalizedText,
-    MessageSecurityMode, MonitoringParameters, NodeId, QualifiedName, StatusCode, UAString,
-    UserTokenPolicy, UserTokenType, Variant, VariantScalarTypeId,
+    MessageSecurityMode, NodeId, QualifiedName, StatusCode, UAString, UserTokenPolicy,
+    UserTokenType, Variant, VariantScalarTypeId,
 };
-use std::collections::VecDeque;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -318,7 +317,8 @@ fn subscription_monitoring_parameters_shape() {
 
 #[test]
 fn controls_jump_over_reads_without_losing_them() {
-    let mut queue = VecDeque::from(vec![
+    let mut queue = CommandQueue::default();
+    for command in [
         cmd(CommandKind::Read { keys: vec![1] }),
         cmd(CommandKind::Read { keys: vec![2] }),
         cmd(CommandKind::Browse {
@@ -328,26 +328,21 @@ fn controls_jump_over_reads_without_losing_them() {
         }),
         cmd(CommandKind::Read { keys: vec![3] }),
         cmd(CommandKind::AddItems { items: vec![] }),
-    ]);
-    let (controls, reads) = partition_commands(&mut queue);
-    // Control commands ordered first (in relative order).
-    let control_kinds: Vec<&str> = controls
-        .iter()
-        .map(|c| match &c.kind {
-            CommandKind::Browse { .. } => "browse",
-            CommandKind::AddItems { .. } => "add",
-            _ => "?",
-        })
-        .collect();
-    assert_eq!(control_kinds, vec!["browse", "add"]);
-    // Reads are kept too (deferred), so no response is ever lost.
-    assert_eq!(reads.len(), 3);
-    assert!(
-        reads
-            .iter()
-            .all(|c| matches!(&c.kind, CommandKind::Read { .. }))
-    );
-    assert!(queue.is_empty());
+    ] {
+        queue.push_command(command);
+    }
+    let mut order = Vec::new();
+    while let Some(command) = queue.pop_command() {
+        order.push(match command.kind {
+            CommandKind::Browse { .. } => "browse".to_string(),
+            CommandKind::AddItems { .. } => "add".to_string(),
+            CommandKind::Read { keys } => format!("read{}", keys.first().copied().unwrap_or(0)),
+            _ => "?".to_string(),
+        });
+    }
+    // Control commands first (in their relative order), then every read, still in
+    // order: nothing is dropped, so no response-backed read is lost.
+    assert_eq!(order, vec!["browse", "add", "read1", "read2", "read3"]);
 }
 
 #[test]

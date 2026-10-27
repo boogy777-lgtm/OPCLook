@@ -20,7 +20,7 @@ thiserror = "2"
 chrono = "0.4"
 rfd = "0.15"
 async-opcua = { version = "0.19", features = ["client"] }
-tokio = { version = "1", features = ["rt", "sync", "time", "net", "io-util"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "net", "io-util"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 
 # Windows-only (COM / WinAPI). Not built on other hosts, where the DA/net

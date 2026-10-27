@@ -30,6 +30,7 @@ use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
 pub(super) struct UaSession {
     pub(super) session: Arc<Session>,
@@ -179,6 +180,18 @@ pub(super) fn merge_add_results(
 }
 
 impl UaSession {
+    /// Closes the session on the wire: CloseSession + CloseSecureChannel, then
+    /// waits for the event loop to finish on its own (it only returns once the
+    /// channel is fully closed). Aborts it only as a last resort when the
+    /// graceful close cannot complete in [`GRACEFUL_CLOSE_TIMEOUT`].
+    pub(super) async fn close(&mut self) {
+        let closed = tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, self.session.disconnect()).await;
+        let joined = tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, &mut self.event_loop).await;
+        if closed.is_err() || joined.is_err() {
+            self.event_loop.abort();
+        }
+    }
+
     pub(super) async fn add_items(
         &mut self,
         items: &[ItemSpec],
@@ -653,25 +666,33 @@ pub(super) fn describe_connect_error(
 
 /// Spawn the session event loop and wait for the session to activate. `build()`
 /// itself does not open a connection, so this is the first network step after
-/// the endpoint description has been selected.
+/// the endpoint description has been selected. A cancelled attempt closes the
+/// channel gracefully like a failed one.
 async fn activate_ua_session<C>(
     session: &Session,
     event_loop: opcua::client::SessionEventLoop<C>,
     url: &str,
+    cancel: &CancellationToken,
 ) -> Result<JoinHandle<StatusCode>, String>
 where
     C: opcua::client::transport::Connector + Send + Sync + 'static,
 {
     let mut event_loop = event_loop.spawn();
-    let connected = tokio::time::timeout(CONNECT_TIMEOUT, session.wait_for_connection()).await;
+    let connected = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => None,
+        connected = tokio::time::timeout(CONNECT_TIMEOUT, session.wait_for_connection()) => {
+            Some(connected)
+        }
+    };
     match connected {
-        Ok(true) => Ok(event_loop),
-        Ok(false) => {
+        Some(Ok(true)) => Ok(event_loop),
+        Some(Ok(false)) => {
             let _ = tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, session.disconnect()).await;
             let _ = tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, &mut event_loop).await;
             Err(format!("сервер {url} закрыл сессию при подключении"))
         }
-        Err(_) => {
+        Some(Err(_)) => {
             // Timeout activating the session: the transport is already connected
             // so the server expects a CloseSession/CloseSecureChannel. Shut the
             // channel down gracefully instead of aborting the loop mid-request.
@@ -679,12 +700,21 @@ where
             let _ = tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, &mut event_loop).await;
             Err("таймаут активации OPC UA сессии".to_string())
         }
+        None => {
+            let _ = tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, session.disconnect()).await;
+            let _ = tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, &mut event_loop).await;
+            Err(CONNECT_CANCELLED.to_string())
+        }
     }
 }
+
+/// Text of the error a cancelled connect attempt ends with.
+pub(super) const CONNECT_CANCELLED: &str = "подключение отменено";
 
 pub(super) async fn connect(
     session_id: SessionId,
     endpoint: EndpointSpec,
+    cancel: &CancellationToken,
 ) -> Result<UaSession, String> {
     let url = endpoint.address.trim();
     if !url.starts_with("opc.tcp://") {
@@ -698,9 +728,10 @@ pub(super) async fn connect(
     //    own user-token policies (CODESYS advertises "Anonymous", not the
     //    crate's hardcoded "anonymous", and rejects ActivateSession otherwise
     //    with BadIdentityTokenInvalid).
-    let server_endpoints = match discover_endpoints(url, binding.as_ref()).await {
-        Ok(list) => list,
-        Err(message) => return Err(message),
+    let server_endpoints = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => return Err(CONNECT_CANCELLED.to_string()),
+        found = discover_endpoints(url, binding.as_ref()) => found?,
     };
     let discovered: Vec<UaEndpointInfo> = server_endpoints
         .iter()
@@ -767,7 +798,7 @@ pub(super) async fn connect(
             .user_identity_token(identity)
             .build(client.certificate_store().clone())
             .map_err(|error| describe_connect_error(url, &pki, error))?;
-        let event_loop = activate_ua_session(&session, event_loop, url).await?;
+        let event_loop = activate_ua_session(&session, event_loop, url, cancel).await?;
         (session, event_loop)
     } else {
         let (session, event_loop) = client
@@ -777,7 +808,7 @@ pub(super) async fn connect(
             .user_identity_token(identity)
             .build(client.certificate_store().clone())
             .map_err(|error| describe_connect_error(url, &pki, error))?;
-        let event_loop = activate_ua_session(&session, event_loop, url).await?;
+        let event_loop = activate_ua_session(&session, event_loop, url, cancel).await?;
         (session, event_loop)
     };
 
