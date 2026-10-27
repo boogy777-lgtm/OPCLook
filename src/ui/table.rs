@@ -337,14 +337,6 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                             actions.push(TableAction::Write(key));
                                         }
                                         response.context_menu(|ui| {
-                                            if ui.button(tr(lang, Tr::AddThisNode)).clicked() {
-                                                actions.push(TableAction::AddSelectedTree);
-                                                ui.close();
-                                            }
-                                            if ui.button(tr(lang, Tr::AddChildrenCtx)).clicked() {
-                                                actions.push(TableAction::AddChildren);
-                                                ui.close();
-                                            }
                                             if ui.button(tr(lang, Tr::ChangeValue)).clicked() {
                                                 actions.push(TableAction::Write(key));
                                                 ui.close();
@@ -464,8 +456,6 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                     TableAction::SelectAll => app.select_all_rows(),
                     TableAction::ClearSelection => app.clear_selection(),
                     TableAction::SaveCsv => save_tree_csv(app),
-                    TableAction::AddSelectedTree => app.add_selected_tree(),
-                    TableAction::AddChildren => app.add_selected_children(),
                     TableAction::MoveColumn(column, dir) => {
                         let order = app.settings.resolved_order();
                         let Some(index) = order.iter().position(|c| *c == column) else {

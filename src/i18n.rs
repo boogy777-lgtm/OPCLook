@@ -71,6 +71,7 @@ impl std::fmt::Display for Lang {
 pub enum Tr {
     // ---- Top menu ----
     MenuClient,
+    TabsNotAFilterHint,
     TraceDropped,
     TraceReply,
     TraceSent,
@@ -729,6 +730,9 @@ fn ru(key: Tr) -> &'static str {
     match key {
         // ---- Top menu ----
         MenuClient => "OPC клиент",
+        TabsNotAFilterHint => {
+            "Вкладки выбирают дерево слева, это не фильтр: в таблице сигналы всех серверов"
+        }
         TraceDropped => "← #{0} (сессия {1}): нет ожидающего запроса, ответ отброшен",
         TraceReply => "← #{0} {1} (сессия {2}): {3} мс",
         TraceSent => "→ #{0} {1} (сессия {2})",
@@ -1293,6 +1297,9 @@ fn en(key: Tr) -> &'static str {
     match key {
         // ---- Top menu ----
         MenuClient => "OPC client",
+        TabsNotAFilterHint => {
+            "Tabs pick the tree on the left; they are not a filter: the table lists signals of all servers"
+        }
         TraceDropped => "← #{0} (session {1}): no outstanding request, reply dropped",
         TraceReply => "← #{0} {1} (session {2}): {3} ms",
         TraceSent => "→ #{0} {1} (session {2})",
@@ -1847,6 +1854,7 @@ fn zh(key: Tr) -> &'static str {
     match key {
         // ---- Top menu ----
         MenuClient => "OPC 客户端",
+        TabsNotAFilterHint => "标签页用于选择左侧的树，不是过滤器：表格显示所有服务器的信号",
         TraceDropped => "← #{0}（会话 {1}）：无待处理请求，响应已丢弃",
         TraceReply => "← #{0} {1}（会话 {2}）：{3} 毫秒",
         TraceSent => "→ #{0} {1}（会话 {2}）",

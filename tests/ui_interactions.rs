@@ -3886,6 +3886,36 @@ fn toolbar_enable_states_follow_active_session() {
     assert!(widget_enabled(&h, "Переподключиться"));
 }
 
+/// A8: the table shows the signals of every server (the tabs are not a
+/// filter) and says so; the row menu has no tree actions.
+#[test]
+fn a8_tabs_are_not_a_filter_and_row_menu_has_no_tree_actions() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_session(2, EndpointSpec::ua("opc.tcp://127.0.0.1:4841"));
+    app.activate_session(1);
+    app.seed_row(1, "a", "SigA", Value::I64(1));
+    app.seed_row(2, "b", "SigB", Value::I64(2));
+    let mut h = harness(app);
+    h.run_steps(3);
+    assert!(h.query_by_label_contains("SigA").is_some());
+    assert!(
+        h.query_by_label_contains("SigB").is_some(),
+        "rows of the other session stay visible"
+    );
+    assert!(
+        h.query_all_by_label_contains("не фильтр").count() >= 1,
+        "the strip explains that tabs do not filter the table"
+    );
+
+    right_click_row(&h, "SigA");
+    h.run_steps(20);
+    assert!(h.query_all_by_label("Удалить выбранные").count() >= 1);
+    assert_eq!(h.query_all_by_label("Добавить (по этому узлу)").count(), 0);
+    assert_eq!(h.query_all_by_label("Добавить дочерние").count(), 0);
+}
+
 /// A12: a branch with thousands of nodes builds only the visible rows.
 #[test]
 fn a12_a_huge_tree_builds_only_the_visible_rows() {
