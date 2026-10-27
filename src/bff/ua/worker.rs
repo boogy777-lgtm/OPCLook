@@ -243,8 +243,9 @@ impl Host {
                 if let Some(scan) = self
                     .scans
                     .lock()
-                    .ok()
-                    .and_then(|scans| scans.get(&scan_id).map(|scan| Arc::clone(&scan.cancel)))
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .get(&scan_id)
+                    .map(|scan| Arc::clone(&scan.cancel))
                 {
                     scan.store(true, Ordering::Relaxed);
                 }

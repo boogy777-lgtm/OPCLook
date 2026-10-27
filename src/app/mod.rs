@@ -1087,8 +1087,12 @@ impl App {
                 session,
                 protocol,
                 CommandKind::ConfigureUaSubscription {
-                    publishing_interval_ms: self.settings.options.update_interval_secs.max(1)
-                        * 1000,
+                    publishing_interval_ms: self
+                        .settings
+                        .options
+                        .update_interval_secs
+                        .max(1)
+                        .saturating_mul(1000),
                     deadband: self.settings.options.ua_deadband,
                 },
             );

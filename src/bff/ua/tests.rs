@@ -1289,3 +1289,15 @@ fn auto_reports_when_it_chose_no_protection_over_a_secure_endpoint() {
         "an explicit None is the user's decision"
     );
 }
+
+#[test]
+fn integer_writes_reject_fractional_and_out_of_range_floats() {
+    use opcua::types::VariantScalarTypeId as Vt;
+    for value in [3.7, f64::NAN, f64::INFINITY, 9_223_372_036_854_775_808.0] {
+        assert!(value_to_ua_variant(&Value::F64(value), Some(Vt::Int64)).is_err());
+    }
+    for value in [3.7, -1.0, f64::INFINITY, 18_446_744_073_709_551_616.0] {
+        assert!(value_to_ua_variant(&Value::F64(value), Some(Vt::UInt64)).is_err());
+    }
+    assert!(value_to_ua_variant(&Value::U64(u64::MAX), Some(Vt::Int64)).is_err());
+}

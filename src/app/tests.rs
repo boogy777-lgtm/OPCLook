@@ -1637,6 +1637,10 @@ fn a9_backend_events_are_rendered_in_the_interface_language() {
 #[test]
 fn u15_lds_host_text_is_parsed_with_the_default_port() {
     use super::search::parse_lds_host;
+    assert_eq!(
+        parse_lds_host("aaaaaaaaaé"),
+        Ok(Some(("aaaaaaaaaé".to_string(), 4840)))
+    );
     assert_eq!(parse_lds_host(""), Ok(None));
     assert_eq!(parse_lds_host("   "), Ok(None));
     assert_eq!(

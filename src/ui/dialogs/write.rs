@@ -133,6 +133,10 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
             });
     }
     if submit {
+        // A confirmation opened below must not observe the same Enter key.
+        ctx.input_mut(|input| {
+            input.consume_key(egui::Modifiers::NONE, egui::Key::Enter);
+        });
         app.apply_write();
     }
     if close {

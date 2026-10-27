@@ -566,7 +566,10 @@ pub(crate) fn parse_lds_host(text: &str) -> Result<Option<(String, u16)>, ()> {
     if rest.is_empty() {
         return Ok(None);
     }
-    if rest.len() >= 10 && rest[..10].eq_ignore_ascii_case("opc.tcp://") {
+    if rest
+        .get(..10)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("opc.tcp://"))
+    {
         rest = &rest[10..];
     }
     let rest = rest.trim_end_matches('/');

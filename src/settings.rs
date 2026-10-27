@@ -391,6 +391,30 @@ impl Settings {
         order
     }
 
+    /// Translate a gap in the visible header to the persisted full order.
+    pub fn move_visible_column_to_insert(&mut self, id: ColumnId, before: usize) -> bool {
+        let order = self.resolved_order();
+        let visible: Vec<_> = order
+            .iter()
+            .copied()
+            .filter(|column| self.columns.is_visible(*column))
+            .collect();
+        let full_gap = if let Some(target) = visible.get(before) {
+            order
+                .iter()
+                .position(|column| column == target)
+                .unwrap_or(order.len())
+        } else if let Some(last) = visible.last() {
+            order
+                .iter()
+                .position(|column| column == last)
+                .map_or(order.len(), |index| index + 1)
+        } else {
+            return false;
+        };
+        self.move_column_to_insert(id, full_gap)
+    }
+
     /// Apply the same move semantics to the effective order no matter whether
     /// it originated in the header menu, dialog, or legacy settings.
     pub fn move_column_to_insert(&mut self, id: ColumnId, before: usize) -> bool {
@@ -1081,6 +1105,19 @@ mod tests {
         s.persist_column_order(&[ColumnId::Status, ColumnId::Status]);
         assert_eq!(s.columns.order.len(), ColumnId::ALL.len());
         assert_eq!(s.column_order.as_ref().unwrap().len(), ColumnId::ALL.len());
+    }
+
+    #[test]
+    fn visible_column_drag_accounts_for_hidden_columns() {
+        let mut settings = Settings::default();
+        settings.columns.set_visible(ColumnId::FullName, false);
+        assert!(settings.move_visible_column_to_insert(ColumnId::Quality, 1));
+        let visible: Vec<_> = settings
+            .resolved_order()
+            .into_iter()
+            .filter(|id| settings.columns.is_visible(*id))
+            .collect();
+        assert_eq!(&visible[..2], &[ColumnId::Status, ColumnId::Quality]);
     }
 
     #[test]

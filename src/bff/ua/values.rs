@@ -404,7 +404,14 @@ fn scalar_value_to_variant(
                             ty: "UInt64".to_string(),
                         })?
                     }
-                    Value::F64(v) if *v >= 0.0 => *v as u64,
+                    Value::F64(v)
+                        if v.is_finite()
+                            && v.fract() == 0.0
+                            && *v >= 0.0
+                            && *v < 18_446_744_073_709_551_616.0 =>
+                    {
+                        *v as u64
+                    }
                     Value::Str(s) => {
                         s.trim()
                             .parse::<u64>()
@@ -547,7 +554,14 @@ fn to_i64(value: &Value, ty: &str) -> Result<i64, BackendMsg> {
             value: v.to_string(),
             ty: ty.to_string(),
         }),
-        Value::F64(v) if v.is_finite() => Ok(*v as i64),
+        Value::F64(v)
+            if v.is_finite()
+                && v.fract() == 0.0
+                && *v >= -9_223_372_036_854_775_808.0
+                && *v < 9_223_372_036_854_775_808.0 =>
+        {
+            Ok(*v as i64)
+        }
         Value::Str(s) => s
             .trim()
             .parse::<i64>()

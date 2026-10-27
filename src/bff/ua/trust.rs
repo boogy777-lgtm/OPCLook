@@ -55,8 +55,9 @@ impl Drop for TrustLease {
             None => false,
         };
         if last {
-            let _ = std::fs::remove_file(&self.trusted_file);
-            forget_in_marker(&self.marker, &self.trusted_file);
+            if remove_trusted_file(&self.trusted_file) {
+                forget_in_marker(&self.marker, &self.trusted_file);
+            }
         }
     }
 }
@@ -95,6 +96,15 @@ pub(super) fn trust_for_session(
         }));
     }
     if trusted_file.exists() {
+        if read_marker(&marker)
+            .iter()
+            .any(|line| Path::new(line) == trusted_file)
+        {
+            return Err(BackendMsg::FsWriteFailed {
+                path: trusted_file.display().to_string(),
+                detail: "temporary certificate cleanup failed".to_string(),
+            });
+        }
         // Trusted by an explicit user action: permanent, not ours to remove.
         return Ok(None);
     }
@@ -167,18 +177,28 @@ fn write_marker(marker: &Path, lines: &[String]) -> Result<(), BackendMsg> {
     })
 }
 
+// A missing file is already clean; all other failures must retain the marker
+// so the next startup can retry instead of making a temporary trust permanent.
+fn remove_trusted_file(file: &Path) -> bool {
+    match std::fs::remove_file(file) {
+        Ok(()) => true,
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+    }
+}
+
 /// Removes certificates a previous run leased and never got to release (it was
 /// killed). Only files inside the `trusted` folder are ever deleted.
 fn purge_leftovers(pki: &Path) {
     let marker = pki.join(MARKER_FILE);
     let trusted_dir = pki.join(TRUSTED_DIR);
-    for line in read_marker(&marker) {
-        let file = PathBuf::from(&line);
-        if file.parent() == Some(trusted_dir.as_path()) {
-            let _ = std::fs::remove_file(&file);
-        }
-    }
-    let _ = std::fs::remove_file(&marker);
+    let retained: Vec<String> = read_marker(&marker)
+        .into_iter()
+        .filter(|line| {
+            let file = PathBuf::from(line);
+            file.parent() == Some(trusted_dir.as_path()) && !remove_trusted_file(&file)
+        })
+        .collect();
+    let _ = write_marker(&marker, &retained);
 }
 
 #[cfg(test)]
@@ -295,6 +315,25 @@ mod tests {
         purge_leftovers(&pki);
         assert!(!leftover.exists());
         assert!(outside.exists(), "files outside trusted/ are never deleted");
+        assert!(!pki.join(MARKER_FILE).exists());
+        let _ = std::fs::remove_dir_all(&pki);
+    }
+
+    #[test]
+    fn failed_removal_retains_marker_for_retry() {
+        let pki = scratch("failed-removal");
+        let trusted = pki.join(TRUSTED_DIR);
+        std::fs::create_dir_all(&trusted).unwrap();
+        let file = trusted.join("cannot-remove-as-file");
+        std::fs::create_dir(&file).unwrap();
+        std::fs::write(pki.join(MARKER_FILE), file.to_string_lossy().as_bytes()).unwrap();
+        purge_leftovers(&pki);
+        assert_eq!(
+            read_marker(&pki.join(MARKER_FILE)),
+            vec![file.to_string_lossy()]
+        );
+        std::fs::remove_dir(&file).unwrap();
+        purge_leftovers(&pki);
         assert!(!pki.join(MARKER_FILE).exists());
         let _ = std::fs::remove_dir_all(&pki);
     }

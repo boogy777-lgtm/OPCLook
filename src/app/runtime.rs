@@ -11,7 +11,12 @@ impl App {
     /// on every connect so a recreated session re-creates the subscription with
     /// the current values.
     pub(super) fn configure_ua_subscription(&mut self, session: SessionId) {
-        let interval_ms = self.settings.options.update_interval_secs.max(1) * 1000;
+        let interval_ms = self
+            .settings
+            .options
+            .update_interval_secs
+            .max(1)
+            .saturating_mul(1000);
         let deadband = self.settings.options.ua_deadband;
         self.send(
             session,

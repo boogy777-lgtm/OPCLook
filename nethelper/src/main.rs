@@ -352,15 +352,16 @@ fn wait_for_client(handle: HANDLE) -> Result<(), String> {
     });
     match rx.recv_timeout(PIPE_CONNECT_TIMEOUT) {
         Ok(Ok(())) => Ok(()),
-        Ok(Err(_)) => {
-            let error = unsafe { GetLastError() };
-            if error == ERROR_PIPE_CONNECTED {
-                Ok(())
-            } else {
-                Err(format!("ConnectNamedPipe failed with {}", error.0))
-            }
-        }
+        Ok(Err(error)) => pipe_connect_result(error),
         Err(_) => Err("client did not connect before the helper timeout".to_string()),
+    }
+}
+
+fn pipe_connect_result(error: windows::core::Error) -> Result<(), String> {
+    if error.code() == windows::core::HRESULT::from_win32(ERROR_PIPE_CONNECTED.0) {
+        Ok(())
+    } else {
+        Err(format!("ConnectNamedPipe failed: {error}"))
     }
 }
 
@@ -409,7 +410,9 @@ fn token_sid(token: HANDLE) -> Result<String, String> {
     if needed == 0 {
         return Err("GetTokenInformation returned no size".to_string());
     }
-    let mut buffer = vec![0u8; needed as usize];
+    // TOKEN_USER contains pointers; the storage must satisfy its alignment.
+    let words = (needed as usize).div_ceil(std::mem::size_of::<usize>());
+    let mut buffer = vec![0usize; words];
     unsafe {
         GetTokenInformation(
             token,
@@ -620,4 +623,18 @@ fn is_multicast_or_broadcast(ip: IpAddr) -> bool {
 
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+
+    #[test]
+    fn already_connected_uses_error_from_pipe_thread() {
+        let error =
+            windows::core::Error::from(windows::core::HRESULT::from_win32(ERROR_PIPE_CONNECTED.0));
+        assert!(pipe_connect_result(error).is_ok());
+        let error = windows::core::Error::from(windows::core::HRESULT::from_win32(5));
+        assert!(pipe_connect_result(error).is_err());
+    }
 }

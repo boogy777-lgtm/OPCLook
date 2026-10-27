@@ -117,13 +117,15 @@ pub(super) fn start_scan_task(
             &tx,
         )
         .await;
-        if let Ok(mut scans) = registry.lock() {
-            scans.remove(&scan_id);
-        }
+        registry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&scan_id);
     });
-    if let Ok(mut scans) = scans.lock() {
-        scans.insert(scan_id, ScanHandle { cancel, task });
-    }
+    scans
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(scan_id, ScanHandle { cancel, task });
 }
 
 /// Cancel every running scan and wait for its task to be dropped. Called when
