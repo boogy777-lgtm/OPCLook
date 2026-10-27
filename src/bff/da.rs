@@ -1,4 +1,5 @@
 use super::da_clsid::{ClsidLookup, DiscoveredClsids, is_local_host, resolve_clsid};
+use super::da_status::{ServerStatusInfo, check_server_state, format_connect_info};
 use super::da_variant::{
     clear_variant, filetime_to_utc, variant_from_value, variant_to_value, vt_name,
 };
@@ -406,27 +407,47 @@ impl DaSession {
             .cast()
             .map_err(|e| format!("группа не поддерживает IOPCSyncIO: {e}"))?;
 
-        let mut info = format!("подключено, группа #{group_handle}, период {revised} мс");
+        let mut status_info = None;
         if let Ok(status) = unsafe { server.GetStatus() } {
             if !status.is_null() {
+                // SAFETY: `status` is a non-null block returned by GetStatus; it and
+                // the vendor string are copied here and freed with CoTaskMemFree.
                 unsafe {
                     let s = &*status;
-                    info = format!(
-                        "подключено, группа #{group_handle}, период {revised} мс, сервер {}.{}.{}.{}",
-                        s.wMajorVersion, s.wMinorVersion, s.wBuildNumber, s.dwGroupCount
-                    );
-                    if !s.szVendorInfo.is_null() {
-                        let vendor = s.szVendorInfo.to_string().unwrap_or_default();
-                        if !vendor.is_empty() {
-                            info.push_str(", ");
-                            info.push_str(&vendor);
-                        }
+                    let vendor = if s.szVendorInfo.is_null() {
+                        String::new()
+                    } else {
+                        let text = s.szVendorInfo.to_string().unwrap_or_default();
                         CoTaskMemFree(Some(s.szVendorInfo.0 as *const c_void));
-                    }
+                        text
+                    };
+                    status_info = Some((
+                        s.wMajorVersion,
+                        s.wMinorVersion,
+                        s.wBuildNumber,
+                        s.dwGroupCount,
+                        vendor,
+                    ));
                     CoTaskMemFree(Some(status as *const c_void));
                 }
             }
         }
+        let info = format_connect_info(
+            group_handle,
+            revised,
+            status_info
+                .as_ref()
+                .map(
+                    |(major, minor, build, group_count, vendor)| ServerStatusInfo {
+                        major: *major,
+                        minor: *minor,
+                        build: *build,
+                        group_count: *group_count,
+                        vendor,
+                    },
+                )
+                .as_ref(),
+        );
 
         Ok(Self {
             endpoint,
@@ -747,14 +768,17 @@ impl DaSession {
         if status.is_null() {
             return Err("сервер не вернул состояние".to_string());
         }
-        let state = unsafe { (*status).dwServerState.0 };
-        unsafe {
+        // SAFETY: `status` is a non-null block returned by GetStatus; the state is
+        // copied before it and the vendor string are freed with CoTaskMemFree.
+        let state = unsafe {
+            let state = (*status).dwServerState.0;
             if !(*status).szVendorInfo.is_null() {
                 CoTaskMemFree(Some((*status).szVendorInfo.0 as *const c_void));
             }
             CoTaskMemFree(Some(status as *const c_void));
-        }
-        Ok(format!("связь с сервером в порядке (состояние {state})"))
+            state
+        };
+        check_server_state(state)
     }
 
     fn error_text(&self, hr: HRESULT) -> String {

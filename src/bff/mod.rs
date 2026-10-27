@@ -14,6 +14,7 @@ pub mod da_variant {
     pub use super::vt::vt_name;
 }
 pub mod da_clsid;
+pub mod da_status;
 pub mod mdns;
 pub mod model;
 pub mod net;
