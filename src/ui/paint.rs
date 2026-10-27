@@ -185,3 +185,44 @@ pub(super) fn paint_play_icon(p: &egui::Painter, rect: egui::Rect, color: egui::
         egui::Stroke::NONE,
     ));
 }
+
+/// UI3: padlock (a rounded body with a shackle above it) for an explicitly
+/// secured UA endpoint. Painted, so it never turns into a tofu box on a
+/// machine without an emoji font.
+pub(super) fn paint_lock_icon(p: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let c = rect.center();
+    let s = rect.width().min(rect.height());
+    let body_w = s * 0.78;
+    let body_h = s * 0.50;
+    let body = egui::Rect::from_min_size(
+        egui::pos2(c.x - body_w / 2.0, c.y + s * 0.5 - body_h),
+        egui::vec2(body_w, body_h),
+    );
+    p.rect_filled(body, s * 0.1, color);
+    // Shackle: an upside-down U above the body.
+    let r = body_w * 0.30;
+    let top = body.top();
+    let pts = arc_points(
+        egui::pos2(c.x, top - r * 0.2),
+        r,
+        std::f32::consts::PI,
+        std::f32::consts::TAU,
+        12,
+    );
+    let stroke = egui::Stroke::new((s * 0.13).max(1.2), color);
+    p.add(egui::Shape::line(pts, stroke));
+    p.line_segment(
+        [
+            egui::pos2(c.x - r, top - r * 0.2),
+            egui::pos2(c.x - r, top + 0.5),
+        ],
+        stroke,
+    );
+    p.line_segment(
+        [
+            egui::pos2(c.x + r, top - r * 0.2),
+            egui::pos2(c.x + r, top + 0.5),
+        ],
+        stroke,
+    );
+}
