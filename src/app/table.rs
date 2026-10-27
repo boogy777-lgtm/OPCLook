@@ -270,7 +270,7 @@ impl App {
         })
     }
 
-    fn perform_write(&mut self, pending: PendingWrites) {
+    pub(super) fn perform_write(&mut self, pending: PendingWrites) {
         let count = pending.requests.len();
         for request in pending.requests {
             let key = request.key;
@@ -282,10 +282,15 @@ impl App {
             );
         }
         self.dialogs.write.open = false;
-        self.pending_writes = count;
-        self.write_total = count;
-        self.write_ok = 0;
-        self.write_err = 0;
+        // A11: a batch started while an earlier one is still running adds to
+        // the same counters; they restart only when nothing is outstanding.
+        if self.pending_writes == 0 {
+            self.write_total = 0;
+            self.write_ok = 0;
+            self.write_err = 0;
+        }
+        self.pending_writes += count;
+        self.write_total += count;
         self.last_write_summary = None;
         let type_label = pending.type_label.clone();
         self.journal
@@ -447,7 +452,7 @@ fn parse_value(
     }
 }
 
-fn infer_kind(
+pub(super) fn infer_kind(
     text: &str,
     canonical_vt: Option<u16>,
     ua_type: Option<&str>,
@@ -489,10 +494,14 @@ fn infer_kind(
     if trimmed.parse::<u64>().is_ok() {
         return WriteKind::U64;
     }
-    if trimmed.contains('.') || trimmed.contains('e') || trimmed.contains('E') {
-        if trimmed.replace(',', ".").parse::<f64>().is_ok() {
-            return WriteKind::F64;
-        }
+    // A decimal comma is a number too (`3,14`); "inf"/"nan" stay strings.
+    if trimmed.chars().any(|c| c.is_ascii_digit())
+        && trimmed
+            .replace(',', ".")
+            .parse::<f64>()
+            .is_ok_and(f64::is_finite)
+    {
+        return WriteKind::F64;
     }
     WriteKind::Str
 }

@@ -495,18 +495,7 @@ impl App {
                         });
                     }
                 }
-                // Batch completed -> publish a compact summary in the status bar.
-                if self.pending_writes == 0 && self.write_total > 0 {
-                    self.last_write_summary = Some(fmt(
-                        lang,
-                        Tr::WrittenSummary,
-                        &[&self.write_ok.to_string(), &self.write_total.to_string()],
-                    ));
-                    self.journal.info_l(
-                        Tr::WriteDoneSummary,
-                        &[&self.write_ok.to_string(), &self.write_total.to_string()],
-                    );
-                }
+                self.finish_write_batch_if_done();
             }
             EventKind::Disconnected { reason } => {
                 self.cancel_add_children(session);
@@ -664,6 +653,18 @@ impl App {
                     }
                 }
             }
+        }
+    }
+
+    /// Batch completed -> publish a compact summary in the status bar.
+    pub(super) fn finish_write_batch_if_done(&mut self) {
+        if self.pending_writes == 0 && self.write_total > 0 {
+            let lang = self.lang();
+            let counts = [self.write_ok.to_string(), self.write_total.to_string()];
+            self.last_write_summary =
+                Some(fmt(lang, Tr::WrittenSummary, &[&counts[0], &counts[1]]));
+            self.journal
+                .info_l(Tr::WriteDoneSummary, &[&counts[0], &counts[1]]);
         }
     }
 

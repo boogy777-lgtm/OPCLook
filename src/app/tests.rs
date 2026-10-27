@@ -1,5 +1,6 @@
 use super::present::operation_label;
 use super::sessions::reconnect_delay;
+use super::table::infer_kind;
 use super::*;
 use crate::bff::model::{BrowseNode, EndpointSpec, EventKind, NodeKind, Operation, WriteRequest};
 use crate::constants::{RECONNECT_MAX_ATTEMPTS, RECONNECT_MAX_DELAY_SECS};
@@ -1400,4 +1401,108 @@ fn k2_trace_logs_request_reply_latency_and_dropped_replies() {
     let lines = trace_lines(&app);
     assert_eq!(lines.len(), 3, "{lines:?}");
     assert!(lines[2].contains("отброшен"), "{lines:?}");
+}
+
+#[test]
+fn a10_decimal_comma_is_a_float_when_the_type_is_unknown() {
+    for text in ["3,14", "-0,5", "1.5", "2e3", "1,5e-3"] {
+        assert_eq!(
+            infer_kind(text, None, None, Protocol::OpcUa),
+            WriteKind::F64,
+            "{text}"
+        );
+    }
+    for text in ["42", "-7", "inf", "nan", "NaN", "abc", "1,2,3", ","] {
+        assert_ne!(
+            infer_kind(text, None, None, Protocol::OpcUa),
+            WriteKind::F64,
+            "{text}"
+        );
+    }
+    assert_eq!(
+        infer_kind("42", None, None, Protocol::OpcUa),
+        WriteKind::I64
+    );
+}
+
+fn write_request(key: ItemKey) -> WriteRequest {
+    WriteRequest {
+        key,
+        value: Value::I64(1),
+        type_hint: None,
+    }
+}
+
+fn start_batch(app: &mut App, keys: &[ItemKey]) {
+    app.perform_write(PendingWrites {
+        session: 1,
+        protocol: Protocol::OpcUa,
+        requests: keys.iter().copied().map(write_request).collect(),
+        type_label: "Int".to_string(),
+    });
+}
+
+#[test]
+fn a11_overlapping_write_batches_add_up() {
+    let (_ctx, mut app) = tree_app();
+    let a = app.seed_row(1, "A", "A", Value::I64(0));
+    let b = app.seed_row(1, "B", "B", Value::I64(0));
+    let c = app.seed_row(1, "C", "C", Value::I64(0));
+    start_batch(&mut app, &[a, b]);
+    start_batch(&mut app, &[c]); // starts while the first batch is running
+    assert_eq!((app.pending_writes, app.write_total), (3, 3));
+    let ids = app.pending_request_ids_for_test(1);
+    assert_eq!(ids.len(), 3);
+    for (index, id) in ids.iter().enumerate() {
+        assert!(app.last_write_summary.is_none(), "not done after {index}");
+        let key = [a, b, c][index];
+        app.on_event_for_test_with_request(
+            1,
+            *id,
+            EventKind::Wrote {
+                key,
+                result: Ok(()),
+            },
+        );
+    }
+    assert_eq!(app.pending_writes, 0);
+    assert_eq!((app.write_ok, app.write_err, app.write_total), (3, 0, 3));
+    assert!(
+        app.last_write_summary
+            .as_deref()
+            .is_some_and(|s| s.contains('3'))
+    );
+}
+
+#[test]
+fn a11_counters_restart_after_a_finished_batch() {
+    let (_ctx, mut app) = tree_app();
+    let a = app.seed_row(1, "A", "A", Value::I64(0));
+    start_batch(&mut app, &[a]);
+    let id = app.pending_request_ids_for_test(1)[0];
+    app.on_event_for_test_with_request(
+        1,
+        id,
+        EventKind::Wrote {
+            key: a,
+            result: Ok(()),
+        },
+    );
+    start_batch(&mut app, &[a]);
+    assert_eq!(
+        (app.pending_writes, app.write_total, app.write_ok),
+        (1, 1, 0)
+    );
+}
+
+#[test]
+fn a11_writes_lost_with_the_session_complete_the_batch_as_failed() {
+    let (_ctx, mut app) = tree_app();
+    let a = app.seed_row(1, "A", "A", Value::I64(0));
+    let b = app.seed_row(1, "B", "B", Value::I64(0));
+    start_batch(&mut app, &[a, b]);
+    app.disconnect_session(1);
+    assert_eq!(app.pending_writes, 0, "no reply can arrive any more");
+    assert_eq!((app.write_ok, app.write_err), (0, 2));
+    assert!(app.last_write_summary.is_some());
 }

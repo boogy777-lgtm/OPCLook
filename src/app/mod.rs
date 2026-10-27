@@ -664,7 +664,22 @@ impl App {
     /// connect/disconnect lifecycle starts so stale replies from the previous
     /// link are rejected by `on_event`.
     pub(super) fn clear_pending_requests(&mut self, session: SessionId) {
-        self.pending_requests.retain(|(sid, _), _| *sid != session);
+        let mut lost_writes = 0usize;
+        self.pending_requests.retain(|(sid, _), pending| {
+            let keep = *sid != session;
+            if !keep && pending.operation == Operation::Write {
+                lost_writes += 1;
+            }
+            keep
+        });
+        // A11: writes whose reply can no longer arrive count as failed, or the
+        // batch counters would never reach zero.
+        if lost_writes > 0 {
+            let lost = lost_writes.min(self.pending_writes);
+            self.pending_writes -= lost;
+            self.write_err += lost;
+            self.finish_write_batch_if_done();
+        }
         // A «Добавить по имени» waiting for this session can never be answered.
         if self
             .dialogs
