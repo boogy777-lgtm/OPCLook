@@ -23,19 +23,21 @@ pub(super) fn bottom_panels(app: &mut App, ui: &mut egui::Ui) {
             if show_script && show_log {
                 let mut selected = app.bottom_tab;
                 ui.horizontal(|ui| {
-                    if ui
-                        .selectable_label(selected == BottomTab::Script, tr(lang, Tr::ScriptTab))
-                        .on_hover_text(tr(lang, Tr::HintScriptTab))
-                        .clicked()
-                    {
-                        selected = BottomTab::Script;
-                    }
+                    // UI7: the journal is the primary tab; the script tab
+                    // comes second and its hint says the interpreter is absent.
                     if ui
                         .selectable_label(selected == BottomTab::Journal, tr(lang, Tr::JournalTab))
                         .on_hover_text(tr(lang, Tr::HintJournalTab))
                         .clicked()
                     {
                         selected = BottomTab::Journal;
+                    }
+                    if ui
+                        .selectable_label(selected == BottomTab::Script, tr(lang, Tr::ScriptTab))
+                        .on_hover_text(tr(lang, Tr::HintScriptTabNotImpl))
+                        .clicked()
+                    {
+                        selected = BottomTab::Script;
                     }
                     ui.separator();
                     match selected {
@@ -56,10 +58,12 @@ pub(super) fn bottom_panels(app: &mut App, ui: &mut egui::Ui) {
                             }
                         }
                     }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let note = egui::RichText::new(tr(lang, Tr::ScriptsNotImpl)).weak();
-                        ui.label(note).on_hover_text(app.script_protocol_note());
-                    });
+                    if selected == BottomTab::Script {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let note = egui::RichText::new(tr(lang, Tr::ScriptsNotImpl)).weak();
+                            ui.label(note).on_hover_text(app.script_protocol_note());
+                        });
+                    }
                 });
                 if selected != app.bottom_tab {
                     app.bottom_tab = selected;

@@ -135,7 +135,7 @@ pub const SESSION_TIMEOUT_MAX_MS: u32 = 3_600_000;
 /// Default width of the left «Серверы» panel.
 pub const LEFT_PANEL_DEFAULT_WIDTH: f32 = 340.0;
 /// Default height of the bottom panels panel.
-pub const BOTTOM_PANEL_DEFAULT_HEIGHT: f32 = 230.0;
+pub const BOTTOM_PANEL_DEFAULT_HEIGHT: f32 = 160.0;
 /// Lower bound for the bottom panels panel height.
 pub const BOTTOM_PANEL_MIN_HEIGHT: f32 = 120.0;
 /// Upper bound for the bottom panels panel height.

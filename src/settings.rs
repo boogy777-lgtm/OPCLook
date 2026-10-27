@@ -56,8 +56,9 @@ impl Default for Options {
             confirm_write: true,
             operation_timeout_secs: OPERATION_TIMEOUT_DEFAULT_SECS,
             test_interval_secs: TEST_INTERVAL_DEFAULT_SECS,
+            // UI7: both panels exist, the journal tab is the one shown first.
             show_script: true,
-            show_log: false,
+            show_log: true,
             ua_deadband: 0.0,
             diagnostic_trace: false,
         }
@@ -721,7 +722,8 @@ mod tests {
         assert!(d.show_colors);
         assert!(d.confirm_write);
         assert!(d.show_script);
-        assert!(!d.show_log);
+        // UI7: the journal is available by default (shown first).
+        assert!(d.show_log);
     }
 
     /// A default/unset settings file defaults to Russian; an explicitly

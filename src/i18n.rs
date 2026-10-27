@@ -159,6 +159,7 @@ pub enum Tr {
     ClearJournalLabel,
     SaveJournalLabel,
     ScriptsNotImpl,
+    HintScriptTabNotImpl,
     EntriesCount,
 
     // ---- Navigation / tree ----
@@ -847,6 +848,9 @@ fn ru(key: Tr) -> &'static str {
         ClearJournalLabel => "Очистить журнал",
         SaveJournalLabel => "Сохранить журнал...",
         ScriptsNotImpl => "Скрипты: интерпретатор не реализован",
+        HintScriptTabNotImpl => {
+            "Скрипт — не реализовано: интерпретатор пока отсутствует, можно только редактировать и сохранять текст"
+        }
         EntriesCount => "записей: {0}",
 
         // ---- Navigation ----
@@ -1426,6 +1430,9 @@ fn en(key: Tr) -> &'static str {
         ClearJournalLabel => "Clear journal",
         SaveJournalLabel => "Save journal...",
         ScriptsNotImpl => "Scripts: interpreter not implemented",
+        HintScriptTabNotImpl => {
+            "Script — not implemented: there is no interpreter yet, the text can only be edited and saved"
+        }
         EntriesCount => "entries: {0}",
 
         // ---- Navigation ----
@@ -1991,6 +1998,7 @@ fn zh(key: Tr) -> &'static str {
         ClearJournalLabel => "清除日志",
         SaveJournalLabel => "保存日志...",
         ScriptsNotImpl => "脚本: 解释器未实现",
+        HintScriptTabNotImpl => "脚本 — 未实现: 暂无解释器，只能编辑和保存文本",
         EntriesCount => "条目: {0}",
 
         // ---- Navigation ----
