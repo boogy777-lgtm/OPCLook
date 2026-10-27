@@ -44,7 +44,7 @@ pub use state::{
     AddChildrenJob, BottomTab, CsvImportJob, CsvImportRow, ReconnectState, Row, SessionState,
     SessionView, TreeItem, WriteKind, WriteTypeChoice, write_type_choices,
 };
-pub use view::{MAX_FIELD_LINES, TableLine};
+pub use view::{CHANGE_FLASH, MAX_FIELD_LINES, TableLine, is_numeric_value};
 
 use self::present::{is_loopback_host, operation_label};
 
@@ -165,8 +165,9 @@ struct DaRouteHold {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let cjk = install_fonts(&cc.egui_ctx);
-        cc.egui_ctx.set_visuals(egui::Visuals::dark());
-        let mut app = Self::new_inner(Settings::load());
+        let settings = Settings::load();
+        crate::ui::apply_style(&cc.egui_ctx, settings.options.theme);
+        let mut app = Self::new_inner(settings);
         app.journal.info_l(Tr::AppStarted, &[]);
         app.journal.info_l(Tr::OriginNote, &[]);
         app.cjk_font = match cjk {
@@ -822,6 +823,7 @@ impl App {
             description: String::new(),
             pending: false,
             poll_only: false,
+            changed_at: None,
         });
         key
     }

@@ -159,6 +159,12 @@ pub enum Tr {
     ClearJournalLabel,
     SaveJournalLabel,
     ScriptsNotImpl,
+    ThemeTitle,
+    ThemeSystem,
+    ThemeLight,
+    ThemeDark,
+    ThemeHint,
+    HintScriptTabNotImpl,
     EntriesCount,
 
     // ---- Navigation / tree ----
@@ -194,6 +200,15 @@ pub enum Tr {
     /// Tells the user how to populate it; rendered on the same column grid so
     /// the table headers stay visible (it never replaces the table).
     TableEmptyInner,
+    /// UI1: accessible name / tooltip of the expander of a structured value.
+    TableValueExpand,
+    TableValueCollapse,
+    /// UI10: second line of the empty table without a session: the keys.
+    TableEmptyKeys,
+    /// UI10: second line of the empty table with an active session.
+    TableEmptyDragHint,
+    /// UI10: the button of the empty table without a session.
+    TableEmptyConnect,
     EscHint,
     PkmMoveColumn,
     MoveLeft,
@@ -550,6 +565,17 @@ pub enum Tr {
     RemoveFromListConfirmText,
     /// Empty-state hint under the tab bar when no tab is open.
     EmptyTabsHint,
+    /// Empty-tree action button: re-read the root of the active session (the same as F5).
+    RefreshF5Button,
+    /// Empty-state action button when there is no session: open the connect dialog (the same as Ctrl+N).
+    /// Tooltip of the left panel's «add» icon (adds the selected tree node).
+    AddNodeTooltip,
+    /// Tooltip of the left panel's «add by name» icon.
+    AddByNameTooltip,
+    /// Accessible name of a tree node's expander when the node is collapsed.
+    TreeExpandLabel,
+    /// Accessible name of a tree node's expander when the node is expanded.
+    TreeCollapseLabel,
 
     // ---- Servers area (left panel) ----
     /// Full-width button that opens the connect dialog.
@@ -847,6 +873,14 @@ fn ru(key: Tr) -> &'static str {
         ClearJournalLabel => "Очистить журнал",
         SaveJournalLabel => "Сохранить журнал...",
         ScriptsNotImpl => "Скрипты: интерпретатор не реализован",
+        ThemeTitle => "Тема оформления",
+        ThemeSystem => "Как в системе",
+        ThemeLight => "Светлая",
+        ThemeDark => "Тёмная",
+        ThemeHint => "Применяется после «Сохранить»",
+        HintScriptTabNotImpl => {
+            "Скрипт — не реализовано: интерпретатор пока отсутствует, можно только редактировать и сохранять текст"
+        }
         EntriesCount => "записей: {0}",
 
         // ---- Navigation ----
@@ -859,7 +893,7 @@ fn ru(key: Tr) -> &'static str {
         BrowseProto => "Обзор: {0}",
         UpdatingTree => "Обновление дерева...",
         LoadingTree => "Загрузка дерева...",
-        TreeNotLoaded => "Дерево не загружено — нажмите \"Обновить ветку\".",
+        TreeNotLoaded => "Дерево не загружено.",
         NoConnection => "Нет соединения.",
         ResumeAttempts => "Возобновить попытки",
         StopAttempts => "Остановить попытки",
@@ -876,6 +910,11 @@ fn ru(key: Tr) -> &'static str {
         TableEmptyHelp => "Подключитесь к серверу, раскройте ветку и добавьте сигналы.",
         TableHint => "Подсказка: двойной щелчок в дереве по сигналу или ПКМ → Добавить.",
         TableEmptyInner => "Нет сигналов — добавьте из дерева, через ПКМ или перетащите сюда",
+        TableValueExpand => "Развернуть значение",
+        TableValueCollapse => "Свернуть значение",
+        TableEmptyKeys => "Ctrl+N — подключиться к серверу · Tab / F6 — дерево и таблица",
+        TableEmptyDragHint => "Перетащите теги из дерева или нажмите Enter на узле",
+        TableEmptyConnect => "Подключиться (Ctrl+N)",
         EscHint => "Нажмите Esc, чтобы снять выделение. ПКМ по строке — меню.",
         PkmMoveColumn => "ПКМ — переместить столбец",
         MoveLeft => "Влево",
@@ -1231,6 +1270,11 @@ fn ru(key: Tr) -> &'static str {
         RemoveFromListConfirmTitle => "Удаление сессии",
         RemoveFromListConfirmText => "Удалить сессию \"{0}\" и все её сигналы из списка?",
         EmptyTabsHint => "Двойной щелчок по серверу в диалоге подключения открывает вкладку",
+        RefreshF5Button => "Обновить (F5)",
+        AddNodeTooltip => "Добавить выбранный сигнал в таблицу",
+        AddByNameTooltip => "Добавить сигнал по имени (Item ID / NodeId)",
+        TreeExpandLabel => "Развернуть",
+        TreeCollapseLabel => "Свернуть",
 
         // ---- Servers area (left panel) ----
         AddServer => "Добавить сервер",
@@ -1426,6 +1470,14 @@ fn en(key: Tr) -> &'static str {
         ClearJournalLabel => "Clear journal",
         SaveJournalLabel => "Save journal...",
         ScriptsNotImpl => "Scripts: interpreter not implemented",
+        ThemeTitle => "Colour theme",
+        ThemeSystem => "Follow system",
+        ThemeLight => "Light",
+        ThemeDark => "Dark",
+        ThemeHint => "Applied after Save",
+        HintScriptTabNotImpl => {
+            "Script — not implemented: there is no interpreter yet, the text can only be edited and saved"
+        }
         EntriesCount => "entries: {0}",
 
         // ---- Navigation ----
@@ -1438,7 +1490,7 @@ fn en(key: Tr) -> &'static str {
         BrowseProto => "Browse: {0}",
         UpdatingTree => "Updating tree...",
         LoadingTree => "Loading tree...",
-        TreeNotLoaded => "Tree not loaded — press \"Refresh branch\".",
+        TreeNotLoaded => "Tree not loaded.",
         NoConnection => "No connection.",
         ResumeAttempts => "Resume attempts",
         StopAttempts => "Stop attempts",
@@ -1455,6 +1507,11 @@ fn en(key: Tr) -> &'static str {
         TableEmptyHelp => "Connect to a server, expand a branch and add signals.",
         TableHint => "Hint: double-click a signal in the tree or right-click → Add.",
         TableEmptyInner => "No signals — add from the tree, via right-click or drag them here",
+        TableValueExpand => "Expand value",
+        TableValueCollapse => "Collapse value",
+        TableEmptyKeys => "Ctrl+N — connect to a server · Tab / F6 — tree and table",
+        TableEmptyDragHint => "Drag tags from the tree or press Enter on a node",
+        TableEmptyConnect => "Connect (Ctrl+N)",
         EscHint => "Press Esc to clear the selection. Right-click a row for the menu.",
         PkmMoveColumn => "Right-click to move the column",
         MoveLeft => "Left",
@@ -1798,6 +1855,11 @@ fn en(key: Tr) -> &'static str {
         RemoveFromListConfirmTitle => "Remove session",
         RemoveFromListConfirmText => "Remove session \"{0}\" and all its signals from the list?",
         EmptyTabsHint => "Double-click a server in the connect dialog to open a tab",
+        RefreshF5Button => "Refresh (F5)",
+        AddNodeTooltip => "Add the selected signal to the table",
+        AddByNameTooltip => "Add a signal by name (item id / NodeId)",
+        TreeExpandLabel => "Expand",
+        TreeCollapseLabel => "Collapse",
 
         // ---- Servers area (left panel) ----
         AddServer => "Add server",
@@ -1991,6 +2053,12 @@ fn zh(key: Tr) -> &'static str {
         ClearJournalLabel => "清除日志",
         SaveJournalLabel => "保存日志...",
         ScriptsNotImpl => "脚本: 解释器未实现",
+        ThemeTitle => "外观主题",
+        ThemeSystem => "跟随系统",
+        ThemeLight => "浅色",
+        ThemeDark => "深色",
+        ThemeHint => "保存后生效",
+        HintScriptTabNotImpl => "脚本 — 未实现: 暂无解释器，只能编辑和保存文本",
         EntriesCount => "条目: {0}",
 
         // ---- Navigation ----
@@ -2003,7 +2071,7 @@ fn zh(key: Tr) -> &'static str {
         BrowseProto => "浏览: {0}",
         UpdatingTree => "正在更新树...",
         LoadingTree => "正在加载树...",
-        TreeNotLoaded => "树未加载 — 请按 \"刷新分支\"。",
+        TreeNotLoaded => "树未加载。",
         NoConnection => "无连接。",
         ResumeAttempts => "恢复尝试",
         StopAttempts => "停止尝试",
@@ -2020,6 +2088,11 @@ fn zh(key: Tr) -> &'static str {
         TableEmptyHelp => "连接到服务器，展开分支并添加信号。",
         TableHint => "提示: 在树中双击信号或右键单击 → 添加。",
         TableEmptyInner => "无信号 — 请从树中添加、右键添加或拖放到此处",
+        TableValueExpand => "展开值",
+        TableValueCollapse => "折叠值",
+        TableEmptyKeys => "Ctrl+N — 连接服务器 · Tab / F6 — 切换树和表格",
+        TableEmptyDragHint => "从树中拖动标签，或在节点上按 Enter",
+        TableEmptyConnect => "连接 (Ctrl+N)",
         EscHint => "按 Esc 清除选择。右键单击行可打开菜单。",
         PkmMoveColumn => "右键单击以移动列",
         MoveLeft => "左移",
@@ -2345,6 +2418,11 @@ fn zh(key: Tr) -> &'static str {
         RemoveFromListConfirmTitle => "删除会话",
         RemoveFromListConfirmText => "从列表中删除会话 \"{0}\" 及其所有信号？",
         EmptyTabsHint => "在连接对话框中双击服务器可打开选项卡",
+        RefreshF5Button => "刷新 (F5)",
+        AddNodeTooltip => "将所选信号添加到表格",
+        AddByNameTooltip => "按名称添加信号 (Item ID / NodeId)",
+        TreeExpandLabel => "展开",
+        TreeCollapseLabel => "折叠",
 
         // ---- Servers area (left panel) ----
         AddServer => "添加服务器",

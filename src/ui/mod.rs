@@ -10,6 +10,7 @@ mod panels;
 mod servers;
 mod shortcuts;
 mod status;
+mod style;
 mod table;
 mod test_hooks;
 mod tree;
@@ -20,6 +21,7 @@ pub use csv::{
     start_csv_import,
 };
 pub use servers::top_tab_panel_enabled;
+pub use style::apply_style;
 
 #[cfg(test)]
 pub use test_hooks::{
@@ -29,6 +31,8 @@ pub use test_hooks::{
 };
 
 pub fn draw(app: &mut crate::app::App, ui: &mut egui::Ui) {
+    style::sync_style(ui.ctx(), app.settings.options.theme);
+    colors::set_dark(ui.visuals().dark_mode);
     shortcuts::keyboard_prepass(app, ui);
     menu::menu(app, ui);
     status::status_bar(app, ui);

@@ -50,6 +50,7 @@ impl App {
                 description: String::new(),
                 pending: true,
                 poll_only: false,
+                changed_at: None,
             });
             specs.push(ItemSpec { key, item_id });
             added += 1;

@@ -189,6 +189,9 @@ pub struct Row {
     /// P1 (UA): no subscription takes this item (server limits), so it is
     /// polled even while the session's push subscription is active.
     pub poll_only: bool,
+    /// UI4: when the shown value last CHANGED (not merely arrived again); the
+    /// table lights the value cell up for a moment after it.
+    pub changed_at: Option<Instant>,
 }
 
 impl Row {

@@ -2,7 +2,9 @@ use super::actions::{TreeAction, TreeDragPayload};
 use super::colors::yellow;
 use super::files::save_tree_csv;
 use super::paint::{
-    paint_pause_icon, paint_play_icon, paint_reconnect_icon, painter_icon_button, painter_x_button,
+    paint_children_icon, paint_expander, paint_name_icon, paint_pause_icon, paint_play_icon,
+    paint_plus_icon, paint_reconnect_icon, paint_refresh_icon, painter_icon_button,
+    painter_icon_button_tip, painter_x_button,
 };
 use super::servers::{request_remove_session, security_suffix, server_state_color, state_text};
 use super::test_hooks::record_server_row_rect;
@@ -16,7 +18,7 @@ use crate::app::{App, ReconnectState, SessionState, TreeItem};
 use crate::bff::model::{NodeKind, Protocol, SessionId};
 use crate::constants::{
     DOT_LEAF, DOT_SERVER_STATE, ICON_SERVER_REMOVE, ICON_SERVER_ROW, ICON_TOOLBAR,
-    LEFT_PANEL_DEFAULT_WIDTH, RECONNECT_MAX_ATTEMPTS, TABLE_ROW_HEIGHT, TRUNCATE_SERVER_ROW,
+    LEFT_PANEL_DEFAULT_WIDTH, RECONNECT_MAX_ATTEMPTS, TRUNCATE_SERVER_ROW,
 };
 use crate::i18n::{Lang, Tr, fmt, tr};
 
@@ -145,82 +147,106 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                         reconnect_state.attempt()
                     };
 
+                    // UI6: the selected server is a soft fill with an accent bar on
+                    // the left (painted under the row), not a solid button.
+                    let row_width = ui.available_width();
+                    let row_rect = egui::Rect::from_min_size(
+                        ui.cursor().min,
+                        egui::vec2(row_width, SERVER_ROW_HEIGHT),
+                    );
+                    paint_row_band(ui, row_rect, selected, true);
                     let awaitable = ui
-                        .horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 4.0;
-                            // State dot (~18px). It is painted (no font glyph);
-                            // a "●" accessible name lets UI tests find it and
-                            // keeps screen-reader symmetry with the tab strip.
-                            let dot = server_state_color(*state);
-                            let (dot_rect, dot_resp) = ui.allocate_exact_size(
-                                egui::vec2(DOT_SERVER_STATE, DOT_SERVER_STATE),
-                                egui::Sense::hover(),
-                            );
-                            dot_resp.widget_info(|| {
-                                egui::WidgetInfo::labeled(egui::Role::Label, true, "●")
-                            });
-                            ui.painter().circle_filled(dot_rect.center(), 4.0, dot);
+                        .allocate_ui_with_layout(
+                            egui::vec2(row_width, SERVER_ROW_HEIGHT),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.spacing_mut().item_spacing.x = 4.0;
+                                ui.add_space(SELECTION_BAR_WIDTH + 3.0);
+                                // State dot (~18px). It is painted (no font glyph);
+                                // a "●" accessible name lets UI tests find it and
+                                // keeps screen-reader symmetry with the tab strip.
+                                let dot = server_state_color(*state);
+                                let (dot_rect, dot_resp) = ui.allocate_exact_size(
+                                    egui::vec2(DOT_SERVER_STATE, DOT_SERVER_STATE),
+                                    egui::Sense::hover(),
+                                );
+                                dot_resp.widget_info(|| {
+                                    egui::WidgetInfo::labeled(egui::Role::Label, true, "●")
+                                });
+                                ui.painter().circle_filled(dot_rect.center(), 4.0, dot);
 
-                            // Reconnect / stop / resume controls that never wrap the name.
-                            if reconnecting || can_auto {
-                                let count =
-                                    fmt(lang, Tr::ReconnectCount, &[&attempts.max(1), &cap]);
-                                if ui
-                                    .small_button(count)
-                                    .on_hover_text(tr(lang, Tr::ReconnectTooltip))
-                                    .clicked()
-                                {
-                                    reconnect = Some(*id);
+                                // Reconnect / stop / resume controls that never wrap the name.
+                                if reconnecting || can_auto {
+                                    let count =
+                                        fmt(lang, Tr::ReconnectCount, &[&attempts.max(1), &cap]);
+                                    if ui
+                                        .small_button(count)
+                                        .on_hover_text(tr(lang, Tr::ReconnectTooltip))
+                                        .clicked()
+                                    {
+                                        reconnect = Some(*id);
+                                    }
                                 }
-                            }
-                            if loop_active {
-                                if painter_icon_button(
+                                if loop_active {
+                                    if painter_icon_button(
+                                        ui,
+                                        ICON_SERVER_ROW,
+                                        true,
+                                        tr(lang, Tr::StopAttempts),
+                                        paint_pause_icon,
+                                    ) {
+                                        to_stop = Some(*id);
+                                    }
+                                } else if can_auto && (stopped || exhausted) {
+                                    if painter_icon_button(
+                                        ui,
+                                        ICON_SERVER_ROW,
+                                        true,
+                                        tr(lang, Tr::ResumeAttempts),
+                                        paint_play_icon,
+                                    ) {
+                                        to_resume = Some(*id);
+                                    }
+                                }
+
+                                // Name: flexible single-line, left-aligned, truncated, with
+                                // tooltip. Capped so a wide label cannot feed back into the
+                                // left panel's auto-size (which would widen the panel
+                                // by ~28px every frame); truncation clips it anyway. The
+                                // «×» at the row end keeps its own room.
+                                let name_width = (ui.available_width()
+                                    - ICON_SERVER_REMOVE
+                                    - ui.spacing().item_spacing.x)
+                                    .clamp(84.0, 300.0);
+                                let short = truncate_text(name, TRUNCATE_SERVER_ROW);
+                                let mut text = egui::RichText::new(short.as_str());
+                                if selected {
+                                    text = text.color(ui.visuals().strong_text_color());
+                                }
+                                let response = flat_row(
                                     ui,
-                                    ICON_SERVER_ROW,
-                                    true,
-                                    tr(lang, Tr::StopAttempts),
-                                    paint_pause_icon,
-                                ) {
-                                    to_stop = Some(*id);
+                                    egui::vec2(name_width, SERVER_ROW_HEIGHT),
+                                    egui::Sense::click(),
+                                    selected,
+                                    text,
+                                    &short,
+                                    RowBand::None,
+                                );
+                                response.clone().on_hover_text(&full_tooltip);
+                                if response.clicked() || response.double_clicked() {
+                                    activate = Some(*id);
                                 }
-                            } else if can_auto && (stopped || exhausted) {
-                                if painter_icon_button(
+
+                                // Destructive × at the row end (~24px).
+                                if painter_x_button(
                                     ui,
-                                    ICON_SERVER_ROW,
-                                    true,
-                                    tr(lang, Tr::ResumeAttempts),
-                                    paint_play_icon,
+                                    ICON_SERVER_REMOVE,
+                                    tr(lang, Tr::RemoveServerTooltip),
                                 ) {
-                                    to_resume = Some(*id);
+                                    to_remove = Some(*id);
                                 }
-                            }
-
-                            // Name: flexible single-line, truncated, with tooltip.
-                            // Capped so a wide label cannot feed back into the
-                            // left panel's auto-size (which would widen the panel
-                            // by ~28px every frame); truncation clips it anyway.
-                            let name_width = ui.available_width().clamp(84.0, 300.0);
-                            let short = truncate_text(name, TRUNCATE_SERVER_ROW);
-                            let response = ui.add_sized(
-                                egui::vec2(name_width, TABLE_ROW_HEIGHT),
-                                egui::Button::selectable(selected, short).truncate(),
-                            );
-                            response.clone().on_hover_text(&full_tooltip);
-                            if response.double_clicked() {
-                                activate = Some(*id);
-                            } else if response.clicked() {
-                                activate = Some(*id);
-                            }
-
-                            // Destructive × at the row end (~24px).
-                            if painter_x_button(
-                                ui,
-                                ICON_SERVER_REMOVE,
-                                tr(lang, Tr::RemoveServerTooltip),
-                            ) {
-                                to_remove = Some(*id);
-                            }
-                        })
+                            },
+                        )
                         .response;
                     // Assert single-line row: keep the height tight for the
                     // test hook (function is a no-op except under #[cfg(test)]).
@@ -249,7 +275,13 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
 
             ui.separator();
             let Some(session_id) = app.active_session else {
-                ui.label(tr(lang, Tr::ConnectPrompt));
+                // UI10: no session at all - only the hint here: «Подключиться»
+                // is the button above and the one in the empty table (one action,
+                // not two identical buttons side by side).
+                ui.vertical_centered(|ui| {
+                    ui.add_space(16.0);
+                    ui.label(egui::RichText::new(tr(lang, Tr::ConnectPrompt)).weak());
+                });
                 return;
             };
             let Some(view) = app.sessions.iter().find(|s| s.id == session_id) else {
@@ -259,48 +291,64 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
             let root_loading = view.root_loading;
             let connected = view.state == SessionState::Connected;
 
+            // UI6: the four tree actions are one compact row of painted icons;
+            // the accessible name of each is the former button text.
             let mut vars_only_changed: Option<bool> = None;
-            ui.horizontal_wrapped(|ui| {
-                if ui
-                    .add_enabled(
-                        connected && !root_loading,
-                        egui::Button::new(tr(lang, Tr::Refresh)),
-                    )
-                    .clicked()
-                {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                if painter_icon_button_tip(
+                    ui,
+                    ICON_TOOLBAR,
+                    connected && !root_loading,
+                    tr(lang, Tr::Refresh),
+                    tr(lang, Tr::HintRefreshF5),
+                    paint_refresh_icon,
+                ) {
                     refresh_selected(app);
                 }
-                if ui
-                    .add_enabled(connected, egui::Button::new(tr(lang, Tr::Add)))
-                    .clicked()
-                {
+                if painter_icon_button_tip(
+                    ui,
+                    ICON_TOOLBAR,
+                    connected,
+                    tr(lang, Tr::Add),
+                    tr(lang, Tr::AddNodeTooltip),
+                    paint_plus_icon,
+                ) {
                     app.add_selected_tree();
                 }
-                if ui
-                    .add_enabled(connected, egui::Button::new(tr(lang, Tr::AddChildren)))
-                    .clicked()
-                {
+                if painter_icon_button_tip(
+                    ui,
+                    ICON_TOOLBAR,
+                    connected,
+                    tr(lang, Tr::AddChildren),
+                    tr(lang, Tr::HintAddChildren),
+                    paint_children_icon,
+                ) {
                     app.add_selected_children();
                 }
-                if ui
-                    .add_enabled(connected, egui::Button::new(tr(lang, Tr::AddByNameShort)))
-                    .clicked()
-                {
+                if painter_icon_button_tip(
+                    ui,
+                    ICON_TOOLBAR,
+                    connected,
+                    tr(lang, Tr::AddByNameShort),
+                    tr(lang, Tr::AddByNameTooltip),
+                    paint_name_icon,
+                ) {
                     open_add_signal(app);
                 }
-                if protocol == Protocol::OpcUa {
-                    let mut only = app
-                        .sessions
-                        .iter()
-                        .find(|s| s.id == session_id)
-                        .is_some_and(|s| s.ua_browse_vars_only);
-                    if ui.checkbox(&mut only, tr(lang, Tr::OnlyVars)).changed() {
-                        // U5: the filter applies to what is loaded, so the
-                        // tree is re-read.
-                        vars_only_changed = Some(only);
-                    }
-                }
             });
+            if protocol == Protocol::OpcUa {
+                let mut only = app
+                    .sessions
+                    .iter()
+                    .find(|s| s.id == session_id)
+                    .is_some_and(|s| s.ua_browse_vars_only);
+                if ui.checkbox(&mut only, tr(lang, Tr::OnlyVars)).changed() {
+                    // U5: the filter applies to what is loaded, so the
+                    // tree is re-read.
+                    vars_only_changed = Some(only);
+                }
+            }
             if let Some(only) = vars_only_changed {
                 app.set_ua_browse_vars_only(session_id, only);
             }
@@ -330,6 +378,7 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
             ui.separator();
 
             let mut actions = Vec::new();
+            let mut refresh_root = false;
             {
                 let Some(view) = app.sessions.iter().find(|s| s.id == session_id) else {
                     return;
@@ -341,7 +390,23 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                             ui.label(tr(lang, Tr::LoadingTree));
                         });
                     } else if connected {
-                        ui.label(tr(lang, Tr::TreeNotLoaded));
+                        // UI10: the hint and the same action as F5. An empty tree
+                        // has no node to carry the tree keyboard focus, so the
+                        // tree's own F5 handler never runs here; the key is
+                        // taken here instead, unless the table, a text field or a
+                        // dialog owns the keyboard (the table has its own F5).
+                        let f5 = ui.input(|i| i.key_pressed(egui::Key::F5))
+                            && app.table_focus.is_none()
+                            && !app.dialogs.any_open()
+                            && !ui.ctx().text_edit_focused();
+                        if empty_state(
+                            ui,
+                            tr(lang, Tr::TreeNotLoaded),
+                            tr(lang, Tr::RefreshF5Button),
+                        ) || f5
+                        {
+                            refresh_root = true;
+                        }
                     } else {
                         ui.label(tr(lang, Tr::NoConnection));
                     }
@@ -384,6 +449,9 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                     }
                 }
             }
+            if refresh_root {
+                refresh_selected(app);
+            }
             for action in actions {
                 match action {
                     TreeAction::Toggle(id) => toggle_tree_item(app, session_id, id),
@@ -410,6 +478,86 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
         });
 }
 
+/// UI10: a quiet empty state - the hint, then one button with the action (and
+/// its shortcut). Returns true when the button was clicked.
+fn empty_state(ui: &mut egui::Ui, hint: &str, action: &str) -> bool {
+    let mut clicked = false;
+    ui.vertical_centered(|ui| {
+        ui.add_space(16.0);
+        ui.label(egui::RichText::new(hint).weak());
+        ui.add_space(8.0);
+        clicked = ui.button(action).clicked();
+    });
+    clicked
+}
+
+/// Who paints the selection / hover band of a `flat_row`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RowBand {
+    /// The caller painted it (the servers list paints one band for the whole
+    /// row, under the dot and the buttons too).
+    None,
+    /// Soft fill under the row (the tag tree).
+    Fill,
+}
+
+/// The soft band of a list row: a fill when selected (plus an accent bar on
+/// the left edge when `bar`), a fainter one under the pointer.
+fn paint_row_band(ui: &egui::Ui, rect: egui::Rect, selected: bool, bar: bool) {
+    let visuals = ui.visuals();
+    let fill = if selected {
+        visuals.selection.bg_fill.gamma_multiply(0.45)
+    } else if ui.rect_contains_pointer(rect) {
+        visuals.widgets.hovered.weak_bg_fill
+    } else {
+        return;
+    };
+    ui.painter().rect_filled(rect, 3.0, fill);
+    if selected && bar {
+        let stripe =
+            egui::Rect::from_min_size(rect.min, egui::vec2(SELECTION_BAR_WIDTH, rect.height()));
+        ui.painter()
+            .rect_filled(stripe, 1.5, visuals.selection.stroke.color);
+    }
+}
+
+/// A single-line, left-aligned list row: the text truncated to the row, a band
+/// under it when `band` says so. `label` is the accessible name. Used by the
+/// tag tree and the servers list instead of a centred selectable button.
+fn flat_row(
+    ui: &mut egui::Ui,
+    size: egui::Vec2,
+    sense: egui::Sense,
+    selected: bool,
+    text: egui::RichText,
+    label: &str,
+    band: RowBand,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(size, sense);
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
+    if ui.is_rect_visible(rect) {
+        if band == RowBand::Fill {
+            paint_row_band(ui, rect, selected, false);
+        }
+        let inset = 4.0;
+        let galley = egui::WidgetText::from(text).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            (rect.width() - inset - 4.0).max(1.0),
+            egui::TextStyle::Button,
+        );
+        let pos = egui::pos2(rect.min.x + inset, rect.center().y - galley.size().y / 2.0);
+        ui.painter().galley(pos, galley, ui.visuals().text_color());
+    }
+    response
+}
+
+/// Width of the accent bar on the left of a selected list row.
+const SELECTION_BAR_WIDTH: f32 = 3.0;
+
+/// Height of one server row in the left panel (a single line, <= 28 px).
+const SERVER_ROW_HEIGHT: f32 = 26.0;
+
 /// Height of one tree row without the spacing between rows (virtualized list).
 const TREE_ROW_HEIGHT: f32 = 20.0;
 
@@ -424,15 +572,30 @@ pub(super) fn draw_tree_item(
     ui.horizontal(|ui| {
         ui.add_space(item.depth as f32 * 14.0);
         if item.node.has_children {
-            let arrow = if item.expanded { "v" } else { ">" };
-            if ui
-                .add_sized([DOT_LEAF, DOT_LEAF], egui::Button::new(arrow).frame(false))
-                .clicked()
-            {
+            // UI1: a painted triangle that turns smoothly (no «>» / «v» glyph).
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(DOT_LEAF, DOT_LEAF), egui::Sense::click());
+            let label = tr(
+                lang,
+                if item.expanded {
+                    Tr::TreeCollapseLabel
+                } else {
+                    Tr::TreeExpandLabel
+                },
+            );
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+            let openness = ui.ctx().animate_bool(response.id, item.expanded);
+            let color = if response.hovered() {
+                ui.visuals().strong_text_color()
+            } else {
+                ui.visuals().weak_text_color()
+            };
+            paint_expander(ui.painter(), rect, openness, color);
+            if response.clicked() {
                 actions.push(TreeAction::Toggle(item.id));
             }
         } else {
-            ui.add_space(18.0);
+            ui.add_space(DOT_LEAF);
         }
 
         let is_selected = selected == Some((session, item.id));
@@ -442,16 +605,20 @@ pub(super) fn draw_tree_item(
             }
             NodeKind::Item => egui::RichText::new(&item.node.name),
         };
-        // A full-width row button is both clickable/queryable and a reliable
-        // drag source: the whole row (not just the label glyphs) senses
+        // A full-width row is both clickable/queryable and a reliable drag
+        // source: the whole row (not just the label glyphs) senses
         // click_and_drag, so a mouse grab anywhere on the row starts a drag.
         // This is what the headless RawInput DnD proof drives.
-        let response = ui
-            .add_sized(
-                [ui.available_width(), 20.0],
-                egui::Button::selectable(is_selected, text).sense(egui::Sense::click_and_drag()),
-            )
-            .on_hover_text(&item.node.node_id);
+        let response = flat_row(
+            ui,
+            egui::vec2(ui.available_width(), TREE_ROW_HEIGHT),
+            egui::Sense::click_and_drag(),
+            is_selected,
+            text,
+            &item.node.name,
+            RowBand::Fill,
+        )
+        .on_hover_text(&item.node.node_id);
         if item.loading {
             ui.spinner();
         }

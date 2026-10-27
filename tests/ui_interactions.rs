@@ -2338,7 +2338,7 @@ fn v3_structured_value_expands_into_field_lines() {
     );
     assert!(h.query_by_label("Speed").is_none(), "collapsed at first");
 
-    let at = h.get_by_label(">").rect().center();
+    let at = h.get_by_label("Развернуть значение").rect().center();
     pointer_click(&h, at, PointerButton::Primary);
     h.run_steps(3);
     assert!(h.state().expanded_values.contains(&(key, vec![])));
@@ -2352,7 +2352,7 @@ fn v3_structured_value_expands_into_field_lines() {
 
     // Expand the nested structure (the first closed expander is Motor's).
     let at = h
-        .get_all_by_label(">")
+        .get_all_by_label("Развернуть значение")
         .next()
         .expect("nested expander")
         .rect()
@@ -4088,8 +4088,10 @@ fn tab_close_button_only_hides_view() {
     let mut h = harness(app);
 
     // The tab × is inside the central panel (x >= 400), unlike the servers ×.
+    // UI3: the tab's close button is painted; its accessible name is the
+    // tooltip. The active tab shows it without hovering.
     let tab_close = h
-        .query_all_by_label("×")
+        .query_all_by_label("Скрыть вкладку (контейнер сохраняется)")
         .find(|n| n.rect().center().x >= 400.0)
         .expect("tab ×");
     tab_close.click();

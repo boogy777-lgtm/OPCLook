@@ -1,3 +1,34 @@
+/// UI1: the expand / collapse triangle shared by the tag tree and the signal
+/// table, drawn with the painter (no font glyph). `openness` runs from 0.0
+/// (closed, pointing right) to 1.0 (open, pointing down); pass the value of
+/// `ctx.animate_bool(id, expanded)` for a smooth turn.
+#[allow(dead_code)]
+pub(super) fn paint_expander(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    openness: f32,
+    color: egui::Color32,
+) {
+    let openness = openness.clamp(0.0, 1.0);
+    let center = rect.center();
+    let r = rect.width().min(rect.height()) * 0.3;
+    // Right-pointing triangle, rotated by 90° * openness around the center.
+    let angle = openness * std::f32::consts::FRAC_PI_2;
+    let rot = egui::emath::Rot2::from_angle(angle);
+    let points = [
+        egui::vec2(-r * 0.6, -r),
+        egui::vec2(r, 0.0),
+        egui::vec2(-r * 0.6, r),
+    ]
+    .map(|v| center + rot * v)
+    .to_vec();
+    painter.add(egui::Shape::convex_polygon(
+        points,
+        color,
+        egui::Stroke::NONE,
+    ));
+}
+
 /// Small clickable square painted with `paint`. No rendered text, so no tofu
 /// glyphs; the `name` string becomes the accessible node label and the tooltip.
 /// Returns true when clicked (only while `enabled`).
@@ -153,4 +184,155 @@ pub(super) fn paint_play_icon(p: &egui::Painter, rect: egui::Rect, color: egui::
         color,
         egui::Stroke::NONE,
     ));
+}
+
+/// UI3: padlock (a rounded body with a shackle above it) for an explicitly
+/// secured UA endpoint. Painted, so it never turns into a tofu box on a
+/// machine without an emoji font.
+pub(super) fn paint_lock_icon(p: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let c = rect.center();
+    let s = rect.width().min(rect.height());
+    let body_w = s * 0.78;
+    let body_h = s * 0.50;
+    let body = egui::Rect::from_min_size(
+        egui::pos2(c.x - body_w / 2.0, c.y + s * 0.5 - body_h),
+        egui::vec2(body_w, body_h),
+    );
+    p.rect_filled(body, s * 0.1, color);
+    // Shackle: an upside-down U above the body.
+    let r = body_w * 0.30;
+    let top = body.top();
+    let pts = arc_points(
+        egui::pos2(c.x, top - r * 0.2),
+        r,
+        std::f32::consts::PI,
+        std::f32::consts::TAU,
+        12,
+    );
+    let stroke = egui::Stroke::new((s * 0.13).max(1.2), color);
+    p.add(egui::Shape::line(pts, stroke));
+    p.line_segment(
+        [
+            egui::pos2(c.x - r, top - r * 0.2),
+            egui::pos2(c.x - r, top + 0.5),
+        ],
+        stroke,
+    );
+    p.line_segment(
+        [
+            egui::pos2(c.x + r, top - r * 0.2),
+            egui::pos2(c.x + r, top + 0.5),
+        ],
+        stroke,
+    );
+}
+
+/// Like `painter_icon_button`, but the accessible label (what tests and screen
+/// readers see) and the hover tooltip are separate strings: the label is the
+/// plain action name, the tooltip may add a hint such as the shortcut.
+pub(super) fn painter_icon_button_tip(
+    ui: &mut egui::Ui,
+    size: f32,
+    enabled: bool,
+    label: &str,
+    tooltip: &str,
+    paint: impl FnOnce(&egui::Painter, egui::Rect, egui::Color32),
+) -> bool {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+    let response = if enabled {
+        response.on_hover_text(tooltip)
+    } else {
+        response.on_disabled_hover_text(tooltip)
+    };
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
+    if enabled && response.hovered() {
+        ui.painter()
+            .rect_filled(rect, 4.0, ui.visuals().widgets.hovered.bg_fill);
+    }
+    let color = if !enabled {
+        ui.visuals().weak_text_color()
+    } else if response.hovered() {
+        ui.visuals().strong_text_color()
+    } else {
+        ui.visuals().text_color()
+    };
+    paint(ui.painter(), rect.shrink(4.0), color);
+    enabled && response.clicked()
+}
+
+/// UI6: «refresh» — a nearly closed circular arrow with a head at its end.
+pub(super) fn paint_refresh_icon(p: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let c = rect.center();
+    let r = rect.width().min(rect.height()) * 0.38;
+    let stroke = egui::Stroke::new(1.6, color);
+    let start = -1.2;
+    let end = std::f32::consts::TAU - 1.9;
+    p.add(egui::Shape::line(arc_points(c, r, start, end, 22), stroke));
+    // Arrowhead at the end of the arc, along the clockwise tangent.
+    let tip = egui::pos2(c.x + r * end.cos(), c.y + r * end.sin());
+    let dir = egui::vec2(-end.sin(), end.cos());
+    let perp = egui::vec2(-dir.y, dir.x) * 3.0;
+    let base = tip - dir * 3.4;
+    p.add(egui::Shape::convex_polygon(
+        vec![tip + dir * 1.6, base + perp, base - perp],
+        color,
+        egui::Stroke::NONE,
+    ));
+}
+
+/// UI6: «add» — a plus sign.
+pub(super) fn paint_plus_icon(p: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let c = rect.center();
+    let h = rect.width().min(rect.height()) * 0.36;
+    let stroke = egui::Stroke::new(1.8, color);
+    p.line_segment([c - egui::vec2(h, 0.0), c + egui::vec2(h, 0.0)], stroke);
+    p.line_segment([c - egui::vec2(0.0, h), c + egui::vec2(0.0, h)], stroke);
+}
+
+/// UI6: «add children» — a parent node with two child nodes hanging off it.
+pub(super) fn paint_children_icon(p: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let s = rect.width().min(rect.height());
+    let x = rect.min.x + s * 0.18;
+    let top = rect.min.y + s * 0.12;
+    let stroke = egui::Stroke::new(1.4, color);
+    p.circle_filled(egui::pos2(x, top + s * 0.06), s * 0.11, color);
+    let y1 = rect.min.y + s * 0.50;
+    let y2 = rect.min.y + s * 0.86;
+    let spine_x = x;
+    p.line_segment(
+        [egui::pos2(spine_x, top + s * 0.16), egui::pos2(spine_x, y2)],
+        stroke,
+    );
+    for y in [y1, y2] {
+        p.line_segment(
+            [egui::pos2(spine_x, y), egui::pos2(rect.min.x + s * 0.50, y)],
+            stroke,
+        );
+        p.rect_filled(
+            egui::Rect::from_min_size(
+                egui::pos2(rect.min.x + s * 0.56, y - s * 0.09),
+                egui::vec2(s * 0.40, s * 0.18),
+            ),
+            1.0,
+            color,
+        );
+    }
+}
+
+/// UI6: «add by name» — a text cursor (I-beam).
+pub(super) fn paint_name_icon(p: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let c = rect.center();
+    let s = rect.width().min(rect.height());
+    let h = s * 0.40;
+    let w = s * 0.20;
+    let stroke = egui::Stroke::new(1.6, color);
+    p.line_segment([c - egui::vec2(0.0, h), c + egui::vec2(0.0, h)], stroke);
+    p.line_segment(
+        [egui::pos2(c.x - w, c.y - h), egui::pos2(c.x + w, c.y - h)],
+        stroke,
+    );
+    p.line_segment(
+        [egui::pos2(c.x - w, c.y + h), egui::pos2(c.x + w, c.y + h)],
+        stroke,
+    );
 }

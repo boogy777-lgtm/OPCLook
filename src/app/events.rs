@@ -457,6 +457,12 @@ impl App {
                 }
                 for (key, value) in values {
                     if let Some(row) = self.row_position(key).and_then(|p| self.rows.get_mut(p)) {
+                        // UI4: remember when the value really changed. The
+                        // first value of a row (still pending / waiting) is
+                        // not a change.
+                        if row.is_value_change(&value.value) {
+                            row.changed_at = Some(Instant::now());
+                        }
                         row.value = value.value;
                         row.quality = value.quality;
                         if let Some(reason) = &value.reason {
