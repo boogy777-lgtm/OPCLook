@@ -11,6 +11,11 @@ impl App {
     /// same container iff they share the protocol and the address (ProgID for
     /// DA, endpoint URL for UA); the DA `host` is just a computer-name filter,
     /// not part of the server's identity.
+    ///
+    /// V2: a UA endpoint is the URL together with its security policy and
+    /// mode (as the server tree lists them), so two endpoints of one server
+    /// are two sessions, each with its own tags, instead of one session that
+    /// reconnects with the other security.
     fn dedup_key(endpoint: &EndpointSpec) -> (Protocol, String) {
         match endpoint.protocol {
             Protocol::OpcDa => (
@@ -21,7 +26,15 @@ impl App {
                     endpoint.address.trim().to_ascii_lowercase()
                 ),
             ),
-            Protocol::OpcUa => (endpoint.protocol, endpoint.address.trim().to_string()),
+            Protocol::OpcUa => (
+                endpoint.protocol,
+                format!(
+                    "{}|{:?}|{:?}",
+                    endpoint.address.trim(),
+                    endpoint.ua_security_policy.unwrap_or_default(),
+                    endpoint.ua_security_mode.unwrap_or_default()
+                ),
+            ),
         }
     }
 

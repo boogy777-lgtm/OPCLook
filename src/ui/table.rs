@@ -25,6 +25,9 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
             // a window-wide top panel. It belongs to the tags area, so it stays
             // reachable even when the left nav/tree is collapsed.
             session_tab_strip(app, ui);
+            // A tab click above may have switched the session: drop the old
+            // tab's selection before the table and the shortcuts use it (V1).
+            app.sync_table_view();
             ui.separator();
             // Opaque drop-zone frame: the tags area owns the full central panel
             // background (no transparent defaults leaking a black band between
@@ -58,13 +61,15 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                     // shrink-wraps to its content (which would shift the header each
                     // time rows are added/dropped).
 
+                    // V1: the table lists the active session's tags only.
+                    let visible = app.visible_row_positions();
                     let selected_count = app.selected_rows.len();
                     let count_strip = ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new(fmt(
                                 lang,
                                 Tr::SignalsCount,
-                                &[&app.rows.len().to_string(), &selected_count.to_string()],
+                                &[&visible.len().to_string(), &selected_count.to_string()],
                             ))
                             .weak(),
                         );
@@ -81,7 +86,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
 
                     let text_height = TABLE_ROW_HEIGHT;
                     let table_ctx = ui.ctx().clone();
-                    let empty = app.rows.is_empty();
+                    let empty = visible.is_empty();
                     // The egui_extras table only scrolls vertically and its internal
                     // ScrollArea shrink-wraps to content width, which would let the table
                     // overflow and/or shift the header on every row change. Wrapping it in
@@ -230,9 +235,13 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                         });
                                         return;
                                     }
-                                    body.rows(text_height, app.rows.len(), |mut row| {
+                                    body.rows(text_height, visible.len(), |mut row| {
+                                        // `index` is the visible position (selection and
+                                        // keyboard work on it); `position` is in `rows`.
                                         let index = row.index();
-                                        let Some(signal) = app.rows.get(index) else {
+                                        let Some(signal) =
+                                            visible.get(index).and_then(|p| app.rows.get(*p))
+                                        else {
                                             return;
                                         };
                                         let key = signal.key;
@@ -488,14 +497,14 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
         });
 }
 pub(super) fn handle_table_keys(app: &mut App, ui: &mut egui::Ui) {
-    if app.rows.is_empty() {
+    let len = app.visible_row_count();
+    if len == 0 {
         app.table_focus = None;
         app.table_anchor = None;
         return;
     }
-    let len = app.rows.len();
     let ctx = ui.ctx();
-    let focus = app.table_focus.unwrap_or(0);
+    let focus = app.table_focus.unwrap_or(0).min(len - 1);
     let shift = ctx.input(|i| i.modifiers.shift);
     let ctrl = ctx.input(|i| i.modifiers.ctrl || i.modifiers.command);
 

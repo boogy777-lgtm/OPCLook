@@ -11,7 +11,7 @@ use crate::net::AdapterSelection;
 
 /// Localized label for a typed security policy. Exhaustive: a new enum variant
 /// cannot be added without a UI label.
-pub(super) fn security_policy_label(lang: Lang, policy: UaSecurityPolicy) -> &'static str {
+pub(in crate::ui) fn security_policy_label(lang: Lang, policy: UaSecurityPolicy) -> &'static str {
     match policy {
         UaSecurityPolicy::Auto => tr(lang, Tr::AutoLabel),
         UaSecurityPolicy::None => tr(lang, Tr::SecPolicyNone),
@@ -24,7 +24,7 @@ pub(super) fn security_policy_label(lang: Lang, policy: UaSecurityPolicy) -> &'s
 }
 
 /// Localized label for a typed security mode. Exhaustive like the policy one.
-pub(super) fn security_mode_label(lang: Lang, mode: UaSecurityMode) -> &'static str {
+pub(in crate::ui) fn security_mode_label(lang: Lang, mode: UaSecurityMode) -> &'static str {
     match mode {
         UaSecurityMode::Auto => tr(lang, Tr::AutoLabel),
         UaSecurityMode::None => tr(lang, Tr::SecModeNone),

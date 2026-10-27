@@ -46,18 +46,18 @@ pub(super) fn status_bar(app: &mut App, ui: &mut egui::Ui) {
                     ui.label(tr(lang, Tr::NoActiveServer));
                 }
                 ui.separator();
-                let hint = if app.table_focus.is_some() {
-                    Some(tr(lang, Tr::RowsHint))
-                } else if app.tree_focus.is_some() {
+                let hint = if app.tree_focused {
                     Some(tr(lang, Tr::TreeHint))
+                } else if app.table_focus.is_some() {
+                    Some(tr(lang, Tr::RowsHint))
                 } else {
-                    None
+                    Some(tr(lang, Tr::KeyboardIdleHint))
                 };
                 let counts = egui::Label::new(fmt(
                     lang,
                     Tr::SignalsCount,
                     &[
-                        &app.rows.len().to_string(),
+                        &app.visible_row_count().to_string(),
                         &app.selected_rows.len().to_string(),
                     ],
                 ));

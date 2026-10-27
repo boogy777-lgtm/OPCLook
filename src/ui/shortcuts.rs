@@ -4,6 +4,60 @@ use crate::app::App;
 use crate::bff::model::{NodeKind, SessionId};
 use crate::i18n::Tr;
 
+/// Window-level keys, handled BEFORE the panels draw (K3) so egui's own Tab
+/// focus walk never runs for them:
+/// - Tab / Shift+Tab / F6: move the keyboard between the tag tree and the
+///   signal table (with neither owning it, the table first, else the tree);
+/// - Ctrl+Tab / Ctrl+Shift+Tab, Ctrl+PgDn / Ctrl+PgUp: next / previous tab;
+/// - Ctrl+N: open the connect dialog.
+///
+/// A focused text field or an open dialog keeps every key.
+pub(super) fn keyboard_prepass(app: &mut App, ui: &mut egui::Ui) {
+    let ctx = ui.ctx().clone();
+    if ctx.text_edit_focused() || app.dialogs.any_open() || app.csv_import.is_some() {
+        return;
+    }
+    let ctrl = egui::Modifiers::COMMAND;
+    let ctrl_shift = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+    let take = |modifiers: egui::Modifiers, key: egui::Key| {
+        ctx.input_mut(|i| i.consume_key(modifiers, key))
+    };
+
+    if take(ctrl, egui::Key::N) {
+        app.open_connect_dialog();
+        return;
+    }
+    if take(ctrl_shift, egui::Key::Tab) || take(ctrl, egui::Key::PageUp) {
+        app.cycle_session(false);
+        return;
+    }
+    if take(ctrl, egui::Key::Tab) || take(ctrl, egui::Key::PageDown) {
+        app.cycle_session(true);
+        return;
+    }
+    let pane_switch = take(egui::Modifiers::NONE, egui::Key::Tab)
+        || take(egui::Modifiers::SHIFT, egui::Key::Tab)
+        || take(egui::Modifiers::NONE, egui::Key::F6)
+        || take(egui::Modifiers::SHIFT, egui::Key::F6);
+    if pane_switch {
+        // egui already read the Tab for its widget focus walk at the start of
+        // the pass; cancel it so no button silently takes the keyboard.
+        ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+        let in_table = app.table_focus.is_some() && !app.tree_focused;
+        if in_table {
+            if !app.focus_tree() {
+                app.focus_table();
+            }
+        } else if app.tree_focused {
+            if !app.focus_table() {
+                app.focus_tree();
+            }
+        } else if !app.focus_table() {
+            app.focus_tree();
+        }
+    }
+}
+
 pub(super) fn handle_shortcuts(app: &mut App, ui: &mut egui::Ui) {
     // A focused text field or a modal dialog takes over the keyboard, so the
     // tag tree must no longer own it. (`text_edit_focused` iff a text edit has
@@ -17,12 +71,20 @@ pub(super) fn handle_shortcuts(app: &mut App, ui: &mut egui::Ui) {
         app.tree_focused = false;
         return;
     }
-    if app.table_focus.is_some() {
-        handle_table_keys(app, ui);
-        return;
+    // While the tree or the table owns the keyboard, no button may hold egui
+    // focus: Enter/Space would press it and arrows would walk the widgets.
+    if app.tree_focused || app.table_focus.is_some() {
+        let ctx = ui.ctx();
+        if let Some(id) = ctx.memory(|m| m.focused()) {
+            ctx.memory_mut(|m| m.surrender_focus(id));
+        }
     }
     if app.tree_focused {
         handle_tree_keys(app, ui);
+        return;
+    }
+    if app.table_focus.is_some() {
+        handle_table_keys(app, ui);
         return;
     }
     // Selection can exist without a focused table row (e.g. right after Ctrl+A,

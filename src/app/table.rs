@@ -173,6 +173,9 @@ impl App {
             Ok(requests) => requests,
             Err(message) => {
                 self.dialogs.write.error = Some(message);
+                // Select the rejected text again so the next keystroke
+                // replaces it (K3).
+                self.dialogs.write.focus_pending = true;
                 return;
             }
         };
@@ -336,8 +339,13 @@ impl App {
         }
     }
 
+    /// Key of the row at `index` in the table's visible list (V1).
     pub fn row_key(&self, index: usize) -> Option<ItemKey> {
-        self.rows.get(index).map(|row| row.key)
+        self.rows
+            .iter()
+            .filter(|row| self.row_shown(row))
+            .nth(index)
+            .map(|row| row.key)
     }
 
     pub fn select_only(&mut self, index: usize) {
@@ -347,6 +355,7 @@ impl App {
         self.table_focus = Some(index);
         self.table_anchor = Some(index);
         self.tree_focus = None;
+        self.tree_focused = false;
         self.selected_rows.clear();
         self.selected_rows.insert(key);
     }
@@ -358,34 +367,56 @@ impl App {
         self.table_focus = Some(index);
         self.table_anchor = Some(index);
         self.tree_focus = None;
+        self.tree_focused = false;
         if !self.selected_rows.remove(&key) {
             self.selected_rows.insert(key);
         }
     }
 
+    /// Select the visible rows from the anchor to `index` (both in the
+    /// visible list), never rows of another tab.
     pub fn select_extend_to(&mut self, index: usize) {
-        if self.rows.is_empty() {
+        let visible = self.visible_row_positions();
+        if visible.is_empty() {
             return;
         }
-        let index = index.min(self.rows.len() - 1);
-        let anchor = self.table_anchor.unwrap_or(index);
+        let index = index.min(visible.len() - 1);
+        let anchor = self.table_anchor.unwrap_or(index).min(visible.len() - 1);
         self.table_focus = Some(index);
         self.tree_focus = None;
+        self.tree_focused = false;
         let (lo, hi) = if anchor <= index {
             (anchor, index)
         } else {
             (index, anchor)
         };
         self.selected_rows.clear();
-        for i in lo..=hi {
-            self.selected_rows.insert(self.rows[i].key);
+        for position in visible.get(lo..=hi).unwrap_or_default() {
+            if let Some(row) = self.rows.get(*position) {
+                self.selected_rows.insert(row.key);
+            }
         }
     }
 
+    /// Select every row the table shows. The table keeps the keyboard (its
+    /// focus stays on a row), so Delete / Enter / Ctrl+C act right away.
     pub fn select_all_rows(&mut self) {
-        self.selected_rows = self.rows.iter().map(|row| row.key).collect();
-        self.table_focus = None;
+        let keys: HashSet<ItemKey> = self
+            .rows
+            .iter()
+            .filter(|row| self.row_shown(row))
+            .map(|row| row.key)
+            .collect();
+        if keys.is_empty() {
+            self.selected_rows.clear();
+            return;
+        }
+        let count = keys.len();
+        self.selected_rows = keys;
+        self.table_focus = Some(self.table_focus.unwrap_or(0).min(count - 1));
         self.table_anchor = None;
+        self.tree_focus = None;
+        self.tree_focused = false;
     }
 
     pub fn clear_selection(&mut self) {

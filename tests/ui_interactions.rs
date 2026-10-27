@@ -1374,6 +1374,43 @@ fn remote_ua_connect_without_adapter_is_blocked_but_loopback_is_allowed() {
     });
 }
 
+/// V2: two endpoints of one server (same URL, other security) are two
+/// sessions with their own tags; reopening an endpoint reuses its session.
+#[test]
+fn v2_endpoints_with_other_security_are_separate_sessions() {
+    with_settings_lock(|| {
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        let url = "opc.tcp://127.0.0.1:4840";
+        let plain = EndpointSpec::ua(url);
+        let mut secure = EndpointSpec::ua(url);
+        secure.ua_security_policy = Some(UaSecurityPolicy::Basic256Sha256);
+        secure.ua_security_mode = Some(UaSecurityMode::SignAndEncrypt);
+
+        assert!(app.open_tab_for_endpoint(plain.clone()));
+        assert!(app.open_tab_for_endpoint(secure.clone()));
+        assert_eq!(app.sessions.len(), 2);
+        let secure_id = app.sessions[1].id;
+        assert_eq!(app.active_session, Some(secure_id));
+
+        assert!(app.open_tab_for_endpoint(plain));
+        assert_eq!(app.sessions.len(), 2, "the plain endpoint is reused");
+        assert_eq!(app.active_session, Some(app.sessions[0].id));
+        assert!(app.open_tab_for_endpoint(secure));
+        assert_eq!(app.sessions.len(), 2);
+        assert_eq!(app.active_session, Some(secure_id));
+
+        // The two tabs are told apart by the security of the explicit one.
+        let mut h = harness(app);
+        h.run_steps(3);
+        assert!(
+            h.query_all_by_label_contains("· Подпись и шифрование")
+                .count()
+                >= 1
+        );
+    });
+}
+
 /// Opening the UA tab must not start a network search by itself. Search is
 /// explicit: the user chooses host/LDS/mDNS or subnet scan.
 #[test]
@@ -2111,6 +2148,157 @@ fn enter_confirms_write_dialog() {
     h.run_steps(3);
     assert!(!h.state().dialogs.write.open);
     assert_eq!(h.state().pending_writes, 1);
+}
+
+/// K3: the write dialog opens with the current value selected, so typing
+/// replaces it (no mouse, no Backspace) and Enter writes the new value.
+#[test]
+fn k3_write_dialog_preselects_value_so_typing_replaces_it() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.settings.options.confirm_write = false;
+    seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+
+    let mut h = harness(app);
+    h.state_mut().select_only(0);
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().dialogs.write.open);
+    assert_eq!(h.state().dialogs.write.text, "42");
+
+    h.event(egui::Event::Text("77".into()));
+    h.run_steps(3);
+    assert_eq!(
+        h.state().dialogs.write.text,
+        "77",
+        "the old value was selected and replaced, not appended to"
+    );
+
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(!h.state().dialogs.write.open);
+    assert_eq!(h.state().pending_writes, 1);
+    // The table keeps the keyboard after the dialog: the next Enter opens it again.
+    assert_eq!(h.state().table_focus, Some(0));
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().dialogs.write.open);
+}
+
+/// K3: a rejected value is selected again, so the next keystrokes replace it.
+#[test]
+fn k3_write_error_reselects_the_value() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.settings.options.confirm_write = false;
+    let key = seed_writable_table(&mut app, &[("a", "SigA", 42)])[0];
+    app.rows[0].canonical_vt = Some(3); // VT_I4: text is not accepted
+    let mut h = harness(app);
+    h.state_mut().open_write_dialog(vec![key]);
+    h.run_steps(3);
+    h.event(egui::Event::Text("abc".into()));
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(
+        h.state().dialogs.write.open,
+        "an invalid integer keeps the dialog"
+    );
+    assert!(h.state().dialogs.write.error.is_some());
+    h.event(egui::Event::Text("5".into()));
+    h.run_steps(3);
+    assert_eq!(h.state().dialogs.write.text, "5");
+}
+
+/// K3 regression: with the tree having had the keyboard, a row click, Ctrl+A
+/// and Delete removed nothing (Ctrl+A dropped the table focus and the tree
+/// took the keys back).
+#[test]
+fn k3_ctrl_a_then_delete_after_the_tree_had_focus() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    seed_table(&mut app, &[("a", "SigA", 1), ("b", "SigB", 2)]);
+    app.tree_focused = true;
+
+    let mut h = harness(app);
+    h.run_steps(2);
+    h.state_mut().select_only(0);
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(3);
+    assert_eq!(h.state().selected_rows.len(), 2);
+    h.key_press(Key::Delete);
+    h.run_steps(3);
+    assert_eq!(h.state().rows.len(), 0);
+}
+
+/// K3: Tab moves the keyboard tree -> table -> tree.
+#[test]
+fn k3_tab_moves_the_keyboard_between_tree_and_table() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    seed_table(&mut app, &[("a", "SigA", 1)]);
+    let node = app.seed_tree_item(
+        1,
+        None,
+        0,
+        BrowseNode {
+            node_id: "Folder".into(),
+            name: "Folder".into(),
+            kind: NodeKind::Branch,
+            has_children: false,
+        },
+    );
+    let mut h = harness(app);
+    h.run_steps(2);
+
+    // Nothing owns the keyboard at start: Tab gives it to the table.
+    h.key_press(Key::Tab);
+    h.run_steps(3);
+    assert_eq!(h.state().table_focus, Some(0));
+    assert!(!h.state().tree_focused);
+
+    h.key_press(Key::Tab);
+    h.run_steps(3);
+    assert!(h.state().tree_focused);
+    assert_eq!(h.state().tree_focus, Some((1, node)));
+    assert_eq!(h.state().table_focus, None);
+
+    h.key_press_modifiers(Modifiers::SHIFT, Key::Tab);
+    h.run_steps(3);
+    assert_eq!(h.state().table_focus, Some(0));
+    assert!(!h.state().tree_focused);
+
+    h.key_press(Key::F6);
+    h.run_steps(3);
+    assert!(h.state().tree_focused);
+}
+
+/// K3: Ctrl+Tab / Ctrl+PgUp switch the session tabs; Ctrl+N opens «Подключиться».
+#[test]
+fn k3_ctrl_tab_switches_sessions_and_ctrl_n_connects() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_session(2, EndpointSpec::ua("opc.tcp://127.0.0.1:4841"));
+    app.activate_session(1);
+    let mut h = harness(app);
+    h.run_steps(2);
+
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Tab);
+    h.run_steps(3);
+    assert_eq!(h.state().active_session, Some(2));
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Tab);
+    h.run_steps(3);
+    assert_eq!(h.state().active_session, Some(1), "wraps around");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::PageUp);
+    h.run_steps(3);
+    assert_eq!(h.state().active_session, Some(2));
+
+    h.key_press_modifiers(Modifiers::COMMAND, Key::N);
+    h.run_steps(3);
+    assert!(h.state().dialogs.connect.open);
 }
 
 /// A Disconnected event must NOT clear the rows or the tree; rows stay visible
@@ -3912,7 +4100,7 @@ fn toolbar_enable_states_follow_active_session() {
 /// A8: the table shows the signals of every server (the tabs are not a
 /// filter) and says so; the row menu has no tree actions.
 #[test]
-fn a8_tabs_are_not_a_filter_and_row_menu_has_no_tree_actions() {
+fn v1_each_tab_shows_its_own_tags_and_row_menu_has_no_tree_actions() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
@@ -3924,19 +4112,73 @@ fn a8_tabs_are_not_a_filter_and_row_menu_has_no_tree_actions() {
     h.run_steps(3);
     assert!(h.query_by_label_contains("SigA").is_some());
     assert!(
-        h.query_by_label_contains("SigB").is_some(),
-        "rows of the other session stay visible"
+        h.query_by_label_contains("SigB").is_none(),
+        "V1: the other session's tags are not in this tab's table"
     );
-    assert!(
-        h.query_all_by_label_contains("не фильтр").count() >= 1,
-        "the strip explains that tabs do not filter the table"
-    );
+    assert_eq!(h.query_all_by_label_contains("не фильтр").count(), 0);
 
     right_click_row(&h, "SigA");
     h.run_steps(20);
     assert!(h.query_all_by_label("Удалить выбранные").count() >= 1);
     assert_eq!(h.query_all_by_label("Добавить (по этому узлу)").count(), 0);
     assert_eq!(h.query_all_by_label("Добавить дочерние").count(), 0);
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+
+    // Switching the tab shows the other endpoint's own list.
+    h.state_mut().activate_session(2);
+    h.run_steps(3);
+    assert!(h.query_by_label_contains("SigB").is_some());
+    assert!(h.query_by_label_contains("SigA").is_none());
+}
+
+/// V1: a selection never survives a tab switch, so Delete in the new tab
+/// cannot remove the hidden rows of the old one.
+#[test]
+fn v1_switching_tabs_drops_the_hidden_selection() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_session(2, EndpointSpec::ua("opc.tcp://127.0.0.1:4841"));
+    app.activate_session(1);
+    let a = app.seed_row(1, "a", "SigA", Value::I64(1));
+    let b = app.seed_row(2, "b", "SigB", Value::I64(2));
+    let mut h = harness(app);
+    h.run_steps(2);
+    h.state_mut().select_only(0);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(3);
+    assert_eq!(
+        h.state().selected_rows.len(),
+        1,
+        "Ctrl+A takes this tab only"
+    );
+    assert!(h.state().selected_rows.contains(&a));
+
+    h.state_mut().activate_session(2);
+    h.run_steps(2);
+    assert!(h.state().selected_rows.is_empty());
+    h.key_press(Key::Delete);
+    h.run_steps(3);
+    assert!(h.state().rows.iter().any(|r| r.key == a));
+    assert!(h.state().rows.iter().any(|r| r.key == b));
+}
+
+/// V1: the count strip shows the active tab's tags.
+#[test]
+fn v1_signal_count_is_per_tab() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_session(2, EndpointSpec::ua("opc.tcp://127.0.0.1:4841"));
+    app.activate_session(2);
+    app.seed_row(1, "a", "SigA", Value::I64(1));
+    app.seed_row(1, "c", "SigC", Value::I64(3));
+    app.seed_row(2, "b", "SigB", Value::I64(2));
+    assert_eq!(app.visible_row_count(), 1);
+    app.activate_session(1);
+    assert_eq!(app.visible_row_count(), 2);
+    assert_eq!(app.visible_row_positions(), vec![0, 1]);
 }
 
 /// A12: a branch with thousands of nodes builds only the visible rows.

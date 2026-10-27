@@ -29,6 +29,7 @@ pub use test_hooks::{
 };
 
 pub fn draw(app: &mut crate::app::App, ui: &mut egui::Ui) {
+    shortcuts::keyboard_prepass(app, ui);
     menu::menu(app, ui);
     status::status_bar(app, ui);
     panels::bottom_panels(app, ui);

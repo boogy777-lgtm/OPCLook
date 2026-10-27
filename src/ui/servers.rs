@@ -1,7 +1,8 @@
 use super::colors::{green, red, yellow};
+use super::dialogs::{security_mode_label, security_policy_label};
 use super::truncate_text;
 use crate::app::{App, SessionState};
-use crate::bff::model::{Protocol, SessionId};
+use crate::bff::model::{Protocol, SessionId, UaSecurityMode, UaSecurityPolicy};
 use crate::constants::TRUNCATE_TAB_LABEL;
 use crate::i18n::{Lang, Tr, fmt, tr};
 
@@ -22,17 +23,31 @@ pub(super) fn session_tab_strip(app: &mut App, ui: &mut egui::Ui) {
     let mut remove = None;
     let mut new_connection = false;
 
-    let visible: Vec<(SessionId, String, SessionState, String)> = app
+    // (id, name, state, tooltip head, security suffix)
+    type TabRow = (SessionId, String, SessionState, String, Option<String>);
+    let visible: Vec<TabRow> = app
         .sessions
         .iter()
         .filter(|s| s.visible)
         .map(|s| {
-            (
-                s.id,
-                s.display_name.clone(),
-                s.state,
-                s.display_name.clone(),
-            )
+            // V2: endpoints of one server differ by security only, so an
+            // explicit choice is part of the tab and of its tooltip.
+            match security_suffix(&s.endpoint, lang) {
+                Some((short, long)) => (
+                    s.id,
+                    s.display_name.clone(),
+                    s.state,
+                    format!("{}\n{long}", s.display_name),
+                    Some(short),
+                ),
+                None => (
+                    s.id,
+                    s.display_name.clone(),
+                    s.state,
+                    s.display_name.clone(),
+                    None,
+                ),
+            }
         })
         .collect();
 
@@ -44,7 +59,7 @@ pub(super) fn session_tab_strip(app: &mut App, ui: &mut egui::Ui) {
             .auto_shrink([false, true])
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    for (id, label, state, full) in &visible {
+                    for (id, label, state, full, security) in &visible {
                         let color = tab_state_color(*state);
                         let prefix = match app
                             .sessions
@@ -56,7 +71,10 @@ pub(super) fn session_tab_strip(app: &mut App, ui: &mut egui::Ui) {
                             _ => "UA",
                         };
                         let short = truncate_text(label, TRUNCATE_TAB_LABEL);
-                        let tab_label = format!("{prefix}: {short}");
+                        let tab_label = match security {
+                            Some(security) => format!("{prefix}: {short} · {security}"),
+                            None => format!("{prefix}: {short}"),
+                        };
                         let tooltip = format!("{}\n{}", full, state_text(*state, lang));
                         let selected = app.active_session == Some(*id);
                         ui.horizontal(|ui| {
@@ -100,12 +118,10 @@ pub(super) fn session_tab_strip(app: &mut App, ui: &mut egui::Ui) {
     // Empty tab state: only a localized hint text keeps the area from looking
     // like something is missing. The «Подключиться» button lives in the left
     // nav and the menu, not here.
+    // V1: each tab owns its tag list (the table below shows the active tab's
+    // tags), so no "tabs are not a filter" hint any more.
     if visible.is_empty() {
         ui.label(egui::RichText::new(tr(lang, Tr::EmptyTabsHint)).weak());
-    } else if visible.len() > 1 {
-        // A8: the tabs pick the server whose tree is shown on the left; they
-        // are NOT a filter of the table below.
-        ui.label(egui::RichText::new(tr(lang, Tr::TabsNotAFilterHint)).weak());
     }
 
     if let Some(id) = switch {
@@ -121,6 +137,28 @@ pub(super) fn session_tab_strip(app: &mut App, ui: &mut egui::Ui) {
     if new_connection {
         app.open_connect_dialog();
     }
+}
+
+/// Short and full security text of an explicitly chosen UA endpoint
+/// (`None` for DA and for Auto/Auto).
+fn security_suffix(
+    endpoint: &crate::bff::model::EndpointSpec,
+    lang: Lang,
+) -> Option<(String, String)> {
+    if endpoint.protocol != Protocol::OpcUa {
+        return None;
+    }
+    let policy = endpoint.ua_security_policy.unwrap_or_default();
+    let mode = endpoint.ua_security_mode.unwrap_or_default();
+    if policy == UaSecurityPolicy::Auto && mode == UaSecurityMode::Auto {
+        return None;
+    }
+    let policy_text = security_policy_label(lang, policy);
+    let mode_text = security_mode_label(lang, mode);
+    Some((
+        mode_text.to_string(),
+        format!("{policy_text} · {mode_text}"),
+    ))
 }
 
 pub(super) fn tab_state_color(state: SessionState) -> egui::Color32 {
