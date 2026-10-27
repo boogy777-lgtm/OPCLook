@@ -7,7 +7,7 @@
 |---|---|---|---|
 | UA backend | агент `ua` | U1, U2, U3, U4, U5 (бэкенд), U8, U12, U13, U15, A9 (bff/ua) | в работе |
 | App/UI | агент `app` | U5 (UI), U6, U7, U9, U10, U11, U14, D4, D5, A1–A8, A10–A13, A9 (app) | в работе |
-| DA | агент `da` | D1, D2, D3, D6, D7, A9 (bff/da) | в работе |
+| DA | агент `da` | D1, D2, D3, D6, D7 сделаны в ветке `fix/da` (COM-часть не скомпилирована, проверит CI); A9 (bff/da) не начат — нужен общий формат кодов ошибок с `ua`/`app` | ждёт слияния |
 | Linux-стенд | агент `linux` | X1: `scripts/check-linux.sh` (fmt, check, тесты на Linux) | сделано в ветке `fix/linux-check`, ждёт слияния; Windows-сборка не проверена |
 
 **Linux-проверка (X1):** `scripts/check-linux.sh` — `fmt`, `check --all-targets`,

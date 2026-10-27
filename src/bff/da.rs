@@ -1,3 +1,6 @@
+use super::da_clsid::{ClsidLookup, DiscoveredClsids, is_local_host, resolve_clsid};
+use super::da_router::{DaHost, SESSION_JOIN_BUDGET, run_router};
+use super::da_status::{ServerStatusInfo, check_server_state, format_connect_info};
 use super::da_variant::{
     clear_variant, filetime_to_utc, variant_from_value, variant_to_value, vt_name,
 };
@@ -5,7 +8,7 @@ use super::model::{
     BrowseNode, Command, CommandKind, DataValue, Event, EventKind, ItemInfo, ItemKey, ItemSpec,
     NodeKind, Operation, Quality, ServerEntry, SessionId,
 };
-use crate::opc::bindings::comn::IOPCServerList;
+use crate::opc::bindings::comn::{IOPCServerList, IOPCServerList2};
 use crate::opc::bindings::da::{
     IOPCBrowseServerAddressSpace, IOPCItemMgt, IOPCServer, IOPCSyncIO, OPC_BRANCH, OPC_BROWSE_DOWN,
     OPC_BROWSE_TO, OPC_DS_CACHE, OPC_LEAF, OPC_NS_FLAT, OPC_WRITEABLE, tagOPCITEMDEF,
@@ -14,11 +17,15 @@ use crate::opc::bindings::da::{
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
+use std::sync::Arc;
 use std::sync::mpsc::Sender;
+use std::sync::{Mutex, OnceLock, PoisonError};
+use tokio::sync::mpsc::UnboundedReceiver;
 use windows::Win32::System::Com::{
     CLSCTX_LOCAL_SERVER, CLSCTX_REMOTE_SERVER, CLSCTX_SERVER, CLSIDFromProgID,
     COINIT_MULTITHREADED, COSERVERINFO, CoCreateInstance, CoCreateInstanceEx, CoInitializeEx,
-    CoTaskMemFree, CoUninitialize, MULTI_QI,
+    CoInitializeSecurity, CoTaskMemFree, CoUninitialize, EOAC_NONE, MULTI_QI,
+    RPC_C_AUTHN_LEVEL_NONE, RPC_C_IMP_LEVEL_IDENTIFY,
 };
 use windows::Win32::System::Variant::VARIANT;
 use windows::core::{GUID, HRESULT, IUnknown, Interface, PCWSTR, PWSTR};
@@ -63,25 +70,97 @@ struct DaSession {
     info: String,
 }
 
+/// The COM side of the router: each session and each discovery runs on its
+/// own thread with its own COM apartment, so a hung DCOM call blocks only
+/// that thread (D2).
+struct WinDaHost;
+
+impl DaHost for WinDaHost {
+    fn run_session(
+        &self,
+        _session: SessionId,
+        commands: &mut UnboundedReceiver<Command>,
+        events: &Sender<Event>,
+    ) {
+        let _com = ComGuard::new();
+        let mut sessions: HashMap<SessionId, DaSession> = HashMap::new();
+        while let Some(command) = commands.blocking_recv() {
+            let disconnect = matches!(command.kind, CommandKind::Disconnect);
+            handle_command(command, &mut sessions, events);
+            // Over after `Disconnect`, or after a failed `Connect` (no session
+            // was stored); the router answers whatever is still queued.
+            if disconnect || sessions.is_empty() {
+                break;
+            }
+        }
+        // Channel closed (gateway shutdown) or session over: drop the group.
+        for (_, session) in sessions {
+            session.shutdown();
+        }
+    }
+
+    fn run_discovery(&self, command: Command, events: &Sender<Event>) {
+        let _com = ComGuard::new();
+        handle_command(command, &mut HashMap::new(), events);
+    }
+}
+
+/// `CoInitializeSecurity` with no authentication and `IDENTIFY` impersonation,
+/// as OPC clients do: without it remote DCOM calls fail with `E_ACCESSDENIED`
+/// or `RPC_S_SERVER_UNAVAILABLE` (D3). It may be called once per process and
+/// fails with `RPC_E_TOO_LATE` when the process already configured COM
+/// security; that is reported in the journal and is not fatal.
+fn init_dcom_security() -> Result<(), String> {
+    // SAFETY: a null security descriptor and null reserved/list pointers are
+    // the documented way to ask COM for the default security settings.
+    unsafe {
+        CoInitializeSecurity(
+            None,
+            -1,
+            None,
+            None,
+            RPC_C_AUTHN_LEVEL_NONE,
+            RPC_C_IMP_LEVEL_IDENTIFY,
+            None,
+            EOAC_NONE,
+            None,
+        )
+    }
+    .map_err(|e| format!("{e}"))
+}
+
 pub(crate) fn spawn(event_tx: Sender<Event>) -> super::WorkerHandle {
-    let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
     let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
     let join = std::thread::Builder::new()
         .name("opc-da".to_string())
         .spawn(move || {
+            // Keep the router thread in the MTA for as long as it runs, so the
+            // process-wide COM security settings stay in force.
             let _com = ComGuard::new();
-            let mut sessions: HashMap<SessionId, DaSession> = HashMap::new();
-            while let Some(command) = cmd_rx.blocking_recv() {
-                handle_command(command, &mut sessions, &event_tx);
+            if let Err(e) = init_dcom_security() {
+                send(
+                    &event_tx,
+                    Event {
+                        request_id: 0,
+                        session: 0,
+                        kind: EventKind::Log {
+                            message: format!(
+                                "параметры безопасности DCOM не заданы (уже настроены процессом): {e}"
+                            ),
+                        },
+                    },
+                );
             }
-            // Command channel closed (gateway shutdown): drop every group.
-            for (_, session) in sessions {
-                session.shutdown();
-            }
+            run_router(Arc::new(WinDaHost), cmd_rx, event_tx, SESSION_JOIN_BUDGET);
             let _ = done_tx.send(());
-        })
-        .expect("failed to spawn OPC DA worker");
-    super::WorkerHandle::new(cmd_tx, join, done_rx)
+        });
+    match join {
+        Ok(join) => super::WorkerHandle::new(cmd_tx, join, done_rx),
+        // The thread could not be created: hand out a handle with a closed
+        // command channel so `Gateway::send` reports the failure to the caller.
+        Err(_) => super::WorkerHandle::closed(done_rx),
+    }
 }
 
 fn handle_command(
@@ -367,7 +446,7 @@ impl DaSession {
         if prog_id.is_empty() {
             return Err("не указан программный идентификатор сервера".to_string());
         }
-        let clsid = clsid_from_progid(prog_id)?;
+        let clsid = resolve_server_clsid(&endpoint.host, prog_id)?;
         let unknown = create_instance(&clsid, &endpoint.host)?;
         let server: IOPCServer = unknown
             .cast()
@@ -404,27 +483,47 @@ impl DaSession {
             .cast()
             .map_err(|e| format!("группа не поддерживает IOPCSyncIO: {e}"))?;
 
-        let mut info = format!("подключено, группа #{group_handle}, период {revised} мс");
+        let mut status_info = None;
         if let Ok(status) = unsafe { server.GetStatus() } {
             if !status.is_null() {
+                // SAFETY: `status` is a non-null block returned by GetStatus; it and
+                // the vendor string are copied here and freed with CoTaskMemFree.
                 unsafe {
                     let s = &*status;
-                    info = format!(
-                        "подключено, группа #{group_handle}, период {revised} мс, сервер {}.{}.{}.{}",
-                        s.wMajorVersion, s.wMinorVersion, s.wBuildNumber, s.dwGroupCount
-                    );
-                    if !s.szVendorInfo.is_null() {
-                        let vendor = s.szVendorInfo.to_string().unwrap_or_default();
-                        if !vendor.is_empty() {
-                            info.push_str(", ");
-                            info.push_str(&vendor);
-                        }
+                    let vendor = if s.szVendorInfo.is_null() {
+                        String::new()
+                    } else {
+                        let text = s.szVendorInfo.to_string().unwrap_or_default();
                         CoTaskMemFree(Some(s.szVendorInfo.0 as *const c_void));
-                    }
+                        text
+                    };
+                    status_info = Some((
+                        s.wMajorVersion,
+                        s.wMinorVersion,
+                        s.wBuildNumber,
+                        s.dwGroupCount,
+                        vendor,
+                    ));
                     CoTaskMemFree(Some(status as *const c_void));
                 }
             }
         }
+        let info = format_connect_info(
+            group_handle,
+            revised,
+            status_info
+                .as_ref()
+                .map(
+                    |(major, minor, build, group_count, vendor)| ServerStatusInfo {
+                        major: *major,
+                        minor: *minor,
+                        build: *build,
+                        group_count: *group_count,
+                        vendor,
+                    },
+                )
+                .as_ref(),
+        );
 
         Ok(Self {
             endpoint,
@@ -745,14 +844,17 @@ impl DaSession {
         if status.is_null() {
             return Err("сервер не вернул состояние".to_string());
         }
-        let state = unsafe { (*status).dwServerState.0 };
-        unsafe {
+        // SAFETY: `status` is a non-null block returned by GetStatus; the state is
+        // copied before it and the vendor string are freed with CoTaskMemFree.
+        let state = unsafe {
+            let state = (*status).dwServerState.0;
             if !(*status).szVendorInfo.is_null() {
                 CoTaskMemFree(Some((*status).szVendorInfo.0 as *const c_void));
             }
             CoTaskMemFree(Some(status as *const c_void));
-        }
-        Ok(format!("связь с сервером в порядке (состояние {state})"))
+            state
+        };
+        check_server_state(state)
     }
 
     fn error_text(&self, hr: HRESULT) -> String {
@@ -842,6 +944,7 @@ fn enumerate_servers(host: &str) -> Result<Vec<ServerEntry>, String> {
             }
             for guid in guids.iter().take(fetched as usize) {
                 if let Some(entry) = class_details(&list, guid) {
+                    remember_discovered(host, &entry.id, guid);
                     if !found.iter().any(|e| e.id == entry.id) {
                         found.push(entry);
                     }
@@ -905,7 +1008,7 @@ fn class_details(list: &IOPCServerList, clsid: &GUID) -> Option<ServerEntry> {
 
 fn create_instance(clsid: &GUID, host: &str) -> Result<IUnknown, String> {
     let host = host.trim();
-    if host.is_empty() || host.eq_ignore_ascii_case("localhost") || host == "." {
+    if is_local_host(host) {
         return unsafe {
             CoCreateInstance(clsid, None::<&IUnknown>, CLSCTX_SERVER)
                 .map_err(|e| format!("CoCreateInstance: {e}"))
@@ -944,10 +1047,70 @@ fn create_instance(clsid: &GUID, host: &str) -> Result<IUnknown, String> {
     }
 }
 
-fn clsid_from_progid(prog_id: &str) -> Result<GUID, String> {
+/// CLSIDs seen while enumerating servers (the model carries no CLSID, so the
+/// connect step recovers it from here when the remote OPCEnum is unreachable).
+fn discovered_clsids() -> &'static Mutex<DiscoveredClsids> {
+    static CACHE: OnceLock<Mutex<DiscoveredClsids>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(DiscoveredClsids::default()))
+}
+
+fn remember_discovered(host: &str, prog_id: &str, clsid: &GUID) {
+    discovered_clsids()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .remember(host, prog_id, clsid.to_u128());
+}
+
+/// `CLSIDFromProgID` against the local registry.
+fn clsid_from_local_registry(prog_id: &str) -> Result<GUID, String> {
     let wide_id = wide(prog_id);
+    // SAFETY: `wide_id` is a NUL-terminated UTF-16 buffer that outlives the call.
     unsafe { CLSIDFromProgID(PCWSTR(wide_id.as_ptr())) }
         .map_err(|e| format!("не удалось получить идентификатор сервера \"{prog_id}\": {e}"))
+}
+
+/// Ask the OPCEnum of `host` for the CLSID of `prog_id` (`IOPCServerList`,
+/// then `IOPCServerList2` for enumerators that only expose the 2.0 interface).
+fn clsid_from_remote_opcenum(host: &str, prog_id: &str) -> Result<GUID, String> {
+    let unknown = create_instance(&CLSID_SERVER_LIST, host)
+        .map_err(|e| format!("OPCEnum на {host} недоступен: {e}"))?;
+    let wide_id = wide(prog_id);
+    if let Ok(list) = unknown.cast::<IOPCServerList>() {
+        // SAFETY: `wide_id` is a NUL-terminated UTF-16 buffer that outlives the call.
+        return unsafe { list.CLSIDFromProgID(PCWSTR(wide_id.as_ptr())) }
+            .map_err(|e| format!("IOPCServerList::CLSIDFromProgID: {e}"));
+    }
+    let list2: IOPCServerList2 = unknown
+        .cast()
+        .map_err(|e| format!("OPC Server List на {host} недоступен: {e}"))?;
+    // SAFETY: as above.
+    unsafe { list2.CLSIDFromProgID(PCWSTR(wide_id.as_ptr())) }
+        .map_err(|e| format!("IOPCServerList2::CLSIDFromProgID: {e}"))
+}
+
+struct WinClsidLookup;
+
+impl ClsidLookup for WinClsidLookup {
+    fn remote_enum(&mut self, host: &str, prog_id: &str) -> Result<u128, String> {
+        clsid_from_remote_opcenum(host, prog_id).map(|guid| guid.to_u128())
+    }
+
+    fn discovered(&self, host: &str, prog_id: &str) -> Option<u128> {
+        discovered_clsids()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(host, prog_id)
+    }
+
+    fn local_registry(&mut self, prog_id: &str) -> Result<u128, String> {
+        clsid_from_local_registry(prog_id).map(|guid| guid.to_u128())
+    }
+}
+
+/// CLSID of `prog_id` on `host`: the local registry for this computer, the
+/// remote OPCEnum (then discovery cache, then local registry) for another one.
+fn resolve_server_clsid(host: &str, prog_id: &str) -> Result<GUID, String> {
+    resolve_clsid(host, prog_id, &mut WinClsidLookup).map(GUID::from_u128)
 }
 
 unsafe fn read_hresult(errors: *mut HRESULT, index: usize) -> HRESULT {
