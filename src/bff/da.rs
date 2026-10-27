@@ -1,3 +1,4 @@
+use super::da_clsid::{ClsidLookup, DiscoveredClsids, is_local_host, resolve_clsid};
 use super::da_variant::{
     clear_variant, filetime_to_utc, variant_from_value, variant_to_value, vt_name,
 };
@@ -5,7 +6,7 @@ use super::model::{
     BrowseNode, Command, CommandKind, DataValue, Event, EventKind, ItemInfo, ItemKey, ItemSpec,
     NodeKind, Operation, Quality, ServerEntry, SessionId,
 };
-use crate::opc::bindings::comn::IOPCServerList;
+use crate::opc::bindings::comn::{IOPCServerList, IOPCServerList2};
 use crate::opc::bindings::da::{
     IOPCBrowseServerAddressSpace, IOPCItemMgt, IOPCServer, IOPCSyncIO, OPC_BRANCH, OPC_BROWSE_DOWN,
     OPC_BROWSE_TO, OPC_DS_CACHE, OPC_LEAF, OPC_NS_FLAT, OPC_WRITEABLE, tagOPCITEMDEF,
@@ -15,6 +16,7 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
 use std::sync::mpsc::Sender;
+use std::sync::{Mutex, OnceLock, PoisonError};
 use windows::Win32::System::Com::{
     CLSCTX_LOCAL_SERVER, CLSCTX_REMOTE_SERVER, CLSCTX_SERVER, CLSIDFromProgID,
     COINIT_MULTITHREADED, COSERVERINFO, CoCreateInstance, CoCreateInstanceEx, CoInitializeEx,
@@ -367,7 +369,7 @@ impl DaSession {
         if prog_id.is_empty() {
             return Err("не указан программный идентификатор сервера".to_string());
         }
-        let clsid = clsid_from_progid(prog_id)?;
+        let clsid = resolve_server_clsid(&endpoint.host, prog_id)?;
         let unknown = create_instance(&clsid, &endpoint.host)?;
         let server: IOPCServer = unknown
             .cast()
@@ -842,6 +844,7 @@ fn enumerate_servers(host: &str) -> Result<Vec<ServerEntry>, String> {
             }
             for guid in guids.iter().take(fetched as usize) {
                 if let Some(entry) = class_details(&list, guid) {
+                    remember_discovered(host, &entry.id, guid);
                     if !found.iter().any(|e| e.id == entry.id) {
                         found.push(entry);
                     }
@@ -905,7 +908,7 @@ fn class_details(list: &IOPCServerList, clsid: &GUID) -> Option<ServerEntry> {
 
 fn create_instance(clsid: &GUID, host: &str) -> Result<IUnknown, String> {
     let host = host.trim();
-    if host.is_empty() || host.eq_ignore_ascii_case("localhost") || host == "." {
+    if is_local_host(host) {
         return unsafe {
             CoCreateInstance(clsid, None::<&IUnknown>, CLSCTX_SERVER)
                 .map_err(|e| format!("CoCreateInstance: {e}"))
@@ -944,10 +947,70 @@ fn create_instance(clsid: &GUID, host: &str) -> Result<IUnknown, String> {
     }
 }
 
-fn clsid_from_progid(prog_id: &str) -> Result<GUID, String> {
+/// CLSIDs seen while enumerating servers (the model carries no CLSID, so the
+/// connect step recovers it from here when the remote OPCEnum is unreachable).
+fn discovered_clsids() -> &'static Mutex<DiscoveredClsids> {
+    static CACHE: OnceLock<Mutex<DiscoveredClsids>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(DiscoveredClsids::default()))
+}
+
+fn remember_discovered(host: &str, prog_id: &str, clsid: &GUID) {
+    discovered_clsids()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .remember(host, prog_id, clsid.to_u128());
+}
+
+/// `CLSIDFromProgID` against the local registry.
+fn clsid_from_local_registry(prog_id: &str) -> Result<GUID, String> {
     let wide_id = wide(prog_id);
+    // SAFETY: `wide_id` is a NUL-terminated UTF-16 buffer that outlives the call.
     unsafe { CLSIDFromProgID(PCWSTR(wide_id.as_ptr())) }
         .map_err(|e| format!("не удалось получить идентификатор сервера \"{prog_id}\": {e}"))
+}
+
+/// Ask the OPCEnum of `host` for the CLSID of `prog_id` (`IOPCServerList`,
+/// then `IOPCServerList2` for enumerators that only expose the 2.0 interface).
+fn clsid_from_remote_opcenum(host: &str, prog_id: &str) -> Result<GUID, String> {
+    let unknown = create_instance(&CLSID_SERVER_LIST, host)
+        .map_err(|e| format!("OPCEnum на {host} недоступен: {e}"))?;
+    let wide_id = wide(prog_id);
+    if let Ok(list) = unknown.cast::<IOPCServerList>() {
+        // SAFETY: `wide_id` is a NUL-terminated UTF-16 buffer that outlives the call.
+        return unsafe { list.CLSIDFromProgID(PCWSTR(wide_id.as_ptr())) }
+            .map_err(|e| format!("IOPCServerList::CLSIDFromProgID: {e}"));
+    }
+    let list2: IOPCServerList2 = unknown
+        .cast()
+        .map_err(|e| format!("OPC Server List на {host} недоступен: {e}"))?;
+    // SAFETY: as above.
+    unsafe { list2.CLSIDFromProgID(PCWSTR(wide_id.as_ptr())) }
+        .map_err(|e| format!("IOPCServerList2::CLSIDFromProgID: {e}"))
+}
+
+struct WinClsidLookup;
+
+impl ClsidLookup for WinClsidLookup {
+    fn remote_enum(&mut self, host: &str, prog_id: &str) -> Result<u128, String> {
+        clsid_from_remote_opcenum(host, prog_id).map(|guid| guid.to_u128())
+    }
+
+    fn discovered(&self, host: &str, prog_id: &str) -> Option<u128> {
+        discovered_clsids()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(host, prog_id)
+    }
+
+    fn local_registry(&mut self, prog_id: &str) -> Result<u128, String> {
+        clsid_from_local_registry(prog_id).map(|guid| guid.to_u128())
+    }
+}
+
+/// CLSID of `prog_id` on `host`: the local registry for this computer, the
+/// remote OPCEnum (then discovery cache, then local registry) for another one.
+fn resolve_server_clsid(host: &str, prog_id: &str) -> Result<GUID, String> {
+    resolve_clsid(host, prog_id, &mut WinClsidLookup).map(GUID::from_u128)
 }
 
 unsafe fn read_hresult(errors: *mut HRESULT, index: usize) -> HRESULT {
