@@ -238,6 +238,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                         return;
                                     }
                                     body.rows(text_height, lines.len(), |mut row| {
+                                        let show_colors = app.settings.options.show_colors;
                                         // `index` is the visible position (selection and
                                         // keyboard work on it); `position` is in `rows`.
                                         let (index, position) = match lines.get(row.index()) {
@@ -289,11 +290,13 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                             match column {
                                                 ColumnId::Status => {
                                                     row.col(|ui| {
-                                                        let color = if signal.pending {
-                                                            yellow()
-                                                        } else {
-                                                            quality_color(signal.quality.kind)
-                                                        };
+                                                        // UI2: the dot follows «show colors» too.
+                                                        let color = quality_tint(
+                                                            ui,
+                                                            show_colors,
+                                                            signal.pending,
+                                                            signal.quality.kind,
+                                                        );
                                                         ui.colored_label(color, "●");
                                                     });
                                                 }
@@ -335,12 +338,9 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                 }
                                                 ColumnId::Value => {
                                                     row.col(|ui| {
-                                                        let color =
-                                                            if app.settings.options.show_colors {
-                                                                quality_color(signal.quality.kind)
-                                                            } else {
-                                                                ui.visuals().text_color()
-                                                            };
+                                                        // UI2: the value is always neutral; the
+                                                        // quality is told by the pill / dot.
+                                                        let color = ui.visuals().text_color();
                                                         ui.label(
                                                             egui::RichText::new(
                                                                 signal.value.to_string(),
@@ -353,17 +353,18 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                 }
                                                 ColumnId::Quality => {
                                                     row.col(|ui| {
-                                                        let color =
-                                                            if app.settings.options.show_colors {
-                                                                quality_color(signal.quality.kind)
-                                                            } else {
-                                                                ui.visuals().text_color()
-                                                            };
-                                                        ui.label(
-                                                            egui::RichText::new(
-                                                                &signal.quality.text,
+                                                        let tint = show_colors.then(|| {
+                                                            quality_tint(
+                                                                ui,
+                                                                true,
+                                                                signal.pending,
+                                                                signal.quality.kind,
                                                             )
-                                                            .color(color),
+                                                        });
+                                                        quality_pill(
+                                                            ui,
+                                                            &signal.quality.text,
+                                                            tint,
                                                         );
                                                     });
                                                 }
@@ -558,6 +559,51 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
             }
         });
 }
+/// UI2: the color a quality is shown in: yellow while the first value is still
+/// pending, else the quality's color; the neutral text color when the
+/// «show colors» option is off.
+fn quality_tint(
+    ui: &egui::Ui,
+    show_colors: bool,
+    pending: bool,
+    kind: crate::bff::model::QualityKind,
+) -> egui::Color32 {
+    if !show_colors {
+        ui.visuals().weak_text_color()
+    } else if pending {
+        yellow()
+    } else {
+        quality_color(kind)
+    }
+}
+
+/// UI2: a quality as a small rounded pill: the quality's color on a soft
+/// background of the same color. `tint` is `None` when colors are switched off:
+/// then the pill is neutral.
+fn quality_pill(ui: &mut egui::Ui, text: &str, tint: Option<egui::Color32>) {
+    let (fg, bg) = match tint {
+        Some(color) => (color, color.gamma_multiply(QUALITY_PILL_BG_STRENGTH)),
+        None => (
+            ui.visuals().text_color(),
+            ui.visuals().widgets.noninteractive.weak_bg_fill,
+        ),
+    };
+    egui::Frame::new()
+        .fill(bg)
+        .corner_radius(8)
+        .inner_margin(egui::Margin::symmetric(6, 1))
+        .show(ui, |ui| {
+            ui.add(
+                egui::Label::new(egui::RichText::new(text).color(fg).size(12.0))
+                    .selectable(false)
+                    .truncate(),
+            );
+        });
+}
+
+/// How strongly the quality color shows through in the pill's background.
+const QUALITY_PILL_BG_STRENGTH: f32 = 0.18;
+
 /// One expanded field of a row value, borrowed from its [`TableLine`].
 struct FieldLine<'a> {
     key: crate::bff::model::ItemKey,
