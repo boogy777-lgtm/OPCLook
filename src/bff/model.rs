@@ -774,7 +774,9 @@ pub enum CommandKind {
     /// Browse the children of `node_id`.
     ///
     /// `filter` (UA only, None for DA) restricts the node-class mask:
-    /// `None` = all classes, `Some(1)` = Objects only, `Some(2)` = Variables only.
+    /// `None` = all classes, `Some(1)` = Objects only, `Some(2)` = Variables
+    /// **and** the Objects/folders leading to them (a mask of Variables alone
+    /// would hide the folders and leave nothing to expand).
     ///
     /// `view_id` (UA only, None for DA) selects a server View node to browse
     /// through; `None` browses the default (Objects/value) view.

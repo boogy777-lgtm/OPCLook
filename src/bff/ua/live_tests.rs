@@ -913,3 +913,48 @@ fn u4_configure_before_the_first_item_is_used_when_the_subscription_is_created()
         "the stored deadband applies to items created later"
     );
 }
+
+// ---------------------------------------------------------------------------
+// U5: the "variables only" browse filter keeps folders
+// ---------------------------------------------------------------------------
+
+#[test]
+fn u5_variables_filter_still_lists_folders_so_the_tree_can_be_walked() {
+    use crate::bff::model::NodeKind;
+    let server = TestServer::start(48631);
+    let mut app = Harness::new();
+    app.connect(1, Harness::endpoint(&server.url))
+        .expect("connect");
+
+    let browse = |app: &mut Harness, node: &str| {
+        let id = app.send(
+            1,
+            CommandKind::Browse {
+                node_id: node.to_string(),
+                filter: Some(2),
+                view_id: None,
+            },
+        );
+        match app.reply(id, Duration::from_secs(20)) {
+            Some(Event {
+                kind: EventKind::Browse { children, .. },
+                ..
+            }) => children,
+            other => panic!("unexpected Browse reply: {other:?}"),
+        }
+    };
+    let top = browse(&mut app, "i=85");
+    let plant = top
+        .iter()
+        .find(|node| node.node_id == server.node("Plant"))
+        .unwrap_or_else(|| panic!("the Plant folder must stay visible: {top:?}"));
+    assert_eq!(plant.kind, NodeKind::Branch);
+
+    let inside = browse(&mut app, &plant.node_id.clone());
+    assert!(
+        inside
+            .iter()
+            .any(|node| node.node_id == server.node("Level") && node.kind == NodeKind::Item),
+        "variables inside the folder are listed: {inside:?}"
+    );
+}

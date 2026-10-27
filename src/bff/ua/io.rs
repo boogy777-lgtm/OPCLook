@@ -13,6 +13,20 @@ use opcua::types::{
 };
 use std::collections::{HashMap, HashSet};
 
+/// Node-class mask of a browse request. UA mask bits equal the `NodeClass`
+/// values. The "variables" filter (`Some(2)`) keeps the Objects too: a Variable
+/// is usually reached through folders, and a mask of Variable alone would hide
+/// every folder and leave nothing to expand.
+pub(super) fn browse_node_class_mask(filter: Option<u8>) -> u32 {
+    let object = NodeClass::Object as i32 as u32;
+    let variable = NodeClass::Variable as i32 as u32;
+    match filter {
+        Some(1) => object,
+        Some(2) => object | variable,
+        _ => 0,
+    }
+}
+
 pub(super) async fn browse(
     session: &mut UaSession,
     node_id: &str,
@@ -28,12 +42,7 @@ pub(super) async fn browse(
             timestamp: Default::default(),
             view_version: 0,
         });
-    // UA node-class mask bit values match the NodeClass enum ordering.
-    let node_class_mask = match filter {
-        Some(1) => NodeClass::Object as i32 as u32,
-        Some(2) => NodeClass::Variable as i32 as u32,
-        _ => 0,
-    };
+    let node_class_mask = browse_node_class_mask(filter);
     let description = BrowseDescription {
         node_id: node,
         browse_direction: BrowseDirection::Forward,

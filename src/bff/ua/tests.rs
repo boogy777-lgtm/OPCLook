@@ -1170,3 +1170,14 @@ fn missing_node_statuses_are_recognised() {
     assert!(!is_missing_node(StatusCode::BadUserAccessDenied));
     assert!(!is_missing_node(StatusCode::BadNotReadable));
 }
+
+#[test]
+fn variables_filter_keeps_folders_navigable() {
+    use super::io::browse_node_class_mask;
+    assert_eq!(browse_node_class_mask(None), 0, "no filter = every class");
+    assert_eq!(browse_node_class_mask(Some(1)), 1, "objects only");
+    let mask = browse_node_class_mask(Some(2));
+    assert_eq!(mask & 2, 2, "variables are listed");
+    assert_eq!(mask & 1, 1, "folders (objects) are listed too");
+    assert_eq!(mask & !3, 0, "methods, types and views stay hidden");
+}
