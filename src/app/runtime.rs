@@ -73,6 +73,21 @@ impl App {
                 session,
                 kind,
             });
+            if operation == Operation::Connect {
+                // The worker may still finish this Connect after we gave up.
+                // Tell it to drop the session so no orphan stays connected on
+                // the server; its reply belongs to an abandoned attempt and is
+                // not awaited (the session is already shown as disconnected).
+                if let Some(protocol) = self
+                    .sessions
+                    .iter()
+                    .find(|view| view.id == session)
+                    .map(|view| view.protocol())
+                {
+                    let disconnect = self.send(session, protocol, CommandKind::Disconnect);
+                    self.pending_requests.remove(&(session, disconnect));
+                }
+            }
         }
     }
 

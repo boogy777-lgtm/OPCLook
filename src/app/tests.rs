@@ -1278,6 +1278,29 @@ fn k1_unanswered_connect_from_the_dialog_shows_the_error_there() {
 }
 
 #[test]
+fn k1_unanswered_connect_tells_the_worker_to_drop_the_session() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.settings.options.diagnostic_trace = true;
+    let _ = app.connect_from_dialog(EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let session = app.sessions.last().expect("session").id;
+    let before = journal_lines(&app).len();
+    app.age_pending_requests_for_test(session, 3600);
+    app.tick_for_test();
+    let disconnect = operation_label(Lang::Ru, Operation::Disconnect);
+    let sent_disconnect = journal_lines(&app)[before..]
+        .iter()
+        .any(|line| line.contains("→ #") && line.contains(&disconnect));
+    assert!(
+        sent_disconnect,
+        "an abandoned Connect must be followed by Disconnect: {:?}",
+        journal_lines(&app)
+    );
+    // Its reply is not awaited: nothing stays pending for the session.
+    assert!(app.pending_request_ids_for_test(session).is_empty());
+}
+
+#[test]
 fn k1_unanswered_resolve_name_unblocks_the_add_signal_dialog() {
     let (_ctx, mut app) = tree_app();
     open_add_by_name(&mut app, 1, "0:Objects/2:Tag1");
