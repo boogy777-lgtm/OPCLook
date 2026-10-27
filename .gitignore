@@ -49,3 +49,6 @@ Desktop.ini
 
 # PKI store created by UI tests in the working directory
 /opcda-egui/
+# CI helper logs
+/test-output.txt*
+/gate-output.txt*

@@ -53,4 +53,9 @@ jobs:
           libxkbcommon-dev libwayland-dev libxcb1-dev libx11-dev libgl1-mesa-dev
           libegl1-mesa-dev pkg-config fonts-noto-cjk
       - name: scripts/check-linux.sh
-        run: scripts/check-linux.sh
+        run: |
+          set -o pipefail
+          if ! scripts/check-linux.sh 2>&1 | tee gate-output.txt; then
+            scripts/ci-annotate.sh "Linux gate failed" gate-output.txt
+            exit 1
+          fi

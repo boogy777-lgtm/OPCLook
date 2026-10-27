@@ -1125,7 +1125,6 @@ fn a9_network_search_reports_its_problems_as_journal_lines() {
             ..
         })
     ));
-    // Linux has no mDNS backend: that must be a journal line, not a stderr line.
     let mut lines = Vec::new();
     while let Some(message) = app.wait(Duration::from_millis(200), |event| match &event.kind {
         EventKind::Log { message } if event.request_id == 0 => Some(message.clone()),
@@ -1133,6 +1132,9 @@ fn a9_network_search_reports_its_problems_as_journal_lines() {
     }) {
         lines.push(message);
     }
+    // Off Windows there is no mDNS backend: that must be a journal line, not a
+    // stderr line. On Windows mDNS really runs and may legitimately say nothing.
+    #[cfg(not(windows))]
     assert!(
         lines.iter().any(|line| line.starts_with("mDNS")),
         "the skipped mDNS step is reported: {lines:?}"
