@@ -100,3 +100,45 @@ fn ui7_bottom_panel_default_is_compact_and_flags_keep_their_logic() {
             .is_none()
     );
 }
+
+// ---------------------------------------------------------------------------
+// UI8: one type / spacing scale
+// ---------------------------------------------------------------------------
+
+fn font_size(style: &egui::Style, ts: egui::TextStyle) -> f32 {
+    style.text_styles.get(&ts).map(|f| f.size).unwrap_or(0.0)
+}
+
+#[test]
+fn ui8_text_scale_spacing_and_row_height_are_applied_to_both_themes() {
+    let mut h = harness(fresh_app());
+    h.run_steps(3);
+    for theme in [egui::Theme::Dark, egui::Theme::Light] {
+        let style = h.ctx.style_of(theme);
+        assert_eq!(font_size(&style, egui::TextStyle::Small), 12.0);
+        assert_eq!(font_size(&style, egui::TextStyle::Body), 13.0);
+        assert_eq!(font_size(&style, egui::TextStyle::Button), 13.0);
+        assert_eq!(font_size(&style, egui::TextStyle::Monospace), 13.0);
+        assert_eq!(font_size(&style, egui::TextStyle::Heading), 15.0);
+        assert_eq!(style.spacing.item_spacing, egui::vec2(8.0, 6.0));
+        assert_eq!(style.spacing.button_padding, egui::vec2(8.0, 4.0));
+        assert_eq!(style.spacing.window_margin, egui::Margin::same(12));
+    }
+    assert_eq!(opcda_egui::constants::TABLE_ROW_HEIGHT, 24.0);
+    assert_eq!(opcda_egui::constants::TABLE_HEADER_HEIGHT, 22.0);
+}
+
+#[test]
+fn ui8_table_stripes_stay_close_to_the_panel_fill() {
+    let mut h = harness(fresh_app());
+    h.run_steps(3);
+    for theme in [egui::Theme::Dark, egui::Theme::Light] {
+        let v = h.ctx.style_of(theme).visuals.clone();
+        let (a, b) = (v.faint_bg_color, v.panel_fill);
+        let diff = a.r().abs_diff(b.r());
+        assert!(
+            diff > 0 && diff <= 8,
+            "{theme:?}: stripe vs panel diff {diff}"
+        );
+    }
+}
