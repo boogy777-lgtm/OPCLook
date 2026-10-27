@@ -226,3 +226,113 @@ pub(super) fn paint_lock_icon(p: &egui::Painter, rect: egui::Rect, color: egui::
         stroke,
     );
 }
+
+/// Like `painter_icon_button`, but the accessible label (what tests and screen
+/// readers see) and the hover tooltip are separate strings: the label is the
+/// plain action name, the tooltip may add a hint such as the shortcut.
+pub(super) fn painter_icon_button_tip(
+    ui: &mut egui::Ui,
+    size: f32,
+    enabled: bool,
+    label: &str,
+    tooltip: &str,
+    paint: impl FnOnce(&egui::Painter, egui::Rect, egui::Color32),
+) -> bool {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+    let response = if enabled {
+        response.on_hover_text(tooltip)
+    } else {
+        response.on_disabled_hover_text(tooltip)
+    };
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
+    if enabled && response.hovered() {
+        ui.painter()
+            .rect_filled(rect, 4.0, ui.visuals().widgets.hovered.bg_fill);
+    }
+    let color = if !enabled {
+        ui.visuals().weak_text_color()
+    } else if response.hovered() {
+        ui.visuals().strong_text_color()
+    } else {
+        ui.visuals().text_color()
+    };
+    paint(ui.painter(), rect.shrink(4.0), color);
+    enabled && response.clicked()
+}
+
+/// UI6: «refresh» — a nearly closed circular arrow with a head at its end.
+pub(super) fn paint_refresh_icon(p: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let c = rect.center();
+    let r = rect.width().min(rect.height()) * 0.38;
+    let stroke = egui::Stroke::new(1.6, color);
+    let start = -1.2;
+    let end = std::f32::consts::TAU - 1.9;
+    p.add(egui::Shape::line(arc_points(c, r, start, end, 22), stroke));
+    // Arrowhead at the end of the arc, along the clockwise tangent.
+    let tip = egui::pos2(c.x + r * end.cos(), c.y + r * end.sin());
+    let dir = egui::vec2(-end.sin(), end.cos());
+    let perp = egui::vec2(-dir.y, dir.x) * 3.0;
+    let base = tip - dir * 3.4;
+    p.add(egui::Shape::convex_polygon(
+        vec![tip + dir * 1.6, base + perp, base - perp],
+        color,
+        egui::Stroke::NONE,
+    ));
+}
+
+/// UI6: «add» — a plus sign.
+pub(super) fn paint_plus_icon(p: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let c = rect.center();
+    let h = rect.width().min(rect.height()) * 0.36;
+    let stroke = egui::Stroke::new(1.8, color);
+    p.line_segment([c - egui::vec2(h, 0.0), c + egui::vec2(h, 0.0)], stroke);
+    p.line_segment([c - egui::vec2(0.0, h), c + egui::vec2(0.0, h)], stroke);
+}
+
+/// UI6: «add children» — a parent node with two child nodes hanging off it.
+pub(super) fn paint_children_icon(p: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let s = rect.width().min(rect.height());
+    let x = rect.min.x + s * 0.18;
+    let top = rect.min.y + s * 0.12;
+    let stroke = egui::Stroke::new(1.4, color);
+    p.circle_filled(egui::pos2(x, top + s * 0.06), s * 0.11, color);
+    let y1 = rect.min.y + s * 0.50;
+    let y2 = rect.min.y + s * 0.86;
+    let spine_x = x;
+    p.line_segment(
+        [egui::pos2(spine_x, top + s * 0.16), egui::pos2(spine_x, y2)],
+        stroke,
+    );
+    for y in [y1, y2] {
+        p.line_segment(
+            [egui::pos2(spine_x, y), egui::pos2(rect.min.x + s * 0.50, y)],
+            stroke,
+        );
+        p.rect_filled(
+            egui::Rect::from_min_size(
+                egui::pos2(rect.min.x + s * 0.56, y - s * 0.09),
+                egui::vec2(s * 0.40, s * 0.18),
+            ),
+            1.0,
+            color,
+        );
+    }
+}
+
+/// UI6: «add by name» — a text cursor (I-beam).
+pub(super) fn paint_name_icon(p: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let c = rect.center();
+    let s = rect.width().min(rect.height());
+    let h = s * 0.40;
+    let w = s * 0.20;
+    let stroke = egui::Stroke::new(1.6, color);
+    p.line_segment([c - egui::vec2(0.0, h), c + egui::vec2(0.0, h)], stroke);
+    p.line_segment(
+        [egui::pos2(c.x - w, c.y - h), egui::pos2(c.x + w, c.y - h)],
+        stroke,
+    );
+    p.line_segment(
+        [egui::pos2(c.x - w, c.y + h), egui::pos2(c.x + w, c.y + h)],
+        stroke,
+    );
+}

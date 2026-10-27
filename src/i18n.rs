@@ -550,6 +550,10 @@ pub enum Tr {
     RemoveFromListConfirmText,
     /// Empty-state hint under the tab bar when no tab is open.
     EmptyTabsHint,
+    /// Tooltip of the left panel's «add» icon (adds the selected tree node).
+    AddNodeTooltip,
+    /// Tooltip of the left panel's «add by name» icon.
+    AddByNameTooltip,
     /// Accessible name of a tree node's expander when the node is collapsed.
     TreeExpandLabel,
     /// Accessible name of a tree node's expander when the node is expanded.
@@ -1235,6 +1239,8 @@ fn ru(key: Tr) -> &'static str {
         RemoveFromListConfirmTitle => "Удаление сессии",
         RemoveFromListConfirmText => "Удалить сессию \"{0}\" и все её сигналы из списка?",
         EmptyTabsHint => "Двойной щелчок по серверу в диалоге подключения открывает вкладку",
+        AddNodeTooltip => "Добавить выбранный сигнал в таблицу",
+        AddByNameTooltip => "Добавить сигнал по имени (Item ID / NodeId)",
         TreeExpandLabel => "Развернуть",
         TreeCollapseLabel => "Свернуть",
 
@@ -1804,6 +1810,8 @@ fn en(key: Tr) -> &'static str {
         RemoveFromListConfirmTitle => "Remove session",
         RemoveFromListConfirmText => "Remove session \"{0}\" and all its signals from the list?",
         EmptyTabsHint => "Double-click a server in the connect dialog to open a tab",
+        AddNodeTooltip => "Add the selected signal to the table",
+        AddByNameTooltip => "Add a signal by name (item id / NodeId)",
         TreeExpandLabel => "Expand",
         TreeCollapseLabel => "Collapse",
 
@@ -2353,6 +2361,8 @@ fn zh(key: Tr) -> &'static str {
         RemoveFromListConfirmTitle => "删除会话",
         RemoveFromListConfirmText => "从列表中删除会话 \"{0}\" 及其所有信号？",
         EmptyTabsHint => "在连接对话框中双击服务器可打开选项卡",
+        AddNodeTooltip => "将所选信号添加到表格",
+        AddByNameTooltip => "按名称添加信号 (Item ID / NodeId)",
         TreeExpandLabel => "展开",
         TreeCollapseLabel => "折叠",
 

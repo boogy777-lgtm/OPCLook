@@ -1,7 +1,10 @@
 //! UI polish of the navigation area (UI1 tree expander, UI3 session tabs,
 //! UI6 left panel, UI10 empty states), headless through egui_kittest.
 use egui::{Modifiers, PointerButton};
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use opcda_egui::app::{App, SessionState};
 use opcda_egui::bff::model::{
     BrowseNode, EndpointSpec, NodeKind, UaSecurityMode, UaSecurityPolicy, Value,
@@ -260,4 +263,124 @@ fn ui3_disconnected_tab_is_still_a_clickable_named_tab() {
     h.get_by_label("DA: Beta.Server").click();
     h.run_steps(3);
     assert_eq!(h.state().active_session, Some(2));
+}
+
+// ---------------------------------------------------------------- UI6
+
+const LEFT: f32 = 400.0;
+
+fn left<'a>(nodes: impl Iterator<Item = egui_kittest::Node<'a>>) -> Vec<egui_kittest::Node<'a>> {
+    nodes.filter(|n| n.rect().center().x < LEFT).collect()
+}
+
+fn connected_with_tree() -> (App, u64, u64) {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    let branch = app.seed_tree_item(1, None, 0, node("b", "Ветка", NodeKind::Branch, true));
+    let item = app.seed_tree_item(1, None, 0, node("i", "Сигнал", NodeKind::Item, false));
+    (app, branch, item)
+}
+
+/// UI6: the four tree actions are painted icons that keep the old button text
+/// as their accessible name, each exactly once, in the left panel.
+#[test]
+fn ui6_tree_actions_are_icons_with_the_old_names() {
+    let (app, _, _) = connected_with_tree();
+    let mut h = harness(app);
+    h.run_steps(4);
+    for name in ["Обновить", "Добавить", "Дочерние", "По имени..."] {
+        let found = left(h.query_all_by_label(name));
+        assert_eq!(found.len(), 1, "one «{name}» icon in the left panel");
+        assert!(
+            !found[0].accesskit_node().is_disabled(),
+            "«{name}» is enabled on a connected session"
+        );
+        let rect = found[0].rect();
+        assert!(
+            rect.width() <= 32.0 && rect.height() <= 32.0,
+            "«{name}» is a small icon, got {rect:?}"
+        );
+    }
+    // The four icons share one row.
+    let ys: Vec<f32> = ["Обновить", "Добавить", "Дочерние", "По имени..."]
+        .iter()
+        .map(|n| left(h.query_all_by_label(n))[0].rect().center().y)
+        .collect();
+    assert!(
+        ys.iter().all(|y| (y - ys[0]).abs() < 1.0),
+        "one row: {ys:?}"
+    );
+}
+
+/// UI6: on a disconnected session the icons are disabled.
+#[test]
+fn ui6_tree_action_icons_are_disabled_without_a_connection() {
+    let (mut app, _, _) = connected_with_tree();
+    if let Some(s) = app.sessions.iter_mut().find(|s| s.id == 1) {
+        s.state = SessionState::Disconnected;
+    }
+    let mut h = harness(app);
+    h.run_steps(4);
+    for name in ["Обновить", "Добавить", "Дочерние", "По имени..."] {
+        let found = left(h.query_all_by_label(name));
+        assert_eq!(found.len(), 1);
+        assert!(found[0].accesskit_node().is_disabled(), "«{name}» disabled");
+    }
+}
+
+/// UI6: «По имени...» opens the add-signal dialog, «Обновить» re-reads the
+/// root (nothing selected), «Добавить» on a branch explains it cannot.
+#[test]
+fn ui6_tree_action_icons_act() {
+    let (app, branch, _) = connected_with_tree();
+    let mut h = harness(app);
+    h.run_steps(3);
+
+    left(h.query_all_by_label("По имени..."))[0].click();
+    h.run_steps(3);
+    assert!(h.state().dialogs.add_signal.open);
+    h.state_mut().dialogs.add_signal.open = false;
+
+    left(h.query_all_by_label("Обновить"))[0].click();
+    h.run_steps(3);
+    let view = &h.state().sessions[0];
+    assert!(view.root_loading, "refresh asked the server for the root");
+
+    // «Добавить» with a branch selected shows the explanation, not a crash.
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    let b = app.seed_tree_item(1, None, 0, node("b", "Ветка", NodeKind::Branch, true));
+    app.set_tree_focus(1, b);
+    let mut h = harness(app);
+    h.run_steps(3);
+    left(h.query_all_by_label("Добавить"))[0].click();
+    h.run_steps(3);
+    assert!(h.state().dialogs.message.is_some());
+    let _ = branch;
+}
+
+/// UI6: a click on a server row (its name, left-aligned) activates it; the
+/// selected row is the active one.
+#[test]
+fn ui6_clicking_a_server_row_selects_it() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(1, EndpointSpec::da("", "Alpha.Server"));
+    app.seed_session(2, EndpointSpec::da("", "Beta.Server"));
+    app.activate_session(1);
+    let mut h = harness(app);
+    h.run_steps(4);
+
+    let beta = left(h.query_all_by_label("Beta.Server"));
+    assert_eq!(beta.len(), 1, "one server row «Beta.Server»");
+    beta[0].click();
+    h.run_steps(3);
+    assert_eq!(h.state().active_session, Some(2));
+    let alpha = left(h.query_all_by_label("Alpha.Server"));
+    assert_eq!(alpha.len(), 1);
+    alpha[0].click();
+    h.run_steps(3);
+    assert_eq!(h.state().active_session, Some(1));
 }
