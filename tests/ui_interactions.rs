@@ -1228,7 +1228,8 @@ fn connect_dialog_ua_security_controls_render() {
     // The trust checkbox, the identity combo and the network-search button are
     // all present on the UA tab.
     assert_eq!(
-        h.query_all_by_label("Доверять сертификату сервера").count(),
+        h.query_all_by_label("Доверять сертификату сервера (только на эту сессию)")
+            .count(),
         1
     );
     assert_eq!(h.query_all_by_label("Поиск через LDS/mDNS").count(), 1);
@@ -2042,7 +2043,8 @@ fn connect_dialog_trust_checkbox_defaults_and_toggles() {
     // Strict trust by default (settings default false).
     assert!(!h.state().dialogs.connect.ua_trust_server_cert);
     // Clicking the checkbox flips the dialog state.
-    h.get_by_label("Доверять сертификату сервера").click();
+    h.get_by_label("Доверять сертификату сервера (только на эту сессию)")
+        .click();
     h.run_steps(5);
     assert!(h.state().dialogs.connect.ua_trust_server_cert);
 }

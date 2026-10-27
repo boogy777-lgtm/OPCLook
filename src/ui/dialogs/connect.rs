@@ -484,7 +484,8 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                         ui.checkbox(
                             &mut dialog.ua_trust_server_cert,
                             tr(lang, Tr::TrustServerCertCheck),
-                        );
+                        )
+                        .on_hover_text(tr(lang, Tr::TrustServerCertTip));
                         // Discovery does not expose user-token policies yet.
                         // Do not silently replace X509 with UserName based on
                         // the endpoint's message security mode. The worker

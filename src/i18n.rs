@@ -329,6 +329,9 @@ pub enum Tr {
     /// Security resolution failed against the server (placeholder: detail).
     SecurityResolveFailed,
     TrustServerCertCheck,
+    /// Tooltip of the trust checkbox: what "trust" means (this session only,
+    /// validity period / host name / ApplicationUri are not checked).
+    TrustServerCertTip,
     IdentityLabel,
     IdentityAnonymous,
     IdentityUserName,
@@ -986,7 +989,10 @@ fn ru(key: Tr) -> &'static str {
         SecModeSignAndEncrypt => "Подпись и шифрование",
         SecurityInvalidCombination => "Недопустимое сочетание политики и режима безопасности: {0}",
         SecurityResolveFailed => "Не удалось выбрать точку безопасности: {0}",
-        TrustServerCertCheck => "Доверять сертификату сервера",
+        TrustServerCertCheck => "Доверять сертификату сервера (только на эту сессию)",
+        TrustServerCertTip => {
+            "Сертификат сервера принимается только на время этого подключения и не сохраняется навсегда. Срок действия сертификата, имя хоста и ApplicationUri не проверяются. Чтобы доверять серверу постоянно, импортируйте его сертификат в PKI-хранилище."
+        }
         IdentityLabel => "Идентичность:",
         IdentityAnonymous => "Анонимно",
         IdentityUserName => "Имя пользователя",
@@ -1562,7 +1568,10 @@ fn en(key: Tr) -> &'static str {
         SecModeSignAndEncrypt => "Sign and Encrypt",
         SecurityInvalidCombination => "Invalid security policy/mode combination: {0}",
         SecurityResolveFailed => "Could not select a security endpoint: {0}",
-        TrustServerCertCheck => "Trust server certificate",
+        TrustServerCertCheck => "Trust the server certificate (this session only)",
+        TrustServerCertTip => {
+            "The server certificate is accepted only for the duration of this connection and is not kept permanently. The certificate's validity period, host name and ApplicationUri are not checked. To trust the server permanently, import its certificate into the PKI store."
+        }
         IdentityLabel => "Identity:",
         IdentityAnonymous => "Anonymous",
         IdentityUserName => "User name",
@@ -2120,7 +2129,10 @@ fn zh(key: Tr) -> &'static str {
         SecModeSignAndEncrypt => "签名并加密",
         SecurityInvalidCombination => "安全策略/模式组合无效: {0}",
         SecurityResolveFailed => "无法选择安全端点: {0}",
-        TrustServerCertCheck => "信任服务器证书",
+        TrustServerCertCheck => "信任服务器证书（仅本次会话）",
+        TrustServerCertTip => {
+            "仅在本次连接期间接受服务器证书，不会永久保存。不检查证书的有效期、主机名和 ApplicationUri。若要永久信任该服务器，请将其证书导入 PKI 存储。"
+        }
         IdentityLabel => "身份:",
         IdentityAnonymous => "匿名",
         IdentityUserName => "用户名",
@@ -3213,9 +3225,9 @@ pub fn backend_text(lang: Lang, msg: &BackendMsg) -> String {
         // ---- UA connect ----
         M::UaCertUntrusted { url, detail, pki } => l!(
             lang,
-            "сертификат сервера {url} не доверенный: {detail}\nВключите «Доверять сертификату сервера» или импортируйте сертификат в PKI-хранилище: {pki}",
-            "the certificate of the server {url} is not trusted: {detail}\nEnable \"Trust the server certificate\" or import the certificate into the PKI store: {pki}",
-            "服务器 {url} 的证书不受信任：{detail}\n请启用“信任服务器证书”，或将证书导入 PKI 存储：{pki}"
+            "сертификат сервера {url} не доверенный: {detail}\nВключите «Доверять сертификату сервера (только на эту сессию)» или импортируйте сертификат в PKI-хранилище: {pki}",
+            "the certificate of the server {url} is not trusted: {detail}\nEnable \"Trust the server certificate (this session only)\" or import the certificate into the PKI store: {pki}",
+            "服务器 {url} 的证书不受信任：{detail}\n请启用“信任服务器证书（仅本次会话）”，或将证书导入 PKI 存储：{pki}"
         ),
         M::UaConnectFailed { url, detail } => l!(
             lang,
@@ -4142,6 +4154,34 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// U13: the trust checkbox says that trust lasts one session, the tooltip
+    /// says what is not checked, and the "untrusted certificate" error points at
+    /// the checkbox by its exact label — in every language.
+    #[test]
+    fn u13_trust_texts_say_session_only_and_what_is_not_checked() {
+        for lang in Lang::ALL {
+            let label = tr(lang, Tr::TrustServerCertCheck);
+            let tip = tr(lang, Tr::TrustServerCertTip);
+            let error = backend_text(
+                lang,
+                &BackendMsg::UaCertUntrusted {
+                    url: "opc.tcp://h:1".to_string(),
+                    detail: "d".to_string(),
+                    pki: "p".to_string(),
+                },
+            );
+            assert!(error.contains(label), "{lang:?}: {error}");
+            assert!(tip.contains("ApplicationUri"), "{lang:?}: {tip}");
+            assert!(tip.contains("PKI"), "{lang:?}: {tip}");
+        }
+        assert!(tr(Lang::Ru, Tr::TrustServerCertCheck).contains("только на эту сессию"));
+        assert!(tr(Lang::En, Tr::TrustServerCertCheck).contains("this session only"));
+        assert!(tr(Lang::Zh, Tr::TrustServerCertCheck).contains("仅本次会话"));
+        assert!(tr(Lang::Ru, Tr::TrustServerCertTip).contains("не сохраняется навсегда"));
+        assert!(tr(Lang::En, Tr::TrustServerCertTip).contains("not kept permanently"));
+        assert!(tr(Lang::Zh, Tr::TrustServerCertTip).contains("不会永久保存"));
     }
 
     #[test]
