@@ -1,4 +1,5 @@
 use super::da_clsid::{ClsidLookup, DiscoveredClsids, is_local_host, resolve_clsid};
+use super::da_router::{DaHost, SESSION_JOIN_BUDGET, run_router};
 use super::da_status::{ServerStatusInfo, check_server_state, format_connect_info};
 use super::da_variant::{
     clear_variant, filetime_to_utc, variant_from_value, variant_to_value, vt_name,
@@ -16,8 +17,10 @@ use crate::opc::bindings::da::{
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
+use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::sync::{Mutex, OnceLock, PoisonError};
+use tokio::sync::mpsc::UnboundedReceiver;
 use windows::Win32::System::Com::{
     CLSCTX_LOCAL_SERVER, CLSCTX_REMOTE_SERVER, CLSCTX_SERVER, CLSIDFromProgID,
     COINIT_MULTITHREADED, COSERVERINFO, CoCreateInstance, CoCreateInstanceEx, CoInitializeEx,
@@ -66,25 +69,58 @@ struct DaSession {
     info: String,
 }
 
+/// The COM side of the router: each session and each discovery runs on its
+/// own thread with its own COM apartment, so a hung DCOM call blocks only
+/// that thread (D2).
+struct WinDaHost;
+
+impl DaHost for WinDaHost {
+    fn run_session(
+        &self,
+        _session: SessionId,
+        commands: &mut UnboundedReceiver<Command>,
+        events: &Sender<Event>,
+    ) {
+        let _com = ComGuard::new();
+        let mut sessions: HashMap<SessionId, DaSession> = HashMap::new();
+        while let Some(command) = commands.blocking_recv() {
+            let disconnect = matches!(command.kind, CommandKind::Disconnect);
+            handle_command(command, &mut sessions, events);
+            // Over after `Disconnect`, or after a failed `Connect` (no session
+            // was stored); the router answers whatever is still queued.
+            if disconnect || sessions.is_empty() {
+                break;
+            }
+        }
+        // Channel closed (gateway shutdown) or session over: drop the group.
+        for (_, session) in sessions {
+            session.shutdown();
+        }
+    }
+
+    fn run_discovery(&self, command: Command, events: &Sender<Event>) {
+        let _com = ComGuard::new();
+        handle_command(command, &mut HashMap::new(), events);
+    }
+}
+
 pub(crate) fn spawn(event_tx: Sender<Event>) -> super::WorkerHandle {
-    let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
     let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
     let join = std::thread::Builder::new()
         .name("opc-da".to_string())
         .spawn(move || {
+            // The router thread is a member of the MTA for as long as it runs.
             let _com = ComGuard::new();
-            let mut sessions: HashMap<SessionId, DaSession> = HashMap::new();
-            while let Some(command) = cmd_rx.blocking_recv() {
-                handle_command(command, &mut sessions, &event_tx);
-            }
-            // Command channel closed (gateway shutdown): drop every group.
-            for (_, session) in sessions {
-                session.shutdown();
-            }
+            run_router(Arc::new(WinDaHost), cmd_rx, event_tx, SESSION_JOIN_BUDGET);
             let _ = done_tx.send(());
-        })
-        .expect("failed to spawn OPC DA worker");
-    super::WorkerHandle::new(cmd_tx, join, done_rx)
+        });
+    match join {
+        Ok(join) => super::WorkerHandle::new(cmd_tx, join, done_rx),
+        // The thread could not be created: hand out a handle with a closed
+        // command channel so `Gateway::send` reports the failure to the caller.
+        Err(_) => super::WorkerHandle::closed(done_rx),
+    }
 }
 
 fn handle_command(

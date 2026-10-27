@@ -14,6 +14,7 @@ pub mod da_variant {
     pub use super::vt::vt_name;
 }
 pub mod da_clsid;
+pub mod da_router;
 pub mod da_status;
 pub mod mdns;
 pub mod model;
@@ -55,7 +56,6 @@ impl WorkerHandle {
 
     /// A handle without a worker (thread creation failed): `send` reports a
     /// closed gateway and `shutdown` has nothing to join.
-    #[cfg(not(windows))]
     pub(crate) fn closed(done: Receiver<()>) -> Self {
         Self {
             tx: None,
