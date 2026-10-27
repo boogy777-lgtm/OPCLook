@@ -275,14 +275,13 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
 
             ui.separator();
             let Some(session_id) = app.active_session else {
-                // UI10: no session at all - the hint and the way out (Ctrl+N).
-                if empty_state(
-                    ui,
-                    tr(lang, Tr::ConnectPrompt),
-                    tr(lang, Tr::ConnectCtrlNButton),
-                ) {
-                    app.open_connect_dialog();
-                }
+                // UI10: no session at all - only the hint here: «Подключиться»
+                // is the button above and the one in the empty table (one action,
+                // not two identical buttons side by side).
+                ui.vertical_centered(|ui| {
+                    ui.add_space(16.0);
+                    ui.label(egui::RichText::new(tr(lang, Tr::ConnectPrompt)).weak());
+                });
                 return;
             };
             let Some(view) = app.sessions.iter().find(|s| s.id == session_id) else {

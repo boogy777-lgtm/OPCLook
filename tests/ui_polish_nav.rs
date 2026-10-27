@@ -440,8 +440,9 @@ fn ui10_no_refresh_button_without_a_connection() {
     assert!(h.query_by_label_contains("Нет соединения").is_some());
 }
 
-/// UI10: no session at all - the hint and «Подключиться (Ctrl+N)», which
-/// opens the connect dialog like Ctrl+N.
+/// UI10: no session at all - the tree area shows the hint only; the one
+/// «Подключиться (Ctrl+N)» action is in the empty table (no twin button on the
+/// left), and Ctrl+N opens the dialog from anywhere.
 #[test]
 fn ui10_no_sessions_offers_connect_like_ctrl_n() {
     let ctx = egui::Context::default();
@@ -449,17 +450,13 @@ fn ui10_no_sessions_offers_connect_like_ctrl_n() {
     let mut h = harness(app);
     h.run_steps(4);
     assert!(h.query_by_label_contains("Подключитесь к OPC").is_some());
-    let buttons = left(h.query_all_by_label("Подключиться (Ctrl+N)"));
-    assert_eq!(buttons.len(), 1);
+    assert!(
+        left(h.query_all_by_label("Подключиться (Ctrl+N)")).is_empty(),
+        "no twin of the table's button in the left panel"
+    );
+    assert_eq!(h.query_all_by_label("Подключиться (Ctrl+N)").count(), 1);
     assert!(!h.state().dialogs.connect.open);
-    buttons[0].click();
-    h.run_steps(3);
-    assert!(h.state().dialogs.connect.open);
-
-    let ctx = egui::Context::default();
-    let mut h = harness(App::new_test(&ctx));
-    h.run_steps(4);
     h.key_press_modifiers(Modifiers::COMMAND, egui::Key::N);
     h.run_steps(3);
-    assert!(h.state().dialogs.connect.open, "Ctrl+N does the same");
+    assert!(h.state().dialogs.connect.open, "Ctrl+N opens the dialog");
 }

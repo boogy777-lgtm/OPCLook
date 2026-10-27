@@ -568,7 +568,6 @@ pub enum Tr {
     /// Empty-tree action button: re-read the root of the active session (the same as F5).
     RefreshF5Button,
     /// Empty-state action button when there is no session: open the connect dialog (the same as Ctrl+N).
-    ConnectCtrlNButton,
     /// Tooltip of the left panel's «add» icon (adds the selected tree node).
     AddNodeTooltip,
     /// Tooltip of the left panel's «add by name» icon.
@@ -1272,7 +1271,6 @@ fn ru(key: Tr) -> &'static str {
         RemoveFromListConfirmText => "Удалить сессию \"{0}\" и все её сигналы из списка?",
         EmptyTabsHint => "Двойной щелчок по серверу в диалоге подключения открывает вкладку",
         RefreshF5Button => "Обновить (F5)",
-        ConnectCtrlNButton => "Подключиться (Ctrl+N)",
         AddNodeTooltip => "Добавить выбранный сигнал в таблицу",
         AddByNameTooltip => "Добавить сигнал по имени (Item ID / NodeId)",
         TreeExpandLabel => "Развернуть",
@@ -1858,7 +1856,6 @@ fn en(key: Tr) -> &'static str {
         RemoveFromListConfirmText => "Remove session \"{0}\" and all its signals from the list?",
         EmptyTabsHint => "Double-click a server in the connect dialog to open a tab",
         RefreshF5Button => "Refresh (F5)",
-        ConnectCtrlNButton => "Connect (Ctrl+N)",
         AddNodeTooltip => "Add the selected signal to the table",
         AddByNameTooltip => "Add a signal by name (item id / NodeId)",
         TreeExpandLabel => "Expand",
@@ -2422,7 +2419,6 @@ fn zh(key: Tr) -> &'static str {
         RemoveFromListConfirmText => "从列表中删除会话 \"{0}\" 及其所有信号？",
         EmptyTabsHint => "在连接对话框中双击服务器可打开选项卡",
         RefreshF5Button => "刷新 (F5)",
-        ConnectCtrlNButton => "连接 (Ctrl+N)",
         AddNodeTooltip => "将所选信号添加到表格",
         AddByNameTooltip => "按名称添加信号 (Item ID / NodeId)",
         TreeExpandLabel => "展开",
