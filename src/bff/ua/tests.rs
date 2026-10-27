@@ -1181,3 +1181,38 @@ fn variables_filter_keeps_folders_navigable() {
     assert_eq!(mask & 1, 1, "folders (objects) are listed too");
     assert_eq!(mask & !3, 0, "methods, types and views stay hidden");
 }
+
+#[test]
+fn aes_policies_resolve_to_their_wire_uris() {
+    let offered = vec![
+        ep(
+            "opc.tcp://h:4840",
+            "http://opcfoundation.org/UA/SecurityPolicy#Aes128_Sha256_RsaOaep",
+            "SignAndEncrypt",
+        ),
+        ep(
+            "opc.tcp://h:4840",
+            "http://opcfoundation.org/UA/SecurityPolicy#Aes256_Sha256_RsaPss",
+            "SignAndEncrypt",
+        ),
+    ];
+    let (uri, mode) = resolve_security(
+        UaSecurityPolicy::Aes256Sha256RsaPss,
+        UaSecurityMode::SignAndEncrypt,
+        &offered,
+    )
+    .unwrap();
+    assert!(uri.ends_with("#Aes256_Sha256_RsaPss"), "{uri}");
+    assert_eq!(mode, MessageSecurityMode::SignAndEncrypt);
+    let (uri, _) = resolve_security(
+        UaSecurityPolicy::Aes128Sha256RsaOaep,
+        UaSecurityMode::Auto,
+        &offered,
+    )
+    .unwrap();
+    assert!(uri.ends_with("#Aes128_Sha256_RsaOaep"), "{uri}");
+    // A server that only offers Aes is reachable with Auto/Auto as well (the
+    // last-resort "first recognized endpoint" rule), instead of "no usable
+    // endpoint".
+    assert!(resolve_security(SECURITY_POLICY_AUTO, SECURITY_MODE_AUTO, &offered).is_ok());
+}

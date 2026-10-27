@@ -116,16 +116,20 @@ pub enum UaSecurityPolicy {
     Basic128Rsa15,
     Basic256,
     Basic256Sha256,
+    Aes128Sha256RsaOaep,
+    Aes256Sha256RsaPss,
 }
 
 impl UaSecurityPolicy {
     /// Every variant, in UI order (guard tests walk this list).
-    pub const ALL: [UaSecurityPolicy; 5] = [
+    pub const ALL: [UaSecurityPolicy; 7] = [
         UaSecurityPolicy::Auto,
         UaSecurityPolicy::None,
         UaSecurityPolicy::Basic128Rsa15,
         UaSecurityPolicy::Basic256,
         UaSecurityPolicy::Basic256Sha256,
+        UaSecurityPolicy::Aes128Sha256RsaOaep,
+        UaSecurityPolicy::Aes256Sha256RsaPss,
     ];
 
     /// Stable, ASCII token for logs/persistence.
@@ -136,6 +140,8 @@ impl UaSecurityPolicy {
             UaSecurityPolicy::Basic128Rsa15 => "Basic128Rsa15",
             UaSecurityPolicy::Basic256 => "Basic256",
             UaSecurityPolicy::Basic256Sha256 => "Basic256Sha256",
+            UaSecurityPolicy::Aes128Sha256RsaOaep => "Aes128_Sha256_RsaOaep",
+            UaSecurityPolicy::Aes256Sha256RsaPss => "Aes256_Sha256_RsaPss",
         }
     }
 
@@ -153,6 +159,12 @@ impl UaSecurityPolicy {
             }
             UaSecurityPolicy::Basic256Sha256 => {
                 Some("http://opcfoundation.org/UA/SecurityPolicy#Basic256Sha256")
+            }
+            UaSecurityPolicy::Aes128Sha256RsaOaep => {
+                Some("http://opcfoundation.org/UA/SecurityPolicy#Aes128_Sha256_RsaOaep")
+            }
+            UaSecurityPolicy::Aes256Sha256RsaPss => {
+                Some("http://opcfoundation.org/UA/SecurityPolicy#Aes256_Sha256_RsaPss")
             }
         }
     }
@@ -185,12 +197,22 @@ impl UaSecurityPolicy {
         if token == "Авто" || token == "авто" {
             return Some(UaSecurityPolicy::Auto);
         }
-        match token.to_ascii_lowercase().as_str() {
+        // The OPC UA URI fragment spells the Aes policies with underscores
+        // (`Aes256_Sha256_RsaPss`) while the library calls them with hyphens;
+        // separators carry no meaning, so ignore them.
+        let compact: String = token
+            .chars()
+            .filter(|c| *c != '_' && *c != '-')
+            .collect::<String>()
+            .to_ascii_lowercase();
+        match compact.as_str() {
             "auto" => Some(UaSecurityPolicy::Auto),
             "none" => Some(UaSecurityPolicy::None),
             "basic128rsa15" => Some(UaSecurityPolicy::Basic128Rsa15),
             "basic256" => Some(UaSecurityPolicy::Basic256),
             "basic256sha256" => Some(UaSecurityPolicy::Basic256Sha256),
+            "aes128sha256rsaoaep" => Some(UaSecurityPolicy::Aes128Sha256RsaOaep),
+            "aes256sha256rsapss" => Some(UaSecurityPolicy::Aes256Sha256RsaPss),
             _ => None,
         }
     }
@@ -213,7 +235,7 @@ impl<'de> Deserialize<'de> for UaSecurityPolicy {
         let raw = String::deserialize(deserializer)?;
         Self::from_stored(&raw).ok_or_else(|| {
             serde::de::Error::custom(format!(
-                "unknown OPC UA security policy {raw:?} (expected Auto, None, Basic128Rsa15, Basic256, Basic256Sha256 or a full SecurityPolicy URI)"
+                "unknown OPC UA security policy {raw:?} (expected Auto, None, Basic128Rsa15, Basic256, Basic256Sha256, Aes128_Sha256_RsaOaep, Aes256_Sha256_RsaPss or a full SecurityPolicy URI)"
             ))
         })
     }
@@ -339,7 +361,9 @@ pub fn validate_security_pair(
             UaSecurityPolicy::Auto
             | UaSecurityPolicy::Basic128Rsa15
             | UaSecurityPolicy::Basic256
-            | UaSecurityPolicy::Basic256Sha256,
+            | UaSecurityPolicy::Basic256Sha256
+            | UaSecurityPolicy::Aes128Sha256RsaOaep
+            | UaSecurityPolicy::Aes256Sha256RsaPss,
             _,
         ) => Ok(()),
     }
@@ -1300,7 +1324,7 @@ mod tests {
     #[test]
     fn security_unknown_strings_are_errors_not_auto() {
         for raw in [
-            "\"Aes128Sha256RsaOaep\"",
+            "\"Aes512Sha999Hypothetical\"",
             "\"http://example.org/SecurityPolicy#Custom\"",
             "\"garbage\"",
         ] {
@@ -1317,6 +1341,36 @@ mod tests {
                 "unexpected error for {raw}: {err}"
             );
         }
+    }
+
+    #[test]
+    fn aes_policies_round_trip_through_every_spelling() {
+        let aes128 = "http://opcfoundation.org/UA/SecurityPolicy#Aes128_Sha256_RsaOaep";
+        let aes256 = "http://opcfoundation.org/UA/SecurityPolicy#Aes256_Sha256_RsaPss";
+        assert_eq!(UaSecurityPolicy::Aes128Sha256RsaOaep.as_uri(), Some(aes128));
+        assert_eq!(UaSecurityPolicy::Aes256Sha256RsaPss.as_uri(), Some(aes256));
+        for (policy, uri) in [
+            (UaSecurityPolicy::Aes128Sha256RsaOaep, aes128),
+            (UaSecurityPolicy::Aes256Sha256RsaPss, aes256),
+        ] {
+            // What the server advertises (URI) and what the settings stored
+            // (token) both come back as the same typed value.
+            assert_eq!(UaSecurityPolicy::from_advertised(uri), Some(policy));
+            assert_eq!(UaSecurityPolicy::from_stored(policy.as_str()), Some(policy));
+            let json = serde_json::to_string(&policy).unwrap();
+            assert_eq!(
+                serde_json::from_str::<UaSecurityPolicy>(&json).unwrap(),
+                policy
+            );
+            assert!(UaSecurityPolicy::ALL.contains(&policy));
+            assert!(validate_security_pair(policy, UaSecurityMode::SignAndEncrypt).is_ok());
+            assert!(validate_security_pair(policy, UaSecurityMode::Sign).is_ok());
+        }
+        // The spelling without separators is accepted too.
+        assert_eq!(
+            UaSecurityPolicy::from_stored("Aes256Sha256RsaPss"),
+            Some(UaSecurityPolicy::Aes256Sha256RsaPss)
+        );
     }
 
     #[test]

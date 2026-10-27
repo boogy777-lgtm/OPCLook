@@ -5,7 +5,7 @@
 //!    ▼ opc.tcp://10.0.0.5:4840          <- click: Auto (or the only option)
 //!         None                           <- click: exact policy/mode
 //!         Basic256Sha256 · Sign
-//!         Aes256_Sha256_RsaPss · …       <- disabled: unsupported by client
+//!         Aes512_Sha999_Hypothetical · … <- disabled: unsupported by client
 //!      opc.tcp://127.0.0.1:4840          <- no advertised security: Auto
 //! ```
 //!
@@ -362,6 +362,9 @@ mod tests {
     const B256: &str = "http://opcfoundation.org/UA/SecurityPolicy#Basic256Sha256";
     const NONE: &str = "http://opcfoundation.org/UA/SecurityPolicy#None";
     const AES: &str = "http://opcfoundation.org/UA/SecurityPolicy#Aes256_Sha256_RsaPss";
+    // A policy this client does not implement (the list of supported ones grows:
+    // Aes256_Sha256_RsaPss used to stand here and is supported now).
+    const FUTURE: &str = "http://opcfoundation.org/UA/SecurityPolicy#Aes512_Sha999_Hypothetical";
 
     #[test]
     fn groups_by_url_and_keeps_first_spelling() {
@@ -418,7 +421,7 @@ mod tests {
     #[test]
     fn unsupported_policies_are_kept_but_never_picked() {
         let nodes = group_endpoints(&[
-            ep("opc.tcp://srv:4840", AES, "SignAndEncrypt"),
+            ep("opc.tcp://srv:4840", FUTURE, "SignAndEncrypt"),
             ep("opc.tcp://srv:4840", B256, "SignAndEncrypt"),
             ep("opc.tcp://srv:4840", NONE, "Sign"),
             ep("opc.tcp://srv:4840", B256, "Invalid"),
@@ -438,6 +441,25 @@ mod tests {
         assert_eq!(pick.policy, UaSecurityPolicy::Basic256Sha256);
         assert_eq!(pick.mode, UaSecurityMode::SignAndEncrypt);
         assert!(pick.connect);
+    }
+
+    #[test]
+    fn aes_policies_are_offered_as_supported_options() {
+        let nodes = group_endpoints(&[
+            ep("opc.tcp://srv:4840", AES, "SignAndEncrypt"),
+            ep("opc.tcp://srv:4840", FUTURE, "SignAndEncrypt"),
+        ]);
+        assert_eq!(
+            nodes[0].options[0],
+            UaSecurityOption::Supported {
+                policy: UaSecurityPolicy::Aes256Sha256RsaPss,
+                mode: UaSecurityMode::SignAndEncrypt
+            }
+        );
+        assert!(matches!(
+            nodes[0].options[1],
+            UaSecurityOption::Unsupported { .. }
+        ));
     }
 
     #[test]

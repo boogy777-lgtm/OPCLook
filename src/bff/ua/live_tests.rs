@@ -958,3 +958,40 @@ fn u5_variables_filter_still_lists_folders_so_the_tree_can_be_walked() {
         "variables inside the folder are listed: {inside:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// U8: Aes128_Sha256_RsaOaep / Aes256_Sha256_RsaPss
+// ---------------------------------------------------------------------------
+
+fn secure_connect_and_read(port: u16, policy: UaSecurityPolicy) {
+    let server = TestServer::start(port);
+    let mut app = Harness::new();
+    let mut endpoint = Harness::endpoint(&server.url);
+    endpoint.ua_security_policy = Some(policy);
+    endpoint.ua_security_mode = Some(UaSecurityMode::SignAndEncrypt);
+    endpoint.ua_trust_server_cert = true;
+    let info = app
+        .connect(1, endpoint)
+        .unwrap_or_else(|e| panic!("{policy} / SignAndEncrypt must connect: {e}"));
+    assert!(
+        info.contains(policy.as_str()),
+        "the session info names the policy: {info:?}"
+    );
+    let added = app.add_items(1, &[(1, server.node("Level"))]);
+    assert!(matches!(added.first(), Some((1, Ok(_)))), "{added:?}");
+    assert!(
+        app.value_of(1, Duration::from_secs(10), |v| *v == Value::F64(1.0))
+            .is_some(),
+        "values flow over the {policy} channel"
+    );
+}
+
+#[test]
+fn u8_aes256_sha256_rsapss_sign_and_encrypt_connects() {
+    secure_connect_and_read(48641, UaSecurityPolicy::Aes256Sha256RsaPss);
+}
+
+#[test]
+fn u8_aes128_sha256_rsaoaep_sign_and_encrypt_connects() {
+    secure_connect_and_read(48642, UaSecurityPolicy::Aes128Sha256RsaOaep);
+}
