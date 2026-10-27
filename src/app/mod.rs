@@ -821,6 +821,7 @@ impl App {
             timestamp: None,
             description: String::new(),
             pending: false,
+            poll_only: false,
         });
         key
     }

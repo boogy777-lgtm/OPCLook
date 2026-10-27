@@ -3164,6 +3164,12 @@ pub fn backend_text(lang: Lang, msg: &BackendMsg) -> String {
             "could not determine the type of {count} OPC UA nodes, writes use the automatic type",
             "无法确定 {count} 个 OPC UA 节点的类型，写入将使用自动类型"
         ),
+        M::PollOnlyItems { count } => l!(
+            lang,
+            "{count} тегов сверх лимитов подписки сервера — они обновляются опросом",
+            "{count} tags exceed the server's subscription limits; they are updated by polling",
+            "{count} 个标签超出服务器订阅限制，将通过轮询更新"
+        ),
         M::StructTypesUnavailable { cause } => {
             let cause = backend_text(lang, cause);
             l!(
@@ -3916,6 +3922,7 @@ mod tests {
                 vec!["§cause§"],
             ),
             (BackendMsg::TimeoutStructTypes, vec![]),
+            (BackendMsg::PollOnlyItems { count: 4343 }, vec!["4343"]),
             (
                 BackendMsg::CreateSubscriptionFailed {
                     detail: "§detail§".to_string(),

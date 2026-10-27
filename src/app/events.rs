@@ -56,6 +56,11 @@ impl App {
         self.tick();
     }
 
+    /// Test-only: re-register a session's rows as on (re)connect.
+    pub fn register_rows_for_test(&mut self, session: SessionId) {
+        self.register_rows(session);
+    }
+
     /// Test-only: make a session the active one (for reconnect-hint lookups).
     pub fn activate_session(&mut self, session: SessionId) {
         self.active_session = Some(session);
@@ -465,6 +470,21 @@ impl App {
                 }
                 if !self.rows.is_empty() {
                     self.last_update = Some(Utc::now());
+                }
+            }
+            EventKind::PollOnly { keys } => {
+                // P1: the server's subscription limits are reached for these
+                // items; the tick keeps reading them while push is active.
+                for key in keys {
+                    if let Some(row) = self.row_position(key).and_then(|p| self.rows.get_mut(p)) {
+                        row.poll_only = true;
+                    }
+                }
+                if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
+                    // Read them right away, not one interval later.
+                    view.last_poll = Instant::now()
+                        .checked_sub(Duration::from_secs(3600))
+                        .unwrap_or_else(Instant::now);
                 }
             }
             EventKind::SubscriptionState { state } => {

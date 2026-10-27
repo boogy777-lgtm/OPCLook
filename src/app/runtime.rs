@@ -118,17 +118,19 @@ impl App {
             let protocol = self.sessions[index].protocol();
             match self.sessions[index].state {
                 SessionState::Connected => {
+                    // With an active UA push subscription only the items no
+                    // subscription takes (P1, server limits) are polled.
+                    let push_active = protocol == Protocol::OpcUa
+                        && self.sessions[index].subscription == SubscriptionState::Active;
                     if !self.sessions[index].read_in_flight
                         && now >= self.sessions[index].last_poll + interval
                         && !self.sessions[index].root_loading
                         && !self.sessions[index].tree.iter().any(|item| item.loading)
-                        && !(protocol == Protocol::OpcUa
-                            && self.sessions[index].subscription == SubscriptionState::Active)
                     {
                         let keys: Vec<ItemKey> = self
                             .rows
                             .iter()
-                            .filter(|row| row.session == id)
+                            .filter(|row| row.session == id && (!push_active || row.poll_only))
                             .map(|row| row.key)
                             .collect();
                         if !keys.is_empty() {
