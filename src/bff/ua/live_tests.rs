@@ -82,7 +82,7 @@ impl TestServer {
             .build()
             .expect("sample server builds");
         drop(guard);
-        rt.spawn(server.run());
+        let running = rt.spawn(server.run());
 
         let ns = handle
             .get_namespace_index(NS_URI)
@@ -116,10 +116,21 @@ impl TestServer {
             );
         }
 
-        // Wait until the listener accepts connections.
-        let deadline = Instant::now() + Duration::from_secs(10);
+        // Wait until the listener accepts connections. The sample server
+        // generates its RSA keypair on start; in a debug build on a busy 2-core
+        // CI runner, with many tests starting servers in parallel, that alone
+        // can take well over 10 s, so the budget is generous. A server task
+        // that already ended (e.g. the port is taken) fails at once instead.
+        let deadline = Instant::now() + Duration::from_secs(90);
         while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
-            assert!(Instant::now() < deadline, "test server did not start");
+            assert!(
+                !running.is_finished(),
+                "test server on port {port} stopped before listening"
+            );
+            assert!(
+                Instant::now() < deadline,
+                "test server on port {port} did not start within 90 s"
+            );
             std::thread::sleep(Duration::from_millis(50));
         }
         Self {
