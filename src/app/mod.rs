@@ -120,12 +120,19 @@ pub(super) enum PendingCtx {
         requested: String,
         name: String,
     },
+    /// One `Write` of a batch: if no reply ever comes, the write is reported
+    /// as failed for this row so the batch counters can complete (K1).
+    WriteKey(ItemKey),
+    /// `AddItems` of these rows: if the whole command fails or never answers
+    /// the rows must leave the "waiting" state (K1).
+    AddKeys(Vec<ItemKey>),
 }
 
 /// One outstanding command.
 #[derive(Clone, Debug)]
 pub(super) struct PendingRequest {
     pub operation: Operation,
+    /// When the command was handed to the worker (K1: expiry, K2: latency).
     pub sent: Instant,
     pub ctx: PendingCtx,
 }
@@ -657,6 +664,18 @@ impl App {
         {
             self.dialogs.add_signal.resolving = None;
             self.dialogs.add_signal.error = Some(tr(self.lang(), Tr::NoConnection).to_string());
+        }
+    }
+
+    /// Test-only: pretend every outstanding request of `session` was sent
+    /// `secs` seconds ago (K1 expiry without sleeping).
+    pub fn age_pending_requests_for_test(&mut self, session: SessionId, secs: u64) {
+        for ((sid, _), pending) in self.pending_requests.iter_mut() {
+            if *sid == session {
+                if let Some(earlier) = pending.sent.checked_sub(Duration::from_secs(secs)) {
+                    pending.sent = earlier;
+                }
+            }
         }
     }
 

@@ -61,7 +61,7 @@ impl App {
         self.active_session = Some(session);
     }
 
-    fn on_event(&mut self, event: Event) {
+    pub(super) fn on_event(&mut self, event: Event) {
         let session = event.session;
         // Request-id correlation: a non-zero reply is accepted only once, and
         // only while its command is still outstanding. Superseded/session-old
@@ -596,10 +596,27 @@ impl App {
                             self.dialogs.add_signal.error = Some(message);
                         }
                     }
+                    Operation::AddItems => {
+                        // The whole command failed (or never got an answer):
+                        // its rows must not wait for values forever.
+                        if let PendingCtx::AddKeys(keys) = &ctx {
+                            for key in keys {
+                                if let Some(row) =
+                                    self.row_position(*key).and_then(|p| self.rows.get_mut(p))
+                                {
+                                    row.pending = false;
+                                    row.quality = Quality {
+                                        code: 0,
+                                        kind: QualityKind::Bad,
+                                        text: message.clone(),
+                                    };
+                                }
+                            }
+                        }
+                    }
                     Operation::Disconnect
                     | Operation::BrowseViews
                     | Operation::Write
-                    | Operation::AddItems
                     | Operation::RemoveItems
                     | Operation::Add
                     | Operation::Remove

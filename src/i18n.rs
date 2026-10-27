@@ -71,6 +71,7 @@ impl std::fmt::Display for Lang {
 pub enum Tr {
     // ---- Top menu ----
     MenuClient,
+    NoReplyFromServer,
     CsvServerAmbiguous,
     CsvServerEmpty,
     CjkFontMissing,
@@ -723,6 +724,7 @@ fn ru(key: Tr) -> &'static str {
     match key {
         // ---- Top menu ----
         MenuClient => "OPC клиент",
+        NoReplyFromServer => "Нет ответа от сервера за {0} с",
         CsvServerAmbiguous => {
             "Строка CSV пропущена: имени сервера «{0}» соответствует несколько подключений, укажите точное имя"
         }
@@ -1279,6 +1281,7 @@ fn en(key: Tr) -> &'static str {
     match key {
         // ---- Top menu ----
         MenuClient => "OPC client",
+        NoReplyFromServer => "No reply from the server within {0} s",
         CsvServerAmbiguous => {
             "CSV row skipped: server name \"{0}\" matches several connections, give the exact name"
         }
@@ -1825,6 +1828,7 @@ fn zh(key: Tr) -> &'static str {
     match key {
         // ---- Top menu ----
         MenuClient => "OPC 客户端",
+        NoReplyFromServer => "服务器 {0} 秒内无响应",
         CsvServerAmbiguous => "已跳过 CSV 行：服务器名“{0}”匹配多个连接，请指定准确名称",
         CsvServerEmpty => "已跳过 CSV 行：信号“{0}”未指定服务器",
         CjkFontMissing => "未找到可显示中文的字体（msyh.ttc、simsun.ttc）：界面文字可能显示为方块",

@@ -91,6 +91,11 @@ pub const UPDATE_INTERVAL_MAX_SECS: u64 = 60;
 pub const OPERATION_TIMEOUT_MIN_SECS: u64 = 1;
 pub const OPERATION_TIMEOUT_MAX_SECS: u64 = 1800;
 pub const OPERATION_TIMEOUT_DEFAULT_SECS: u64 = 60;
+/// K1: no request is declared unanswered sooner than this, whatever the
+/// operation timeout setting says.
+pub const REQUEST_MIN_SECS: u64 = 5;
+/// K1: lower bound for slow operations (connect, discovery, server search).
+pub const REQUEST_SLOW_MIN_SECS: u64 = 45;
 /// Test-interval range (Spin 1..1800 s), default 60.
 pub const TEST_INTERVAL_MIN_SECS: u64 = 1;
 pub const TEST_INTERVAL_MAX_SECS: u64 = 1800;

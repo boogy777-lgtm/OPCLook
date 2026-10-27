@@ -1,7 +1,7 @@
 use super::present::operation_label;
 use super::sessions::reconnect_delay;
 use super::*;
-use crate::bff::model::{BrowseNode, EndpointSpec, EventKind, NodeKind, Operation};
+use crate::bff::model::{BrowseNode, EndpointSpec, EventKind, NodeKind, Operation, WriteRequest};
 use crate::constants::{RECONNECT_MAX_ATTEMPTS, RECONNECT_MAX_DELAY_SECS};
 use crate::i18n::Lang;
 use crate::settings::Options;
@@ -1144,4 +1144,203 @@ fn a1_build_fonts_appends_the_cjk_face_as_a_fallback_only() {
     let (fonts, loaded) = build_fonts(&[], &[], &[]);
     assert!(loaded.is_none() && !fonts.font_data.contains_key("cjk"));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn journal_lines(app: &App) -> Vec<String> {
+    app.journal
+        .entries()
+        .iter()
+        .map(|e| e.render(Lang::Ru))
+        .collect()
+}
+
+fn no_reply_lines(app: &App) -> usize {
+    journal_lines(app)
+        .iter()
+        .filter(|l| l.contains("Нет ответа от сервера"))
+        .count()
+}
+
+#[test]
+fn k1_request_timeout_honours_the_setting_with_floors() {
+    use super::runtime::request_timeout;
+    // Plain operations follow the setting but never go below 5 s.
+    assert_eq!(request_timeout(Operation::Read, 60).as_secs(), 60);
+    assert_eq!(request_timeout(Operation::Read, 1).as_secs(), 5);
+    // Slow operations get at least 45 s.
+    assert_eq!(request_timeout(Operation::Connect, 10).as_secs(), 45);
+    assert_eq!(request_timeout(Operation::Discover, 10).as_secs(), 45);
+    assert_eq!(request_timeout(Operation::Connect, 300).as_secs(), 300);
+}
+
+#[test]
+fn k1_fresh_requests_do_not_expire() {
+    let (_ctx, mut app) = tree_app();
+    app.browse(1, String::new());
+    app.age_pending_requests_for_test(1, 20);
+    app.tick_for_test();
+    assert_eq!(app.pending_request_ids_for_test(1).len(), 1);
+    assert_eq!(no_reply_lines(&app), 0);
+}
+
+#[test]
+fn k1_unanswered_root_browse_stops_the_spinner_and_reports() {
+    let (_ctx, mut app) = tree_app();
+    app.browse(1, String::new());
+    assert!(app.sessions[0].root_loading);
+    app.age_pending_requests_for_test(1, 3600);
+    app.tick_for_test();
+    assert!(!app.sessions[0].root_loading, "spinner must stop");
+    assert!(app.pending_request_ids_for_test(1).is_empty());
+    assert_eq!(no_reply_lines(&app), 1, "{:?}", journal_lines(&app));
+}
+
+#[test]
+fn k1_unanswered_node_expand_resets_only_the_loading_flags() {
+    let (_ctx, mut app) = tree_app();
+    app.on_event_for_test_at(
+        1,
+        EventKind::Browse {
+            node_id: String::new(),
+            children: vec![branch_node("ns=1;s=P", "P", true)],
+        },
+    );
+    let item = item_id_named(&app, "P");
+    app.browse_item(1, item);
+    assert!(app.sessions[0].tree[0].loading);
+    app.age_pending_requests_for_test(1, 3600);
+    app.tick_for_test();
+    assert!(!app.sessions[0].tree[0].loading);
+    assert!(!app.sessions[0].tree[0].loaded, "can be expanded again");
+}
+
+#[test]
+fn k1_unanswered_read_frees_the_poll_slot_once() {
+    let (_ctx, mut app) = tree_app();
+    app.seed_row(1, "Tag1", "Tag1", Value::I64(1));
+    app.sessions[0].read_in_flight = true;
+    app.send(
+        1,
+        Protocol::OpcUa,
+        CommandKind::Read {
+            keys: vec![app.rows[0].key],
+        },
+    );
+    app.age_pending_requests_for_test(1, 3600);
+    app.tick_for_test();
+    assert!(
+        !app.sessions[0].read_in_flight || app.pending_request_ids_for_test(1).len() == 1,
+        "the slot is free (a new poll may already be in flight)"
+    );
+    assert_eq!(no_reply_lines(&app), 1, "one message, not two");
+}
+
+#[test]
+fn k1_late_reply_after_expiry_is_dropped() {
+    let (_ctx, mut app) = tree_app();
+    app.browse(1, String::new());
+    let request = app.pending_request_ids_for_test(1)[0];
+    app.age_pending_requests_for_test(1, 3600);
+    app.tick_for_test();
+    app.on_event_for_test_with_request(
+        1,
+        request,
+        EventKind::Browse {
+            node_id: String::new(),
+            children: vec![branch_node("ns=1;s=P", "P", true)],
+        },
+    );
+    assert!(app.sessions[0].tree.is_empty(), "late answer ignored");
+}
+
+#[test]
+fn k1_unanswered_connect_from_the_dialog_shows_the_error_there() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    let _ = app.connect_from_dialog(EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let session = app.sessions.last().expect("session").id;
+    assert_eq!(app.dialogs.connect.connecting, Some(session));
+    app.age_pending_requests_for_test(session, 3600);
+    app.tick_for_test();
+    assert_eq!(app.dialogs.connect.connecting, None);
+    assert!(
+        app.dialogs
+            .connect
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("Нет ответа"))
+    );
+    assert_eq!(
+        app.sessions.last().unwrap().state,
+        SessionState::Disconnected
+    );
+}
+
+#[test]
+fn k1_unanswered_resolve_name_unblocks_the_add_signal_dialog() {
+    let (_ctx, mut app) = tree_app();
+    open_add_by_name(&mut app, 1, "0:Objects/2:Tag1");
+    assert!(app.dialogs.add_signal.resolving.is_some());
+    app.age_pending_requests_for_test(1, 3600);
+    app.tick_for_test();
+    assert_eq!(app.dialogs.add_signal.resolving, None);
+    assert!(app.dialogs.add_signal.open);
+    assert!(app.dialogs.add_signal.error.is_some());
+}
+
+#[test]
+fn k1_unanswered_add_items_leaves_the_waiting_state() {
+    let (_ctx, mut app) = tree_app();
+    app.add_items(1, vec![("ns=2;s=Tag1".to_string(), "Tag1".to_string())]);
+    assert!(app.rows[0].pending);
+    app.age_pending_requests_for_test(1, 3600);
+    app.tick_for_test();
+    assert!(!app.rows[0].pending, "row must stop waiting");
+    assert_eq!(app.rows[0].quality.kind, QualityKind::Bad);
+}
+
+#[test]
+fn k1_unanswered_write_completes_the_batch_as_failed() {
+    let (_ctx, mut app) = tree_app();
+    app.seed_row(1, "Tag1", "Tag1", Value::I64(1));
+    let key = app.rows[0].key;
+    app.pending_writes = 1;
+    app.write_total = 1;
+    app.send_with(
+        1,
+        Protocol::OpcUa,
+        CommandKind::Write {
+            request: WriteRequest {
+                key,
+                value: Value::I64(2),
+                type_hint: None,
+            },
+        },
+        PendingCtx::WriteKey(key),
+    );
+    app.age_pending_requests_for_test(1, 3600);
+    app.tick_for_test();
+    assert_eq!(app.pending_writes, 0);
+    assert_eq!(app.write_err, 1);
+    assert!(app.last_write_summary.is_some());
+}
+
+#[test]
+fn k1_disconnect_and_subscription_expire_silently() {
+    let (_ctx, mut app) = tree_app();
+    app.send(1, Protocol::OpcUa, CommandKind::Disconnect);
+    app.send(
+        1,
+        Protocol::OpcUa,
+        CommandKind::ConfigureUaSubscription {
+            publishing_interval_ms: 1000,
+            deadband: 0.0,
+        },
+    );
+    assert_eq!(app.pending_request_ids_for_test(1).len(), 2);
+    app.age_pending_requests_for_test(1, 3600);
+    app.tick_for_test();
+    assert!(app.pending_request_ids_for_test(1).is_empty());
+    assert_eq!(no_reply_lines(&app), 0);
+    assert_eq!(app.sessions[0].state, SessionState::Connected);
 }

@@ -57,7 +57,13 @@ impl App {
             self.journal.info_l(Tr::AddFailedEmpty, &[]);
             return;
         }
-        self.send(session, protocol, CommandKind::AddItems { items: specs });
+        let keys: Vec<ItemKey> = specs.iter().map(|spec| spec.key).collect();
+        self.send_with(
+            session,
+            protocol,
+            CommandKind::AddItems { items: specs },
+            PendingCtx::AddKeys(keys),
+        );
         self.journal.info_l(Tr::AddedSignals, &[&added.to_string()]);
     }
 
@@ -75,7 +81,13 @@ impl App {
             });
         }
         if !specs.is_empty() {
-            self.send(session, protocol, CommandKind::AddItems { items: specs });
+            let keys: Vec<ItemKey> = specs.iter().map(|spec| spec.key).collect();
+            self.send_with(
+                session,
+                protocol,
+                CommandKind::AddItems { items: specs },
+                PendingCtx::AddKeys(keys),
+            );
         }
     }
 
@@ -261,10 +273,12 @@ impl App {
     fn perform_write(&mut self, pending: PendingWrites) {
         let count = pending.requests.len();
         for request in pending.requests {
-            self.send(
+            let key = request.key;
+            self.send_with(
                 pending.session,
                 pending.protocol,
                 CommandKind::Write { request },
+                PendingCtx::WriteKey(key),
             );
         }
         self.dialogs.write.open = false;

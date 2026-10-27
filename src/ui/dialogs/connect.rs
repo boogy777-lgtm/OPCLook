@@ -118,7 +118,6 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
 
                 let is_network = dialog.network_tab;
                 let is_da = !is_network && dialog.protocol == Protocol::OpcDa;
-                let is_ua = !is_network && dialog.protocol == Protocol::OpcUa;
                 let ua_busy = dialog.ua_searching
                     || dialog.ua_network_searching
                     || dialog.ua_subnet_searching
