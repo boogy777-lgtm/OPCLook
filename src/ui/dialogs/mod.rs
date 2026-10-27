@@ -7,6 +7,7 @@ mod csv_import;
 mod message;
 mod network;
 mod options;
+mod ua_tree;
 mod write;
 
 use about::about_dialog;

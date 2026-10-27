@@ -20,6 +20,10 @@
 //! index for an IPv6 source, 0/all interfaces for loopback or an unbound
 //! search).
 
+// Only the Windows `dnsapi` backend consumes most of these helpers; on other
+// hosts they are exercised by unit tests only.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
+
 use crate::bff::net::{NetworkBinding, endpoint_url_for};
 use crate::constants::MDNS_WINDOW;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -87,25 +91,39 @@ pub(crate) fn interface_index_for(binding: Option<&NetworkBinding>) -> u32 {
     }
 }
 
-/// Run a bounded mDNS discovery. Never panics; failures are logged and
-/// reported as an empty list.
-pub(crate) fn discover(binding: Option<&NetworkBinding>) -> Vec<MdnService> {
+/// What one mDNS discovery run produced: the resolved services plus journal
+/// lines for anything that failed or was skipped (a release build has no console,
+/// so these must reach the application journal, not stderr).
+#[derive(Debug, Default)]
+pub(crate) struct MdnsOutcome {
+    pub services: Vec<MdnService>,
+    pub notes: Vec<String>,
+}
+
+/// Run a bounded mDNS discovery. Never panics; a failure is reported in
+/// [`MdnsOutcome::notes`] together with an empty service list.
+pub(crate) fn discover(binding: Option<&NetworkBinding>) -> MdnsOutcome {
     #[cfg(windows)]
     {
         let interface = interface_index_for(binding);
         match windows_impl::discover(interface) {
-            Ok(services) => services,
-            Err(error) => {
-                eprintln!("mDNS discovery failed: {error}");
-                Vec::new()
-            }
+            Ok(services) => MdnsOutcome {
+                services,
+                notes: Vec::new(),
+            },
+            Err(error) => MdnsOutcome {
+                services: Vec::new(),
+                notes: vec![format!("mDNS: поиск не удался: {error}")],
+            },
         }
     }
     #[cfg(not(windows))]
     {
         let _ = binding;
-        eprintln!("mDNS discovery is not supported on this platform");
-        Vec::new()
+        MdnsOutcome {
+            services: Vec::new(),
+            notes: vec!["mDNS: поиск не поддерживается на этой платформе".to_string()],
+        }
     }
 }
 

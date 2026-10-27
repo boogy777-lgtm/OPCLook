@@ -33,10 +33,11 @@ impl App {
             fmt(self.lang(), Tr::ServerHostSuffix, &[&host])
         };
         self.journal.info_l(Tr::ReqServerList, &[&host_suffix]);
-        self.send(
+        self.send_with(
             0,
             Protocol::OpcDa,
             CommandKind::Discover { host: host.clone() },
+            PendingCtx::Host(host.clone()),
         );
         self.hold_da_route(0, &host, prepared);
     }
@@ -410,17 +411,27 @@ fn merge_ua_server(dialog: &mut ConnectDialog, server: crate::bff::model::UaServ
             .position(|s| s.application_uri.trim().eq_ignore_ascii_case(app_uri))
     };
     if existing.is_none() {
+        // URL fallback only when one side has no URI: two servers with
+        // different application URIs are different servers even if a stale
+        // discovery record points both at the same URL.
         existing = dialog.ua_search_results.iter().position(|s| {
-            s.endpoints.iter().any(|existing| {
-                server.endpoints.iter().any(|incoming| {
-                    normalized_ua_url(&existing.url) == normalized_ua_url(&incoming.url)
+            (app_uri.is_empty() || s.application_uri.trim().is_empty())
+                && s.endpoints.iter().any(|existing| {
+                    server.endpoints.iter().any(|incoming| {
+                        normalized_ua_url(&existing.url) == normalized_ua_url(&incoming.url)
+                    })
                 })
-            })
         });
     }
     match existing {
         Some(index) => {
             let existing = &mut dialog.ua_search_results[index];
+            if existing.application_name.trim().is_empty() {
+                existing.application_name = server.application_name.clone();
+            }
+            if existing.application_uri.trim().is_empty() {
+                existing.application_uri = server.application_uri.clone();
+            }
             for endpoint in server.endpoints {
                 if !existing
                     .endpoints
@@ -449,8 +460,26 @@ fn same_ua_endpoint(
         && left.security_mode == right.security_mode
 }
 
-/// Fold the mDNS/LDS network results and the accumulated per-host results of a
-/// combined UA auto-search into a single, deduplicated server list.
+/// Merge a batch of per-host results into the visible list (dedup by
+/// application URI, then by endpoint URL; endpoints are unioned).
+pub(super) fn merge_ua_servers(
+    dialog: &mut ConnectDialog,
+    servers: Vec<crate::bff::model::UaServerInfo>,
+) {
+    for server in servers {
+        merge_ua_server(dialog, server);
+    }
+    refresh_ua_combos(dialog);
+}
+
+/// Fold the mDNS/LDS network results into the (already merged) per-host
+/// results of a combined UA auto-search.
+///
+/// Network entries go through the same merge as every other source, so a
+/// server already found by a host search still gains the discovery URLs that
+/// only LDS/mDNS reported (e.g. its LAN address). An empty application URI
+/// stays empty (dedup then falls back to the URL); the display name is never
+/// stored as a URI.
 pub(super) fn merge_ua_results(dialog: &mut ConnectDialog) {
     use crate::bff::model::UaServerInfo;
     let mut merged: Vec<UaServerInfo> = std::mem::take(&mut dialog.ua_search_results);
@@ -458,31 +487,19 @@ pub(super) fn merge_ua_results(dialog: &mut ConnectDialog) {
         let endpoints = network
             .discovery_urls
             .iter()
+            .filter(|url| !url.trim().is_empty())
             .map(|url| crate::bff::model::UaEndpointInfo {
                 url: url.clone(),
                 security_policy: String::new(),
                 security_mode: String::new(),
             })
             .collect::<Vec<_>>();
-        let app_uri = network.application_uri.clone();
-        let uri = if app_uri.is_empty() {
-            network.application_name.clone()
-        } else {
-            app_uri
-        };
-        if uri.is_empty() {
-            continue;
-        }
-        if merged
-            .iter()
-            .any(|s| s.application_uri == network.application_uri)
-        {
-            // Already present from a host search: keep the richer entry.
+        if network.application_uri.trim().is_empty() && endpoints.is_empty() {
             continue;
         }
         merged.push(UaServerInfo {
             application_name: network.application_name,
-            application_uri: uri,
+            application_uri: network.application_uri,
             endpoints,
         });
     }

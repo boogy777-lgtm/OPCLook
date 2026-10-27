@@ -1,6 +1,8 @@
 use super::*;
-use crate::bff::model::{CommandKind, EndpointSpec, Protocol, Quality, QualityKind, SessionId};
-use crate::constants::{RECONNECT_BASE_DELAY_SECS, RECONNECT_MAX_ATTEMPTS};
+use crate::bff::model::{CommandKind, EndpointSpec, Protocol, SessionId};
+use crate::constants::{
+    RECONNECT_BASE_DELAY_SECS, RECONNECT_MAX_ATTEMPTS, RECONNECT_MAX_DELAY_SECS,
+};
 use crate::i18n::{Tr, fmt, tr};
 use std::time::{Duration, Instant};
 
@@ -164,13 +166,67 @@ impl App {
         self.open_tab_for_endpoint(endpoint)
     }
 
+    /// «Подключиться» from the connect dialog. The dialog is NOT closed after
+    /// the command is sent: it stays open (spinner on the button) until this
+    /// attempt reports `Connected` (closes) or `Error` (message shown inside
+    /// the dialog). When no `Connect` is in flight afterwards (an already live
+    /// container was just activated) the dialog closes at once. A disconnected
+    /// container that is reused is reconnected, because the user explicitly
+    /// asked to connect. Returns `false` when the attempt was rejected and the
+    /// error is shown in the dialog.
+    pub fn connect_from_dialog(&mut self, endpoint: EndpointSpec) -> bool {
+        let key = Self::dedup_key(&endpoint);
+        let was_disconnected = self
+            .sessions
+            .iter()
+            .find(|s| Self::dedup_key(&s.endpoint) == key)
+            .is_some_and(|s| s.state == SessionState::Disconnected);
+        if !self.open_tab_for_endpoint(endpoint) {
+            return false;
+        }
+        let Some(id) = self.active_session else {
+            self.close_connect_dialog();
+            return true;
+        };
+        let mut state = self.sessions.iter().find(|s| s.id == id).map(|s| s.state);
+        if was_disconnected && state == Some(SessionState::Disconnected) {
+            self.reconnect_session(id);
+            state = self.sessions.iter().find(|s| s.id == id).map(|s| s.state);
+        }
+        match state {
+            Some(SessionState::Connecting) => {
+                self.dialogs.connect.connecting = Some(id);
+                self.dialogs.connect.error = None;
+                true
+            }
+            Some(SessionState::Disconnected) => {
+                // The command could not even be dispatched (dead worker, DA
+                // route refused): the reason is already in `view.info`.
+                let info = self
+                    .sessions
+                    .iter()
+                    .find(|s| s.id == id)
+                    .map(|s| s.info.clone())
+                    .unwrap_or_default();
+                self.dialogs.connect.error = Some(info);
+                false
+            }
+            _ => {
+                self.close_connect_dialog();
+                true
+            }
+        }
+    }
+
     /// Disconnect a session from its server. The session container (endpoint,
     /// tab, rows, tree) is KEPT: only the link is dropped, rows are marked
     /// stale and the tab stays visible + active. This is the only non-destructive
     /// teardown path; `remove_session` fully drops the container.
     pub fn disconnect_session(&mut self, session: SessionId) {
-        let lang = self.lang();
         self.cancel_add_children(session);
+        if self.dialogs.connect.connecting == Some(session) {
+            self.dialogs.connect.connecting = None;
+        }
         // A new lifecycle begins: discard replies still in flight for the old
         // link (only the Disconnect sent below may come back).
         self.clear_pending_requests(session);
@@ -191,13 +247,7 @@ impl App {
         }
         // Keep rows and the tree: tags remain visible with their last values,
         // just marked stale while the server is unreachable.
-        for row in self.rows.iter_mut().filter(|r| r.session == session) {
-            row.quality = Quality {
-                code: 0,
-                kind: QualityKind::Bad,
-                text: tr(lang, Tr::StaleData).to_string(),
-            };
-        }
+        self.mark_session_rows_stale(session);
         self.release_da_routes_for_session(session);
         self.journal
             .info_l(Tr::DisconnectingFrom, &[&endpoint_name]);
@@ -208,6 +258,9 @@ impl App {
     /// It is the only destructive way to remove a container.
     pub fn remove_session(&mut self, session: SessionId) {
         self.cancel_add_children(session);
+        if self.dialogs.connect.connecting == Some(session) {
+            self.dialogs.connect.connecting = None;
+        }
         self.clear_pending_requests(session);
         let (protocol, endpoint_name) = {
             let Some(view) = self.sessions.iter().find(|s| s.id == session) else {
@@ -344,6 +397,22 @@ impl App {
         self.send(session, protocol, CommandKind::Connect { endpoint });
         self.journal
             .info_l(Tr::AutoReconnectAtt, &[&attempt.to_string()]);
+    }
+
+    /// The toolbar «Подключиться» (A7). Always available: with a disconnected
+    /// active session it reconnects that session (the dialog would only make the
+    /// user retype what is already known); in every other case, including the
+    /// first start with no sessions, it opens the connect dialog.
+    pub fn toolbar_connect(&mut self) {
+        let disconnected = self
+            .active_session
+            .and_then(|id| self.sessions.iter().find(|s| s.id == id))
+            .filter(|s| s.state == SessionState::Disconnected)
+            .map(|s| s.id);
+        match disconnected {
+            Some(id) => self.reconnect_session(id),
+            None => self.open_connect_dialog(),
+        }
     }
 
     pub fn reconnect_session(&mut self, session: SessionId) {
@@ -490,13 +559,15 @@ impl App {
     }
 }
 
-/// Exponential reconnect backoff: 1s, 2s, 4s, 8s, ... for attempt 1, 2, 3, 4.
-/// Overflow-safe for absurdly large attempt numbers (kept to u64 seconds).
+/// Exponential reconnect backoff: 1s, 2s, 4s, 8s, ... for attempt 1, 2, 3, 4,
+/// capped at `RECONNECT_MAX_DELAY_SECS`. Overflow-safe for absurd attempt
+/// numbers.
 pub(super) fn reconnect_delay(attempt: u32) -> Duration {
     let shift = attempt.saturating_sub(1);
     let secs = RECONNECT_BASE_DELAY_SECS
         .checked_shl(shift)
-        .unwrap_or(u64::MAX);
+        .unwrap_or(u64::MAX)
+        .min(RECONNECT_MAX_DELAY_SECS);
     Duration::from_secs(secs)
 }
 

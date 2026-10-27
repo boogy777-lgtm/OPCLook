@@ -28,8 +28,10 @@ pub const GRACEFUL_CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::fro
 /// finish, so the library normally closes the temporary channel itself before
 /// the future is dropped.
 pub const DISCOVERY_GUARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
-/// Standard mDNS/LDS discovery endpoints queried by `FindServersOnNetwork`.
-pub const DISCOVERY_URLS: [&str; 2] = ["opc.tcp://localhost:4840", "opc.tcp://127.0.0.1:4840"];
+/// Standard LDS discovery endpoints queried by `FindServersOnNetwork`. Both are
+/// spellings of this machine's own LDS: the numeric one goes first (no name
+/// resolution, no IPv6 detour) and `localhost` is only tried when it is unreachable.
+pub const DISCOVERY_URLS: [&str; 2] = ["opc.tcp://127.0.0.1:4840", "opc.tcp://localhost:4840"];
 
 // ---------------------------------------------------------------------------
 // UA sessions / network discovery
@@ -37,6 +39,22 @@ pub const DISCOVERY_URLS: [&str; 2] = ["opc.tcp://localhost:4840", "opc.tcp://12
 
 /// Hard cap on concurrently open OPC UA sessions (DA sessions are not counted).
 pub const MAX_UA_SESSIONS: usize = 100;
+/// `samplingInterval` of every monitored item. `-1` means "use the subscription's
+/// publishing interval" (OPC UA Part 4, 5.12.2): the sampling rate then follows
+/// the interval the user picks (and `ConfigureUaSubscription` changes) and no
+/// server is asked to sample at "its fastest rate" (`0`), which a PLC-class
+/// server may take as a request to sample every cycle.
+pub const UA_SAMPLING_INTERVAL_MS: f64 = -1.0;
+/// Subscription lifetime / keep-alive counts (lifetime must be >= 3 * keep-alive).
+pub const UA_SUBSCRIPTION_LIFETIME_COUNT: u32 = 60;
+pub const UA_SUBSCRIPTION_KEEPALIVE_COUNT: u32 = 20;
+/// Worker threads of the OPC UA runtime. Sessions, searches and connects are
+/// separate tasks; a couple of threads keep the CPU-bound part of a secure
+/// handshake (RSA) of one session from stalling the I/O of the others.
+pub const UA_HOST_RUNTIME_THREADS: usize = 2;
+/// Commands the host keeps for a session whose `Connect` is still running; more
+/// are answered "not connected" at once so a stuck connect cannot grow memory.
+pub const UA_SESSION_BACKLOG_LIMIT: usize = 256;
 /// Maximum number of address checks the subnet scanner runs at once.
 pub const SCAN_PARALLELISM: usize = 32;
 /// A subnet larger than this many addresses requires explicit confirmation.
@@ -76,6 +94,9 @@ pub const DA_HELPER_EXE_ENV: &str = "OPCDA_NETHELPER_EXE";
 pub const RECONNECT_MAX_ATTEMPTS: u32 = 20;
 /// Base backoff (seconds) for the first reconnect attempt; doubles each time.
 pub const RECONNECT_BASE_DELAY_SECS: u64 = 1;
+/// Ceiling of the reconnect backoff: an unreachable server is retried at least
+/// once a minute instead of at 2^n seconds (U10).
+pub const RECONNECT_MAX_DELAY_SECS: u64 = 60;
 
 // ---------------------------------------------------------------------------
 // Option ranges and defaults (seconds unless noted)
@@ -88,6 +109,11 @@ pub const UPDATE_INTERVAL_MAX_SECS: u64 = 60;
 pub const OPERATION_TIMEOUT_MIN_SECS: u64 = 1;
 pub const OPERATION_TIMEOUT_MAX_SECS: u64 = 1800;
 pub const OPERATION_TIMEOUT_DEFAULT_SECS: u64 = 60;
+/// K1: no request is declared unanswered sooner than this, whatever the
+/// operation timeout setting says.
+pub const REQUEST_MIN_SECS: u64 = 5;
+/// K1: lower bound for slow operations (connect, discovery, server search).
+pub const REQUEST_SLOW_MIN_SECS: u64 = 45;
 /// Test-interval range (Spin 1..1800 s), default 60.
 pub const TEST_INTERVAL_MIN_SECS: u64 = 1;
 pub const TEST_INTERVAL_MAX_SECS: u64 = 1800;
@@ -194,6 +220,7 @@ mod tests {
     fn reconnect_cap_is_the_single_source_of_truth() {
         assert_eq!(RECONNECT_MAX_ATTEMPTS, 20);
         assert_eq!(RECONNECT_BASE_DELAY_SECS, 1);
+        assert!(RECONNECT_MAX_DELAY_SECS >= RECONNECT_BASE_DELAY_SECS);
     }
 
     #[test]

@@ -23,8 +23,6 @@ pub(super) enum TableAction {
     SelectAll,
     ClearSelection,
     SaveCsv,
-    AddSelectedTree,
-    AddChildren,
     MoveColumn(ColumnId, ColumnDir),
     DropColumn(ColumnId, usize),
 }

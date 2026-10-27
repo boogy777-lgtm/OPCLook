@@ -18,11 +18,9 @@ impl App {
             if item_id.trim().is_empty() {
                 continue;
             }
-            if self
-                .rows
-                .iter()
-                .any(|row| row.session == session && row.item_id == item_id)
-            {
+            // Index lookup (A4): a CSV import or an add-children job calls this
+            // once per item, so a scan of all rows would be O(N^2).
+            if self.has_row_for_item(session, &item_id) {
                 continue;
             }
             let key = self.next_key;
@@ -32,7 +30,7 @@ impl App {
             } else {
                 display_name
             };
-            self.rows.push(Row {
+            self.push_row(Row {
                 key,
                 session,
                 item_id: item_id.clone(),
@@ -59,7 +57,13 @@ impl App {
             self.journal.info_l(Tr::AddFailedEmpty, &[]);
             return;
         }
-        self.send(session, protocol, CommandKind::AddItems { items: specs });
+        let keys: Vec<ItemKey> = specs.iter().map(|spec| spec.key).collect();
+        self.send_with(
+            session,
+            protocol,
+            CommandKind::AddItems { items: specs },
+            PendingCtx::AddKeys(keys),
+        );
         self.journal.info_l(Tr::AddedSignals, &[&added.to_string()]);
     }
 
@@ -77,7 +81,13 @@ impl App {
             });
         }
         if !specs.is_empty() {
-            self.send(session, protocol, CommandKind::AddItems { items: specs });
+            let keys: Vec<ItemKey> = specs.iter().map(|spec| spec.key).collect();
+            self.send_with(
+                session,
+                protocol,
+                CommandKind::AddItems { items: specs },
+                PendingCtx::AddKeys(keys),
+            );
         }
     }
 
@@ -260,20 +270,27 @@ impl App {
         })
     }
 
-    fn perform_write(&mut self, pending: PendingWrites) {
+    pub(super) fn perform_write(&mut self, pending: PendingWrites) {
         let count = pending.requests.len();
         for request in pending.requests {
-            self.send(
+            let key = request.key;
+            self.send_with(
                 pending.session,
                 pending.protocol,
                 CommandKind::Write { request },
+                PendingCtx::WriteKey(key),
             );
         }
         self.dialogs.write.open = false;
-        self.pending_writes = count;
-        self.write_total = count;
-        self.write_ok = 0;
-        self.write_err = 0;
+        // A11: a batch started while an earlier one is still running adds to
+        // the same counters; they restart only when nothing is outstanding.
+        if self.pending_writes == 0 {
+            self.write_total = 0;
+            self.write_ok = 0;
+            self.write_err = 0;
+        }
+        self.pending_writes += count;
+        self.write_total += count;
         self.last_write_summary = None;
         let type_label = pending.type_label.clone();
         self.journal
@@ -435,7 +452,7 @@ fn parse_value(
     }
 }
 
-fn infer_kind(
+pub(super) fn infer_kind(
     text: &str,
     canonical_vt: Option<u16>,
     ua_type: Option<&str>,
@@ -477,10 +494,14 @@ fn infer_kind(
     if trimmed.parse::<u64>().is_ok() {
         return WriteKind::U64;
     }
-    if trimmed.contains('.') || trimmed.contains('e') || trimmed.contains('E') {
-        if trimmed.replace(',', ".").parse::<f64>().is_ok() {
-            return WriteKind::F64;
-        }
+    // A decimal comma is a number too (`3,14`); "inf"/"nan" stay strings.
+    if trimmed.chars().any(|c| c.is_ascii_digit())
+        && trimmed
+            .replace(',', ".")
+            .parse::<f64>()
+            .is_ok_and(f64::is_finite)
+    {
+        return WriteKind::F64;
     }
     WriteKind::Str
 }

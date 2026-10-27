@@ -102,6 +102,10 @@ pub(super) fn session_tab_strip(app: &mut App, ui: &mut egui::Ui) {
     // nav and the menu, not here.
     if visible.is_empty() {
         ui.label(egui::RichText::new(tr(lang, Tr::EmptyTabsHint)).weak());
+    } else if visible.len() > 1 {
+        // A8: the tabs pick the server whose tree is shown on the left; they
+        // are NOT a filter of the table below.
+        ui.label(egui::RichText::new(tr(lang, Tr::TabsNotAFilterHint)).weak());
     }
 
     if let Some(id) = switch {

@@ -1,9 +1,12 @@
 use super::discovery::build_discovery_client;
 use super::io::read_values_chunked;
-use super::security::{resolve_security, security_error};
+use super::security::{
+    auto_chose_unprotected_over_secure, resolve_security, security_error, security_summary,
+};
+use super::trust::{TrustLease, purge_stale, trust_for_session};
 use super::values::{
-    data_change_filter, fallback_items, parse_node, ua_access_current_write, ua_data_value,
-    ua_type_name, ua_variant_scalar,
+    data_change_filter, parse_node, ua_access_current_write, ua_data_value, ua_type_name,
+    ua_variant_scalar,
 };
 use super::worker::{send, timeout_drain};
 use crate::bff::model::{
@@ -13,23 +16,25 @@ use crate::bff::model::{
 use crate::bff::net::{BoundConnectionSource, BoundConnectorBuilder, NetworkBinding};
 use crate::constants::{
     CONNECT_TIMEOUT, DISCOVERY_GUARD_TIMEOUT, GRACEFUL_CLOSE_TIMEOUT, IO_TIMEOUT,
-    READ_MAX_ITEMS_PER_CALL,
+    READ_MAX_ITEMS_PER_CALL, UA_SAMPLING_INTERVAL_MS, UA_SUBSCRIPTION_KEEPALIVE_COUNT,
+    UA_SUBSCRIPTION_LIFETIME_COUNT,
 };
 use opcua::client::{
     ClientBuilder, DataChangeCallback, IdentityToken, MonitoredItem, Password, Session,
 };
 use opcua::types::{
-    AttributeId, DataValue as UaDataValue, EndpointDescription, MessageSecurityMode,
-    MonitoredItemCreateRequest, MonitoringMode, MonitoringParameters, NodeId, NumericRange,
-    QualifiedName, ReadValueId, StatusCode, TimestampsToReturn, UserTokenPolicy, UserTokenType,
-    VariantScalarTypeId,
+    AttributeId, DataValue as UaDataValue, EndpointDescription, ExtensionObject,
+    MessageSecurityMode, MonitoredItemCreateRequest, MonitoredItemModifyRequest, MonitoringMode,
+    MonitoringParameters, NodeId, NumericRange, QualifiedName, ReadValueId, StatusCode,
+    TimestampsToReturn, UserTokenPolicy, UserTokenType, VariantScalarTypeId,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
 pub(super) struct UaSession {
     pub(super) session: Arc<Session>,
@@ -46,27 +51,179 @@ pub(super) struct UaSession {
     /// Requested publishing interval (ms) for the push subscription; mirrors the
     /// app's update interval. 0 until ConfigureUaSubscription arrives.
     pub(super) publishing_interval_ms: u64,
-    /// Absolute deadband for DataChangeFilter (0 = off). Applied at creation.
+    /// Absolute deadband for DataChangeFilter (0 = off). Used for new items and
+    /// pushed to the live ones by `apply_subscription_settings`.
     pub(super) deadband: f64,
+    /// Publishing interval (ms) the live subscription actually runs with.
+    pub(super) applied_interval_ms: u64,
+    /// Deadband the live monitored items actually carry.
+    pub(super) applied_deadband: f64,
+    /// Server-assigned monitored item id of every item that is really monitored
+    /// (created with a Good status). `delete`/`modify` address items by this id,
+    /// NOT by the client handle (`ItemKey`).
+    pub(super) monitored: HashMap<ItemKey, u32>,
+    /// Items monitored WITHOUT the deadband filter because the server refused it
+    /// for their attribute/type (for example a Boolean or String node).
+    pub(super) unfiltered: HashSet<ItemKey>,
     /// Set when a request hit [`IO_TIMEOUT`]. A timed-out request may still have
     /// a response in flight, so the session is poisoned: the command loop must
     /// close it gracefully instead of issuing another request on it.
     pub(super) timed_out: bool,
+    /// Keeps the server certificate trusted for this session only (the connect
+    /// dialog's "trust the certificate"); released when the session closes.
+    pub(super) trust: Option<TrustLease>,
+}
+
+/// Monitoring parameters of one item: single-slot queue that discards the
+/// oldest value, sampled at the subscription's publishing interval.
+pub(super) fn monitoring_parameters(
+    key: ItemKey,
+    deadband: f64,
+    with_filter: bool,
+) -> MonitoringParameters {
+    MonitoringParameters {
+        client_handle: key,
+        sampling_interval: UA_SAMPLING_INTERVAL_MS,
+        filter: if with_filter {
+            data_change_filter(deadband)
+        } else {
+            ExtensionObject::null()
+        },
+        queue_size: 1,
+        discard_oldest: true,
+    }
+}
+
+/// Status codes with which a server refuses a monitoring filter (deadband) for
+/// an attribute/type that cannot carry one, for example a Boolean or String
+/// node. The item itself is fine and is monitored again without the filter.
+pub(super) fn is_filter_refusal(status: StatusCode) -> bool {
+    matches!(
+        status.bits() & 0xFFFF_0000,
+        0x8043_0000 | 0x8044_0000 | 0x8045_0000
+    )
+}
+
+/// The node does not exist or is not a variable: the server answered the very
+/// first attribute read with one of these. Such an item can never deliver a
+/// value, so it is refused up front with the server's own reason.
+pub(super) fn is_missing_node(status: StatusCode) -> bool {
+    [
+        StatusCode::BadNodeIdUnknown,
+        StatusCode::BadNodeIdInvalid,
+        StatusCode::BadAttributeIdInvalid,
+    ]
+    .iter()
+    .any(|bad| status.bits() & 0xFFFF_0000 == bad.bits() & 0xFFFF_0000)
+}
+
+/// Why one item could not be monitored.
+pub(super) enum ItemFailure {
+    /// The server answered the item with a Bad status.
+    Status(StatusCode),
+    /// The call itself failed or timed out; the text says why.
+    Call(String),
+}
+
+impl ItemFailure {
+    pub(super) fn text(&self) -> String {
+        match self {
+            ItemFailure::Status(status) => status_text(*status),
+            ItemFailure::Call(reason) => reason.clone(),
+        }
+    }
+
+    /// True when only the deadband filter was refused.
+    pub(super) fn is_filter_refusal(&self) -> bool {
+        matches!(self, ItemFailure::Status(status) if is_filter_refusal(*status))
+    }
+}
+
+/// Language-neutral text for a Bad status of one item: the status name plus its
+/// hexadecimal code, so the row and the journal show exactly what the server said.
+pub(super) fn status_text(status: StatusCode) -> String {
+    format!("{status} (0x{:08X})", status.bits())
+}
+
+/// Pairs the keys of one `CreateMonitoredItems` chunk with the server's
+/// per-item results (same order): the monitored item id of a Good item, or the
+/// reason of a Bad one. A result the server did not send is a failure too, never
+/// silently "fine".
+pub(super) fn create_outcomes(
+    keys: &[ItemKey],
+    results: &[(StatusCode, u32)],
+) -> Vec<(ItemKey, Result<u32, ItemFailure>)> {
+    keys.iter()
+        .enumerate()
+        .map(|(index, key)| {
+            let outcome = match results.get(index) {
+                Some((status, _)) if status.is_bad() => Err(ItemFailure::Status(*status)),
+                Some((_, id)) => Ok(*id),
+                None => Err(ItemFailure::Call(
+                    "сервер не вернул результат для элемента".to_string(),
+                )),
+            };
+            (*key, outcome)
+        })
+        .collect()
+}
+
+/// Folds per-item outcomes back into the caller's item order. A rejected item is
+/// an `Err` with the server's reason; everything else carries its attributes.
+pub(super) fn merge_add_results(
+    items: &[ItemSpec],
+    mut infos: HashMap<ItemKey, ItemInfo>,
+    rejected: &HashMap<ItemKey, String>,
+) -> Vec<(ItemKey, Result<ItemInfo, String>)> {
+    items
+        .iter()
+        .map(|item| {
+            if let Some(reason) = rejected.get(&item.key) {
+                return (item.key, Err(reason.clone()));
+            }
+            let info = infos.remove(&item.key).unwrap_or(ItemInfo {
+                data_type: None,
+                type_id: None,
+                writable: true,
+            });
+            (item.key, Ok(info))
+        })
+        .collect()
 }
 
 impl UaSession {
+    /// Closes the session on the wire: CloseSession + CloseSecureChannel, then
+    /// waits for the event loop to finish on its own (it only returns once the
+    /// channel is fully closed). Aborts it only as a last resort when the
+    /// graceful close cannot complete in [`GRACEFUL_CLOSE_TIMEOUT`].
+    pub(super) async fn close(&mut self) {
+        // Untrust the server certificate once the channel is gone (below), but
+        // keep it while the close handshake still runs.
+        let trust = self.trust.take();
+        let closed = tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, self.session.disconnect()).await;
+        let joined = tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, &mut self.event_loop).await;
+        if closed.is_err() || joined.is_err() {
+            self.event_loop.abort();
+        }
+        drop(trust);
+    }
+
     pub(super) async fn add_items(
         &mut self,
         items: &[ItemSpec],
         tx: &Sender<Event>,
-    ) -> (Vec<(ItemKey, ItemInfo)>, Option<String>) {
+    ) -> (Vec<(ItemKey, Result<ItemInfo, String>)>, Option<String>) {
         // Query the DataType and AccessLevel attributes once per node so the
         // write path can honor the server's actual type and writability.
+        let mut rejected: HashMap<ItemKey, String> = HashMap::new();
         let mut requests = Vec::new();
         let mut plan: Vec<(ItemKey, NodeId)> = Vec::new();
         for item in items {
             let Some(node) = parse_node(&item.item_id) else {
-                plan.push((item.key, NodeId::null()));
+                rejected.insert(
+                    item.key,
+                    format!("некорректный NodeId: {}", item.item_id.trim()),
+                );
                 continue;
             };
             requests.push(ReadValueId {
@@ -81,11 +238,8 @@ impl UaSession {
                 index_range: NumericRange::None,
                 data_encoding: QualifiedName::null(),
             });
-            plan.push((item.key, node));
-        }
-
-        for item in items {
             self.items.insert(item.key, item.item_id.clone());
+            plan.push((item.key, node));
         }
 
         let raw = if requests.is_empty() {
@@ -94,8 +248,21 @@ impl UaSession {
             match read_values_chunked(self, &requests, TimestampsToReturn::Neither, 0.0).await {
                 Ok(values) => Some(values),
                 Err(e) => {
+                    let infos = plan
+                        .iter()
+                        .map(|(key, _)| {
+                            (
+                                *key,
+                                ItemInfo {
+                                    data_type: None,
+                                    type_id: None,
+                                    writable: true,
+                                },
+                            )
+                        })
+                        .collect();
                     return (
-                        fallback_items(items),
+                        merge_add_results(items, infos, &rejected),
                         Some(format!(
                             "не удалось прочитать атрибуты узлов OPC UA, тип/доступ не определён: {e}"
                         )),
@@ -104,20 +271,8 @@ impl UaSession {
             }
         };
 
-        let mut attribute_failures = 0usize;
-        let mut out = Vec::with_capacity(items.len());
-        for (idx, (key, node)) in plan.into_iter().enumerate() {
-            if node.is_null() {
-                out.push((
-                    key,
-                    ItemInfo {
-                        data_type: None,
-                        type_id: None,
-                        writable: true,
-                    },
-                ));
-                continue;
-            }
+        let mut infos: HashMap<ItemKey, ItemInfo> = HashMap::with_capacity(plan.len());
+        for (idx, (key, _)) in plan.iter().enumerate() {
             let mut scalar = None;
             let mut writable = false;
             if let Some(values) = &raw {
@@ -128,27 +283,45 @@ impl UaSession {
                     writable = ua_access_current_write(dv).unwrap_or(false);
                 }
             }
-            if scalar.is_none() {
-                attribute_failures += 1;
-            }
-
             let data_type = scalar.map(|t| ua_type_name(t).to_string());
             let type_id = scalar.map(|t| t as u16);
             if let Some(t) = scalar {
-                self.node_types.insert(key, t);
+                self.node_types.insert(*key, t);
             } else {
-                self.node_types.remove(&key);
+                self.node_types.remove(key);
             }
-            out.push((
-                key,
+            infos.insert(
+                *key,
                 ItemInfo {
                     data_type,
                     type_id,
                     writable,
                 },
-            ));
+            );
         }
 
+        // A node the server does not know (or that is no variable) answered the
+        // attribute read with a Bad status already: refuse it right here, with the
+        // server's own reason, instead of subscribing to something that can never
+        // deliver a value.
+        if let Some(values) = &raw {
+            for (idx, (key, _)) in plan.iter().enumerate() {
+                let status = values.get(idx * 2).and_then(|dv| dv.status);
+                if let Some(status) = status.filter(|s| is_missing_node(*s)) {
+                    rejected.insert(*key, status_text(status));
+                    self.items.remove(key);
+                    self.node_types.remove(key);
+                }
+            }
+        }
+        let plan: Vec<(ItemKey, NodeId)> = plan
+            .into_iter()
+            .filter(|(key, _)| !rejected.contains_key(key))
+            .collect();
+        let attribute_failures = plan
+            .iter()
+            .filter(|(key, _)| !self.node_types.contains_key(key))
+            .count();
         let warning = if attribute_failures > 0 {
             Some(format!(
                 "не удалось определить тип {attribute_failures} узлов OPC UA, запись выполняется с авто-типом"
@@ -157,37 +330,42 @@ impl UaSession {
             None
         };
 
+        if plan.is_empty() {
+            return (merge_add_results(items, infos, &rejected), warning);
+        }
+
         // After items are successfully registered, (re-)establish the push
         // subscription for this session. The same DataChange callback pushes
         // values into the shared event channel so rows update without polling.
         match self.ensure_subscription(tx).await {
             Ok(()) => {
                 if let Some(sub_id) = self.subscription_id {
-                    let monitor = self.monitor_items(tx, sub_id, items).await;
-                    if monitor {
-                        send(
-                            tx,
-                            Event {
-                                request_id: 0,
-                                session: self.session_id,
-                                kind: EventKind::SubscriptionState {
-                                    state: SubscriptionState::Active,
-                                },
-                            },
-                        );
+                    for (key, reason) in self.monitor_items(tx, sub_id, &plan).await {
+                        rejected.insert(key, reason);
                     }
+                    // Push is live as soon as at least one item is really
+                    // monitored. When none is, the app keeps polling.
+                    let state = if self.monitored.is_empty() {
+                        SubscriptionState::Failed
+                    } else {
+                        SubscriptionState::Active
+                    };
+                    self.report_subscription_state(tx, state);
                 }
             }
             Err(message) => {
-                if let Some(mut warning) = warning {
-                    warning.push_str(&format!("\nподписка не создана: {message}"));
-                    return (out, Some(warning));
-                }
-                return (out, Some(format!("подписка не создана: {message}")));
+                let warning = match warning {
+                    Some(mut warning) => {
+                        warning.push_str(&format!("\nподписка не создана: {message}"));
+                        warning
+                    }
+                    None => format!("подписка не создана: {message}"),
+                };
+                return (merge_add_results(items, infos, &rejected), Some(warning));
             }
         }
 
-        (out, warning)
+        (merge_add_results(items, infos, &rejected), warning)
     }
 
     /// Create the single per-session subscription on its first use. Publishing
@@ -214,8 +392,9 @@ impl UaSession {
             });
         let (created, timed_out) = timeout_drain(
             self.session.create_subscription(
-                interval, 60,   // lifetime count (>= 3 * keep_alive)
-                20,   // keep_alive count
+                interval,
+                UA_SUBSCRIPTION_LIFETIME_COUNT,
+                UA_SUBSCRIPTION_KEEPALIVE_COUNT,
                 0,    // max_notifications_per_publish (0 = no limit)
                 0,    // priority
                 true, // publishing_enabled
@@ -228,98 +407,269 @@ impl UaSession {
             self.timed_out = true;
             return Err("таймаут создания подписки OPC UA".to_string());
         }
-        let sub_id = created
-            .expect("request future completes unless it timed out")
-            .map_err(|e| format!("не удалось создать подписку OPC UA: {e}"))?;
+        let Some(created) = created else {
+            return Err("таймаут создания подписки OPC UA".to_string());
+        };
+        let sub_id = created.map_err(|e| format!("не удалось создать подписку OPC UA: {e}"))?;
         self.subscription_id = Some(sub_id);
+        self.applied_interval_ms = interval_ms;
+        self.applied_deadband = self.deadband;
         Ok(())
     }
 
-    /// Create monitored items for `items` on the session subscription, mapping
+    /// Applies new update-interval / deadband settings to the LIVE subscription
+    /// (`ModifySubscription` + `ModifyMonitoredItems`). Without a subscription the
+    /// values are only stored and used when it is created. Returns the problems
+    /// found, each one a journal line; an empty list means everything applied.
+    pub(super) async fn apply_subscription_settings(
+        &mut self,
+        publishing_interval_ms: u64,
+        deadband: f64,
+    ) -> Vec<String> {
+        let interval_ms = publishing_interval_ms.clamp(100, 3600_000);
+        let deadband = if deadband.is_finite() {
+            deadband.max(0.0)
+        } else {
+            0.0
+        };
+        self.publishing_interval_ms = interval_ms;
+        self.deadband = deadband;
+        let Some(sub_id) = self.subscription_id else {
+            return Vec::new();
+        };
+        let mut problems = Vec::new();
+
+        if interval_ms != self.applied_interval_ms {
+            let (modified, timed_out) = timeout_drain(
+                self.session.modify_subscription(
+                    sub_id,
+                    Duration::from_millis(interval_ms),
+                    UA_SUBSCRIPTION_LIFETIME_COUNT,
+                    UA_SUBSCRIPTION_KEEPALIVE_COUNT,
+                    0,
+                    0,
+                ),
+                IO_TIMEOUT,
+            )
+            .await;
+            if timed_out {
+                self.timed_out = true;
+                problems.push("подписка: таймаут изменения интервала публикации".to_string());
+                return problems;
+            }
+            match modified {
+                Some(Ok(())) => self.applied_interval_ms = interval_ms,
+                Some(Err(e)) => {
+                    problems.push(format!("подписка: не удалось изменить интервал: {e}"))
+                }
+                None => {}
+            }
+        }
+
+        if deadband != self.applied_deadband {
+            let mut targets: Vec<(ItemKey, u32)> = self
+                .monitored
+                .iter()
+                .filter(|(key, _)| !self.unfiltered.contains(key))
+                .map(|(key, id)| (*key, *id))
+                .collect();
+            targets.sort_unstable();
+            let mut failed = 0usize;
+            for chunk in targets.chunks(READ_MAX_ITEMS_PER_CALL.max(1)) {
+                let requests: Vec<MonitoredItemModifyRequest> = chunk
+                    .iter()
+                    .map(|(key, id)| MonitoredItemModifyRequest {
+                        monitored_item_id: *id,
+                        requested_parameters: MonitoringParameters {
+                            client_handle: *key,
+                            sampling_interval: UA_SAMPLING_INTERVAL_MS,
+                            filter: data_change_filter(deadband),
+                            queue_size: 1,
+                            discard_oldest: true,
+                        },
+                    })
+                    .collect();
+                let (modified, timed_out) = timeout_drain(
+                    self.session.modify_monitored_items(
+                        sub_id,
+                        TimestampsToReturn::Both,
+                        &requests,
+                    ),
+                    IO_TIMEOUT,
+                )
+                .await;
+                if timed_out {
+                    self.timed_out = true;
+                    problems.push("подписка: таймаут изменения мёртвой зоны".to_string());
+                    return problems;
+                }
+                match modified {
+                    Some(Ok(results)) => {
+                        for (index, (key, id)) in chunk.iter().enumerate() {
+                            let status = results.get(index).map(|r| r.status_code);
+                            match status {
+                                Some(status) if status.is_bad() => {
+                                    if is_filter_refusal(status) {
+                                        // Not a numeric node: it simply has no
+                                        // deadband. Keep it monitored as it is.
+                                        self.unfiltered.insert(*key);
+                                    } else {
+                                        failed += 1;
+                                    }
+                                }
+                                Some(_) => {}
+                                None => failed += 1,
+                            }
+                            let _ = id;
+                        }
+                    }
+                    Some(Err(e)) => {
+                        problems.push(format!("подписка: не удалось изменить мёртвую зону: {e}"));
+                        return problems;
+                    }
+                    None => return problems,
+                }
+            }
+            if failed > 0 {
+                problems.push(format!(
+                    "подписка: сервер отклонил изменение мёртвой зоны для {failed} элементов"
+                ));
+            } else {
+                self.applied_deadband = deadband;
+            }
+        }
+        problems
+    }
+
+    /// Builds the `CreateMonitoredItems` entry of one node.
+    fn monitor_request(
+        &self,
+        key: ItemKey,
+        node: &NodeId,
+        with_filter: bool,
+    ) -> MonitoredItemCreateRequest {
+        MonitoredItemCreateRequest {
+            item_to_monitor: ReadValueId {
+                node_id: node.clone(),
+                attribute_id: AttributeId::Value as u32,
+                index_range: NumericRange::None,
+                data_encoding: QualifiedName::null(),
+            },
+            monitoring_mode: MonitoringMode::Reporting,
+            requested_parameters: monitoring_parameters(key, self.deadband, with_filter),
+        }
+    }
+
+    /// Sends one `CreateMonitoredItems` round (chunked) and returns, in request
+    /// order, either the server-assigned monitored item id or the Bad status the
+    /// server gave that item. A failure of the whole call is an `Err`.
+    async fn create_round(
+        &mut self,
+        subscription_id: u32,
+        round: &[(ItemKey, MonitoredItemCreateRequest)],
+        tx: &Sender<Event>,
+    ) -> Vec<(ItemKey, Result<u32, ItemFailure>)> {
+        let mut out: Vec<(ItemKey, Result<u32, ItemFailure>)> = Vec::with_capacity(round.len());
+        for chunk in round.chunks(READ_MAX_ITEMS_PER_CALL.max(1)) {
+            let requests: Vec<MonitoredItemCreateRequest> =
+                chunk.iter().map(|(_, request)| request.clone()).collect();
+            let (created, timed_out) = timeout_drain(
+                self.session.create_monitored_items(
+                    subscription_id,
+                    TimestampsToReturn::Both,
+                    requests,
+                ),
+                IO_TIMEOUT,
+            )
+            .await;
+            let failure = if timed_out {
+                self.timed_out = true;
+                Some("таймаут создания контролируемых элементов".to_string())
+            } else {
+                match created {
+                    Some(Ok(results)) => {
+                        let keys: Vec<ItemKey> = chunk.iter().map(|(key, _)| *key).collect();
+                        let statuses: Vec<(StatusCode, u32)> = results
+                            .iter()
+                            .map(|item| (item.result.status_code, item.result.monitored_item_id))
+                            .collect();
+                        out.extend(create_outcomes(&keys, &statuses));
+                        None
+                    }
+                    Some(Err(e)) => Some(format!("не удалось контролировать элементы: {e}")),
+                    None => Some("таймаут создания контролируемых элементов".to_string()),
+                }
+            };
+            if let Some(reason) = failure {
+                // The whole call failed: every item of this and the remaining
+                // chunks is reported with the reason, never silently dropped.
+                self.log(tx, format!("подписка: {reason}"));
+                let done = out.len();
+                for (key, _) in round.iter().skip(done) {
+                    out.push((*key, Err(ItemFailure::Call(reason.clone()))));
+                }
+                break;
+            }
+        }
+        out
+    }
+
+    /// Create monitored items for `nodes` on the session subscription, mapping
     /// each ItemKey to the monitored item's client handle and applying the
-    /// configured absolute deadband filter (0 = none). Returns true once the
-    /// subscription is live and pushing.
+    /// configured absolute deadband filter (0 = none). Every item's own
+    /// `status_code` is checked: a Bad item is NOT monitored and is returned with
+    /// the server's reason, so the caller can show it instead of leaving the row
+    /// "waiting for a value" forever. An item refused only because of the
+    /// deadband filter (Boolean/String nodes) is monitored again without it.
     async fn monitor_items(
         &mut self,
         tx: &Sender<Event>,
         subscription_id: u32,
-        items: &[ItemSpec],
-    ) -> bool {
-        let requests: Vec<MonitoredItemCreateRequest> = items
+        nodes: &[(ItemKey, NodeId)],
+    ) -> Vec<(ItemKey, String)> {
+        let round: Vec<(ItemKey, MonitoredItemCreateRequest)> = nodes
             .iter()
-            .filter_map(|item| {
-                let node = parse_node(&item.item_id)?;
-                Some(MonitoredItemCreateRequest {
-                    item_to_monitor: ReadValueId {
-                        node_id: node,
-                        attribute_id: AttributeId::Value as u32,
-                        index_range: NumericRange::None,
-                        data_encoding: QualifiedName::null(),
-                    },
-                    monitoring_mode: MonitoringMode::Reporting,
-                    requested_parameters: MonitoringParameters {
-                        client_handle: item.key,
-                        sampling_interval: 0.0,
-                        filter: data_change_filter(self.deadband),
-                        queue_size: 1,
-                        discard_oldest: true,
-                    },
-                })
-            })
+            .map(|(key, node)| (*key, self.monitor_request(*key, node, true)))
             .collect();
+        let mut rejected: Vec<(ItemKey, String)> = Vec::new();
+        let mut retry: Vec<(ItemKey, NodeId)> = Vec::new();
+        for (key, outcome) in self.create_round(subscription_id, &round, tx).await {
+            match outcome {
+                Ok(id) => {
+                    self.monitored.insert(key, id);
+                }
+                Err(failure) => {
+                    let node = nodes.iter().find(|(k, _)| *k == key).map(|(_, n)| n);
+                    match node {
+                        Some(node)
+                            if failure.is_filter_refusal()
+                                && self.deadband > 0.0
+                                && !self.timed_out =>
+                        {
+                            retry.push((key, node.clone()));
+                        }
+                        _ => rejected.push((key, failure.text())),
+                    }
+                }
+            }
+        }
 
-        if requests.is_empty() || self.subscription_id.is_none() {
-            self.report_subscription_state(tx, SubscriptionState::Inactive);
-            return false;
-        }
-        let (created, timed_out) = timeout_drain(
-            self.session.create_monitored_items(
-                subscription_id,
-                TimestampsToReturn::Both,
-                requests,
-            ),
-            IO_TIMEOUT,
-        )
-        .await;
-        let ok = match (created, timed_out) {
-            (_, true) => {
-                self.timed_out = true;
-                send(
-                    tx,
-                    Event {
-                        request_id: 0,
-                        session: self.session_id,
-                        kind: EventKind::Log {
-                            message: "подписка: таймаут создания контролируемых элементов"
-                                .to_string(),
-                        },
-                    },
-                );
-                false
+        if !retry.is_empty() {
+            let round: Vec<(ItemKey, MonitoredItemCreateRequest)> = retry
+                .iter()
+                .map(|(key, node)| (*key, self.monitor_request(*key, node, false)))
+                .collect();
+            for (key, outcome) in self.create_round(subscription_id, &round, tx).await {
+                match outcome {
+                    Ok(id) => {
+                        self.monitored.insert(key, id);
+                        self.unfiltered.insert(key);
+                    }
+                    Err(failure) => rejected.push((key, failure.text())),
+                }
             }
-            (Some(Ok(_)), false) => true,
-            (Some(Err(e)), false) => {
-                send(
-                    tx,
-                    Event {
-                        request_id: 0,
-                        session: self.session_id,
-                        kind: EventKind::Log {
-                            message: format!("подписка: не удалось контролировать элементы: {e}"),
-                        },
-                    },
-                );
-                false
-            }
-            (None, false) => false,
-        };
-        if !ok {
-            // Monitor failed: fall back to polling by reporting the failure
-            // (the app keeps periodic Read for Failed, like Inactive).
-            self.report_subscription_state(tx, SubscriptionState::Failed);
-            return false;
         }
-        true
+        rejected
     }
 
     /// Report the current subscription state so the app knows whether to poll.
@@ -334,54 +684,96 @@ impl UaSession {
         );
     }
 
+    /// Unsolicited diagnostic line for the application journal.
+    fn log(&self, tx: &Sender<Event>, message: String) {
+        send(
+            tx,
+            Event {
+                request_id: 0,
+                session: self.session_id,
+                kind: EventKind::Log { message },
+            },
+        );
+    }
+
     /// Delete the monitored items for `keys` and drop the whole subscription
-    /// when no item remains. Returns the keys that were actually monitored so
-    /// the caller can prune its maps once the server confirmed the delete.
-    pub(super) async fn remove_items(&mut self, tx: &Sender<Event>, keys: &[ItemKey]) {
-        let Some(sub_id) = self.subscription_id else {
-            return;
-        };
-        let handles: Vec<u32> = keys
+    /// when no item remains. Items are addressed by the server-assigned
+    /// monitored item id (the `ItemKey` is only the client handle). Returns the
+    /// problems found, each one a journal line.
+    pub(super) async fn remove_items(
+        &mut self,
+        tx: &Sender<Event>,
+        keys: &[ItemKey],
+    ) -> Vec<String> {
+        let mut problems = Vec::new();
+        let known: Vec<ItemKey> = keys
             .iter()
             .filter(|k| self.items.contains_key(k))
             .copied()
             .collect();
-        if handles.is_empty() {
-            return;
+        if known.is_empty() {
+            return problems;
         }
         let mut poisoned = false;
-        for chunk in handles.chunks(READ_MAX_ITEMS_PER_CALL.max(1)) {
-            let (delete_result, timed_out) = timeout_drain(
-                self.session.delete_monitored_items(sub_id, chunk),
-                IO_TIMEOUT,
-            )
-            .await;
-            if timed_out {
-                self.timed_out = true;
-                poisoned = true;
-                break;
-            }
-            match delete_result.expect("request future completes unless it timed out") {
-                Ok(_) => {}
-                Err(_) => break,
+        if let Some(sub_id) = self.subscription_id {
+            let ids: Vec<u32> = known
+                .iter()
+                .filter_map(|key| self.monitored.get(key).copied())
+                .collect();
+            for chunk in ids.chunks(READ_MAX_ITEMS_PER_CALL.max(1)) {
+                let (delete_result, timed_out) = timeout_drain(
+                    self.session.delete_monitored_items(sub_id, chunk),
+                    IO_TIMEOUT,
+                )
+                .await;
+                if timed_out {
+                    self.timed_out = true;
+                    poisoned = true;
+                    break;
+                }
+                match delete_result {
+                    Some(Ok(statuses)) => {
+                        let bad = statuses
+                            .iter()
+                            .filter(|s| {
+                                s.is_bad()
+                                    && s.bits() & 0xFFFF_0000
+                                        != StatusCode::BadMonitoredItemIdInvalid.bits()
+                            })
+                            .count();
+                        if bad > 0 {
+                            problems.push(format!(
+                                "подписка: сервер отклонил удаление {bad} элементов"
+                            ));
+                        }
+                    }
+                    Some(Err(e)) => {
+                        problems.push(format!("подписка: не удалось удалить элементы: {e}"));
+                        break;
+                    }
+                    None => break,
+                }
             }
         }
 
         // Prune the maps now so a subsequent add re-monitors correctly.
-        for key in &handles {
+        for key in &known {
             self.items.remove(key);
             self.node_types.remove(key);
+            self.monitored.remove(key);
+            self.unfiltered.remove(key);
         }
 
         // A timed-out delete may still have a response in flight; the caller
         // closes the session gracefully, so do not enqueue another request.
         if poisoned {
-            return;
+            return problems;
         }
 
         if self.items.is_empty() {
             self.teardown_subscription(tx).await;
         }
+        problems
     }
 
     /// Best-effort cleanup: delete the subscription and report it inactive.
@@ -393,6 +785,8 @@ impl UaSession {
                 self.timed_out = true;
             }
         }
+        self.monitored.clear();
+        self.unfiltered.clear();
         self.report_subscription_state(tx, SubscriptionState::Inactive);
     }
 }
@@ -415,25 +809,33 @@ pub(super) fn describe_connect_error(
 
 /// Spawn the session event loop and wait for the session to activate. `build()`
 /// itself does not open a connection, so this is the first network step after
-/// the endpoint description has been selected.
+/// the endpoint description has been selected. A cancelled attempt closes the
+/// channel gracefully like a failed one.
 async fn activate_ua_session<C>(
     session: &Session,
     event_loop: opcua::client::SessionEventLoop<C>,
     url: &str,
+    cancel: &CancellationToken,
 ) -> Result<JoinHandle<StatusCode>, String>
 where
     C: opcua::client::transport::Connector + Send + Sync + 'static,
 {
     let mut event_loop = event_loop.spawn();
-    let connected = tokio::time::timeout(CONNECT_TIMEOUT, session.wait_for_connection()).await;
+    let connected = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => None,
+        connected = tokio::time::timeout(CONNECT_TIMEOUT, session.wait_for_connection()) => {
+            Some(connected)
+        }
+    };
     match connected {
-        Ok(true) => Ok(event_loop),
-        Ok(false) => {
+        Some(Ok(true)) => Ok(event_loop),
+        Some(Ok(false)) => {
             let _ = tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, session.disconnect()).await;
             let _ = tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, &mut event_loop).await;
             Err(format!("сервер {url} закрыл сессию при подключении"))
         }
-        Err(_) => {
+        Some(Err(_)) => {
             // Timeout activating the session: the transport is already connected
             // so the server expects a CloseSession/CloseSecureChannel. Shut the
             // channel down gracefully instead of aborting the loop mid-request.
@@ -441,12 +843,21 @@ where
             let _ = tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, &mut event_loop).await;
             Err("таймаут активации OPC UA сессии".to_string())
         }
+        None => {
+            let _ = tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, session.disconnect()).await;
+            let _ = tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, &mut event_loop).await;
+            Err(CONNECT_CANCELLED.to_string())
+        }
     }
 }
+
+/// Text of the error a cancelled connect attempt ends with.
+pub(super) const CONNECT_CANCELLED: &str = "подключение отменено";
 
 pub(super) async fn connect(
     session_id: SessionId,
     endpoint: EndpointSpec,
+    cancel: &CancellationToken,
 ) -> Result<UaSession, String> {
     let url = endpoint.address.trim();
     if !url.starts_with("opc.tcp://") {
@@ -460,9 +871,10 @@ pub(super) async fn connect(
     //    own user-token policies (CODESYS advertises "Anonymous", not the
     //    crate's hardcoded "anonymous", and rejects ActivateSession otherwise
     //    with BadIdentityTokenInvalid).
-    let server_endpoints = match discover_endpoints(url, binding.as_ref()).await {
-        Ok(list) => list,
-        Err(message) => return Err(message),
+    let server_endpoints = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => return Err(CONNECT_CANCELLED.to_string()),
+        found = discover_endpoints(url, binding.as_ref()) => found?,
     };
     let discovered: Vec<UaEndpointInfo> = server_endpoints
         .iter()
@@ -489,14 +901,19 @@ pub(super) async fn connect(
 
     // 3. Build the client with the PKI store and the user's trust preference.
     let pki = pki_dir();
+    purge_stale(&pki);
     let mut builder = ClientBuilder::new()
         .application_name("OPC DA/UA Test Client")
         .application_uri("urn:opcda-egui")
         .product_uri("urn:opcda-egui")
         .create_sample_keypair(true)
-        // Trust flag drives auto-storing server certs into the trusted store.
-        .trust_server_certs(endpoint.ua_trust_server_cert)
-        // When trusting server certs we also skip strict hostname/expiry checks.
+        // The library's own "trust unknown certificates" switch would store the
+        // server certificate in `trusted` FOREVER. "Trust" in the connect dialog
+        // means this session only, which `TrustLease` provides (see trust.rs).
+        .trust_server_certs(false)
+        // A trusted server is also exempt from the validity period, host name and
+        // application URI checks (industrial devices often fail them); the key
+        // length and the identity of the certificate are still checked.
         .verify_server_certs(!endpoint.ua_trust_server_cert)
         .pki_dir(pki.clone())
         .session_retry_limit(3);
@@ -512,6 +929,15 @@ pub(super) async fn connect(
     // 5. Reuse the selected server's full endpoint description, including its
     //    actual user-token policies.
     let description = endpoint_description_for(&server_endpoints, url, &policy_uri, mode);
+
+    // 5b. "Trust the certificate" = trust for the lifetime of this session. The
+    //     lease is dropped (and the certificate untrusted again) when the connect
+    //     fails below or the session closes.
+    let trust = if endpoint.ua_trust_server_cert {
+        trust_for_session(&pki, &description.server_certificate)?
+    } else {
+        None
+    };
 
     // 6. Validate identity against the selected endpoint, not a guessed
     //    correlation between message security and certificate support.
@@ -529,7 +955,7 @@ pub(super) async fn connect(
             .user_identity_token(identity)
             .build(client.certificate_store().clone())
             .map_err(|error| describe_connect_error(url, &pki, error))?;
-        let event_loop = activate_ua_session(&session, event_loop, url).await?;
+        let event_loop = activate_ua_session(&session, event_loop, url, cancel).await?;
         (session, event_loop)
     } else {
         let (session, event_loop) = client
@@ -539,29 +965,32 @@ pub(super) async fn connect(
             .user_identity_token(identity)
             .build(client.certificate_store().clone())
             .map_err(|error| describe_connect_error(url, &pki, error))?;
-        let event_loop = activate_ua_session(&session, event_loop, url).await?;
+        let event_loop = activate_ua_session(&session, event_loop, url, cancel).await?;
         (session, event_loop)
     };
 
-    let mode_text = format!("{mode:?}");
+    let secure_was_available = auto_chose_unprotected_over_secure(
+        endpoint.ua_security_policy.unwrap_or_default(),
+        endpoint.ua_security_mode.unwrap_or_default(),
+        mode,
+        &discovered,
+    );
     Ok(UaSession {
         session,
         event_loop,
         items: HashMap::new(),
         node_types: HashMap::new(),
-        info: format!(
-            "подключено к {url} [{policy_short} / {mode_text}]{}",
-            if mode == MessageSecurityMode::None {
-                ""
-            } else {
-                " (TLS)"
-            }
-        ),
+        info: security_summary(url, &policy_short, mode, secure_was_available),
         session_id,
         subscription_id: None,
         publishing_interval_ms: 0,
         deadband: 0.0,
+        applied_interval_ms: 0,
+        applied_deadband: 0.0,
+        monitored: HashMap::new(),
+        unfiltered: HashSet::new(),
         timed_out: false,
+        trust,
     })
 }
 
@@ -670,6 +1099,10 @@ async fn discover_endpoints(
     Ok(endpoints)
 }
 
+/// Test-only override of the PKI store location (see `live_tests`).
+#[cfg(test)]
+pub(super) static TEST_PKI_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
 pub(super) fn pki_dir() -> PathBuf {
     pki_dir_public()
 }
@@ -677,6 +1110,12 @@ pub(super) fn pki_dir() -> PathBuf {
 /// Public accessor for the PKI store path (the connect dialog / About dialog
 /// display it). Path: `%APPDATA%\opcda-egui\pki`.
 pub fn pki_dir_public() -> PathBuf {
+    // Live tests run many clients in one process: they share one scratch PKI
+    // store instead of the user's real one.
+    #[cfg(test)]
+    if let Some(dir) = TEST_PKI_DIR.get() {
+        return dir.clone();
+    }
     std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))

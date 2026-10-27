@@ -1,6 +1,6 @@
 use super::present::{compose_server_name, localize_scan_error, operation_label};
-use super::search::{merge_ua_scan_servers, refresh_ua_combos};
-use super::tree::{insert_children, replace_roots};
+use super::search::{merge_ua_scan_servers, merge_ua_servers, refresh_ua_combos};
+use super::tree::{insert_children, replace_roots, set_children};
 use super::*;
 use crate::bff::model::{
     BrowseNode, Event, EventKind, ItemInfo, ItemKey, NodeKind, Operation, Protocol, Quality,
@@ -61,14 +61,40 @@ impl App {
         self.active_session = Some(session);
     }
 
-    fn on_event(&mut self, event: Event) {
+    pub(super) fn on_event(&mut self, event: Event) {
         let session = event.session;
         // Request-id correlation: a non-zero reply is accepted only once, and
         // only while its command is still outstanding. Superseded/session-old
         // replies are dropped before they can touch any state. `0` is reserved
         // for unsolicited pushes and worker runtime errors.
-        if event.request_id != 0 && !self.pending_requests.remove(&(session, event.request_id)) {
-            return;
+        let mut ctx = PendingCtx::None;
+        if event.request_id != 0 {
+            match self.pending_requests.remove(&(session, event.request_id)) {
+                Some(pending) => {
+                    if self.settings.options.diagnostic_trace {
+                        let latency = pending.sent.elapsed().as_millis();
+                        self.journal.info_l(
+                            Tr::TraceReply,
+                            &[
+                                &event.request_id.to_string(),
+                                &operation_label(self.lang(), pending.operation),
+                                &session.to_string(),
+                                &latency.to_string(),
+                            ],
+                        );
+                    }
+                    ctx = pending.ctx;
+                }
+                None => {
+                    if self.settings.options.diagnostic_trace {
+                        self.journal.info_l(
+                            Tr::TraceDropped,
+                            &[&event.request_id.to_string(), &session.to_string()],
+                        );
+                    }
+                    return;
+                }
+            }
         }
         let request_id = event.request_id;
         let lang = self.lang();
@@ -82,10 +108,12 @@ impl App {
                     return;
                 }
                 if self.dialogs.connect.ua_auto_pending > 0 {
-                    // A combined auto-search is running: accumulate this host's
-                    // result; merge once every sub-search has replied.
+                    // A combined auto-search is running: merge this host's
+                    // result right away (127.0.0.1 and localhost usually return
+                    // the same server; the visible tree must not show it twice
+                    // while the remaining sub-searches are still running).
                     self.ua_auto_step_done(|d| {
-                        d.ua_search_results.extend(servers);
+                        merge_ua_servers(d, servers);
                     });
                     return;
                 }
@@ -287,8 +315,11 @@ impl App {
                     self.configure_ua_subscription(session);
                 }
                 self.register_rows(session);
-                if self.dialogs.connect.open {
-                    self.dialogs.connect.open = false;
+                // Only the attempt the dialog is waiting for closes it; a
+                // background reconnect of another session must not.
+                if self.dialogs.connect.connecting == Some(session) {
+                    self.dialogs.connect.connecting = None;
+                    self.close_connect_dialog();
                 }
             }
             EventKind::AddItems { results } => {
@@ -296,7 +327,9 @@ impl App {
                     match result {
                         Ok(info) => self.apply_item_info(key, info),
                         Err(message) => {
-                            if let Some(row) = self.rows.iter_mut().find(|r| r.key == key) {
+                            if let Some(row) =
+                                self.row_position(key).and_then(|p| self.rows.get_mut(p))
+                            {
                                 row.pending = false;
                                 row.quality = Quality {
                                     code: 0,
@@ -311,23 +344,36 @@ impl App {
                 }
             }
             EventKind::Removed { keys } => {
-                for key in keys {
-                    self.rows.retain(|row| row.key != key);
-                }
+                self.remove_rows(&keys.into_iter().collect());
             }
             EventKind::Browse { node_id, children } => {
+                // U7: the reply belongs to the tree ITEM that was expanded (the
+                // app remembered it per request id), not to the first node
+                // that happens to share the NodeId. Unsolicited replies
+                // (request id 0) fall back to the first matching node.
+                let mut target: Option<u64> = None;
                 if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
                     if node_id.is_empty() {
-                        replace_roots(view, children.clone());
+                        replace_roots(view, children);
                         view.root_loaded = true;
                         view.root_loading = false;
                     } else {
-                        insert_children(view, &node_id, children.clone());
-                        for item in &mut view.tree {
-                            if item.node.node_id == node_id {
-                                item.loaded = true;
-                                item.loading = false;
-                                item.expanded = true;
+                        let item_id = match &ctx {
+                            PendingCtx::TreeItem(id) => Some(*id),
+                            _ => view
+                                .tree
+                                .iter()
+                                .find(|t| t.node.node_id == node_id)
+                                .map(|t| t.id),
+                        };
+                        if let Some(item_id) = item_id {
+                            if insert_children(view, item_id, children) {
+                                if let Some(item) = view.tree.iter_mut().find(|t| t.id == item_id) {
+                                    item.loaded = true;
+                                    item.loading = false;
+                                    item.expanded = true;
+                                }
+                                target = Some(item_id);
                             }
                         }
                     }
@@ -335,7 +381,7 @@ impl App {
                 // Drive the recursive add-children job. The job is keyed by the
                 // request id it issued, so a manual browse or a stale reply is
                 // never consumed as one of its pages.
-                self.advance_add_children(session, request_id, &node_id);
+                self.advance_add_children(session, request_id, &node_id, target);
             }
             EventKind::Views { children } => {
                 // Seed a synthetic «Представления» root node; browsing it lists
@@ -343,89 +389,59 @@ impl App {
                 const VIEWS_MARKER: &str = "\u{1}views";
                 if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
                     view.root_loading = false;
-                    if !view.tree.iter().any(|t| t.node.node_id == VIEWS_MARKER) {
-                        view.tree.insert(
-                            0,
-                            TreeItem {
-                                id: view.next_tree_id,
-                                parent: None,
-                                node: BrowseNode {
-                                    node_id: VIEWS_MARKER.to_string(),
-                                    name: tr(lang, Tr::ViewsRoot).to_string(),
-                                    kind: NodeKind::Branch,
-                                    has_children: true,
-                                },
-                                depth: 0,
-                                expanded: false,
-                                loaded: true,
-                                loading: false,
-                            },
-                        );
-                        view.next_tree_id += 1;
-                    }
-                    // Replace any previously listed child Views.
-                    let (_i, marker) = view
-                        .tree
-                        .iter()
-                        .enumerate()
-                        .find(|(_, t)| t.node.node_id == VIEWS_MARKER)
-                        .expect("views marker seeded above");
-                    let parent_id = marker.id;
-                    let marker_depth = marker.depth;
-                    let old_ids: Vec<u64> = view
-                        .tree
-                        .iter()
-                        .filter(|t| {
-                            t.parent == Some(parent_id)
-                                || (t.node.node_id != VIEWS_MARKER && t.depth > marker_depth)
-                        })
-                        .map(|t| t.id)
-                        .collect();
-                    view.tree.retain(|t| !old_ids.contains(&t.id));
-                    let parent_index = view
+                    let marker_index = match view
                         .tree
                         .iter()
                         .position(|t| t.node.node_id == VIEWS_MARKER)
-                        .expect("marker survives retain");
-                    let mut id = view.next_tree_id;
-                    let depth = marker_depth + 1;
-                    let new_items: Vec<TreeItem> = children
-                        .iter()
-                        .map(|node| {
-                            let tree_item = TreeItem {
-                                id,
-                                parent: Some(parent_id),
-                                node: node.clone(),
-                                depth,
-                                expanded: false,
-                                loaded: true,
-                                loading: false,
-                            };
-                            id += 1;
-                            tree_item
-                        })
-                        .collect();
-                    view.next_tree_id = id;
-                    view.tree
-                        .splice(parent_index + 1..parent_index + 1, new_items);
+                    {
+                        Some(index) => index,
+                        None => {
+                            let id = view.next_tree_id;
+                            view.next_tree_id += 1;
+                            view.tree.insert(
+                                0,
+                                TreeItem {
+                                    id,
+                                    parent: None,
+                                    node: BrowseNode {
+                                        node_id: VIEWS_MARKER.to_string(),
+                                        name: tr(lang, Tr::ViewsRoot).to_string(),
+                                        kind: NodeKind::Branch,
+                                        has_children: true,
+                                    },
+                                    depth: 0,
+                                    expanded: false,
+                                    loaded: true,
+                                    loading: false,
+                                },
+                            );
+                            0
+                        }
+                    };
+                    // U6: replace only the marker's own descendants. The rest of
+                    // the tree (other roots and their expanded branches) stays.
+                    set_children(view, marker_index, children, true);
                 }
             }
             EventKind::PathResolved { targets } => {
-                if let Some((pending_session, requested, name)) = self.pending_path_resolve.take() {
-                    if pending_session != session {
-                        // A resolve from a different session: re-queue is not
-                        // needed; just report the failure on the original dialog.
-                        self.dialogs.add_signal.error =
-                            Some(fmt(self.lang(), Tr::NameNotResolved, &[&requested]));
-                        return;
-                    }
-                    if let Some(first) = targets.first() {
-                        let display = if name.is_empty() { first.clone() } else { name };
-                        self.add_items(session, vec![(first.clone(), display)]);
-                    } else {
-                        self.dialogs.add_signal.error =
-                            Some(fmt(self.lang(), Tr::NameNotResolved, &[&requested]));
-                    }
+                // U14: only the reply to the dialog's own request counts; a
+                // reply that belongs to another session/request never reaches
+                // here (its pending entry is not this one), and a dialog that
+                // was cancelled meanwhile ignores a late answer.
+                let PendingCtx::ResolvePath { requested, name } = ctx else {
+                    return;
+                };
+                if self.dialogs.add_signal.resolving != Some((session, request_id)) {
+                    return;
+                }
+                self.dialogs.add_signal.resolving = None;
+                if let Some(first) = targets.first() {
+                    let display = if name.is_empty() { first.clone() } else { name };
+                    self.add_items(session, vec![(first.clone(), display)]);
+                    self.close_add_signal_dialog();
+                } else {
+                    self.dialogs.add_signal.error =
+                        Some(fmt(self.lang(), Tr::NameNotResolved, &[&requested]));
                 }
             }
             EventKind::Values { values } => {
@@ -433,7 +449,7 @@ impl App {
                     view.read_in_flight = false;
                 }
                 for (key, value) in values {
-                    if let Some(row) = self.rows.iter_mut().find(|r| r.key == key) {
+                    if let Some(row) = self.row_position(key).and_then(|p| self.rows.get_mut(p)) {
                         row.value = value.value;
                         row.quality = value.quality;
                         row.timestamp = value.timestamp;
@@ -479,40 +495,26 @@ impl App {
                         });
                     }
                 }
-                // Batch completed -> publish a compact summary in the status bar.
-                if self.pending_writes == 0 && self.write_total > 0 {
-                    self.last_write_summary = Some(fmt(
-                        lang,
-                        Tr::WrittenSummary,
-                        &[&self.write_ok.to_string(), &self.write_total.to_string()],
-                    ));
-                    self.journal.info_l(
-                        Tr::WriteDoneSummary,
-                        &[&self.write_ok.to_string(), &self.write_total.to_string()],
-                    );
-                }
+                self.finish_write_batch_if_done();
             }
             EventKind::Disconnected { reason } => {
                 self.cancel_add_children(session);
+                let mut lost: Option<String> = None;
                 if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
                     view.read_in_flight = false;
                     if view.state != SessionState::Connecting {
                         view.state = SessionState::Disconnected;
                         view.info = reason.clone();
-                        // Keep rows and the tree: tags must remain visible with
-                        // their last values, just marked stale while the server
-                        // is unreachable.
-                        for row in self.rows.iter_mut().filter(|r| r.session == session) {
-                            row.quality = Quality {
-                                code: 0,
-                                kind: QualityKind::Bad,
-                                text: tr(lang, Tr::StaleData).to_string(),
-                            };
-                        }
-                        self.journal
-                            .info_l(Tr::ConnectedInfo, &[&view.endpoint.display_name(), &reason]);
-                        self.schedule_reconnect(session);
+                        lost = Some(view.endpoint.display_name());
                     }
+                }
+                if let Some(name) = lost {
+                    // Keep rows and the tree: tags must remain visible with
+                    // their last values, just marked stale while the server
+                    // is unreachable.
+                    self.mark_session_rows_stale(session);
+                    self.journal.info_l(Tr::ConnectedInfo, &[&name, &reason]);
+                    self.schedule_reconnect(session);
                 }
             }
             EventKind::Log { message } => {
@@ -535,8 +537,16 @@ impl App {
                             view.state = SessionState::Disconnected;
                             view.info = message.clone();
                         }
-                        if self.dialogs.connect.open {
+                        if self.dialogs.connect.connecting == Some(session) {
+                            // The failed attempt was started from the dialog:
+                            // show the reason there and do not keep retrying in
+                            // the background (the user decides: edit, retry or
+                            // remove the half-open tab).
+                            self.dialogs.connect.connecting = None;
                             self.dialogs.connect.error = Some(message.clone());
+                            if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
+                                view.reconnect = ReconnectState::Stopped;
+                            }
                         }
                         self.schedule_reconnect(session);
                     }
@@ -559,6 +569,9 @@ impl App {
                             view.info = message;
                             view.read_in_flight = false;
                         }
+                        // A3: the link is declared dead, so the last Good values
+                        // must not stay on screen as if they were live.
+                        self.mark_session_rows_stale(session);
                         self.schedule_reconnect(session);
                     }
                     Operation::SearchServers => {
@@ -586,18 +599,47 @@ impl App {
                     // Operations with no extra UI state transition beyond the
                     // journal line. Listed explicitly so a new variant forces a
                     // decision here.
+                    Operation::ResolveBrowsePath => {
+                        // U14: the error belongs in the (still open) dialog and
+                        // frees its pending state.
+                        if self.dialogs.add_signal.resolving == Some((session, request_id)) {
+                            self.dialogs.add_signal.resolving = None;
+                            self.dialogs.add_signal.error = Some(message);
+                        }
+                    }
+                    Operation::AddItems => {
+                        // The whole command failed (or never got an answer):
+                        // its rows must not wait for values forever.
+                        if let PendingCtx::AddKeys(keys) = &ctx {
+                            for key in keys {
+                                if let Some(row) =
+                                    self.row_position(*key).and_then(|p| self.rows.get_mut(p))
+                                {
+                                    row.pending = false;
+                                    row.quality = Quality {
+                                        code: 0,
+                                        kind: QualityKind::Bad,
+                                        text: message.clone(),
+                                    };
+                                }
+                            }
+                        }
+                    }
                     Operation::Disconnect
                     | Operation::BrowseViews
-                    | Operation::ResolveBrowsePath
                     | Operation::Write
-                    | Operation::AddItems
                     | Operation::RemoveItems
                     | Operation::Add
                     | Operation::Remove
                     | Operation::Subscription
                     | Operation::UaRuntime => {}
                     Operation::Discover => {
-                        self.release_da_discovery_routes();
+                        // D4: only the host whose request failed gives its
+                        // temporary route back; other searches keep theirs.
+                        match &ctx {
+                            PendingCtx::Host(host) => self.release_da_discovery_route(host),
+                            _ => self.release_da_discovery_routes(),
+                        }
                         let d = &mut self.dialogs.connect;
                         if d.da_auto_pending > 0 {
                             d.da_auto_pending -= 1;
@@ -614,9 +656,21 @@ impl App {
         }
     }
 
+    /// Batch completed -> publish a compact summary in the status bar.
+    pub(super) fn finish_write_batch_if_done(&mut self) {
+        if self.pending_writes == 0 && self.write_total > 0 {
+            let lang = self.lang();
+            let counts = [self.write_ok.to_string(), self.write_total.to_string()];
+            self.last_write_summary =
+                Some(fmt(lang, Tr::WrittenSummary, &[&counts[0], &counts[1]]));
+            self.journal
+                .info_l(Tr::WriteDoneSummary, &[&counts[0], &counts[1]]);
+        }
+    }
+
     fn apply_item_info(&mut self, key: ItemKey, info: ItemInfo) {
         let waiting_value = tr(self.lang(), Tr::WaitingValue).to_string();
-        if let Some(row) = self.rows.iter_mut().find(|r| r.key == key) {
+        if let Some(row) = self.row_position(key).and_then(|p| self.rows.get_mut(p)) {
             row.data_type = info.data_type;
             // For OPC UA the type_id holds a UA built-in type code, not a DA VT,
             // so keep canonical_vt (VT) only for DA sessions.

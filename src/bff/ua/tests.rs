@@ -8,7 +8,7 @@ use super::security::{
     security_error_detail,
 };
 use super::values::{data_change_filter, ua_type_name, value_to_ua_variant, variant_to_value};
-use super::worker::{is_control_command, partition_commands};
+use super::worker::{CommandQueue, is_control_command};
 use crate::bff::model::{
     Command, CommandKind, EndpointSpec, EventKind, Protocol, UaEndpointInfo, UaNetworkInfo,
     UaSecurityMode, UaSecurityPolicy, UaServerInfo, Value, WriteRequest,
@@ -20,10 +20,9 @@ use chrono::TimeZone;
 use opcua::types::VariantScalarTypeId as Vt;
 use opcua::types::{
     DataChangeFilter, DataChangeTrigger, DeadbandType, EndpointDescription, LocalizedText,
-    MessageSecurityMode, MonitoringParameters, NodeId, QualifiedName, StatusCode, UAString,
-    UserTokenPolicy, UserTokenType, Variant, VariantScalarTypeId,
+    MessageSecurityMode, NodeId, QualifiedName, StatusCode, UAString, UserTokenPolicy,
+    UserTokenType, Variant, VariantScalarTypeId,
 };
-use std::collections::VecDeque;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -296,26 +295,30 @@ fn parsed_absolute_deadband_matches() {
 
 #[test]
 fn subscription_monitoring_parameters_shape() {
-    // ItemKey is used directly as the client handle; the request uses a
-    // single-slot queue that always discards the oldest value, sampling at
-    // the server's fastest rate (0), reporting mode.
-    let params = MonitoringParameters {
-        client_handle: 42,
-        sampling_interval: 0.0,
-        filter: data_change_filter(0.0),
-        queue_size: 1,
-        discard_oldest: true,
-    };
+    // ItemKey is the client handle; single-slot queue discarding the oldest
+    // value; sampling follows the publishing interval (-1), not "as fast as
+    // the server can" (0).
+    let params = super::session::monitoring_parameters(42, 0.0, true);
     assert_eq!(params.client_handle, 42);
-    assert_eq!(params.sampling_interval, 0.0);
+    assert_eq!(params.sampling_interval, -1.0);
     assert_eq!(params.queue_size, 1);
     assert!(params.discard_oldest);
-    assert!(params.filter.is_null());
+    assert!(params.filter.is_null(), "no deadband, no filter");
+
+    let with_deadband = super::session::monitoring_parameters(7, 2.5, true);
+    assert!(!with_deadband.filter.is_null());
+    let retry = super::session::monitoring_parameters(7, 2.5, false);
+    assert!(
+        retry.filter.is_null(),
+        "the filterless retry carries no filter"
+    );
+    assert_eq!(retry.sampling_interval, -1.0);
 }
 
 #[test]
 fn controls_jump_over_reads_without_losing_them() {
-    let mut queue = VecDeque::from(vec![
+    let mut queue = CommandQueue::default();
+    for command in [
         cmd(CommandKind::Read { keys: vec![1] }),
         cmd(CommandKind::Read { keys: vec![2] }),
         cmd(CommandKind::Browse {
@@ -325,26 +328,21 @@ fn controls_jump_over_reads_without_losing_them() {
         }),
         cmd(CommandKind::Read { keys: vec![3] }),
         cmd(CommandKind::AddItems { items: vec![] }),
-    ]);
-    let (controls, reads) = partition_commands(&mut queue);
-    // Control commands ordered first (in relative order).
-    let control_kinds: Vec<&str> = controls
-        .iter()
-        .map(|c| match &c.kind {
-            CommandKind::Browse { .. } => "browse",
-            CommandKind::AddItems { .. } => "add",
-            _ => "?",
-        })
-        .collect();
-    assert_eq!(control_kinds, vec!["browse", "add"]);
-    // Reads are kept too (deferred), so no response is ever lost.
-    assert_eq!(reads.len(), 3);
-    assert!(
-        reads
-            .iter()
-            .all(|c| matches!(&c.kind, CommandKind::Read { .. }))
-    );
-    assert!(queue.is_empty());
+    ] {
+        queue.push_command(command);
+    }
+    let mut order = Vec::new();
+    while let Some(command) = queue.pop_command() {
+        order.push(match command.kind {
+            CommandKind::Browse { .. } => "browse".to_string(),
+            CommandKind::AddItems { .. } => "add".to_string(),
+            CommandKind::Read { keys } => format!("read{}", keys.first().copied().unwrap_or(0)),
+            _ => "?".to_string(),
+        });
+    }
+    // Control commands first (in their relative order), then every read, still in
+    // order: nothing is dropped, so no response-backed read is lost.
+    assert_eq!(order, vec!["browse", "add", "read1", "read2", "read3"]);
 }
 
 #[test]
@@ -1072,4 +1070,203 @@ fn x509_identity_requires_actual_advertised_certificate_token() {
         Ok(_) => panic!("a signed endpoint is not evidence of an X509 user-token policy"),
     };
     assert!(err.contains("не поддерживает"), "unexpected error: {err}");
+}
+
+#[test]
+fn status_text_names_the_status_and_keeps_the_hex_code() {
+    use super::session::status_text;
+    let text = status_text(StatusCode::BadNodeIdUnknown);
+    assert!(text.starts_with("BadNodeIdUnknown"), "{text}");
+    assert!(text.contains("0x80340000"), "{text}");
+}
+
+#[test]
+fn only_filter_status_codes_count_as_filter_refusals() {
+    use super::session::is_filter_refusal;
+    for status in [
+        StatusCode::BadFilterNotAllowed,
+        StatusCode::BadMonitoredItemFilterInvalid,
+        StatusCode::BadMonitoredItemFilterUnsupported,
+    ] {
+        assert!(is_filter_refusal(status), "{status}");
+    }
+    for status in [
+        StatusCode::BadNodeIdUnknown,
+        StatusCode::BadAttributeIdInvalid,
+        StatusCode::BadTooManyMonitoredItems,
+        StatusCode::Good,
+    ] {
+        assert!(!is_filter_refusal(status), "{status}");
+    }
+}
+
+#[test]
+fn rejected_items_come_back_as_errors_in_request_order() {
+    use super::session::merge_add_results;
+    use crate::bff::model::{ItemInfo, ItemSpec};
+    use std::collections::HashMap;
+    let items = [
+        ItemSpec {
+            key: 7,
+            item_id: "ns=2;s=A".to_string(),
+        },
+        ItemSpec {
+            key: 3,
+            item_id: "ns=2;s=B".to_string(),
+        },
+        ItemSpec {
+            key: 9,
+            item_id: "ns=2;s=C".to_string(),
+        },
+    ];
+    let info = |writable| ItemInfo {
+        data_type: None,
+        type_id: None,
+        writable,
+    };
+    let infos = HashMap::from([(7, info(true)), (3, info(false)), (9, info(true))]);
+    let rejected = HashMap::from([(3, "BadNodeIdUnknown (0x80340000)".to_string())]);
+    let merged = merge_add_results(&items, infos, &rejected);
+    let keys: Vec<_> = merged.iter().map(|(k, _)| *k).collect();
+    assert_eq!(keys, [7, 3, 9]);
+    assert!(merged[0].1.is_ok());
+    assert_eq!(
+        merged[1].1.as_ref().unwrap_err(),
+        "BadNodeIdUnknown (0x80340000)"
+    );
+    assert!(merged[2].1.is_ok());
+}
+
+#[test]
+fn create_results_are_paired_with_their_items_and_bad_statuses_are_failures() {
+    use super::session::{ItemFailure, create_outcomes};
+    let results = [
+        (StatusCode::Good, 11),
+        (StatusCode::BadNodeIdUnknown, 0),
+        (StatusCode::BadFilterNotAllowed, 0),
+    ];
+    // Four items asked, three results answered: the fourth is a failure, not "ok".
+    let outcomes = create_outcomes(&[10, 20, 30, 40], &results);
+    assert_eq!(outcomes.len(), 4);
+    assert!(matches!(outcomes[0], (10, Ok(11))));
+    assert!(matches!(
+        &outcomes[1],
+        (20, Err(failure)) if failure.text().starts_with("BadNodeIdUnknown")
+    ));
+    assert!(matches!(
+        &outcomes[2],
+        (30, Err(failure)) if failure.is_filter_refusal()
+    ));
+    assert!(matches!(&outcomes[3], (40, Err(ItemFailure::Call(_)))));
+}
+
+#[test]
+fn missing_node_statuses_are_recognised() {
+    use super::session::is_missing_node;
+    assert!(is_missing_node(StatusCode::BadNodeIdUnknown));
+    assert!(is_missing_node(StatusCode::BadNodeIdInvalid));
+    assert!(is_missing_node(StatusCode::BadAttributeIdInvalid));
+    assert!(!is_missing_node(StatusCode::Good));
+    assert!(!is_missing_node(StatusCode::BadUserAccessDenied));
+    assert!(!is_missing_node(StatusCode::BadNotReadable));
+}
+
+#[test]
+fn variables_filter_keeps_folders_navigable() {
+    use super::io::browse_node_class_mask;
+    assert_eq!(browse_node_class_mask(None), 0, "no filter = every class");
+    assert_eq!(browse_node_class_mask(Some(1)), 1, "objects only");
+    let mask = browse_node_class_mask(Some(2));
+    assert_eq!(mask & 2, 2, "variables are listed");
+    assert_eq!(mask & 1, 1, "folders (objects) are listed too");
+    assert_eq!(mask & !3, 0, "methods, types and views stay hidden");
+}
+
+#[test]
+fn aes_policies_resolve_to_their_wire_uris() {
+    let offered = vec![
+        ep(
+            "opc.tcp://h:4840",
+            "http://opcfoundation.org/UA/SecurityPolicy#Aes128_Sha256_RsaOaep",
+            "SignAndEncrypt",
+        ),
+        ep(
+            "opc.tcp://h:4840",
+            "http://opcfoundation.org/UA/SecurityPolicy#Aes256_Sha256_RsaPss",
+            "SignAndEncrypt",
+        ),
+    ];
+    let (uri, mode) = resolve_security(
+        UaSecurityPolicy::Aes256Sha256RsaPss,
+        UaSecurityMode::SignAndEncrypt,
+        &offered,
+    )
+    .unwrap();
+    assert!(uri.ends_with("#Aes256_Sha256_RsaPss"), "{uri}");
+    assert_eq!(mode, MessageSecurityMode::SignAndEncrypt);
+    let (uri, _) = resolve_security(
+        UaSecurityPolicy::Aes128Sha256RsaOaep,
+        UaSecurityMode::Auto,
+        &offered,
+    )
+    .unwrap();
+    assert!(uri.ends_with("#Aes128_Sha256_RsaOaep"), "{uri}");
+    // A server that only offers Aes is reachable with Auto/Auto as well (the
+    // last-resort "first recognized endpoint" rule), instead of "no usable
+    // endpoint".
+    assert!(resolve_security(SECURITY_POLICY_AUTO, SECURITY_MODE_AUTO, &offered).is_ok());
+}
+
+#[test]
+fn session_info_states_how_the_channel_is_protected() {
+    use super::security::security_summary;
+    let none = security_summary("opc.tcp://h:4840", "None", MessageSecurityMode::None, false);
+    assert!(none.contains("без шифрования"), "{none}");
+    assert!(!none.contains("TLS"), "OPC UA is not TLS: {none}");
+    let sign = security_summary(
+        "opc.tcp://h:4840",
+        "Basic256Sha256",
+        MessageSecurityMode::Sign,
+        false,
+    );
+    assert!(sign.contains("не шифруются"), "{sign}");
+    let full = security_summary(
+        "opc.tcp://h:4840",
+        "Basic256Sha256",
+        MessageSecurityMode::SignAndEncrypt,
+        false,
+    );
+    assert!(full.contains("подпись и шифрование"), "{full}");
+    assert!(!full.contains("без шифрования"));
+    let hinted = security_summary("opc.tcp://h:4840", "None", MessageSecurityMode::None, true);
+    assert!(hinted.contains("предлагает защищённое"), "{hinted}");
+}
+
+#[test]
+fn auto_reports_when_it_chose_no_protection_over_a_secure_endpoint() {
+    use super::security::auto_chose_unprotected_over_secure as chose;
+    let both = vec![
+        ep("opc.tcp://h:4840", "None", "None"),
+        ep("opc.tcp://h:4840", "Basic256Sha256", "SignAndEncrypt"),
+    ];
+    let only_none = vec![ep("opc.tcp://h:4840", "None", "None")];
+    let auto = (UaSecurityPolicy::Auto, UaSecurityMode::Auto);
+    assert!(chose(auto.0, auto.1, MessageSecurityMode::None, &both));
+    assert!(
+        !chose(auto.0, auto.1, MessageSecurityMode::None, &only_none),
+        "nothing better was offered"
+    );
+    assert!(
+        !chose(auto.0, auto.1, MessageSecurityMode::Sign, &both),
+        "a protected channel needs no warning"
+    );
+    assert!(
+        !chose(
+            UaSecurityPolicy::None,
+            UaSecurityMode::None,
+            MessageSecurityMode::None,
+            &both
+        ),
+        "an explicit None is the user's decision"
+    );
 }
