@@ -575,7 +575,7 @@ impl DaSession {
         for (idx, item) in items.iter().enumerate() {
             let err = unsafe { read_hresult(errors_ptr, idx) };
             if err.is_err() {
-                out.push((item.key, Err(self.error_text(err))));
+                out.push((item.key, Err(BackendMsg::Raw(self.error_text(err)))));
                 continue;
             }
             if results_ptr.is_null() {
