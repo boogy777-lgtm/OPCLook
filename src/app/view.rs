@@ -153,7 +153,14 @@ pub enum TableLine {
         type_text: String,
         expandable: bool,
         expanded: bool,
+        /// UI5: a number: shown monospace and right-aligned.
+        numeric: bool,
     },
+}
+
+/// UI5: whether a value is a number (right-aligned, monospace in the table).
+pub fn is_numeric_value(value: &Value) -> bool {
+    matches!(value, Value::I64(_) | Value::U64(_) | Value::F64(_))
 }
 
 /// At most this many field lines are built per frame; a huge array never
@@ -215,6 +222,7 @@ impl App {
                 type_text,
                 expandable,
                 expanded,
+                numeric: is_numeric_value(field),
             });
             if expanded {
                 self.push_fields(lines, budget, index, key, field, &child_path, depth + 1);

@@ -6,7 +6,7 @@ use super::servers::session_tab_strip;
 #[cfg(test)]
 use super::test_hooks::{record_header_cell, record_table_scroll, set_tags_rect_for_test};
 use super::tree::refresh_selected;
-use crate::app::{App, TableLine};
+use crate::app::{App, TableLine, is_numeric_value};
 use crate::columns::ColumnId;
 use crate::constants::{MIN_COLUMN_WIDTH, TABLE_HEADER_HEIGHT, TABLE_ROW_HEIGHT};
 use crate::i18n::{Tr, fmt, tr};
@@ -255,6 +255,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                 type_text,
                                                 expandable,
                                                 expanded,
+                                                numeric,
                                             }) => {
                                                 let field = FieldLine {
                                                     key: *key,
@@ -265,6 +266,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                     type_text,
                                                     expandable: *expandable,
                                                     expanded: *expanded,
+                                                    numeric: *numeric,
                                                 };
                                                 draw_field_line(
                                                     &mut row,
@@ -341,12 +343,13 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                         // UI2: the value is always neutral; the
                                                         // quality is told by the pill / dot.
                                                         let color = ui.visuals().text_color();
-                                                        ui.label(
-                                                            egui::RichText::new(
-                                                                signal.value.to_string(),
-                                                            )
-                                                            .monospace()
-                                                            .color(color),
+                                                        let numeric =
+                                                            is_numeric_value(&signal.value);
+                                                        value_text_cell(
+                                                            ui,
+                                                            signal.value.to_string(),
+                                                            numeric,
+                                                            color,
                                                         )
                                                         .on_hover_text(&signal.quality.text);
                                                     });
@@ -559,6 +562,26 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
             }
         });
 }
+/// UI5: a value in the «Value» column. A number is monospace and sticks to the
+/// right edge of the cell; strings, structure summaries, dates and the rest
+/// keep the left edge.
+fn value_text_cell(
+    ui: &mut egui::Ui,
+    text: impl Into<String>,
+    numeric: bool,
+    color: egui::Color32,
+) -> egui::Response {
+    let text = text.into();
+    if numeric {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(egui::RichText::new(text).monospace().color(color))
+        })
+        .inner
+    } else {
+        ui.label(egui::RichText::new(text).color(color))
+    }
+}
+
 /// UI2: the color a quality is shown in: yellow while the first value is still
 /// pending, else the quality's color; the neutral text color when the
 /// «show colors» option is off.
@@ -614,6 +637,7 @@ struct FieldLine<'a> {
     type_text: &'a str,
     expandable: bool,
     expanded: bool,
+    numeric: bool,
 }
 
 /// The expander of a structured value (same look as the tag tree): a painted
@@ -678,7 +702,8 @@ fn draw_field_line(
             }
             ColumnId::Value => {
                 row.col(|ui| {
-                    ui.label(egui::RichText::new(field.value_text).monospace());
+                    let color = ui.visuals().text_color();
+                    value_text_cell(ui, field.value_text, field.numeric, color);
                 });
             }
             ColumnId::Type => {

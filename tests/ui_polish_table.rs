@@ -250,3 +250,92 @@ fn ui2_show_colors_off_makes_the_pill_neutral() {
         "no coloured pill when colours are off"
     );
 }
+
+/// (left x, right x, monospace) of the single text shape drawn as `text`.
+fn text_extent(shapes: &[egui::Shape], text: &str) -> (f32, f32, bool) {
+    let found: Vec<_> = shapes
+        .iter()
+        .filter_map(|s| match s {
+            egui::Shape::Text(t) if t.galley.text() == text => Some(t),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(found.len(), 1, "exactly one {text:?} drawn");
+    let t = found[0];
+    let mono = t
+        .galley
+        .job
+        .sections
+        .first()
+        .is_some_and(|sec| sec.format.font_id.family == egui::FontFamily::Monospace);
+    // A right-aligned galley spans negative x around its anchor `pos`.
+    (
+        t.pos.x + t.galley.rect.min.x,
+        t.pos.x + t.galley.rect.max.x,
+        mono,
+    )
+}
+
+/// UI5: numbers are monospace and right-aligned in the Value column; strings
+/// and dates keep the left edge (proportional text).
+#[test]
+fn ui5_numbers_are_right_aligned_and_monospace() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_row(1, "ns=2;s=A", "Count", Value::I64(7));
+    app.seed_row(1, "ns=2;s=B", "Ratio", Value::F64(0.5));
+    app.seed_row(1, "ns=2;s=C", "Big", Value::U64(9));
+    app.seed_row(1, "ns=2;s=D", "Name", Value::Str("Pump".into()));
+    app.seed_row(1, "ns=2;s=E", "Flag", Value::Bool(true));
+    let mut h = harness(app);
+    h.run_steps(3);
+    let shapes = flat_shapes(&h);
+    let (name_left, _, name_mono) = text_extent(&shapes, "Pump");
+    let (flag_left, _, _) = text_extent(&shapes, "true");
+    assert!(!name_mono, "a string is proportional");
+    assert!((flag_left - name_left).abs() < 0.5, "left edge shared");
+    // The Value column is 170 wide: a one-glyph number sits at its right edge.
+    for number in ["7", "0.5", "9"] {
+        let (left, right, mono) = text_extent(&shapes, number);
+        assert!(mono, "{number} is monospace");
+        assert!(
+            left > name_left + 100.0,
+            "{number} is far from the left edge"
+        );
+        let width = right - name_left;
+        assert!(
+            (160.0..=175.0).contains(&width),
+            "{number} ends at the cell's right edge, got {width}"
+        );
+    }
+}
+
+/// UI5: the same rule for the field lines of an expanded structure.
+#[test]
+fn ui5_field_lines_follow_the_same_alignment() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let key = app.seed_row(
+        1,
+        "ns=2;s=Pump",
+        "Pump",
+        Value::Struct {
+            type_name: "PumpType".into(),
+            fields: vec![
+                ("Speed".into(), Value::F64(12.5)),
+                ("Label".into(), Value::Str("Pump one".into())),
+            ],
+        },
+    );
+    app.toggle_value(key, vec![]);
+    let mut h = harness(app);
+    h.run_steps(3);
+    let shapes = flat_shapes(&h);
+    let (label_left, _, label_mono) = text_extent(&shapes, "Pump one");
+    let (speed_left, speed_right, speed_mono) = text_extent(&shapes, "12.5");
+    assert!(!label_mono && speed_mono);
+    assert!(speed_left > label_left + 100.0);
+    assert!((160.0..=175.0).contains(&(speed_right - label_left)));
+}
