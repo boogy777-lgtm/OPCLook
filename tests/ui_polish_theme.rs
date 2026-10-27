@@ -1,9 +1,6 @@
 //! UI polish, stream `theme` (UI7-UI9): bottom panel layout, type/spacing
 //! scale and the light/dark/system theme. Headless egui_kittest tests.
-use egui_kittest::{
-    Harness,
-    kittest::{NodeT, Queryable},
-};
+use egui_kittest::{Harness, kittest::Queryable};
 use opcda_egui::app::{App, BottomTab};
 use opcda_egui::i18n::{Lang, Tr, tr};
 
@@ -28,10 +25,7 @@ fn ui7_fresh_app_shows_journal_tab_first_and_script_second() {
     h.run_steps(3);
     assert_eq!(h.state().bottom_tab, BottomTab::Journal);
     // The journal toolbar is visible, the script toolbar is not.
-    assert!(
-        h.query_by_label(tr(Lang::Ru, Tr::SaveJournalLabel))
-            .is_some()
-    );
+    assert!(h.query_by_label(tr(Lang::Ru, Tr::SaveJournal)).is_some());
     assert!(
         h.query_by_label(tr(Lang::Ru, Tr::SaveScriptLabel))
             .is_none()
@@ -81,10 +75,7 @@ fn ui7_bottom_panel_default_is_compact_and_flags_keep_their_logic() {
         h.query_by_label(tr(Lang::Ru, Tr::SaveScriptLabel))
             .is_none()
     );
-    assert!(
-        h.query_by_label(tr(Lang::Ru, Tr::SaveJournalLabel))
-            .is_some()
-    );
+    assert!(h.query_by_label(tr(Lang::Ru, Tr::SaveJournal)).is_some());
     // Script-only: script toolbar shown, no journal toolbar.
     let mut app = fresh_app();
     app.settings.options.show_script = true;
@@ -95,10 +86,7 @@ fn ui7_bottom_panel_default_is_compact_and_flags_keep_their_logic() {
         h.query_by_label(tr(Lang::Ru, Tr::SaveScriptLabel))
             .is_some()
     );
-    assert!(
-        h.query_by_label(tr(Lang::Ru, Tr::SaveJournalLabel))
-            .is_none()
-    );
+    assert!(h.query_by_label(tr(Lang::Ru, Tr::SaveJournal)).is_none());
 }
 
 // ---------------------------------------------------------------------------
@@ -141,4 +129,135 @@ fn ui8_table_stripes_stay_close_to_the_panel_fill() {
             "{theme:?}: stripe vs panel diff {diff}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// UI9: light / dark / system theme
+// ---------------------------------------------------------------------------
+
+use opcda_egui::settings::{Options, Settings, Theme};
+
+fn dark_mode(h: &Harness<'_, App>) -> bool {
+    h.ctx.global_style().visuals.dark_mode
+}
+
+fn app_with_theme(theme: Theme) -> App {
+    let mut app = fresh_app();
+    app.settings.options.theme = theme;
+    app
+}
+
+#[test]
+fn ui9_theme_defaults_to_system_and_old_settings_files_load() {
+    assert_eq!(Options::default().theme, Theme::System);
+    let mut value = serde_json::to_value(Options::default()).expect("serialize");
+    value
+        .as_object_mut()
+        .expect("options object")
+        .remove("theme");
+    let old: Options = serde_json::from_value(value).expect("old file loads");
+    assert_eq!(old.theme, Theme::System);
+}
+
+#[test]
+fn ui9_theme_setting_roundtrips_through_the_settings_file() {
+    let dir = std::env::temp_dir().join(format!("opclook-ui9-theme-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create dir");
+    {
+        let _redirect = opcda_egui::settings::thread_dir::redirect(&dir);
+        for theme in [Theme::Light, Theme::Dark, Theme::System] {
+            let mut s = Settings::default();
+            s.options.theme = theme;
+            s.save();
+            assert_eq!(Settings::load().options.theme, theme);
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn ui9_changing_the_theme_setting_switches_the_visuals() {
+    let mut h = harness(app_with_theme(Theme::Dark));
+    h.run_steps(4);
+    assert!(dark_mode(&h));
+
+    h.state_mut().settings.options.theme = Theme::Light;
+    h.run_steps(4);
+    assert!(!dark_mode(&h));
+
+    h.state_mut().settings.options.theme = Theme::Dark;
+    h.run_steps(4);
+    assert!(dark_mode(&h));
+}
+
+#[test]
+fn ui9_system_theme_follows_the_operating_system() {
+    let mut h = harness(app_with_theme(Theme::System));
+    h.input_mut().system_theme = Some(egui::Theme::Light);
+    h.run_steps(4);
+    assert!(!dark_mode(&h), "system light");
+    h.input_mut().system_theme = Some(egui::Theme::Dark);
+    h.run_steps(4);
+    assert!(dark_mode(&h), "system dark");
+}
+
+#[test]
+fn ui9_forced_theme_ignores_the_operating_system() {
+    let mut h = harness(app_with_theme(Theme::Light));
+    h.input_mut().system_theme = Some(egui::Theme::Dark);
+    h.run_steps(4);
+    assert!(!dark_mode(&h));
+}
+
+#[test]
+fn ui9_options_dialog_picks_the_theme_and_save_applies_it() {
+    let mut app = app_with_theme(Theme::Dark);
+    app.open_options_dialog();
+    let mut h = harness(app);
+    h.run_steps(4);
+    assert!(dark_mode(&h));
+    h.get_by_label(tr(Lang::Ru, Tr::ThemeLight)).click();
+    h.run_steps(4);
+    // Only the draft changes until Save.
+    assert_eq!(h.state().settings.options.theme, Theme::Dark);
+    assert_eq!(h.state().dialogs.options.draft.theme, Theme::Light);
+    h.get_by_label(tr(Lang::Ru, Tr::Save)).click();
+    h.run_steps(6);
+    assert_eq!(h.state().settings.options.theme, Theme::Light);
+    assert!(!dark_mode(&h));
+}
+
+#[test]
+fn ui9_theme_labels_exist_in_every_language() {
+    for lang in [Lang::Ru, Lang::En, Lang::Zh] {
+        for key in [
+            Tr::ThemeTitle,
+            Tr::ThemeSystem,
+            Tr::ThemeLight,
+            Tr::ThemeDark,
+            Tr::ThemeHint,
+        ] {
+            assert!(!tr(lang, key).is_empty());
+        }
+    }
+}
+
+#[test]
+fn ui9_options_dialog_keeps_save_reachable_in_a_short_window() {
+    let mut app = fresh_app();
+    app.open_options_dialog();
+    app.settings.set_lang(Lang::Ru);
+    let mut h = Harness::builder()
+        .with_size([1000.0, 520.0])
+        .with_max_steps(60)
+        .with_accessibility_check(false)
+        .allow_missing_glyphs()
+        .build_ui_state(|ui, app| opcda_egui::ui::draw(app, ui), app);
+    h.run_steps(5);
+    let save = h.get_by_label(tr(Lang::Ru, Tr::Save)).rect();
+    assert!(
+        save.bottom() <= 520.0 && save.top() >= 0.0,
+        "Save button {save:?} must stay inside the 520 px window"
+    );
 }

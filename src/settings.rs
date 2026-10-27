@@ -28,6 +28,15 @@ pub fn default_session_timeout() -> u32 {
     SESSION_TIMEOUT_DEFAULT_MS
 }
 
+/// UI colour theme (UI9). `System` follows the OS light/dark preference.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Theme {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Options {
     pub update_interval_secs: u64,
@@ -45,6 +54,10 @@ pub struct Options {
     /// K2: journal every request/reply pair with its latency (off by default).
     #[serde(default)]
     pub diagnostic_trace: bool,
+    /// UI9: light / dark / follow the system. Settings files written before
+    /// this field existed load as `System`.
+    #[serde(default)]
+    pub theme: Theme,
 }
 
 impl Default for Options {
@@ -61,6 +74,7 @@ impl Default for Options {
             show_log: true,
             ua_deadband: 0.0,
             diagnostic_trace: false,
+            theme: Theme::System,
         }
     }
 }

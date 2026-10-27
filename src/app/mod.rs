@@ -165,8 +165,9 @@ struct DaRouteHold {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let cjk = install_fonts(&cc.egui_ctx);
-        crate::ui::apply_style(&cc.egui_ctx);
-        let mut app = Self::new_inner(Settings::load());
+        let settings = Settings::load();
+        crate::ui::apply_style(&cc.egui_ctx, settings.options.theme);
+        let mut app = Self::new_inner(settings);
         app.journal.info_l(Tr::AppStarted, &[]);
         app.journal.info_l(Tr::OriginNote, &[]);
         app.cjk_font = match cjk {

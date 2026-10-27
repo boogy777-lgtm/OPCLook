@@ -6,7 +6,10 @@
 use crate::constants::{
     BUTTON_PADDING, ITEM_SPACING, TEXT_SIZE_BODY, TEXT_SIZE_HEADING, TEXT_SIZE_SMALL, WINDOW_MARGIN,
 };
+use crate::settings::Theme;
 use egui::{Color32, FontFamily, FontId, TextStyle};
+
+use super::colors::accent_for;
 
 /// Striped-row colour: barely lighter than the dark `panel_fill` (gray 27).
 const DARK_STRIPE: Color32 = Color32::from_gray(31);
@@ -45,38 +48,63 @@ fn apply_scale(style: &mut egui::Style) {
     style.spacing.window_margin = egui::Margin::same(WINDOW_MARGIN);
 }
 
-/// Apply the application style to the context (both themes).
-pub fn apply_style(ctx: &egui::Context) {
-    // Only the dark theme is selectable until UI9 adds the setting.
-    ctx.set_theme(egui::Theme::Dark);
+/// Accent-coloured selection and links for one palette (UI9).
+fn apply_accent(visuals: &mut egui::Visuals) {
+    let dark = visuals.dark_mode;
+    let accent = accent_for(dark);
+    visuals.hyperlink_color = accent;
+    visuals.selection.bg_fill = if dark {
+        Color32::from_rgb(36, 76, 128)
+    } else {
+        Color32::from_rgb(190, 214, 245)
+    };
+    visuals.selection.stroke.color = if dark {
+        Color32::from_rgb(200, 222, 255)
+    } else {
+        Color32::from_rgb(16, 60, 130)
+    };
+    visuals.widgets.hovered.bg_stroke.color = accent;
+}
+
+/// Apply the application style (both palettes) and the theme preference:
+/// `System` follows the OS (`ctx.system_theme()`; dark when the OS says
+/// nothing), `Light`/`Dark` force the palette.
+pub fn apply_style(ctx: &egui::Context, theme: Theme) {
+    ctx.set_theme(match theme {
+        Theme::System => egui::ThemePreference::System,
+        Theme::Light => egui::ThemePreference::Light,
+        Theme::Dark => egui::ThemePreference::Dark,
+    });
     ctx.set_visuals_of(egui::Theme::Dark, egui::Visuals::dark());
     ctx.set_visuals_of(egui::Theme::Light, egui::Visuals::light());
     ctx.style_mut_of(egui::Theme::Dark, |style| {
         apply_scale(style);
         style.visuals.faint_bg_color = DARK_STRIPE;
+        apply_accent(&mut style.visuals);
     });
     ctx.style_mut_of(egui::Theme::Light, |style| {
         apply_scale(style);
         style.visuals.faint_bg_color = LIGHT_STRIPE;
+        apply_accent(&mut style.visuals);
     });
-    ctx.data_mut(|d| d.insert_temp(applied_marker(), StyleApplied));
+    ctx.data_mut(|d| d.insert_temp(applied_marker(), AppliedTheme(theme)));
 }
 
-/// Marker stored in the egui context: the style has been applied.
+/// Marker stored in the egui context: the style was applied for this theme.
 #[derive(Clone, Copy, PartialEq, Eq)]
-struct StyleApplied;
+struct AppliedTheme(Theme);
 
 fn applied_marker() -> egui::Id {
-    egui::Id::new("opclook_style_applied")
+    egui::Id::NULL
 }
 
-/// Apply the style once per context; called at the start of every frame.
-pub(super) fn sync_style(ctx: &egui::Context) {
-    let applied = ctx
-        .data(|d| d.get_temp::<StyleApplied>(applied_marker()))
-        .is_some();
-    if !applied {
-        apply_style(ctx);
+/// Apply the style on the first frame and whenever the theme setting changes;
+/// called at the start of every frame.
+pub(super) fn sync_style(ctx: &egui::Context, theme: Theme) {
+    let applied = ctx.data(|d| d.get_temp::<AppliedTheme>(applied_marker()));
+    if applied != Some(AppliedTheme(theme)) {
+        apply_style(ctx, theme);
+        // The frame in progress still uses the old style.
         ctx.request_repaint();
     }
 }
