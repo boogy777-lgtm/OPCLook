@@ -10,7 +10,10 @@ pub(super) fn menu(app: &mut App, ui: &mut egui::Ui) {
     egui::Panel::top("menu_bar").show(ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button(tr(lang, Tr::MenuClient), |ui| {
-                if ui.button(tr(lang, Tr::ConnectEllipsis)).clicked() {
+                if ui
+                    .add(egui::Button::new(tr(lang, Tr::ConnectEllipsis)).shortcut_text("Ctrl+N"))
+                    .clicked()
+                {
                     app.open_connect_dialog();
                     ui.close();
                 }

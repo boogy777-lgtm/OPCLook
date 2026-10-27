@@ -10,6 +10,8 @@ mod options;
 mod ua_tree;
 mod write;
 
+pub(super) use connect::{security_mode_label, security_policy_label};
+
 use about::about_dialog;
 use add_signal::add_signal_dialog;
 use columns::columns_dialog;

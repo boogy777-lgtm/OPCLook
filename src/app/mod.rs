@@ -30,6 +30,7 @@ mod sessions;
 mod state;
 mod table;
 mod tree;
+mod view;
 
 #[cfg(test)]
 mod tests;
@@ -43,6 +44,7 @@ pub use state::{
     AddChildrenJob, BottomTab, CsvImportJob, CsvImportRow, ReconnectState, Row, SessionState,
     SessionView, TreeItem, WriteKind, WriteTypeChoice, write_type_choices,
 };
+pub use view::{MAX_FIELD_LINES, TableLine};
 
 use self::present::{is_loopback_host, operation_label};
 
@@ -70,6 +72,12 @@ pub struct App {
     /// Whether the tag tree owns keyboard focus for navigation. Cleared when a
     /// text field or a modal dialog captures the keyboard.
     pub tree_focused: bool,
+    /// Session whose rows the table showed last frame (V1); a change drops
+    /// the selection so it never spans tabs.
+    table_view_session: Option<SessionId>,
+    /// Structured / array values expanded in the table (V3): the row and the
+    /// path of field indices from the row value down to the expanded node.
+    pub expanded_values: HashSet<(ItemKey, Vec<u32>)>,
     pub last_update: Option<DateTime<Utc>>,
     /// Selected bottom tab (only relevant when both panels are enabled).
     pub bottom_tab: BottomTab,
@@ -238,6 +246,8 @@ impl App {
             table_anchor: None,
             tree_focus: None,
             tree_focused: false,
+            table_view_session: None,
+            expanded_values: HashSet::new(),
             last_update: None,
             bottom_tab: BottomTab::Journal,
             status_popup: false,
@@ -553,6 +563,7 @@ impl App {
     pub fn update(&mut self, ui: &mut egui::Ui) {
         self.poll_events();
         self.tick();
+        self.sync_table_view();
         crate::ui::draw(self, ui);
         ui.ctx().request_repaint_after(Duration::from_millis(200));
     }

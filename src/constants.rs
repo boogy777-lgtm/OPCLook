@@ -20,6 +20,9 @@ pub const UA_SEARCH_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 pub const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 /// Upper bound for one blocking IO op (browse/read/write).
 pub const IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+/// V3: budget for loading a server's structure types after connect (a browse
+/// of the type hierarchy plus one read per 1000 attributes).
+pub const STRUCT_TYPES_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// Budget for a graceful `Session::disconnect()` and its event loop to finish.
 pub const GRACEFUL_CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 /// Hard upper bound for one one-shot discovery call (`FindServers`/`GetEndpoints`/

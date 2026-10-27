@@ -1,0 +1,278 @@
+//! What the signal table shows (V1): the tags of the active session only.
+//!
+//! Every session (one server endpoint) has its own tag list. The table lists
+//! the rows of the active tab; with no active tab it lists all rows, so a row
+//! never disappears without a tab that owns it being picked.
+//!
+//! `table_focus` / `table_anchor` are positions in this visible list, not in
+//! `rows`. Selection never reaches rows of another session: switching the tab
+//! drops the selection, so Delete or a write can only act on rows the user sees.
+
+use super::*;
+
+impl App {
+    /// Whether the table shows `row` (it belongs to the active session).
+    pub fn row_shown(&self, row: &Row) -> bool {
+        match self.active_session {
+            Some(session) => row.session == session,
+            None => true,
+        }
+    }
+
+    /// Positions in `rows` of the rows the table shows, in table order.
+    pub fn visible_row_positions(&self) -> Vec<usize> {
+        self.rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| self.row_shown(row))
+            .map(|(position, _)| position)
+            .collect()
+    }
+
+    /// Number of rows the table shows.
+    pub fn visible_row_count(&self) -> usize {
+        match self.active_session {
+            Some(session) => self.rows.iter().filter(|r| r.session == session).count(),
+            None => self.rows.len(),
+        }
+    }
+
+    /// Drop selection and focus that belong to another tab. Called every frame
+    /// before the table and the shortcuts see the state; work is done only
+    /// when the active tab changed.
+    pub fn sync_table_view(&mut self) {
+        if self.table_view_session == self.active_session {
+            return;
+        }
+        self.table_view_session = self.active_session;
+        let shown: HashSet<ItemKey> = self
+            .rows
+            .iter()
+            .filter(|row| self.row_shown(row))
+            .map(|row| row.key)
+            .collect();
+        self.selected_rows.retain(|key| shown.contains(key));
+        self.table_focus = None;
+        self.table_anchor = None;
+    }
+
+    /// Switch to the next (`forward`) or previous visible session tab.
+    pub fn cycle_session(&mut self, forward: bool) {
+        let visible: Vec<SessionId> = self
+            .sessions
+            .iter()
+            .filter(|s| s.visible)
+            .map(|s| s.id)
+            .collect();
+        if visible.is_empty() {
+            return;
+        }
+        let current = self
+            .active_session
+            .and_then(|id| visible.iter().position(|v| *v == id));
+        let next = match current {
+            None => 0,
+            Some(index) if forward => (index + 1) % visible.len(),
+            Some(index) => (index + visible.len() - 1) % visible.len(),
+        };
+        if let Some(id) = visible.get(next) {
+            self.active_session = Some(*id);
+            self.selected_tree = None;
+            self.tree_focus = None;
+        }
+    }
+
+    /// Give the keyboard to the signal table: focus the first selected visible
+    /// row, else the first row. Returns false when the table is empty.
+    pub fn focus_table(&mut self) -> bool {
+        let visible = self.visible_row_positions();
+        if visible.is_empty() {
+            return false;
+        }
+        let selected = visible.iter().position(|p| {
+            self.rows
+                .get(*p)
+                .is_some_and(|row| self.selected_rows.contains(&row.key))
+        });
+        match selected {
+            Some(index) => {
+                self.table_focus = Some(index);
+                self.table_anchor = Some(index);
+            }
+            None => self.select_only(0),
+        }
+        self.tree_focused = false;
+        true
+    }
+
+    /// Give the keyboard to the tag tree of the active session: its selected
+    /// node, else its first visible node. Returns false without a tree.
+    pub fn focus_tree(&mut self) -> bool {
+        let Some(session) = self.active_session else {
+            return false;
+        };
+        let Some(view) = self.sessions.iter().find(|s| s.id == session) else {
+            return false;
+        };
+        let target = match self.selected_tree {
+            Some((sid, id)) if sid == session && view.tree.iter().any(|t| t.id == id) => Some(id),
+            // The first node is a root, and roots are always visible.
+            _ => view.tree.first().map(|t| t.id),
+        };
+        match target {
+            Some(id) => {
+                self.set_tree_focus(session, id);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// One line of the signal table (V3): a signal row, or a field / element of
+/// an expanded structured or array value under it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TableLine {
+    Row {
+        /// Position in the visible list (selection and keyboard use it).
+        index: usize,
+        /// Position in `rows`.
+        position: usize,
+    },
+    Field {
+        /// Visible index of the row this field belongs to.
+        index: usize,
+        key: ItemKey,
+        /// Field indices from the row value down to this field.
+        path: Vec<u32>,
+        /// 1 for a direct field of the row value.
+        depth: usize,
+        name: String,
+        value_text: String,
+        /// Structure type name of a nested structure, else empty.
+        type_text: String,
+        expandable: bool,
+        expanded: bool,
+    },
+}
+
+/// At most this many field lines are built per frame; a huge array never
+/// stalls the table.
+pub const MAX_FIELD_LINES: usize = 10_000;
+
+impl App {
+    /// The table's lines for the visible rows, with the expanded values
+    /// unfolded under their rows.
+    pub fn table_lines(&self, visible: &[usize]) -> Vec<TableLine> {
+        let mut lines = Vec::with_capacity(visible.len());
+        let mut budget = MAX_FIELD_LINES;
+        for (index, position) in visible.iter().enumerate() {
+            lines.push(TableLine::Row {
+                index,
+                position: *position,
+            });
+            let Some(row) = self.rows.get(*position) else {
+                continue;
+            };
+            if row.value.is_expandable() && self.expanded_values.contains(&(row.key, Vec::new())) {
+                self.push_fields(&mut lines, &mut budget, index, row.key, &row.value, &[], 1);
+            }
+        }
+        lines
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_fields(
+        &self,
+        lines: &mut Vec<TableLine>,
+        budget: &mut usize,
+        index: usize,
+        key: ItemKey,
+        value: &Value,
+        path: &[u32],
+        depth: usize,
+    ) {
+        for (child, (name, field)) in value.children().into_iter().enumerate() {
+            if *budget == 0 {
+                return;
+            }
+            *budget -= 1;
+            let mut child_path = path.to_vec();
+            child_path.push(u32::try_from(child).unwrap_or(u32::MAX));
+            let expandable = field.is_expandable();
+            let expanded = expandable && self.expanded_values.contains(&(key, child_path.clone()));
+            let type_text = match field {
+                Value::Struct { type_name, .. } => type_name.clone(),
+                _ => String::new(),
+            };
+            lines.push(TableLine::Field {
+                index,
+                key,
+                path: child_path.clone(),
+                depth,
+                name,
+                value_text: field.to_string(),
+                type_text,
+                expandable,
+                expanded,
+            });
+            if expanded {
+                self.push_fields(lines, budget, index, key, field, &child_path, depth + 1);
+            }
+        }
+    }
+
+    /// Expand / collapse one structured value node of a row.
+    pub fn toggle_value(&mut self, key: ItemKey, path: Vec<u32>) {
+        let entry = (key, path);
+        if !self.expanded_values.remove(&entry) {
+            self.expanded_values.insert(entry);
+        }
+    }
+
+    /// Keyboard → on the focused row: the first press opens the value, the
+    /// next one opens every nested level.
+    pub fn expand_focused_value(&mut self) {
+        let Some(key) = self.table_focus.and_then(|i| self.row_key(i)) else {
+            return;
+        };
+        let Some(value) = self
+            .rows
+            .iter()
+            .find(|r| r.key == key)
+            .map(|r| r.value.clone())
+        else {
+            return;
+        };
+        if !value.is_expandable() {
+            return;
+        }
+        if self.expanded_values.insert((key, Vec::new())) {
+            return;
+        }
+        let mut budget = MAX_FIELD_LINES;
+        let mut stack: Vec<(Vec<u32>, &Value)> = vec![(Vec::new(), &value)];
+        while let Some((path, node)) = stack.pop() {
+            for (child, (_, field)) in node.children().into_iter().enumerate() {
+                if budget == 0 {
+                    return;
+                }
+                budget -= 1;
+                if field.is_expandable() {
+                    let mut child_path = path.clone();
+                    child_path.push(u32::try_from(child).unwrap_or(u32::MAX));
+                    self.expanded_values.insert((key, child_path.clone()));
+                    stack.push((child_path, field));
+                }
+            }
+        }
+    }
+
+    /// Keyboard ← on the focused row: close its value with every level.
+    pub fn collapse_focused_value(&mut self) {
+        let Some(key) = self.table_focus.and_then(|i| self.row_key(i)) else {
+            return;
+        };
+        self.expanded_values.retain(|(k, _)| *k != key);
+    }
+}

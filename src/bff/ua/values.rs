@@ -1,8 +1,9 @@
 use crate::bff::model::{BackendMsg, DataValue, Quality, Value};
+use opcua::types::custom::{DataTypeTree, DynamicStructure};
 use opcua::types::{
-    DataChangeFilter, DataChangeTrigger, DataValue as UaDataValue, DeadbandType, ExtensionObject,
-    LocalizedText, NodeId, ObjectId, QualifiedName, StatusCode, UAString, Variant,
-    VariantScalarTypeId, VariantTypeId,
+    DataChangeFilter, DataChangeTrigger, DataValue as UaDataValue, DeadbandType,
+    ExpandedMessageInfo, ExtensionObject, LocalizedText, NodeId, ObjectId, QualifiedName,
+    StatusCode, StructureType, UAString, Variant, VariantScalarTypeId, VariantTypeId,
 };
 
 /// Build the DataChangeFilter for an absolute deadband. `deadband <= 0` yields
@@ -83,7 +84,9 @@ pub(super) fn ua_type_name(t: VariantScalarTypeId) -> &'static str {
     }
 }
 
-pub(super) fn ua_data_value(dv: &UaDataValue) -> DataValue {
+/// A server value as the application sees it; structures are decoded with
+/// the server's data type descriptions (V3) when they were loaded.
+pub(super) fn ua_data_value_typed(dv: &UaDataValue, types: Option<&DataTypeTree>) -> DataValue {
     let status = dv.status.unwrap_or(StatusCode::Good);
     let quality = Quality::from_ua(
         status.bits(),
@@ -92,7 +95,7 @@ pub(super) fn ua_data_value(dv: &UaDataValue) -> DataValue {
     let value = dv
         .value
         .as_ref()
-        .map(variant_to_value)
+        .map(|v| convert(v, types, 0))
         .unwrap_or(Value::Empty);
     DataValue {
         value,
@@ -102,7 +105,23 @@ pub(super) fn ua_data_value(dv: &UaDataValue) -> DataValue {
     }
 }
 
+#[cfg(test)]
 pub(super) fn variant_to_value(variant: &Variant) -> Value {
+    convert(variant, None, 0)
+}
+
+/// How deep nested structures / arrays are unfolded; a server value is hostile
+/// input, so the recursion is bounded.
+const MAX_VALUE_DEPTH: usize = 16;
+
+/// How many elements of a one-dimensional array are kept.
+const MAX_ARRAY_ITEMS: usize = 512;
+
+fn convert(variant: &Variant, types: Option<&DataTypeTree>, depth: usize) -> Value {
+    if depth > MAX_VALUE_DEPTH {
+        return Value::Other("…".to_string());
+    }
+    let nested = |v: &Variant| convert(v, types, depth + 1);
     match variant {
         Variant::Empty => Value::Empty,
         Variant::Boolean(v) => Value::Bool(*v),
@@ -131,36 +150,72 @@ pub(super) fn variant_to_value(variant: &Variant) -> Value {
             text: v.text.to_string(),
         },
         Variant::Guid(v) => Value::Other(format!("guid:{v}")),
-        Variant::Variant(v) => variant_to_value(v),
-        Variant::DataValue(v) => {
-            let dv = ua_data_value(v);
-            dv.value
-        }
-        Variant::ExtensionObject(v) => {
-            // ExtensionObjects are structured/encoded values we cannot fully
-            // decode in the generic path; surface a stable textual summary.
-            let kind = v.body.as_ref().map(|b| b.type_name()).unwrap_or("null");
-            Value::Other(format!("structured:{kind}"))
-        }
+        Variant::Variant(v) => nested(v),
+        Variant::DataValue(v) => v.value.as_ref().map(nested).unwrap_or(Value::Empty),
+        Variant::ExtensionObject(v) => extension_object_value(v, types, depth),
         Variant::Array(array) => {
             // Multi-dimensional arrays flatten the values into nested 1-D
             // Arrays mirroring the dimension layout.
             if let Some(dims) = &array.dimensions {
-                let values: Vec<Value> = array.values.iter().map(variant_to_value).collect();
+                let values: Vec<Value> = array.values.iter().map(nested).collect();
                 Value::Array(flatten_dimensions(&values, dims))
             } else {
                 Value::Array(
                     array
                         .values
                         .iter()
-                        .take(512)
-                        .map(variant_to_value)
+                        .take(MAX_ARRAY_ITEMS)
+                        .map(nested)
                         .collect(),
                 )
             }
         }
         other => Value::Other(format!("{other:?}")),
     }
+}
+
+/// V3: a structure the session decoded with the server's type descriptions
+/// becomes `Value::Struct` (field names from the type tree); any other
+/// structure keeps a stable textual summary.
+fn extension_object_value(
+    object: &ExtensionObject,
+    types: Option<&DataTypeTree>,
+    depth: usize,
+) -> Value {
+    if let Some(structure) = object.inner_as::<DynamicStructure>() {
+        let type_id = structure.full_data_type_id().node_id;
+        let info = types.and_then(|t| t.get_struct_type(&type_id));
+        let union = info.is_some_and(|i| matches!(i.structure_type, StructureType::Union));
+        let fields = structure
+            .values()
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                let name = match info {
+                    // A union carries only the chosen member; which one is not
+                    // public, so it is shown under the type's name.
+                    Some(info) if union => info.name.clone(),
+                    Some(info) => info
+                        .fields
+                        .get(index)
+                        .map(|f| f.name.clone())
+                        .unwrap_or_else(|| format!("#{index}")),
+                    None => format!("#{index}"),
+                };
+                (name, convert(value, types, depth + 1))
+            })
+            .collect();
+        let type_name = info
+            .map(|i| i.name.clone())
+            .unwrap_or_else(|| type_id.to_string());
+        return Value::Struct { type_name, fields };
+    }
+    let kind = object
+        .body
+        .as_ref()
+        .map(|b| b.type_name())
+        .unwrap_or("null");
+    Value::Other(format!("structured:{kind}"))
 }
 
 /// Rebuilds a nested `Value::Array` tree from a flat element list and the
@@ -244,6 +299,11 @@ fn infer_value_to_variant(value: &Value) -> Result<Variant, BackendMsg> {
         Value::Other(v) => {
             return Err(BackendMsg::WriteOtherType {
                 value: v.to_string(),
+            });
+        }
+        Value::Struct { type_name, .. } => {
+            return Err(BackendMsg::WriteStructUnsupported {
+                ty: type_name.clone(),
             });
         }
     })

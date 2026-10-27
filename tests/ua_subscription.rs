@@ -313,7 +313,8 @@ fn differing_value(v: &Value) -> Value {
         | Value::Array(_)
         | Value::NodeId(_)
         | Value::QualifiedName { .. }
-        | Value::LocalizedText { .. } => v.clone(),
+        | Value::LocalizedText { .. }
+        | Value::Struct { .. } => v.clone(),
     }
 }
 

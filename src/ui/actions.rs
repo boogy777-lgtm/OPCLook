@@ -25,6 +25,8 @@ pub(super) enum TableAction {
     SaveCsv,
     MoveColumn(ColumnId, ColumnDir),
     DropColumn(ColumnId, usize),
+    /// V3: expand / collapse a structured value node of a row.
+    ToggleValue(ItemKey, Vec<u32>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

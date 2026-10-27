@@ -72,7 +72,6 @@ impl std::fmt::Display for Lang {
 pub enum Tr {
     // ---- Top menu ----
     MenuClient,
-    TabsNotAFilterHint,
     TraceDropped,
     TraceReply,
     TraceSent,
@@ -148,6 +147,7 @@ pub enum Tr {
     UpdatedAt,
     RowsHint,
     TreeHint,
+    KeyboardIdleHint,
 
     // ---- Bottom panels ----
     ScriptTab,
@@ -746,9 +746,6 @@ fn ru(key: Tr) -> &'static str {
     match key {
         // ---- Top menu ----
         MenuClient => "OPC клиент",
-        TabsNotAFilterHint => {
-            "Вкладки выбирают дерево слева, это не фильтр: в таблице сигналы всех серверов"
-        }
         TraceDropped => "← #{0} (сессия {1}): нет ожидающего запроса, ответ отброшен",
         TraceReply => "← #{0} {1} (сессия {2}): {3} мс",
         TraceSent => "→ #{0} {1} (сессия {2})",
@@ -834,8 +831,11 @@ fn ru(key: Tr) -> &'static str {
         Writing => "Запись...",
         WrittenSummary => "Записано: {0} из {1}",
         UpdatedAt => "Обновлено {0}",
-        RowsHint => "Таблица: ↑↓ Shift+PgUp/PgDn Home/End Ctrl+A Ctrl+C Del Enter F5",
-        TreeHint => "Дерево: ↑↓ ← → Space Enter F5",
+        RowsHint => {
+            "Таблица: ↑↓ Shift+PgUp/PgDn Home/End Ctrl+A Ctrl+C Del Enter F5 · Tab — дерево · Ctrl+Tab — сервер"
+        }
+        TreeHint => "Дерево: ↑↓ ← → Space Enter F5 · Tab — таблица · Ctrl+Tab — сервер",
+        KeyboardIdleHint => "Tab — таблица / дерево · Ctrl+N — подключиться",
 
         // ---- Bottom panels ----
         ScriptTab => "Скрипт",
@@ -1327,9 +1327,6 @@ fn en(key: Tr) -> &'static str {
     match key {
         // ---- Top menu ----
         MenuClient => "OPC client",
-        TabsNotAFilterHint => {
-            "Tabs pick the tree on the left; they are not a filter: the table lists signals of all servers"
-        }
         TraceDropped => "← #{0} (session {1}): no outstanding request, reply dropped",
         TraceReply => "← #{0} {1} (session {2}): {3} ms",
         TraceSent => "→ #{0} {1} (session {2})",
@@ -1413,8 +1410,11 @@ fn en(key: Tr) -> &'static str {
         Writing => "Writing...",
         WrittenSummary => "Written: {0} of {1}",
         UpdatedAt => "Updated {0}",
-        RowsHint => "Table: ↑↓ Shift+PgUp/PgDn Home/End Ctrl+A Ctrl+C Del Enter F5",
-        TreeHint => "Tree: ↑↓ ← → Space Enter F5",
+        RowsHint => {
+            "Table: ↑↓ Shift+PgUp/PgDn Home/End Ctrl+A Ctrl+C Del Enter F5 · Tab — tree · Ctrl+Tab — server"
+        }
+        TreeHint => "Tree: ↑↓ ← → Space Enter F5 · Tab — table · Ctrl+Tab — server",
+        KeyboardIdleHint => "Tab — table / tree · Ctrl+N — connect",
 
         // ---- Bottom panels ----
         ScriptTab => "Script",
@@ -1898,7 +1898,6 @@ fn zh(key: Tr) -> &'static str {
     match key {
         // ---- Top menu ----
         MenuClient => "OPC 客户端",
-        TabsNotAFilterHint => "标签页用于选择左侧的树，不是过滤器：表格显示所有服务器的信号",
         TraceDropped => "← #{0}（会话 {1}）：无待处理请求，响应已丢弃",
         TraceReply => "← #{0} {1}（会话 {2}）：{3} 毫秒",
         TraceSent => "→ #{0} {1}（会话 {2}）",
@@ -1976,8 +1975,11 @@ fn zh(key: Tr) -> &'static str {
         Writing => "写入中...",
         WrittenSummary => "已写入: {0} / {1}",
         UpdatedAt => "更新于 {0}",
-        RowsHint => "表格: ↑↓ Shift+PgUp/PgDn Home/End Ctrl+A Ctrl+C Delete Enter F5",
-        TreeHint => "树: ↑↓ ← → 空格 Enter F5",
+        RowsHint => {
+            "表格: ↑↓ Shift+PgUp/PgDn Home/End Ctrl+A Ctrl+C Delete Enter F5 · Tab — 树 · Ctrl+Tab — 服务器"
+        }
+        TreeHint => "树: ↑↓ ← → 空格 Enter F5 · Tab — 表格 · Ctrl+Tab — 服务器",
+        KeyboardIdleHint => "Tab — 表格 / 树 · Ctrl+N — 连接",
 
         // ---- Bottom panels ----
         ScriptTab => "脚本",
@@ -3162,6 +3164,21 @@ pub fn backend_text(lang: Lang, msg: &BackendMsg) -> String {
             "could not determine the type of {count} OPC UA nodes, writes use the automatic type",
             "无法确定 {count} 个 OPC UA 节点的类型，写入将使用自动类型"
         ),
+        M::StructTypesUnavailable { cause } => {
+            let cause = backend_text(lang, cause);
+            l!(
+                lang,
+                "типы структур сервера не загружены, структуры показаны текстом: {cause}",
+                "the server's structure types were not loaded, structures are shown as text: {cause}",
+                "未加载服务器结构类型，结构以文本显示：{cause}"
+            )
+        }
+        M::TimeoutStructTypes => l!(
+            lang,
+            "таймаут загрузки типов структур OPC UA",
+            "loading OPC UA structure types timed out",
+            "加载 OPC UA 结构类型超时"
+        ),
         M::SubscriptionNotCreated { cause } => {
             let cause = backend_text(lang, cause);
             l!(
@@ -3892,6 +3909,13 @@ mod tests {
                 },
                 vec!["§cause§"],
             ),
+            (
+                BackendMsg::StructTypesUnavailable {
+                    cause: Box::new(BackendMsg::raw("§cause§")),
+                },
+                vec!["§cause§"],
+            ),
+            (BackendMsg::TimeoutStructTypes, vec![]),
             (
                 BackendMsg::CreateSubscriptionFailed {
                     detail: "§detail§".to_string(),

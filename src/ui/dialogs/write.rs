@@ -86,13 +86,22 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
                         });
                 });
                 ui.label(tr(lang, Tr::ValueLabel));
-                let value_response = ui.add(
-                    egui::TextEdit::singleline(&mut dialog.text)
-                        .desired_width(f32::INFINITY)
-                        .hint_text(tr(lang, Tr::HintWriteValue)),
-                );
+                let value_out = egui::TextEdit::singleline(&mut dialog.text)
+                    .desired_width(f32::INFINITY)
+                    .hint_text(tr(lang, Tr::HintWriteValue))
+                    .show(ui);
                 if dialog.focus_pending {
-                    value_response.request_focus();
+                    // K3: the field opens focused with the current value selected,
+                    // so typing replaces it and Enter writes: no mouse needed.
+                    let id = value_out.response.response.id;
+                    value_out.response.response.request_focus();
+                    let mut state = value_out.state;
+                    state
+                        .cursor
+                        .set_char_range(Some(egui::text::CCursorRange::select_all_str(
+                            &dialog.text,
+                        )));
+                    state.store(ui.ctx(), id);
                     dialog.focus_pending = false;
                 }
                 if enter && writable && !opening_frame && !confirm_open {

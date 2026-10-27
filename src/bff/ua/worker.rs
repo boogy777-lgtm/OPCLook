@@ -739,6 +739,17 @@ struct Actor {
 
 impl Actor {
     async fn run(mut self) {
+        // V3: before the first command, so the first values already decode.
+        if let Err(cause) = self.session.load_struct_types().await {
+            self.send_event(
+                0,
+                EventKind::Log {
+                    message: BackendMsg::StructTypesUnavailable {
+                        cause: Box::new(cause),
+                    },
+                },
+            );
+        }
         let mut shutdown = false;
         'serve: loop {
             // Take everything that is already waiting, so a control command

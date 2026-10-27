@@ -4,7 +4,7 @@ use super::files::save_tree_csv;
 use super::paint::{
     paint_pause_icon, paint_play_icon, paint_reconnect_icon, painter_icon_button, painter_x_button,
 };
-use super::servers::{request_remove_session, server_state_color, state_text};
+use super::servers::{request_remove_session, security_suffix, server_state_color, state_text};
 use super::test_hooks::record_server_row_rect;
 #[cfg(test)]
 use super::test_hooks::set_tree_row_rect_for_test;
@@ -102,9 +102,14 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                 .sessions
                 .iter()
                 .map(|s| {
+                    // V2: one server's endpoints differ by security only.
+                    let name = match security_suffix(&s.endpoint, lang) {
+                        Some((short, _)) => format!("{} · {short}", s.display_name),
+                        None => s.display_name.clone(),
+                    };
                     (
                         s.id,
-                        s.display_name.clone(),
+                        name,
                         s.state,
                         s.info.clone(),
                         s.protocol() == Protocol::OpcDa,

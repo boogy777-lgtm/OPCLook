@@ -5,7 +5,7 @@ use super::security::{
 };
 use super::trust::{TrustLease, purge_stale, trust_for_session};
 use super::values::{
-    data_change_filter, parse_node, ua_access_current_write, ua_data_value, ua_type_name,
+    data_change_filter, parse_node, ua_access_current_write, ua_data_value_typed, ua_type_name,
     ua_variant_scalar,
 };
 use super::worker::{send, timeout_drain};
@@ -16,12 +16,14 @@ use crate::bff::model::{
 use crate::bff::net::{BoundConnectionSource, BoundConnectorBuilder, NetworkBinding};
 use crate::constants::{
     CONNECT_TIMEOUT, DISCOVERY_GUARD_TIMEOUT, GRACEFUL_CLOSE_TIMEOUT, IO_TIMEOUT,
-    READ_MAX_ITEMS_PER_CALL, UA_SAMPLING_INTERVAL_MS, UA_SUBSCRIPTION_KEEPALIVE_COUNT,
-    UA_SUBSCRIPTION_LIFETIME_COUNT,
+    READ_MAX_ITEMS_PER_CALL, STRUCT_TYPES_TIMEOUT, UA_SAMPLING_INTERVAL_MS,
+    UA_SUBSCRIPTION_KEEPALIVE_COUNT, UA_SUBSCRIPTION_LIFETIME_COUNT,
 };
+use opcua::client::custom_types::DataTypeTreeBuilder;
 use opcua::client::{
     ClientBuilder, DataChangeCallback, IdentityToken, MonitoredItem, Password, Session,
 };
+use opcua::types::custom::{DataTypeTree, DynamicTypeLoader};
 use opcua::types::{
     AttributeId, DataValue as UaDataValue, EndpointDescription, ExtensionObject,
     MessageSecurityMode, MonitoredItemCreateRequest, MonitoredItemModifyRequest, MonitoringMode,
@@ -72,6 +74,9 @@ pub(super) struct UaSession {
     /// Keeps the server certificate trusted for this session only (the connect
     /// dialog's "trust the certificate"); released when the session closes.
     pub(super) trust: Option<TrustLease>,
+    /// V3: the server's structure descriptions, loaded once after connect, so
+    /// structured values decode into named fields.
+    pub(super) types: Option<Arc<DataTypeTree>>,
 }
 
 /// Monitoring parameters of one item: single-slot queue that discards the
@@ -190,6 +195,50 @@ pub(super) fn merge_add_results(
 }
 
 impl UaSession {
+    /// V3: load the server's own structure types (namespaces other than 0;
+    /// the standard ones are built into the client) and register a decoder
+    /// for them, so a structured value arrives as named fields instead of an
+    /// opaque `structured:…`. Best effort: a server without DataTypeDefinition
+    /// (pre-1.04) just keeps the old text.
+    pub(super) async fn load_struct_types(&mut self) -> Result<(), BackendMsg> {
+        let session = self.session.clone();
+        let work = async move {
+            // The decoder resolves encoding ids through the namespace table.
+            session.read_namespace_array().await?;
+            let tree = DataTypeTreeBuilder::new(|id: &NodeId| id.namespace != 0)
+                .build(&session)
+                .await?;
+            Ok::<_, opcua::types::Error>((session, tree))
+        };
+        let (result, timed_out) = timeout_drain(work, STRUCT_TYPES_TIMEOUT).await;
+        let Some(result) = result else {
+            // The build never finished, even after the drain: a request may
+            // still be in flight, so the session is closed like any timeout.
+            self.timed_out = true;
+            return Err(BackendMsg::TimeoutStructTypes);
+        };
+        let _ = timed_out;
+        let (session, tree) = result.map_err(|e| BackendMsg::raw(e.to_string()))?;
+        let tree = Arc::new(tree);
+        session.add_type_loader(Arc::new(DynamicTypeLoader::new(tree.clone())));
+        self.types = Some(tree);
+        Ok(())
+    }
+
+    /// V3: name of the loaded structure type a DataType attribute value
+    /// points at, if any.
+    fn struct_type_name(&self, dv: &UaDataValue) -> Option<String> {
+        let Some(opcua::types::Variant::NodeId(type_id)) = dv.value.as_ref() else {
+            return None;
+        };
+        let info = self.types.as_ref()?.get_struct_type(type_id)?;
+        Some(if info.name.trim().is_empty() {
+            type_id.to_string()
+        } else {
+            info.name.clone()
+        })
+    }
+
     /// Closes the session on the wire: CloseSession + CloseSecureChannel, then
     /// waits for the event loop to finish on its own (it only returns once the
     /// channel is fully closed). Aborts it only as a last resort when the
@@ -273,18 +322,28 @@ impl UaSession {
         };
 
         let mut infos: HashMap<ItemKey, ItemInfo> = HashMap::with_capacity(plan.len());
+        // V3: nodes whose DataType is a known structure: their type is clear
+        // (shown by name), it just is not a scalar.
+        let mut structured: HashSet<ItemKey> = HashSet::new();
         for (idx, (key, _)) in plan.iter().enumerate() {
             let mut scalar = None;
+            let mut struct_name = None;
             let mut writable = false;
             if let Some(values) = &raw {
                 if let Some(dv) = values.get(idx * 2) {
                     scalar = ua_variant_scalar(dv);
+                    if scalar.is_none() {
+                        struct_name = self.struct_type_name(dv);
+                    }
                 }
                 if let Some(dv) = values.get(idx * 2 + 1) {
                     writable = ua_access_current_write(dv).unwrap_or(false);
                 }
             }
-            let data_type = scalar.map(|t| ua_type_name(t).to_string());
+            if struct_name.is_some() {
+                structured.insert(*key);
+            }
+            let data_type = scalar.map(|t| ua_type_name(t).to_string()).or(struct_name);
             let type_id = scalar.map(|t| t as u16);
             if let Some(t) = scalar {
                 self.node_types.insert(*key, t);
@@ -321,7 +380,7 @@ impl UaSession {
             .collect();
         let attribute_failures = plan
             .iter()
-            .filter(|(key, _)| !self.node_types.contains_key(key))
+            .filter(|(key, _)| !self.node_types.contains_key(key) && !structured.contains(key))
             .count();
         let warning = if attribute_failures > 0 {
             Some(BackendMsg::TypesUnresolved {
@@ -380,6 +439,7 @@ impl UaSession {
         let interval = Duration::from_millis(interval_ms);
         let session_id = self.session_id;
         let event_tx = tx.clone();
+        let types = self.types.clone();
         let callback =
             DataChangeCallback::new(move |data_value: UaDataValue, item: &MonitoredItem| {
                 let key = item.client_handle();
@@ -387,7 +447,7 @@ impl UaSession {
                     request_id: 0,
                     session: session_id,
                     kind: EventKind::Values {
-                        values: vec![(key, ua_data_value(&data_value))],
+                        values: vec![(key, ua_data_value_typed(&data_value, types.as_deref()))],
                     },
                 });
             });
@@ -1018,6 +1078,7 @@ pub(super) async fn connect(
         unfiltered: HashSet::new(),
         timed_out: false,
         trust,
+        types: None,
     })
 }
 

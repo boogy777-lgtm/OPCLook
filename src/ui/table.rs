@@ -6,7 +6,7 @@ use super::servers::session_tab_strip;
 #[cfg(test)]
 use super::test_hooks::{record_header_cell, record_table_scroll, set_tags_rect_for_test};
 use super::tree::refresh_selected;
-use crate::app::App;
+use crate::app::{App, TableLine};
 use crate::columns::ColumnId;
 use crate::constants::{MIN_COLUMN_WIDTH, TABLE_HEADER_HEIGHT, TABLE_ROW_HEIGHT};
 use crate::i18n::{Tr, fmt, tr};
@@ -25,6 +25,9 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
             // a window-wide top panel. It belongs to the tags area, so it stays
             // reachable even when the left nav/tree is collapsed.
             session_tab_strip(app, ui);
+            // A tab click above may have switched the session: drop the old
+            // tab's selection before the table and the shortcuts use it (V1).
+            app.sync_table_view();
             ui.separator();
             // Opaque drop-zone frame: the tags area owns the full central panel
             // background (no transparent defaults leaking a black band between
@@ -58,13 +61,17 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                     // shrink-wraps to its content (which would shift the header each
                     // time rows are added/dropped).
 
+                    // V1: the table lists the active session's tags only.
+                    let visible = app.visible_row_positions();
+                    // V3: expanded structures / arrays add field lines under their row.
+                    let lines = app.table_lines(&visible);
                     let selected_count = app.selected_rows.len();
                     let count_strip = ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new(fmt(
                                 lang,
                                 Tr::SignalsCount,
-                                &[&app.rows.len().to_string(), &selected_count.to_string()],
+                                &[&visible.len().to_string(), &selected_count.to_string()],
                             ))
                             .weak(),
                         );
@@ -81,7 +88,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
 
                     let text_height = TABLE_ROW_HEIGHT;
                     let table_ctx = ui.ctx().clone();
-                    let empty = app.rows.is_empty();
+                    let empty = visible.is_empty();
                     // The egui_extras table only scrolls vertically and its internal
                     // ScrollArea shrink-wraps to content width, which would let the table
                     // overflow and/or shift the header on every row change. Wrapping it in
@@ -230,12 +237,52 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                         });
                                         return;
                                     }
-                                    body.rows(text_height, app.rows.len(), |mut row| {
-                                        let index = row.index();
-                                        let Some(signal) = app.rows.get(index) else {
+                                    body.rows(text_height, lines.len(), |mut row| {
+                                        // `index` is the visible position (selection and
+                                        // keyboard work on it); `position` is in `rows`.
+                                        let (index, position) = match lines.get(row.index()) {
+                                            Some(TableLine::Row { index, position }) => {
+                                                (*index, *position)
+                                            }
+                                            Some(TableLine::Field {
+                                                index,
+                                                key,
+                                                path,
+                                                depth,
+                                                name,
+                                                value_text,
+                                                type_text,
+                                                expandable,
+                                                expanded,
+                                            }) => {
+                                                let field = FieldLine {
+                                                    key: *key,
+                                                    path,
+                                                    depth: *depth,
+                                                    name,
+                                                    value_text,
+                                                    type_text,
+                                                    expandable: *expandable,
+                                                    expanded: *expanded,
+                                                };
+                                                draw_field_line(
+                                                    &mut row,
+                                                    &columns,
+                                                    &field,
+                                                    *index,
+                                                    &mut actions,
+                                                );
+                                                return;
+                                            }
+                                            None => return,
+                                        };
+                                        let Some(signal) = app.rows.get(position) else {
                                             return;
                                         };
                                         let key = signal.key;
+                                        // V3: the row's own click handles the expander
+                                        // (the row sits above its cells for the pointer).
+                                        let mut toggle_rect: Option<egui::Rect> = None;
                                         row.set_selected(app.selected_rows.contains(&key));
                                         for (column_index, column) in columns.iter().enumerate() {
                                             match column {
@@ -251,6 +298,13 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                 }
                                                 ColumnId::FullName => {
                                                     row.col(|ui| {
+                                                        if signal.value.is_expandable() {
+                                                            let expanded = app
+                                                                .expanded_values
+                                                                .contains(&(key, Vec::new()));
+                                                            toggle_rect =
+                                                                Some(value_toggle(ui, expanded));
+                                                        }
                                                         ui.label(&signal.display_name)
                                                             .on_hover_text(&signal.item_id);
                                                     });
@@ -323,7 +377,14 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                             let _ = column_index;
                                         }
                                         let response = row.response();
-                                        if response.clicked() {
+                                        let on_toggle = toggle_rect.is_some_and(|rect| {
+                                            response
+                                                .interact_pointer_pos()
+                                                .is_some_and(|pos| rect.expand(2.0).contains(pos))
+                                        });
+                                        if response.clicked() && on_toggle {
+                                            actions.push(TableAction::ToggleValue(key, Vec::new()));
+                                        } else if response.clicked() {
                                             let modifiers = table_ctx.input(|i| i.modifiers);
                                             if modifiers.shift && app.table_anchor.is_some() {
                                                 actions.push(TableAction::SelectExtend(index));
@@ -453,6 +514,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                             app.status = tr(app.lang(), Tr::FullNameCopied).to_string();
                         }
                     }
+                    TableAction::ToggleValue(key, path) => app.toggle_value(key, path),
                     TableAction::SelectAll => app.select_all_rows(),
                     TableAction::ClearSelection => app.clear_selection(),
                     TableAction::SaveCsv => save_tree_csv(app),
@@ -487,15 +549,93 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
             }
         });
 }
+/// One expanded field of a row value, borrowed from its [`TableLine`].
+struct FieldLine<'a> {
+    key: crate::bff::model::ItemKey,
+    path: &'a [u32],
+    depth: usize,
+    name: &'a str,
+    value_text: &'a str,
+    type_text: &'a str,
+    expandable: bool,
+    expanded: bool,
+}
+
+/// The ">" / "v" expander of a structured value (same look as the tag tree).
+/// Returns its rect: the table row owns the pointer, so the caller turns a row
+/// click inside this rect into expand / collapse.
+fn value_toggle(ui: &mut egui::Ui, expanded: bool) -> egui::Rect {
+    let arrow = if expanded { "v" } else { ">" };
+    ui.add_sized(
+        [16.0, 16.0],
+        egui::Label::new(egui::RichText::new(arrow).strong())
+            .selectable(false)
+            .sense(egui::Sense::hover()),
+    )
+    .rect
+}
+
+/// V3: a field / element line under an expanded row: indented name with its
+/// own expander, the field value and, for a nested structure, its type name.
+/// Clicking it selects the row it belongs to.
+fn draw_field_line(
+    row: &mut egui_extras::TableRow<'_, '_>,
+    columns: &[ColumnId],
+    field: &FieldLine<'_>,
+    index: usize,
+    actions: &mut Vec<TableAction>,
+) {
+    let mut toggle_rect = None;
+    for column in columns {
+        match column {
+            ColumnId::FullName => {
+                row.col(|ui| {
+                    ui.add_space(field.depth as f32 * 16.0);
+                    if field.expandable {
+                        toggle_rect = Some(value_toggle(ui, field.expanded));
+                    } else {
+                        ui.add_space(16.0 + ui.spacing().item_spacing.x);
+                    }
+                    ui.label(egui::RichText::new(field.name).weak());
+                });
+            }
+            ColumnId::Value => {
+                row.col(|ui| {
+                    ui.label(egui::RichText::new(field.value_text).monospace());
+                });
+            }
+            ColumnId::Type => {
+                row.col(|ui| {
+                    ui.label(egui::RichText::new(field.type_text).weak());
+                });
+            }
+            _ => {
+                row.col(|_ui| {});
+            }
+        }
+    }
+    let response = row.response();
+    let on_toggle = toggle_rect.is_some_and(|rect: egui::Rect| {
+        response
+            .interact_pointer_pos()
+            .is_some_and(|pos| rect.expand(2.0).contains(pos))
+    });
+    if response.clicked() && on_toggle {
+        actions.push(TableAction::ToggleValue(field.key, field.path.to_vec()));
+    } else if response.clicked() {
+        actions.push(TableAction::SelectSingle(index));
+    }
+}
+
 pub(super) fn handle_table_keys(app: &mut App, ui: &mut egui::Ui) {
-    if app.rows.is_empty() {
+    let len = app.visible_row_count();
+    if len == 0 {
         app.table_focus = None;
         app.table_anchor = None;
         return;
     }
-    let len = app.rows.len();
     let ctx = ui.ctx();
-    let focus = app.table_focus.unwrap_or(0);
+    let focus = app.table_focus.unwrap_or(0).min(len - 1);
     let shift = ctx.input(|i| i.modifiers.shift);
     let ctrl = ctx.input(|i| i.modifiers.ctrl || i.modifiers.command);
 
@@ -539,6 +679,13 @@ pub(super) fn handle_table_keys(app: &mut App, ui: &mut egui::Ui) {
         } else {
             app.select_only(len - 1);
         }
+    }
+
+    // V3: → opens the focused row's structure (again: every level), ← closes it.
+    if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
+        app.expand_focused_value();
+    } else if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
+        app.collapse_focused_value();
     }
 
     if ctrl && ctx.input(|i| i.key_pressed(egui::Key::A)) {
