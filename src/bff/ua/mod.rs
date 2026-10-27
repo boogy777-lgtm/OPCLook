@@ -7,6 +7,7 @@ mod security;
 mod session;
 #[cfg(test)]
 mod tests;
+mod trust;
 mod values;
 mod worker;
 

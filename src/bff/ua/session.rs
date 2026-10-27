@@ -3,6 +3,7 @@ use super::io::read_values_chunked;
 use super::security::{
     auto_chose_unprotected_over_secure, resolve_security, security_error, security_summary,
 };
+use super::trust::{TrustLease, purge_stale, trust_for_session};
 use super::values::{
     data_change_filter, parse_node, ua_access_current_write, ua_data_value, ua_type_name,
     ua_variant_scalar,
@@ -68,6 +69,9 @@ pub(super) struct UaSession {
     /// a response in flight, so the session is poisoned: the command loop must
     /// close it gracefully instead of issuing another request on it.
     pub(super) timed_out: bool,
+    /// Keeps the server certificate trusted for this session only (the connect
+    /// dialog's "trust the certificate"); released when the session closes.
+    pub(super) trust: Option<TrustLease>,
 }
 
 /// Monitoring parameters of one item: single-slot queue that discards the
@@ -193,11 +197,15 @@ impl UaSession {
     /// channel is fully closed). Aborts it only as a last resort when the
     /// graceful close cannot complete in [`GRACEFUL_CLOSE_TIMEOUT`].
     pub(super) async fn close(&mut self) {
+        // Untrust the server certificate once the channel is gone (below), but
+        // keep it while the close handshake still runs.
+        let trust = self.trust.take();
         let closed = tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, self.session.disconnect()).await;
         let joined = tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, &mut self.event_loop).await;
         if closed.is_err() || joined.is_err() {
             self.event_loop.abort();
         }
+        drop(trust);
     }
 
     pub(super) async fn add_items(
@@ -893,14 +901,19 @@ pub(super) async fn connect(
 
     // 3. Build the client with the PKI store and the user's trust preference.
     let pki = pki_dir();
+    purge_stale(&pki);
     let mut builder = ClientBuilder::new()
         .application_name("OPC DA/UA Test Client")
         .application_uri("urn:opcda-egui")
         .product_uri("urn:opcda-egui")
         .create_sample_keypair(true)
-        // Trust flag drives auto-storing server certs into the trusted store.
-        .trust_server_certs(endpoint.ua_trust_server_cert)
-        // When trusting server certs we also skip strict hostname/expiry checks.
+        // The library's own "trust unknown certificates" switch would store the
+        // server certificate in `trusted` FOREVER. "Trust" in the connect dialog
+        // means this session only, which `TrustLease` provides (see trust.rs).
+        .trust_server_certs(false)
+        // A trusted server is also exempt from the validity period, host name and
+        // application URI checks (industrial devices often fail them); the key
+        // length and the identity of the certificate are still checked.
         .verify_server_certs(!endpoint.ua_trust_server_cert)
         .pki_dir(pki.clone())
         .session_retry_limit(3);
@@ -916,6 +929,15 @@ pub(super) async fn connect(
     // 5. Reuse the selected server's full endpoint description, including its
     //    actual user-token policies.
     let description = endpoint_description_for(&server_endpoints, url, &policy_uri, mode);
+
+    // 5b. "Trust the certificate" = trust for the lifetime of this session. The
+    //     lease is dropped (and the certificate untrusted again) when the connect
+    //     fails below or the session closes.
+    let trust = if endpoint.ua_trust_server_cert {
+        trust_for_session(&pki, &description.server_certificate)?
+    } else {
+        None
+    };
 
     // 6. Validate identity against the selected endpoint, not a guessed
     //    correlation between message security and certificate support.
@@ -968,6 +990,7 @@ pub(super) async fn connect(
         monitored: HashMap::new(),
         unfiltered: HashSet::new(),
         timed_out: false,
+        trust,
     })
 }
 

@@ -1014,3 +1014,63 @@ fn u12_auto_connect_reports_the_unencrypted_channel_and_the_secure_alternative()
         "the sample server also offers secure endpoints: {info:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// U13: "trust the certificate" lasts one session
+// ---------------------------------------------------------------------------
+
+/// Where the client keeps the server's certificate while it is trusted.
+fn trusted_copy_of_server_cert(server: &TestServer) -> PathBuf {
+    use opcua::crypto::{CertificateStore, X509};
+    use opcua::types::ByteString;
+    let der = std::fs::read(server.dir.join("own").join("cert.der")).expect("server certificate");
+    let cert = X509::from_byte_string(&ByteString::from(der)).expect("parse server certificate");
+    TEST_PKI_DIR
+        .get()
+        .expect("client pki")
+        .join("trusted")
+        .join(CertificateStore::cert_file_name(&cert))
+}
+
+fn secure_endpoint(server: &TestServer, trust: bool) -> EndpointSpec {
+    let mut endpoint = Harness::endpoint(&server.url);
+    endpoint.ua_security_policy = Some(UaSecurityPolicy::Basic256Sha256);
+    endpoint.ua_security_mode = Some(UaSecurityMode::SignAndEncrypt);
+    endpoint.ua_trust_server_cert = trust;
+    endpoint
+}
+
+#[test]
+fn u13_trusting_a_certificate_lasts_only_for_the_session() {
+    let server = TestServer::start(48661);
+    let mut app = Harness::new();
+    let trusted = trusted_copy_of_server_cert(&server);
+
+    assert!(
+        app.connect(1, secure_endpoint(&server, false)).is_err(),
+        "an unknown server certificate is refused without the trust choice"
+    );
+    assert!(!trusted.exists());
+
+    app.connect(1, secure_endpoint(&server, true))
+        .expect("connects when the user trusts the certificate");
+    assert!(trusted.exists(), "trusted while the session lives");
+    let _ = app.send(1, CommandKind::Disconnect);
+    assert!(
+        app.wait(Duration::from_secs(20), |event| matches!(
+            event.kind,
+            EventKind::Disconnected { .. }
+        )
+        .then_some(()))
+            .is_some()
+    );
+    assert!(
+        !trusted.exists(),
+        "the certificate must not stay trusted after the session"
+    );
+
+    assert!(
+        app.connect(1, secure_endpoint(&server, false)).is_err(),
+        "the earlier session's trust must not carry over"
+    );
+}
