@@ -21,7 +21,7 @@ pub use security::{
     SECURITY_POLICY_AUTO, SECURITY_POLICY_BASIC256_SHA256, SECURITY_POLICY_NONE, resolve_security,
     security_error,
 };
-pub use session::{client_cert_subject, pki_dir_public};
+pub use session::{client_cert_subject, pki_dir_public, use_private_pki_dir};
 
 pub(crate) fn spawn(event_tx: Sender<Event>) -> super::WorkerHandle {
     worker::spawn(event_tx)

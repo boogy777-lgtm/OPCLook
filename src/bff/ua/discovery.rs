@@ -759,17 +759,17 @@ pub(super) fn merge_network_info(found: &mut Vec<UaNetworkInfo>, incoming: UaNet
 /// a wedged connect.
 pub(super) fn build_discovery_client() -> Result<opcua::client::Client, BackendMsg> {
     let pki = pki_dir();
-    ClientBuilder::new()
-        .application_name("OPC DA/UA Test Client")
-        .application_uri("urn:opcda-egui")
-        .product_uri("urn:opcda-egui")
-        .create_sample_keypair(true)
-        .trust_server_certs(true)
-        .pki_dir(pki)
-        .session_retry_limit(0)
-        .request_timeout(UA_SEARCH_TIMEOUT)
-        .client()
-        .map_err(|errors| BackendMsg::Raw(errors.join("; ")))
+    super::session::build_client(
+        ClientBuilder::new()
+            .application_name("OPC DA/UA Test Client")
+            .application_uri("urn:opcda-egui")
+            .product_uri("urn:opcda-egui")
+            .create_sample_keypair(true)
+            .trust_server_certs(true)
+            .pki_dir(pki)
+            .session_retry_limit(0)
+            .request_timeout(UA_SEARCH_TIMEOUT),
+    )
 }
 
 #[cfg(test)]

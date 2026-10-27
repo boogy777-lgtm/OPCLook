@@ -510,14 +510,93 @@ fn backup_damaged_file(path: &std::path::Path) -> Result<String, String> {
     Err("no free backup file name".to_string())
 }
 
+/// Per-thread redirect of the settings directory for headless tests of the
+/// application (`tests/*.rs`), which run in the same process and in parallel.
+///
+/// Redirecting through the process-wide `APPDATA` variable made such tests
+/// interleave: one test's `save()` landed in another test's directory, and
+/// `set_var` itself races with every other thread reading the environment. A
+/// thread-local directory cannot be seen by other tests. The application never
+/// installs one; without it `app_dir()` reads `%APPDATA%` as before.
+pub mod thread_dir {
+    use std::cell::RefCell;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    thread_local! {
+        static DIR: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+        static OWNED: RefCell<Option<Owned>> = const { RefCell::new(None) };
+    }
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    /// A private directory created for this thread; removed when the thread ends.
+    struct Owned(PathBuf);
+
+    impl Drop for Owned {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    pub(super) fn current() -> Option<PathBuf> {
+        DIR.with(|dir| dir.borrow().clone())
+    }
+
+    /// Redirect this thread's settings to `dir` until the guard is dropped.
+    pub fn redirect(dir: &Path) -> Redirect {
+        let previous = DIR.with(|cell| cell.borrow_mut().replace(dir.to_path_buf()));
+        Redirect { previous }
+    }
+
+    /// Restores the previous redirect of the thread.
+    pub struct Redirect {
+        previous: Option<PathBuf>,
+    }
+
+    impl Drop for Redirect {
+        fn drop(&mut self) {
+            let previous = self.previous.take();
+            DIR.with(|cell| *cell.borrow_mut() = previous);
+        }
+    }
+
+    /// Give this thread a private temporary settings directory unless it has a
+    /// redirect already, so a headless test that saves settings never writes to
+    /// the real `%APPDATA%` or into another test's directory.
+    pub fn ensure_private() {
+        if current().is_some() {
+            return;
+        }
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "opcda-egui-thread-settings-{}-{n}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        if std::fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+        DIR.with(|cell| *cell.borrow_mut() = Some(dir.clone()));
+        OWNED.with(|cell| *cell.borrow_mut() = Some(Owned(dir)));
+    }
+}
+
 pub fn app_dir() -> PathBuf {
     // Unit tests must never touch the developer's real settings: in test builds
     // the base directory is a per-test override or a private per-process temp
-    // directory (see `test_isolation`). The real `%APPDATA%` is only read by the
-    // non-test build (the application and the integration tests, which redirect
-    // `APPDATA` themselves).
+    // directory (see `test_isolation`). Headless tests of the application
+    // redirect per thread (see `thread_dir`). The real `%APPDATA%` is read only
+    // by the application itself.
     #[cfg(test)]
-    let base = test_isolation::current_override().unwrap_or_else(test_isolation::fallback_dir);
+    if let Some(dir) = test_isolation::current_override() {
+        return dir.join("opcda-egui");
+    }
+    if let Some(dir) = thread_dir::current() {
+        return dir.join("opcda-egui");
+    }
+    #[cfg(test)]
+    let base = test_isolation::fallback_dir();
     #[cfg(not(test))]
     let base = std::env::var_os("APPDATA")
         .map(PathBuf::from)

@@ -185,6 +185,11 @@ impl App {
     /// Headless test constructor with explicit settings (no user config).
     pub fn new_test_with_settings(ctx: &egui::Context, settings: Settings) -> Self {
         ctx.set_visuals(egui::Visuals::dark());
+        // Headless tests run in one process, in parallel: each test thread gets
+        // its own settings directory and the process its own PKI store, never
+        // the real `%APPDATA%` and never a directory shared with other tests.
+        crate::settings::thread_dir::ensure_private();
+        crate::bff::ua::use_private_pki_dir();
         let mut app = Self::new_inner(settings);
         app.journal.info_l(Tr::AppStarted, &[]);
         app.journal.info_l(Tr::OriginNote, &[]);

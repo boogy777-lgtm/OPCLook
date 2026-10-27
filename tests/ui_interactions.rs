@@ -11,41 +11,20 @@ use opcda_egui::bff::model::{
     SubscriptionState, UaSecurityMode, UaSecurityPolicy, Value,
 };
 use opcda_egui::settings::Settings;
-use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Serializes tests that read or write the on-disk settings (via `set_lang` /
-/// `settings.save()` / `Settings::load()`). Those tests share the process-global
-/// `APPDATA` location, and running them in parallel can clobber each other's
-/// `settings.json` writes, making the suite flaky.
-static SETTINGS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static SETTINGS_DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 
-struct IsolatedAppData {
-    previous: Option<OsString>,
-    path: PathBuf,
-}
-
-impl Drop for IsolatedAppData {
-    fn drop(&mut self) {
-        match self.previous.take() {
-            Some(value) => unsafe { std::env::set_var("APPDATA", value) },
-            None => unsafe { std::env::remove_var("APPDATA") },
-        }
-        let _ = std::fs::remove_dir_all(&self.path);
-    }
-}
-
-/// Run `f` against a private temporary `%APPDATA%`. Tests that save settings
-/// must never overwrite the developer's real `settings.json`.
+/// Run `f` against a private temporary settings directory of THIS thread.
+///
+/// Tests that save settings must never overwrite the developer's real
+/// `settings.json`, nor another test's file. The directory is redirected per
+/// thread (`settings::thread_dir`), not through the process-wide `APPDATA`
+/// variable: parallel tests cannot see each other's files and nothing needs a
+/// lock or `set_var` (which races with every other thread reading the
+/// environment).
 fn with_settings_lock<R>(f: impl FnOnce() -> R) -> R {
-    // A failing settings test must not poison the lock for the rest of the
-    // suite: the next test still has to run with its own directory.
-    let _guard = SETTINGS_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-
     let seq = SETTINGS_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!(
         "opcda-egui-ui-settings-{}-{seq}",
@@ -53,13 +32,17 @@ fn with_settings_lock<R>(f: impl FnOnce() -> R) -> R {
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create isolated settings directory");
-    let previous = std::env::var_os("APPDATA");
-    unsafe { std::env::set_var("APPDATA", &dir) };
-    let _appdata = IsolatedAppData {
-        previous,
-        path: dir,
-    };
+    let _redirect = opcda_egui::settings::thread_dir::redirect(&dir);
+    let _cleanup = RemoveDir(dir);
     f()
+}
+
+struct RemoveDir(PathBuf);
+
+impl Drop for RemoveDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 /// Force the app's UI language to Russian even if not persisted. The
@@ -3012,41 +2995,25 @@ fn language_switch_persists_in_settings() {
     with_settings_lock(|| {
         use opcda_egui::i18n::Lang;
 
-        let dir = std::env::temp_dir().join(format!("opcda_egui_i18n_{}", std::process::id()));
-        // Start from a clean store: a previous run (or a reused PID) may have left
-        // a settings.json with a non-default language here.
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let previous = std::env::var_os("APPDATA");
-        unsafe { std::env::set_var("APPDATA", &dir) };
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        // A brand-new app has no persisted language: it inherits the Russian
+        // default.
+        assert_eq!(app.lang(), opcda_egui::i18n::Lang::Ru);
 
-        let result = std::panic::catch_unwind(|| {
-            let ctx = egui::Context::default();
-            let mut app = App::new_test(&ctx);
-            // A brand-new app has no persisted language: it inherits the Russian
-            // default.
-            assert_eq!(app.lang(), opcda_egui::i18n::Lang::Ru);
+        // Persisting Russian must survive a restart (the persisted value wins
+        // over the Russian default — here it equals it).
+        app.set_lang(Lang::Ru);
+        assert_eq!(app.lang(), Lang::Ru);
+        let reloaded = opcda_egui::settings::Settings::load();
+        assert_eq!(reloaded.lang(), Lang::Ru);
 
-            // Persisting Russian must survive a restart (the persisted value wins
-            // over the Russian default — here it equals it).
-            app.set_lang(Lang::Ru);
-            assert_eq!(app.lang(), Lang::Ru);
-            let reloaded = opcda_egui::settings::Settings::load();
-            assert_eq!(reloaded.lang(), Lang::Ru);
-
-            // And switching to Chinese persists through Settings::save() to
-            // settings.json; a persisted non-default language is never overridden.
-            app.set_lang(Lang::Zh);
-            assert_eq!(app.lang(), Lang::Zh);
-            let reloaded2 = opcda_egui::settings::Settings::load();
-            assert_eq!(reloaded2.lang(), Lang::Zh);
-        });
-
-        match previous {
-            Some(v) => unsafe { std::env::set_var("APPDATA", v) },
-            None => unsafe { std::env::remove_var("APPDATA") },
-        }
-        result.expect("language persistence assertion failed");
+        // And switching to Chinese persists through Settings::save() to
+        // settings.json; a persisted non-default language is never overridden.
+        app.set_lang(Lang::Zh);
+        assert_eq!(app.lang(), Lang::Zh);
+        let reloaded2 = opcda_egui::settings::Settings::load();
+        assert_eq!(reloaded2.lang(), Lang::Zh);
     });
 }
 
@@ -4055,45 +4022,28 @@ fn fresh_app_defaults_to_russian() {
 #[test]
 fn on_exit_shuts_down_the_gateway() {
     with_settings_lock(|| {
-        let dir = std::env::temp_dir().join(format!("opcda_egui_on_exit_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let previous = std::env::var_os("APPDATA");
-        unsafe { std::env::set_var("APPDATA", &dir) };
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let ctx = egui::Context::default();
-            let mut app = App::new_test(&ctx);
-            app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+        let started = std::time::Instant::now();
+        <App as eframe::App>::on_exit(&mut app, None);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(6),
+            "on_exit waited too long: {:?}",
+            started.elapsed()
+        );
 
-            let started = std::time::Instant::now();
-            <App as eframe::App>::on_exit(&mut app, None);
-            assert!(
-                started.elapsed() < std::time::Duration::from_secs(6),
-                "on_exit waited too long: {:?}",
-                started.elapsed()
-            );
-
-            let error = app
-                .gateway
-                .send(Command {
-                    request_id: 1,
-                    session: 1,
-                    protocol: Protocol::OpcDa,
-                    kind: CommandKind::Test,
-                })
-                .unwrap_err();
-            assert!(error.contains("shut down"), "unexpected error: {error}");
-        }));
-
-        match previous {
-            Some(value) => unsafe { std::env::set_var("APPDATA", value) },
-            None => unsafe { std::env::remove_var("APPDATA") },
-        }
-        let _ = std::fs::remove_dir_all(&dir);
-        if let Err(panic) = result {
-            std::panic::resume_unwind(panic);
-        }
+        let error = app
+            .gateway
+            .send(Command {
+                request_id: 1,
+                session: 1,
+                protocol: Protocol::OpcDa,
+                kind: CommandKind::Test,
+            })
+            .unwrap_err();
+        assert!(error.contains("shut down"), "unexpected error: {error}");
     });
 }
 
@@ -4248,7 +4198,7 @@ fn journal_text(app: &App) -> String {
 #[test]
 fn a2_damaged_settings_file_is_backed_up_and_reported_in_the_journal() {
     with_settings_lock(|| {
-        let dir = PathBuf::from(std::env::var_os("APPDATA").expect("APPDATA")).join("opcda-egui");
+        let dir = opcda_egui::settings::app_dir();
         std::fs::create_dir_all(&dir).expect("settings dir");
         std::fs::write(dir.join("settings.json"), "{ broken").expect("write damaged file");
         let settings = Settings::load();
@@ -4273,7 +4223,7 @@ fn a2_damaged_settings_file_is_backed_up_and_reported_in_the_journal() {
 #[test]
 fn a2_failed_settings_save_is_reported_in_the_journal() {
     with_settings_lock(|| {
-        let dir = PathBuf::from(std::env::var_os("APPDATA").expect("APPDATA")).join("opcda-egui");
+        let dir = opcda_egui::settings::app_dir();
         // A directory in place of settings.json makes the final rename fail.
         std::fs::create_dir_all(dir.join("settings.json")).expect("squatting dir");
         let ctx = egui::Context::default();

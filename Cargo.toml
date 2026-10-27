@@ -68,3 +68,5 @@ egui_kittest = "0.37"
 # In-process OPC UA server for the live backend tests (src/bff/ua/live_tests.rs).
 async-opcua = { version = "0.19", features = ["client", "server"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
+# The library reports a lost key-pair race only through `log`; one test captures it.
+log = "0.4"
