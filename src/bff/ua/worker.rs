@@ -22,7 +22,8 @@ use super::io::{browse, browse_views, read, resolve_browse_path, test, write};
 use super::scanner::{ScanRegistry, abort_all_scans, start_scan_task};
 use super::session::{UaSession, connect};
 use crate::bff::model::{
-    Command, CommandKind, DataValue, EndpointSpec, Event, EventKind, Operation, SessionId,
+    BackendMsg, Command, CommandKind, DataValue, EndpointSpec, Event, EventKind, Operation,
+    SessionId,
 };
 use crate::constants::{GRACEFUL_CLOSE_TIMEOUT, UA_HOST_RUNTIME_THREADS, UA_SESSION_BACKLOG_LIMIT};
 use std::collections::{HashMap, VecDeque};
@@ -35,9 +36,6 @@ use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
-
-/// Reply text for a command addressed to a session that is not connected.
-const NO_CONNECTION: &str = "нет соединения";
 
 pub(super) fn spawn(event_tx: Sender<Event>) -> crate::bff::WorkerHandle {
     let (cmd_tx, cmd_rx): (UnboundedSender<Command>, UnboundedReceiver<Command>) =
@@ -62,7 +60,9 @@ pub(super) fn spawn(event_tx: Sender<Event>) -> crate::bff::WorkerHandle {
                         session: 0,
                         kind: EventKind::Error {
                             operation: Operation::UaRuntime,
-                            message: format!("не удалось запустить tokio runtime: {err}"),
+                            message: BackendMsg::UaRuntimeStartFailed {
+                                detail: err.to_string(),
+                            },
                         },
                     });
                     let _ = done_tx.send(());
@@ -93,7 +93,7 @@ enum Internal {
         session: SessionId,
         generation: u64,
         request_id: u64,
-        message: String,
+        message: BackendMsg,
     },
     /// An actor has finished and released its session.
     Closed { session: SessionId, generation: u64 },
@@ -104,7 +104,7 @@ struct Ready {
     generation: u64,
     request_id: u64,
     endpoint: EndpointSpec,
-    info: String,
+    info: BackendMsg,
     commands: UnboundedSender<ActorMsg>,
     join: JoinHandle<()>,
 }
@@ -181,7 +181,7 @@ impl Host {
                 request_id,
                 session,
                 Operation::Discover,
-                "для OPC UA укажите URL сервера (opc.tcp://host:port)",
+                BackendMsg::UaNeedsServerUrl,
             ),
             CommandKind::SearchUaServers { host, port, bind } => {
                 let tx = self.event_tx.clone();
@@ -208,10 +208,10 @@ impl Host {
                     }
                 });
             }
-            CommandKind::SearchUaNetwork { bind } => {
+            CommandKind::SearchUaNetwork { bind, lds } => {
                 let tx = self.event_tx.clone();
                 self.tasks.spawn(async move {
-                    match search_network_servers(bind.as_ref()).await {
+                    match search_network_servers(bind.as_ref(), lds.as_ref()).await {
                         Ok(searched) => {
                             send_notes(&tx, session, searched.notes);
                             send(
@@ -300,7 +300,7 @@ impl Host {
                 request_id,
                 session,
                 Operation::Connect,
-                "сессия уже подключена",
+                BackendMsg::SessionAlreadyConnected,
             );
             return;
         }
@@ -310,7 +310,7 @@ impl Host {
                 request_id,
                 session,
                 Operation::Connect,
-                "подключение уже выполняется",
+                BackendMsg::ConnectInProgress,
             );
             return;
         }
@@ -451,7 +451,7 @@ impl Host {
                 request_id,
                 session,
                 Operation::Connect,
-                "подключение отменено",
+                BackendMsg::ConnectCancelled,
             );
             return;
         }
@@ -497,7 +497,7 @@ impl Host {
                     ready.request_id,
                     ready.session,
                     Operation::Connect,
-                    "подключение отменено",
+                    BackendMsg::ConnectCancelled,
                 );
                 pending.push(ready.join);
             }
@@ -603,7 +603,7 @@ impl ConnectJob {
             let _ = prior.await;
         }
         let outcome = if cancel.is_cancelled() {
-            Err("подключение отменено".to_string())
+            Err(BackendMsg::ConnectCancelled)
         } else {
             connect(session, endpoint.clone(), &cancel).await
         };
@@ -615,7 +615,7 @@ impl ConnectJob {
                         session,
                         generation,
                         request_id,
-                        message: "подключение отменено".to_string(),
+                        message: BackendMsg::ConnectCancelled,
                     });
                     return;
                 }
@@ -803,7 +803,7 @@ impl Actor {
         });
     }
 
-    fn send_error(&self, request_id: u64, operation: Operation, message: impl Into<String>) {
+    fn send_error(&self, request_id: u64, operation: Operation, message: BackendMsg) {
         send_error(&self.event_tx, request_id, self.id, operation, message);
     }
 
@@ -836,7 +836,7 @@ impl Actor {
                 self.send_event(
                     request_id,
                     EventKind::Disconnected {
-                        reason: "соединение закрыто".to_string(),
+                        reason: BackendMsg::ConnectionClosed,
                     },
                 );
                 Flow::Closed
@@ -885,7 +885,7 @@ impl Actor {
                         .close_timed_out(
                             request_id,
                             Operation::Subscription,
-                            "таймаут запроса OPC UA: сессия закрыта".to_string(),
+                            BackendMsg::RequestTimedOutSessionClosed,
                         )
                         .await;
                 }
@@ -905,7 +905,7 @@ impl Actor {
                         .close_timed_out(
                             request_id,
                             Operation::Add,
-                            "таймаут запроса OPC UA: сессия закрыта".to_string(),
+                            BackendMsg::RequestTimedOutSessionClosed,
                         )
                         .await;
                 }
@@ -921,7 +921,7 @@ impl Actor {
                         .close_timed_out(
                             request_id,
                             Operation::Remove,
-                            "таймаут запроса OPC UA: сессия закрыта".to_string(),
+                            BackendMsg::RequestTimedOutSessionClosed,
                         )
                         .await;
                 }
@@ -935,7 +935,7 @@ impl Actor {
                         .close_timed_out(
                             request_id,
                             Operation::Read,
-                            "таймаут запроса OPC UA: сессия закрыта".to_string(),
+                            BackendMsg::RequestTimedOutSessionClosed,
                         )
                         .await;
                 }
@@ -946,7 +946,7 @@ impl Actor {
                 let result = write(&mut self.session, request).await;
                 if self.session.timed_out {
                     let message = match &result {
-                        Ok(()) => "таймаут запроса OPC UA: сессия закрыта".to_string(),
+                        Ok(()) => BackendMsg::RequestTimedOutSessionClosed,
                         Err(message) => message.clone(),
                     };
                     self.send_event(request_id, EventKind::Wrote { key, result });
@@ -971,7 +971,11 @@ impl Actor {
             | CommandKind::SearchUaNetwork { .. }
             | CommandKind::ScanUaNetwork { .. }
             | CommandKind::CancelUaScan { .. } => {
-                self.send_error(request_id, command.kind.operation(), NO_CONNECTION);
+                self.send_error(
+                    request_id,
+                    command.kind.operation(),
+                    BackendMsg::NoConnection,
+                );
                 Flow::Continue
             }
         }
@@ -985,7 +989,7 @@ impl Actor {
         &mut self,
         request_id: u64,
         operation: Operation,
-        result: Result<T, String>,
+        result: Result<T, BackendMsg>,
         on_success: impl FnOnce(T) -> EventKind,
     ) -> Flow {
         let timed_out = self.session.timed_out;
@@ -1003,7 +1007,7 @@ impl Actor {
                 self.close_timed_out(
                     request_id,
                     operation,
-                    "таймаут запроса OPC UA: сессия закрыта".to_string(),
+                    BackendMsg::RequestTimedOutSessionClosed,
                 )
                 .await
             }
@@ -1026,7 +1030,7 @@ impl Actor {
         &mut self,
         request_id: u64,
         operation: Operation,
-        message: String,
+        message: BackendMsg,
     ) -> Flow {
         // Close the inbox first: from now on the host answers "not connected"
         // itself and treats a new Connect of this id as a fresh session.
@@ -1040,7 +1044,7 @@ impl Actor {
         self.send_event(
             0,
             EventKind::Disconnected {
-                reason: "сессия закрыта после таймаута запроса".to_string(),
+                reason: BackendMsg::SessionClosedAfterTimeout,
             },
         );
         Flow::Closed
@@ -1057,7 +1061,7 @@ pub(super) fn send(tx: &Sender<Event>, event: Event) {
 
 /// Diagnostics of a search or scan as journal lines. They are unsolicited
 /// (request id 0), so they never take the place of the request's own reply.
-fn send_notes(tx: &Sender<Event>, session: SessionId, notes: Vec<String>) {
+fn send_notes(tx: &Sender<Event>, session: SessionId, notes: Vec<BackendMsg>) {
     for message in notes {
         send(
             tx,
@@ -1075,17 +1079,14 @@ fn send_error(
     request_id: u64,
     session: SessionId,
     operation: Operation,
-    message: impl Into<String>,
+    message: BackendMsg,
 ) {
     send(
         tx,
         Event {
             request_id,
             session,
-            kind: EventKind::Error {
-                operation,
-                message: message.into(),
-            },
+            kind: EventKind::Error { operation, message },
         },
     );
 }
@@ -1101,7 +1102,7 @@ pub(super) fn reply_no_connection(tx: &Sender<Event>, command: Command) {
         ..
     } = command;
     let error = |operation: Operation| {
-        send_error(tx, request_id, session, operation, NO_CONNECTION);
+        send_error(tx, request_id, session, operation, BackendMsg::NoConnection);
     };
     match kind {
         CommandKind::Browse { .. } => error(Operation::Browse),
@@ -1120,7 +1121,7 @@ pub(super) fn reply_no_connection(tx: &Sender<Event>, command: Command) {
                 kind: EventKind::Values {
                     values: keys
                         .into_iter()
-                        .map(|key| (key, DataValue::bad(NO_CONNECTION)))
+                        .map(|key| (key, DataValue::bad(BackendMsg::NoConnection)))
                         .collect(),
                 },
             },

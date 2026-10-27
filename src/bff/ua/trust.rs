@@ -18,6 +18,7 @@
 //! fails those). The key length against the negotiated policy and the identity
 //! of the certificate are always checked by the library.
 
+use crate::bff::model::BackendMsg;
 use opcua::crypto::{CertificateStore, X509};
 use opcua::types::ByteString;
 use std::collections::HashMap;
@@ -67,7 +68,7 @@ impl Drop for TrustLease {
 pub(super) fn trust_for_session(
     pki: &Path,
     server_certificate: &ByteString,
-) -> Result<Option<TrustLease>, String> {
+) -> Result<Option<TrustLease>, BackendMsg> {
     let Some(der) = server_certificate
         .value
         .as_deref()
@@ -75,8 +76,10 @@ pub(super) fn trust_for_session(
     else {
         return Ok(None);
     };
-    let cert = X509::from_byte_string(server_certificate)
-        .map_err(|e| format!("не удалось разобрать сертификат сервера: {e}"))?;
+    let cert =
+        X509::from_byte_string(server_certificate).map_err(|e| BackendMsg::CertParseFailed {
+            detail: e.to_string(),
+        })?;
     let name = CertificateStore::cert_file_name(&cert);
     let trusted_dir = pki.join(TRUSTED_DIR);
     let trusted_file = trusted_dir.join(&name);
@@ -95,13 +98,17 @@ pub(super) fn trust_for_session(
         // Trusted by an explicit user action: permanent, not ours to remove.
         return Ok(None);
     }
-    std::fs::create_dir_all(&trusted_dir)
-        .map_err(|e| format!("не удалось создать {}: {e}", trusted_dir.display()))?;
+    std::fs::create_dir_all(&trusted_dir).map_err(|e| BackendMsg::FsCreateFailed {
+        path: trusted_dir.display().to_string(),
+        detail: e.to_string(),
+    })?;
     // Record the file BEFORE creating it so a crash in between leaves no
     // permanent trust behind.
     remember_in_marker(&marker, &trusted_file)?;
-    std::fs::write(&trusted_file, der)
-        .map_err(|e| format!("не удалось сохранить {}: {e}", trusted_file.display()))?;
+    std::fs::write(&trusted_file, der).map_err(|e| BackendMsg::FsSaveFailed {
+        path: trusted_file.display().to_string(),
+        detail: e.to_string(),
+    })?;
     // An earlier refused attempt parks the certificate in `rejected`, and the
     // library rejects anything found there even when it is trusted.
     let _ = std::fs::remove_file(pki.join(REJECTED_DIR).join(&name));
@@ -119,7 +126,7 @@ pub(super) fn purge_stale(pki: &Path) {
     PURGE.call_once(|| purge_leftovers(pki));
 }
 
-fn remember_in_marker(marker: &Path, file: &Path) -> Result<(), String> {
+fn remember_in_marker(marker: &Path, file: &Path) -> Result<(), BackendMsg> {
     let mut lines = read_marker(marker);
     let text = file.to_string_lossy().to_string();
     if !lines.contains(&text) {
@@ -149,13 +156,15 @@ fn read_marker(marker: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn write_marker(marker: &Path, lines: &[String]) -> Result<(), String> {
+fn write_marker(marker: &Path, lines: &[String]) -> Result<(), BackendMsg> {
     if lines.is_empty() {
         let _ = std::fs::remove_file(marker);
         return Ok(());
     }
-    std::fs::write(marker, lines.join("\n"))
-        .map_err(|e| format!("не удалось записать {}: {e}", marker.display()))
+    std::fs::write(marker, lines.join("\n")).map_err(|e| BackendMsg::FsWriteFailed {
+        path: marker.display().to_string(),
+        detail: e.to_string(),
+    })
 }
 
 /// Removes certificates a previous run leased and never got to release (it was

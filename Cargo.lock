@@ -2656,6 +2656,7 @@ dependencies = [
  "egui",
  "egui_extras",
  "egui_kittest",
+ "log",
  "rfd",
  "serde",
  "serde_json",

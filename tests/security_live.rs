@@ -89,6 +89,7 @@ fn live_auto_security_still_connects() {
     let event = connect_endpoint(&gateway, session, endpoint);
     match event.kind {
         EventKind::Connected { info, .. } => {
+            let info = info.to_string();
             assert!(
                 info.contains("None") || info.contains("Basic256"),
                 "info should name the resolved policy: {info}"
@@ -115,15 +116,14 @@ fn live_explicit_unadvertised_security_is_an_error() {
     let event = connect_endpoint(&gateway, session, endpoint);
     match event.kind {
         EventKind::Error { message, .. } => {
+            let opcda_egui::bff::model::BackendMsg::SecurityResolveFailed { detail } = &message
+            else {
+                panic!("expected the security-resolution error, got: {message}");
+            };
             assert!(
-                message.contains(opcda_egui::bff::ua::SECURITY_ERROR_PREFIX),
-                "expected the security marker, got: {message}"
-            );
-            assert!(
-                message.contains("not offered"),
+                detail.contains("not offered"),
                 "expected a clear 'not offered' detail, got: {message}"
             );
-            let detail = opcda_egui::bff::ua::security_error_detail(&message).unwrap_or_default();
             assert!(
                 detail.contains("advertised:"),
                 "error must list the advertised endpoints, got: {message}"

@@ -1,6 +1,6 @@
 use super::*;
+use crate::bff::model::{BackendMsg, Event, EventKind, Operation, RequestId};
 use crate::bff::model::{CommandKind, Protocol, SessionId};
-use crate::bff::model::{Event, EventKind, Operation, RequestId};
 use crate::constants::{DA_ROUTE_REFRESH_SECS, REQUEST_MIN_SECS, REQUEST_SLOW_MIN_SECS};
 use crate::i18n::{Tr, fmt};
 use std::time::{Duration, Instant};
@@ -49,7 +49,7 @@ impl App {
             .collect();
         let lang = self.lang();
         for (session, request_id, operation, ctx, secs) in expired {
-            let message = fmt(lang, Tr::NoReplyFromServer, &[&secs.to_string()]);
+            let message = BackendMsg::raw(fmt(lang, Tr::NoReplyFromServer, &[&secs.to_string()]));
             let kind = match (operation, ctx) {
                 (
                     Operation::Disconnect

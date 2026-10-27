@@ -9,8 +9,8 @@ use super::session::TEST_PKI_DIR;
 use super::worker::spawn;
 use crate::bff::WorkerHandle;
 use crate::bff::model::{
-    Command, CommandKind, EndpointSpec, Event, EventKind, ItemInfo, ItemKey, ItemSpec, Operation,
-    Protocol, SessionId, UaSecurityMode, UaSecurityPolicy, Value,
+    BackendMsg, Command, CommandKind, EndpointSpec, Event, EventKind, ItemInfo, ItemKey, ItemSpec,
+    Operation, Protocol, SessionId, UaSecurityMode, UaSecurityPolicy, Value,
 };
 use opcua::server::ServerBuilder;
 use opcua::server::ServerHandle;
@@ -262,11 +262,11 @@ impl Harness {
             Some(Event {
                 kind: EventKind::Connected { info, .. },
                 ..
-            }) => Ok(info),
+            }) => Ok(info.to_string()),
             Some(Event {
                 kind: EventKind::Error { message, .. },
                 ..
-            }) => Err(message),
+            }) => Err(message.to_string()),
             other => Err(format!("unexpected connect reply: {other:?}")),
         }
     }
@@ -275,7 +275,7 @@ impl Harness {
         &mut self,
         session: SessionId,
         items: &[(ItemKey, String)],
-    ) -> Vec<(ItemKey, Result<ItemInfo, String>)> {
+    ) -> Vec<(ItemKey, Result<ItemInfo, BackendMsg>)> {
         let id = self.send(
             session,
             CommandKind::AddItems {
@@ -358,7 +358,7 @@ fn u2_unknown_node_is_reported_as_error_and_valid_node_delivers_values() {
         .and_then(|(_, r)| r.as_ref().err())
         .expect("unknown node must be an Err");
     assert!(
-        bad.contains("BadNodeIdUnknown"),
+        bad.to_string().contains("BadNodeIdUnknown"),
         "message must carry the server status, got {bad:?}"
     );
 
@@ -1019,9 +1019,9 @@ fn u12_auto_connect_reports_the_unencrypted_channel_and_the_secure_alternative()
     let info = app
         .connect(1, EndpointSpec::ua(&server.url))
         .expect("connect");
-    assert!(info.contains("без шифрования"), "{info:?}");
+    assert!(info.contains("not encrypted"), "{info:?}");
     assert!(
-        info.contains("предлагает защищённое"),
+        info.contains("offers a secure connection"),
         "the sample server also offers secure endpoints: {info:?}"
     );
 }
@@ -1116,7 +1116,9 @@ fn u15_host_search_on_loopback_finds_the_server_without_lds_noise() {
         other => panic!("unexpected search reply: {other:?}"),
     }
     let noise = app.wait(Duration::from_millis(300), |event| match &event.kind {
-        EventKind::Log { message } if message.contains("LDS") => Some(message.clone()),
+        EventKind::Log { message } if message.to_string().contains("LDS") => {
+            Some(message.to_string())
+        }
         _ => None,
     });
     assert!(
@@ -1128,7 +1130,13 @@ fn u15_host_search_on_loopback_finds_the_server_without_lds_noise() {
 #[test]
 fn a9_network_search_reports_its_problems_as_journal_lines() {
     let mut app = Harness::new();
-    let id = app.send(0, CommandKind::SearchUaNetwork { bind: None });
+    let id = app.send(
+        0,
+        CommandKind::SearchUaNetwork {
+            bind: None,
+            lds: None,
+        },
+    );
     assert!(matches!(
         app.reply(id, Duration::from_secs(60)),
         Some(Event {
@@ -1138,7 +1146,7 @@ fn a9_network_search_reports_its_problems_as_journal_lines() {
     ));
     let mut lines = Vec::new();
     while let Some(message) = app.wait(Duration::from_millis(200), |event| match &event.kind {
-        EventKind::Log { message } if event.request_id == 0 => Some(message.clone()),
+        EventKind::Log { message } if event.request_id == 0 => Some(message.to_string()),
         _ => None,
     }) {
         lines.push(message);
@@ -1156,6 +1164,81 @@ fn a9_network_search_reports_its_problems_as_journal_lines() {
     );
 }
 
+/// U15: an explicitly named LDS host is the one that is asked (not the
+/// machine's standard 4840 endpoints), with its own port.
+#[test]
+fn u15_the_named_lds_host_is_the_one_that_is_asked() {
+    use crate::bff::model::LdsTarget;
+    use crate::bff::net::NetworkBinding;
+    let server = TestServer::start(48672);
+    let mut app = Harness::new();
+    let target = |port: u16| LdsTarget {
+        host: "127.0.0.1".to_string(),
+        port,
+        bind: NetworkBinding::loopback(),
+    };
+
+    // Nothing listens on the named port: the journal names exactly that URL.
+    let id = app.send(
+        0,
+        CommandKind::SearchUaNetwork {
+            bind: None,
+            lds: Some(target(48673)),
+        },
+    );
+    assert!(matches!(
+        app.reply(id, Duration::from_secs(60)),
+        Some(Event {
+            kind: EventKind::UaNetworkFound { .. },
+            ..
+        })
+    ));
+    let mut lines = Vec::new();
+    while let Some(line) = app.wait(Duration::from_millis(200), |event| match &event.kind {
+        EventKind::Log { message } if event.request_id == 0 => Some(message.to_string()),
+        _ => None,
+    }) {
+        lines.push(line);
+    }
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("LDS") && l.contains(":48673")),
+        "the named host is reported: {lines:?}"
+    );
+    assert!(
+        lines.iter().all(|l| !l.contains(":4840")),
+        "the standard endpoints are not asked when a host is named: {lines:?}"
+    );
+    assert!(
+        lines.iter().all(|l| !l.starts_with("mDNS")),
+        "without an adapter only the LDS is asked: {lines:?}"
+    );
+
+    // A UA server that is not an LDS answers "unsupported": reachable, no noise.
+    let id = app.send(
+        0,
+        CommandKind::SearchUaNetwork {
+            bind: None,
+            lds: Some(target(server.port)),
+        },
+    );
+    assert!(matches!(
+        app.reply(id, Duration::from_secs(60)),
+        Some(Event {
+            kind: EventKind::UaNetworkFound { .. },
+            ..
+        })
+    ));
+    let noise = app.wait(Duration::from_millis(300), |event| match &event.kind {
+        EventKind::Log { message } if message.to_string().contains(&server.port.to_string()) => {
+            Some(message.to_string())
+        }
+        _ => None,
+    });
+    assert!(noise.is_none(), "{noise:?}");
+}
+
 #[test]
 fn u1_a_retry_right_after_a_failed_connect_never_meets_a_stale_connecting_slot() {
     // The application retries as soon as it sees the Connect error. The slot of
@@ -1166,7 +1249,7 @@ fn u1_a_retry_right_after_a_failed_connect_never_meets_a_stale_connecting_slot()
             .connect(9, Harness::endpoint("opc.tcp://127.0.0.1:48679/"))
             .expect_err("nothing listens there");
         assert!(
-            !message.contains("уже выполняется") && !message.contains("уже подключена"),
+            !message.contains("already in progress") && !message.contains("already connected"),
             "attempt {attempt}: {message}"
         );
     }

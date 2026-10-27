@@ -66,8 +66,14 @@ impl Scan {
         if self.src[self.i..].starts_with(&ATTR) {
             self.i += ATTR.len();
             // Skip the annotated item's keyword/name/signature up to its body.
-            while self.peek().is_some() && self.peek() != Some('{') {
+            // An item without a body (`mod x;`, `use ...;`, `static ... = ...;`)
+            // ends at its `;`.
+            while self.peek().is_some() && self.peek() != Some('{') && self.peek() != Some(';') {
                 self.i += 1;
+            }
+            if self.peek() == Some(';') {
+                self.i += 1;
+                return true;
             }
             if self.peek() == Some('{') {
                 self.skip_balanced_braces();
@@ -94,6 +100,8 @@ impl Scan {
                     }
                 }
                 Some('"') => self.skip_string_literal(),
+                Some('r') if self.skip_raw_string() => continue,
+                Some('\'') if self.skip_char_literal() => continue,
                 Some('\\') => {
                     // Skip an escaped char (e.g. inside nothing here, but safe).
                     self.i += 2;
@@ -103,6 +111,56 @@ impl Scan {
                 None => break,
             }
             self.i += 1;
+        }
+    }
+
+    /// Skip a raw string literal (`r"..."`, `r#"..."#`) at `self.i`; false (and
+    /// no movement) when the position is not the start of one.
+    fn skip_raw_string(&mut self) -> bool {
+        if self.i > 0 {
+            let before = self.src[self.i - 1];
+            if before.is_alphanumeric() || before == '_' {
+                return false;
+            }
+        }
+        let mut j = self.i + 1;
+        let mut hashes = 0usize;
+        while self.src.get(j) == Some(&'#') {
+            hashes += 1;
+            j += 1;
+        }
+        if self.src.get(j) != Some(&'"') {
+            return false;
+        }
+        j += 1;
+        while j < self.src.len() {
+            if self.src[j] == '"' && (1..=hashes).all(|k| self.src.get(j + k) == Some(&'#')) {
+                self.i = j + 1 + hashes;
+                return true;
+            }
+            j += 1;
+        }
+        self.i = self.src.len();
+        true
+    }
+
+    /// Skip a character literal (`'{'`, `'"'`, `'\\n'`) at `self.i`; false for a
+    /// lifetime or anything else.
+    fn skip_char_literal(&mut self) -> bool {
+        match (
+            self.src.get(self.i + 1),
+            self.src.get(self.i + 2),
+            self.src.get(self.i + 3),
+        ) {
+            (Some('\\'), Some(_), Some('\'')) => {
+                self.i += 4;
+                true
+            }
+            (Some(c), Some('\''), _) if *c != '\\' => {
+                self.i += 3;
+                true
+            }
+            _ => false,
         }
     }
 
@@ -298,4 +356,96 @@ fn app_modules_have_no_hardcoded_cyrillic_ui_strings() {
     ] {
         assert_no_hardcoded_ui_strings(source, name);
     }
+}
+
+/// Data-input aliases in the backend (boolean spellings, the legacy "Auto"
+/// setting value) are not user-visible text.
+const BACKEND_WHITELIST: &[&str] = &["да", "нет", "Авто", "авто"];
+
+fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            rust_files(&path, out);
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
+            out.push(path);
+        }
+    }
+}
+
+/// A9: the backend (`src/bff/**`) sends typed `BackendMsg` variants and the
+/// application localizes them; a Russian literal in production backend code
+/// would show Russian text in the English and Chinese interface.
+#[test]
+fn backend_has_no_hardcoded_cyrillic_strings() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bff");
+    let mut files = Vec::new();
+    rust_files(&root, &mut files);
+    assert!(
+        files.len() >= 15,
+        "the backend sources were not found under {root:?}: {files:?}"
+    );
+    let mut failures: Vec<String> = Vec::new();
+    for path in files {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        // Wholly test-only modules (`#[cfg(test)] mod tests;`).
+        if name == "tests.rs" || name == "live_tests.rs" {
+            continue;
+        }
+        let Ok(source) = std::fs::read_to_string(&path) else {
+            failures.push(format!("{}: unreadable", path.display()));
+            continue;
+        };
+        for literal in production_string_literals(&source) {
+            if has_cyrillic(&literal) && !BACKEND_WHITELIST.contains(&literal.as_str()) {
+                failures.push(format!("{}: {literal:?}", path.display()));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "hardcoded Cyrillic in backend string literals (use a `BackendMsg` variant and \
+         localize it in `i18n::backend_text`): {failures:#?}"
+    );
+}
+
+/// The scanner itself: it must see production literals and skip test items.
+#[test]
+fn scanner_sees_production_literals_and_skips_test_items() {
+    let src = r#"
+        // "комментарий"
+        const A: &str = "боевая строка";
+        #[cfg(test)]
+        mod tests { const B: &str = "тестовая строка"; }
+        #[cfg(test)]
+        mod live_tests;
+        const C: &str = "after";
+    "#;
+    let literals = production_string_literals(src);
+    assert_eq!(
+        literals,
+        vec!["боевая строка".to_string(), "after".to_string()]
+    );
+}
+
+/// Braces and quotes inside raw strings and char literals of a test module
+/// must not end the skipped block early.
+#[test]
+fn scanner_skips_test_modules_containing_raw_strings_and_char_literals() {
+    let src = r##"
+        #[cfg(test)]
+        mod tests {
+            const JSON: &str = r#"{ "k": "Авто" "#;
+            fn f(c: char) -> bool { c == '{' || c == '"' || c == '}' }
+            const D: &str = "тест";
+        }
+        const C: &str = "after";
+    "##;
+    assert_eq!(production_string_literals(src), vec!["after".to_string()]);
 }

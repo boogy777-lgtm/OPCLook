@@ -1,4 +1,4 @@
-use crate::bff::model::Value;
+use crate::bff::model::{BackendMsg, Value};
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use windows::Win32::Foundation::FILETIME;
 use windows::Win32::Foundation::VARIANT_BOOL;
@@ -172,7 +172,7 @@ fn variant_inner(variant: &mut VARIANT) -> *mut VARIANT_0_0_0 {
 /// the `VT_ARRAY` (0x2000) bit, a one-dimensional SAFEARRAY is built whose
 /// element type is the scalar VT. An array value with a scalar hint is turned
 /// into an array of that element type.
-pub fn variant_from_value(value: &Value, hint: Option<u16>) -> Result<VARIANT, String> {
+pub fn variant_from_value(value: &Value, hint: Option<u16>) -> Result<VARIANT, BackendMsg> {
     let vt = hint.unwrap_or_else(|| default_vt(value));
 
     // When the value is an array (or the hint marks an array) route to the SAFEARRAY path.
@@ -207,7 +207,11 @@ pub fn variant_from_value(value: &Value, hint: Option<u16>) -> Result<VARIANT, S
 }
 
 /// Writes one scalar (non-array) value into the VARIANT named union.
-unsafe fn write_scalar(value: &Value, vt: u16, inner: *mut VARIANT_0_0_0) -> Result<(), String> {
+unsafe fn write_scalar(
+    value: &Value,
+    vt: u16,
+    inner: *mut VARIANT_0_0_0,
+) -> Result<(), BackendMsg> {
     match vt {
         0 => {}
         2 => {
@@ -233,9 +237,9 @@ unsafe fn write_scalar(value: &Value, vt: u16, inner: *mut VARIANT_0_0_0) -> Res
         7 => {
             let dt = match value {
                 Value::DateTime(dt) => *dt,
-                _ => return Err("для типа DATE требуется дата/время".to_string()),
+                _ => return Err(BackendMsg::DaDateRequired),
             };
-            let ole = utc_to_ole_date(dt).ok_or_else(|| "некорректная дата".to_string())?;
+            let ole = utc_to_ole_date(dt).ok_or(BackendMsg::DaBadDate)?;
             unsafe { (*inner).date = ole };
         }
         8 => {
@@ -275,13 +279,17 @@ unsafe fn write_scalar(value: &Value, vt: u16, inner: *mut VARIANT_0_0_0) -> Res
         },
         22 => unsafe { (*inner).intVal = convert_int(value)? as i32 },
         23 => unsafe { (*inner).uintVal = convert_uint(value)? as u32 },
-        other => return Err(format!("запись типа VT {other} не поддерживается")),
+        other => return Err(BackendMsg::DaVtUnsupported { vt: other }),
     }
     Ok(())
 }
 
 /// Builds a `VT_x | VT_ARRAY` VARIANT holding a single-dimension SAFEARRAY.
-fn build_array_variant(value: &Value, element_vt: u16, outer_vt: u16) -> Result<VARIANT, String> {
+fn build_array_variant(
+    value: &Value,
+    element_vt: u16,
+    outer_vt: u16,
+) -> Result<VARIANT, BackendMsg> {
     let items: Vec<&Value> = match value {
         Value::Array(items) => items.iter().collect(),
         single => vec![single],
@@ -295,7 +303,7 @@ fn build_array_variant(value: &Value, element_vt: u16, outer_vt: u16) -> Result<
         )
     };
     if psa.is_null() {
-        return Err(format!("не удалось создать массив VT {element_vt}"));
+        return Err(BackendMsg::DaArrayCreateFailed { vt: element_vt });
     }
 
     let element_size: usize = match element_vt {
@@ -307,7 +315,7 @@ fn build_array_variant(value: &Value, element_vt: u16, outer_vt: u16) -> Result<
         12 => std::mem::size_of::<VARIANT>(),
         other => {
             let _ = unsafe { SafeArrayDestroy(psa) };
-            return Err(format!("запись массива VT {other} не поддерживается"));
+            return Err(BackendMsg::DaArrayVtUnsupported { vt: other });
         }
     };
 
@@ -315,7 +323,7 @@ fn build_array_variant(value: &Value, element_vt: u16, outer_vt: u16) -> Result<
     let locked = unsafe { SafeArrayLock(psa) }.is_ok();
     if !locked {
         let _ = unsafe { SafeArrayDestroy(psa) };
-        return Err(format!("не удалось заблокировать массив VT {element_vt}"));
+        return Err(BackendMsg::DaArrayLockFailed { vt: element_vt });
     }
     let mut access: *mut core::ffi::c_void = std::ptr::null_mut();
     if unsafe { SafeArrayAccessData(psa, &raw mut access) }.is_err() {
@@ -323,11 +331,11 @@ fn build_array_variant(value: &Value, element_vt: u16, outer_vt: u16) -> Result<
             let _ = SafeArrayUnlock(psa);
             let _ = SafeArrayDestroy(psa);
         }
-        return Err("не удалось получить доступ к данным массива".to_string());
+        return Err(BackendMsg::DaArrayAccessFailed);
     }
     let data = access as *mut u8;
 
-    let mut build_result: Result<(), String> = Ok(());
+    let mut build_result: Result<(), BackendMsg> = Ok(());
     for (i, item) in items.iter().enumerate() {
         match element_vt {
             12 => {
@@ -341,7 +349,7 @@ fn build_array_variant(value: &Value, element_vt: u16, outer_vt: u16) -> Result<
                 set_vt(&mut tmp, element_vt);
                 if let Err(e) = (|| {
                     unsafe { write_scalar(item, element_vt, variant_inner(&mut tmp)) }?;
-                    Ok::<(), String>(())
+                    Ok::<(), BackendMsg>(())
                 })() {
                     build_result = Err(e);
                     break;
@@ -394,7 +402,7 @@ pub fn default_vt(value: &Value) -> u16 {
     }
 }
 
-fn convert_int(value: &Value) -> Result<i64, String> {
+fn convert_int(value: &Value) -> Result<i64, BackendMsg> {
     match value {
         Value::Bool(b) => Ok(i64::from(*b)),
         Value::I64(v) => Ok(*v),
@@ -403,30 +411,30 @@ fn convert_int(value: &Value) -> Result<i64, String> {
         Value::Str(s) => s
             .trim()
             .parse::<i64>()
-            .map_err(|_| format!("значение \"{s}\" не является целым числом")),
+            .map_err(|_| BackendMsg::DaNotInteger { value: s.clone() }),
         Value::DateTime(dt) => Ok(dt.timestamp()),
-        _ => Err("значение не приводится к целому".to_string()),
+        _ => Err(BackendMsg::DaNotIntegerAny),
     }
 }
 
-fn convert_uint(value: &Value) -> Result<u64, String> {
+fn convert_uint(value: &Value) -> Result<u64, BackendMsg> {
     match value {
         Value::Bool(b) => Ok(u64::from(*b)),
-        Value::I64(v) => u64::try_from(*v).map_err(|_| format!("значение {v} отрицательное")),
+        Value::I64(v) => u64::try_from(*v).map_err(|_| BackendMsg::DaNegativeValue {
+            value: v.to_string(),
+        }),
         Value::U64(v) => Ok(*v),
         Value::F64(v) if v.is_finite() && *v >= 0.0 => Ok(*v as u64),
         Value::Str(s) => s
             .trim()
             .parse::<u64>()
-            .map_err(|_| format!("значение \"{s}\" не является целым числом без знака")),
-        _ => Err("значение не приводится к целому без знака".to_string()),
+            .map_err(|_| BackendMsg::DaNotUnsigned { value: s.clone() }),
+        _ => Err(BackendMsg::DaNotUnsignedAny),
     }
 }
 
-fn convert_float(value: &Value) -> Result<f64, String> {
-    value
-        .as_f64()
-        .ok_or_else(|| "значение не приводится к числу".to_string())
+fn convert_float(value: &Value) -> Result<f64, BackendMsg> {
+    value.as_f64().ok_or(BackendMsg::DaNotNumberAny)
 }
 
 pub fn clear_variant(variant: &mut VARIANT) {

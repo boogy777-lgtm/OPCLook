@@ -70,6 +70,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                 let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
                 let opening_frame = dialog.focus_pending;
                 let mut focus_in_search_field = false;
+                let mut focus_in_lds_field = false;
                 let mut focus_in_url_field = false;
                 ui.horizontal(|ui| {
                     if ui
@@ -329,6 +330,20 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                     // them on their own row avoids overflowing the 560 px
                     // non-resizable connect window.
                     if !is_da {
+                        // Optional discovery server: «Поиск через LDS/mDNS» asks
+                        // this host for the server list (port defaults to 4840).
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(tr(lang, Tr::LdsHostLabel)).weak());
+                            let lds = ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut dialog.ua_lds_host)
+                                        .id_salt("ua_lds_host")
+                                        .hint_text(tr(lang, Tr::LdsHostHint))
+                                        .desired_width(200.0),
+                                )
+                                .on_hover_text(tr(lang, Tr::LdsHostTip));
+                            focus_in_lds_field = lds.has_focus();
+                        });
                         ui.horizontal(|ui| {
                             // «Поиск через LDS/mDNS» (`FindServersOnNetwork` + DNS-SD).
                             let net_searching = dialog.ua_network_searching;
@@ -469,7 +484,8 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                         ui.checkbox(
                             &mut dialog.ua_trust_server_cert,
                             tr(lang, Tr::TrustServerCertCheck),
-                        );
+                        )
+                        .on_hover_text(tr(lang, Tr::TrustServerCertTip));
                         // Discovery does not expose user-token policies yet.
                         // Do not silently replace X509 with UserName based on
                         // the endpoint's message security mode. The worker
@@ -636,6 +652,8 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                         } else {
                             app_search = true;
                         }
+                    } else if enter && !opening_frame && focus_in_lds_field && !ua_busy {
+                        app_network_search = true;
                     } else if enter
                         && !opening_frame
                         && !waiting

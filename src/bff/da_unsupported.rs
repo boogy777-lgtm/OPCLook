@@ -5,10 +5,8 @@
 //! answers every request that expects a reply with `EventKind::Error` — a
 //! command is never dropped silently and nothing panics.
 
-use super::model::{Command, CommandKind, Event, EventKind};
+use super::model::{BackendMsg, Command, CommandKind, Event, EventKind};
 use std::sync::mpsc::Sender;
-
-const UNSUPPORTED: &str = "OPC DA поддерживается только в Windows (COM)";
 
 pub(crate) fn spawn(event_tx: Sender<Event>) -> super::WorkerHandle {
     let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::unbounded_channel::<Command>();
@@ -42,7 +40,7 @@ fn reply(command: Command, tx: &Sender<Event>) {
                 session: command.session,
                 kind: EventKind::Error {
                     operation: kind.operation(),
-                    message: UNSUPPORTED.to_string(),
+                    message: BackendMsg::DaOnlyOnWindows,
                 },
             });
         }

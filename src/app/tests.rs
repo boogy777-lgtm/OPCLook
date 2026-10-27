@@ -2,7 +2,9 @@ use super::present::operation_label;
 use super::sessions::reconnect_delay;
 use super::table::infer_kind;
 use super::*;
-use crate::bff::model::{BrowseNode, EndpointSpec, EventKind, NodeKind, Operation, WriteRequest};
+use crate::bff::model::{
+    BackendMsg, BrowseNode, EndpointSpec, EventKind, NodeKind, Operation, WriteRequest,
+};
 use crate::constants::{RECONNECT_MAX_ATTEMPTS, RECONNECT_MAX_DELAY_SECS};
 use crate::i18n::Lang;
 use crate::settings::Options;
@@ -414,7 +416,7 @@ fn add_children_disconnect_cancels_job() {
     app.on_event_for_test_at(
         1,
         EventKind::Disconnected {
-            reason: "lost".to_string(),
+            reason: BackendMsg::raw("lost"),
         },
     );
     assert!(app.add_children.is_none());
@@ -481,7 +483,7 @@ fn da_search_error_clears_pending_state() {
     app.dialogs.connect.da_pending = true;
     app.on_event_for_test(EventKind::Error {
         operation: Operation::Discover,
-        message: "OPCEnum unavailable".to_string(),
+        message: BackendMsg::raw("OPCEnum unavailable"),
     });
     assert_eq!(app.dialogs.connect.da_auto_pending, 0);
     assert!(!app.dialogs.connect.da_pending);
@@ -566,7 +568,8 @@ fn combined_ua_search_shows_a_loopback_server_once_while_running() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    // LDS/mDNS + 127.0.0.1 + localhost; LDS has not answered yet.
+    // LDS/mDNS + loopback; LDS has not answered yet. (An older build also asked
+    // `localhost`; a late reply for either spelling must still merge.)
     app.dialogs.connect.ua_auto_pending = 3;
     app.dialogs.connect.ua_searching = true;
     for host in ["127.0.0.1", "localhost"] {
@@ -943,7 +946,7 @@ fn d4_discover_error_releases_only_the_failing_hosts_route() {
         501,
         EventKind::Error {
             operation: Operation::Discover,
-            message: "RPC unavailable".to_string(),
+            message: BackendMsg::raw("RPC unavailable"),
         },
     );
     let hosts: Vec<&str> = app.da_route_holds.iter().map(|h| h.host.as_str()).collect();
@@ -1010,7 +1013,7 @@ fn u14_resolve_error_is_shown_in_the_dialog_and_frees_pending() {
         request,
         EventKind::Error {
             operation: Operation::ResolveBrowsePath,
-            message: "BadNoMatch".to_string(),
+            message: BackendMsg::raw("BadNoMatch"),
         },
     );
     assert!(app.dialogs.add_signal.open);
@@ -1528,4 +1531,285 @@ fn a11_writes_lost_with_the_session_complete_the_batch_as_failed() {
     assert_eq!(app.pending_writes, 0, "no reply can arrive any more");
     assert_eq!((app.write_ok, app.write_err), (0, 2));
     assert!(app.last_write_summary.is_some());
+}
+
+// ---------------------------------------------------------------------------
+// A9: backend messages follow the interface language
+// ---------------------------------------------------------------------------
+
+fn has_cyrillic(text: &str) -> bool {
+    text.chars().any(|c| matches!(c as u32, 0x0400..=0x052F))
+}
+
+/// A real connect to a port nobody listens on: before A9 the backend's
+/// hardcoded Russian error reached the English and Chinese interface.
+#[test]
+fn a9_connect_failure_to_an_unreachable_ua_server_is_in_the_interface_language() {
+    for lang in [Lang::En, Lang::Zh] {
+        let ctx = egui::Context::default();
+        let mut settings = Settings::default();
+        settings.set_lang(lang);
+        let mut app = App::new_test_with_settings(&ctx, settings);
+        let journal_before = app.journal.entries().len();
+        assert!(app.connect_endpoint(EndpointSpec::ua("opc.tcp://127.0.0.1:1")));
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            app.poll_events();
+            let settled = app
+                .sessions
+                .first()
+                .is_some_and(|view| view.state != SessionState::Connecting);
+            if settled {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{lang:?}: the connect attempt did not finish"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let view = app.sessions.first().expect("the session tab");
+        assert_eq!(view.state, SessionState::Disconnected);
+        assert!(!view.info.trim().is_empty(), "{lang:?}: empty error text");
+        assert!(
+            !has_cyrillic(&view.info),
+            "{lang:?}: Russian text in the session info: {}",
+            view.info
+        );
+        let lines: Vec<String> = app
+            .journal
+            .entries()
+            .iter()
+            .skip(journal_before)
+            .map(|entry| entry.render(lang))
+            .collect();
+        assert!(
+            lines.iter().any(|line| line.contains(&view.info)),
+            "{lang:?}: the error is in the journal: {lines:?}"
+        );
+        for line in &lines {
+            assert!(
+                !has_cyrillic(line),
+                "{lang:?}: Russian text in the journal line: {line}"
+            );
+        }
+    }
+}
+
+/// Every backend message kind is shown in the interface language when it
+/// arrives as an event (the application, not the worker, picks the wording).
+#[test]
+fn a9_backend_events_are_rendered_in_the_interface_language() {
+    let ctx = egui::Context::default();
+    let mut settings = Settings::default();
+    settings.set_lang(Lang::En);
+    let mut app = App::new_test_with_settings(&ctx, settings);
+    let before = app.journal.entries().len();
+    app.on_event_for_test(EventKind::Log {
+        message: BackendMsg::MdnsNotSupported,
+    });
+    app.on_event_for_test(EventKind::Error {
+        operation: Operation::Test,
+        message: BackendMsg::NoConnection,
+    });
+    let lines: Vec<String> = app
+        .journal
+        .entries()
+        .iter()
+        .skip(before)
+        .map(|entry| entry.render(Lang::En))
+        .collect();
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("mDNS: the search is not supported")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("no connection")),
+        "{lines:?}"
+    );
+    assert!(lines.iter().all(|line| !has_cyrillic(line)), "{lines:?}");
+}
+
+// ---- U15: one loopback request, optional LDS host ----
+
+#[test]
+fn u15_lds_host_text_is_parsed_with_the_default_port() {
+    use super::search::parse_lds_host;
+    assert_eq!(parse_lds_host(""), Ok(None));
+    assert_eq!(parse_lds_host("   "), Ok(None));
+    assert_eq!(
+        parse_lds_host("lds.plant.local"),
+        Ok(Some(("lds.plant.local".to_string(), 4840)))
+    );
+    assert_eq!(
+        parse_lds_host(" 10.0.0.5:4850 "),
+        Ok(Some(("10.0.0.5".to_string(), 4850)))
+    );
+    assert_eq!(
+        parse_lds_host("opc.tcp://lds:4841/"),
+        Ok(Some(("lds".to_string(), 4841)))
+    );
+    assert_eq!(
+        parse_lds_host("[fe80::1]:4850"),
+        Ok(Some(("fe80::1".to_string(), 4850)))
+    );
+    assert_eq!(parse_lds_host("::1"), Ok(Some(("::1".to_string(), 4840))));
+    for bad in [
+        "host:",
+        "host:0",
+        "host:99999",
+        "host:abc",
+        "a b",
+        "[::1",
+        "ho/st",
+        ":4840",
+    ] {
+        assert_eq!(parse_lds_host(bad), Err(()), "{bad:?}");
+    }
+}
+
+#[test]
+fn u15_the_lds_target_builds_its_url() {
+    use crate::bff::model::LdsTarget;
+    use crate::bff::net::NetworkBinding;
+    let target = |host: &str| LdsTarget {
+        host: host.to_string(),
+        port: 4850,
+        bind: NetworkBinding::loopback(),
+    };
+    assert_eq!(target("lds").url(), "opc.tcp://lds:4850");
+    assert_eq!(target("fe80::1").url(), "opc.tcp://[fe80::1]:4850");
+}
+
+#[test]
+fn u15_the_combined_search_sends_exactly_one_loopback_request() {
+    use super::search::ua_all_commands;
+    use crate::bff::model::{CommandKind, LdsTarget};
+    use crate::bff::net::NetworkBinding;
+    let adapter = NetworkBinding::new("192.168.1.21".parse().unwrap(), None, None, None);
+    let lds = LdsTarget {
+        host: "lds".to_string(),
+        port: 4840,
+        bind: adapter.clone(),
+    };
+    let loopback_requests = |commands: &[CommandKind]| {
+        commands
+            .iter()
+            .filter(|c| matches!(c, CommandKind::SearchUaServers { .. }))
+            .count()
+    };
+    for (bind, lds, expected) in [
+        (None, None, 1),
+        (Some(adapter.clone()), None, 2),
+        (None, Some(lds.clone()), 2),
+        (Some(adapter.clone()), Some(lds.clone()), 2),
+    ] {
+        let commands = ua_all_commands(bind, lds);
+        assert_eq!(commands.len(), expected, "{commands:?}");
+        assert_eq!(loopback_requests(&commands), 1, "{commands:?}");
+        for command in &commands {
+            if let CommandKind::SearchUaServers { host, port, bind } = command {
+                assert_eq!(host, "127.0.0.1");
+                assert_eq!(*port, 4840);
+                assert!(bind.as_ref().is_some_and(NetworkBinding::is_loopback));
+            }
+        }
+    }
+}
+
+#[test]
+fn u15_the_combined_search_counts_one_pending_step_per_request() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.search_ua_all();
+    let d = &app.dialogs.connect;
+    assert!(d.ua_searching);
+    assert!(!d.ua_network_searching, "no adapter, no LDS host");
+    assert_eq!(d.ua_auto_pending, 1);
+
+    app.dialogs.connect.ua_lds_host = "127.0.0.1:4850".to_string();
+    app.search_ua_all();
+    let d = &app.dialogs.connect;
+    assert!(
+        d.ua_network_searching,
+        "a named LDS is asked without an adapter"
+    );
+    assert_eq!(d.ua_auto_pending, 2);
+}
+
+#[test]
+fn u15_the_lds_host_is_remembered_and_restored() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.dialogs.connect.ua_lds_host = " localhost:4850 ".to_string();
+    app.search_ua_network();
+    assert!(app.dialogs.connect.ua_network_searching);
+    assert!(app.dialogs.connect.error.is_none());
+    assert_eq!(app.settings.ua_lds_host, "localhost:4850");
+
+    app.close_connect_dialog();
+    app.open_connect_dialog();
+    assert_eq!(app.dialogs.connect.ua_lds_host, "localhost:4850");
+
+    // Clearing the field forgets it.
+    app.dialogs.connect.ua_lds_host.clear();
+    app.search_ua_network();
+    assert_eq!(app.settings.ua_lds_host, "");
+}
+
+#[test]
+fn u15_a_remote_lds_host_needs_an_adapter_and_a_bad_text_is_reported() {
+    let ctx = egui::Context::default();
+    let mut settings = Settings::default();
+    settings.set_lang(Lang::En);
+    let mut app = App::new_test_with_settings(&ctx, settings);
+    app.open_connect_dialog();
+
+    app.dialogs.connect.ua_lds_host = "lds.plant.local".to_string();
+    app.search_ua_network();
+    assert!(!app.dialogs.connect.ua_network_searching);
+    assert_eq!(
+        app.dialogs.connect.error.as_deref(),
+        Some("Select a network adapter")
+    );
+
+    app.dialogs.connect.ua_lds_host = "host:0".to_string();
+    app.search_ua_network();
+    assert!(!app.dialogs.connect.ua_network_searching);
+    let error = app.dialogs.connect.error.clone().unwrap_or_default();
+    assert!(error.contains("LDS host"), "{error}");
+    assert_eq!(
+        app.settings.ua_lds_host, "",
+        "an unusable text is not saved"
+    );
+
+    // Empty field and no adapter: the old requirement stays.
+    app.dialogs.connect.ua_lds_host.clear();
+    app.search_ua_network();
+    assert_eq!(
+        app.dialogs.connect.error.as_deref(),
+        Some("Select a network adapter")
+    );
+}
+
+#[test]
+fn u15_lds_texts_exist_in_every_language() {
+    use crate::i18n::{Tr, tr};
+    for key in [
+        Tr::LdsHostLabel,
+        Tr::LdsHostHint,
+        Tr::LdsHostTip,
+        Tr::LdsHostInvalid,
+        Tr::SearchingUaLds,
+    ] {
+        let ru = tr(Lang::Ru, key);
+        let en = tr(Lang::En, key);
+        let zh = tr(Lang::Zh, key);
+        assert!(!ru.is_empty() && !en.is_empty() && !zh.is_empty());
+        assert!(ru != en && en != zh);
+    }
 }

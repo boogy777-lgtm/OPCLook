@@ -55,6 +55,7 @@ fn a4_ten_thousand_rows() {
                         value: Value::I64(i as i64),
                         quality: good(),
                         timestamp: None,
+                        reason: None,
                     },
                 )],
             },

@@ -4,6 +4,7 @@
 //! [`ClsidLookup`]; a GUID travels as `u128` (`GUID::to_u128`/`from_u128`).
 #![cfg_attr(not(windows), allow(dead_code))]
 
+use super::model::BackendMsg;
 use std::collections::HashMap;
 
 /// Whether `host` designates this computer (empty, `localhost`, `.`).
@@ -16,11 +17,11 @@ pub fn is_local_host(host: &str) -> bool {
 /// (`GUID::to_u128`/`from_u128`) so that this module stays WinAPI-free.
 pub trait ClsidLookup {
     /// `IOPCServerList::CLSIDFromProgID` on the OPCEnum of the remote `host`.
-    fn remote_enum(&mut self, host: &str, prog_id: &str) -> Result<u128, String>;
+    fn remote_enum(&mut self, host: &str, prog_id: &str) -> Result<u128, BackendMsg>;
     /// A CLSID remembered from an earlier discovery of this host.
     fn discovered(&self, host: &str, prog_id: &str) -> Option<u128>;
     /// `CLSIDFromProgID` against the local registry.
-    fn local_registry(&mut self, prog_id: &str) -> Result<u128, String>;
+    fn local_registry(&mut self, prog_id: &str) -> Result<u128, BackendMsg>;
 }
 
 /// Resolve the CLSID of `prog_id` on `host`.
@@ -33,7 +34,7 @@ pub fn resolve_clsid<L: ClsidLookup>(
     host: &str,
     prog_id: &str,
     lookup: &mut L,
-) -> Result<u128, String> {
+) -> Result<u128, BackendMsg> {
     if is_local_host(host) {
         return lookup.local_registry(prog_id);
     }
@@ -47,10 +48,12 @@ pub fn resolve_clsid<L: ClsidLookup>(
     }
     match lookup.local_registry(prog_id) {
         Ok(clsid) => Ok(clsid),
-        Err(local_error) => Err(format!(
-            "не удалось получить идентификатор сервера \"{prog_id}\" на {host}: \
-             OPCEnum: {remote_error}; локальный реестр: {local_error}"
-        )),
+        Err(local_error) => Err(BackendMsg::DaClsidResolveFailed {
+            prog_id: prog_id.to_string(),
+            host: host.to_string(),
+            remote: Box::new(remote_error),
+            local: Box::new(local_error),
+        }),
     }
 }
 
@@ -88,25 +91,27 @@ mod tests {
 
     #[derive(Default)]
     struct FakeLookup {
-        remote: Option<Result<u128, String>>,
+        remote: Option<Result<u128, BackendMsg>>,
         discovered: Option<u128>,
-        local: Option<Result<u128, String>>,
+        local: Option<Result<u128, BackendMsg>>,
         calls: Vec<&'static str>,
     }
 
     impl ClsidLookup for FakeLookup {
-        fn remote_enum(&mut self, _host: &str, _prog_id: &str) -> Result<u128, String> {
+        fn remote_enum(&mut self, _host: &str, _prog_id: &str) -> Result<u128, BackendMsg> {
             self.calls.push("remote");
             self.remote
                 .clone()
-                .unwrap_or_else(|| Err("no remote".into()))
+                .unwrap_or_else(|| Err(BackendMsg::raw("no remote")))
         }
         fn discovered(&self, _host: &str, _prog_id: &str) -> Option<u128> {
             self.discovered
         }
-        fn local_registry(&mut self, _prog_id: &str) -> Result<u128, String> {
+        fn local_registry(&mut self, _prog_id: &str) -> Result<u128, BackendMsg> {
             self.calls.push("local");
-            self.local.clone().unwrap_or_else(|| Err("no local".into()))
+            self.local
+                .clone()
+                .unwrap_or_else(|| Err(BackendMsg::raw("no local")))
         }
     }
 
@@ -116,7 +121,7 @@ mod tests {
         // not registered on this machine could not be connected to.
         let mut lookup = FakeLookup {
             remote: Some(Ok(0xAA)),
-            local: Some(Err("not registered".into())),
+            local: Some(Err(BackendMsg::raw("not registered"))),
             ..FakeLookup::default()
         };
         assert_eq!(
@@ -146,11 +151,13 @@ mod tests {
     #[test]
     fn remote_failure_reports_both_causes() {
         let mut lookup = FakeLookup {
-            remote: Some(Err("RPC unavailable".into())),
-            local: Some(Err("not registered".into())),
+            remote: Some(Err(BackendMsg::raw("RPC unavailable"))),
+            local: Some(Err(BackendMsg::raw("not registered"))),
             ..FakeLookup::default()
         };
-        let err = resolve_clsid("plc-1", "S", &mut lookup).unwrap_err();
+        let err = resolve_clsid("plc-1", "S", &mut lookup)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("RPC unavailable"), "{err}");
         assert!(err.contains("not registered"), "{err}");
         assert!(err.contains("plc-1"), "{err}");

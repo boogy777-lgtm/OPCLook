@@ -24,6 +24,7 @@
 // hosts they are exercised by unit tests only.
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
+use crate::bff::model::BackendMsg;
 use crate::bff::net::{NetworkBinding, endpoint_url_for};
 use crate::constants::MDNS_WINDOW;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -97,7 +98,7 @@ pub(crate) fn interface_index_for(binding: Option<&NetworkBinding>) -> u32 {
 #[derive(Debug, Default)]
 pub(crate) struct MdnsOutcome {
     pub services: Vec<MdnService>,
-    pub notes: Vec<String>,
+    pub notes: Vec<BackendMsg>,
 }
 
 /// Run a bounded mDNS discovery. Never panics; a failure is reported in
@@ -106,15 +107,18 @@ pub(crate) fn discover(binding: Option<&NetworkBinding>) -> MdnsOutcome {
     #[cfg(windows)]
     {
         let interface = interface_index_for(binding);
-        match windows_impl::discover(interface) {
-            Ok(services) => MdnsOutcome {
-                services,
-                notes: Vec::new(),
-            },
-            Err(error) => MdnsOutcome {
-                services: Vec::new(),
-                notes: vec![format!("mDNS: поиск не удался: {error}")],
-            },
+        let mut notes = Vec::new();
+        match windows_impl::discover(interface, &mut notes) {
+            Ok(services) => MdnsOutcome { services, notes },
+            Err(error) => {
+                notes.push(BackendMsg::MdnsFailed {
+                    cause: Box::new(error),
+                });
+                MdnsOutcome {
+                    services: Vec::new(),
+                    notes,
+                }
+            }
         }
     }
     #[cfg(not(windows))]
@@ -122,7 +126,7 @@ pub(crate) fn discover(binding: Option<&NetworkBinding>) -> MdnsOutcome {
         let _ = binding;
         MdnsOutcome {
             services: Vec::new(),
-            notes: vec!["mDNS: поиск не поддерживается на этой платформе".to_string()],
+            notes: vec![BackendMsg::MdnsNotSupported],
         }
     }
 }
@@ -441,9 +445,15 @@ mod windows_impl {
         }
     }
 
-    fn browse(interface: u32, deadline: Instant) -> Result<Vec<String>, String> {
+    fn browse(
+        interface: u32,
+        deadline: Instant,
+        notes: &mut Vec<BackendMsg>,
+    ) -> Result<Vec<String>, BackendMsg> {
         let Some(api) = dns_api() else {
-            return Err("Windows DNS-SD API (DnsServiceBrowse) is unavailable".to_string());
+            return Err(BackendMsg::MdnsApiUnavailable {
+                function: "DnsServiceBrowse".to_string(),
+            });
         };
         let (tx, rx) = mpsc::channel();
         let id = register_callback(tx);
@@ -461,7 +471,10 @@ mod windows_impl {
         let started = unsafe { (api.browse)(&request, &mut cancel) };
         if started != DNS_REQUEST_PENDING && started != 0 {
             unregister_callback(id);
-            return Err(format!("DnsServiceBrowse failed with {started}"));
+            return Err(BackendMsg::MdnsCallFailed {
+                function: "DnsServiceBrowse".to_string(),
+                code: started,
+            });
         }
 
         let mut instances = Vec::new();
@@ -489,7 +502,7 @@ mod windows_impl {
 
         let cancelled = unsafe { (api.browse_cancel)(&cancel) };
         if cancelled != 0 {
-            eprintln!("mDNS browse cancel failed with {cancelled}");
+            notes.push(BackendMsg::MdnsBrowseCancelFailed { code: cancelled });
         }
         // Later callbacks only hold this id; they will not find it and return.
         unregister_callback(id);
@@ -507,9 +520,12 @@ mod windows_impl {
         instances: &[String],
         interface: u32,
         deadline: Instant,
-    ) -> Result<Vec<ResolvedService>, String> {
+        notes: &mut Vec<BackendMsg>,
+    ) -> Result<Vec<ResolvedService>, BackendMsg> {
         let Some(api) = dns_api() else {
-            return Err("Windows DNS-SD API (DnsServiceResolve) is unavailable".to_string());
+            return Err(BackendMsg::MdnsApiUnavailable {
+                function: "DnsServiceResolve".to_string(),
+            });
         };
         let (tx, rx) = mpsc::channel();
         let mut pending = Vec::new();
@@ -533,7 +549,10 @@ mod windows_impl {
                 });
             } else {
                 unregister_callback(id);
-                eprintln!("mDNS resolve start failed for {instance}: {started}");
+                notes.push(BackendMsg::MdnsResolveStartFailed {
+                    instance: instance.clone(),
+                    code: started,
+                });
             }
         }
 
@@ -552,7 +571,7 @@ mod windows_impl {
                 }
                 Ok(CallbackEvent::ResolveDone(status)) => {
                     if status != 0 {
-                        eprintln!("mDNS resolve completed with {status}");
+                        notes.push(BackendMsg::MdnsResolveCompleted { code: status });
                     }
                 }
                 Ok(_) => {}
@@ -563,7 +582,7 @@ mod windows_impl {
         for entry in &pending {
             let cancelled = unsafe { (api.resolve_cancel)(&entry.cancel) };
             if cancelled != 0 {
-                eprintln!("mDNS resolve cancel failed with {cancelled}");
+                notes.push(BackendMsg::MdnsResolveCancelFailed { code: cancelled });
             }
             unregister_callback(entry.id);
         }
@@ -601,16 +620,19 @@ mod windows_impl {
         })
     }
 
-    pub(super) fn discover(interface: u32) -> Result<Vec<MdnService>, String> {
+    pub(super) fn discover(
+        interface: u32,
+        notes: &mut Vec<BackendMsg>,
+    ) -> Result<Vec<MdnService>, BackendMsg> {
         let overall_deadline = Instant::now() + MDNS_WINDOW;
         let browse_deadline = overall_deadline
             .checked_sub(MDNS_RESOLVE_RESERVE)
             .unwrap_or(overall_deadline);
-        let instances = browse(interface, browse_deadline)?;
+        let instances = browse(interface, browse_deadline, notes)?;
         if instances.is_empty() {
             return Ok(Vec::new());
         }
-        let resolved = resolve(&instances, interface, overall_deadline)?;
+        let resolved = resolve(&instances, interface, overall_deadline, notes)?;
         let services: Vec<MdnService> = resolved
             .into_iter()
             .filter_map(service_from_resolved)

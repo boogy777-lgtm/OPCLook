@@ -163,6 +163,10 @@ pub struct Settings {
     /// UA connect dialog: last selected message security mode.
     #[serde(default)]
     pub ua_security_mode: UaSecurityMode,
+    /// UA connect dialog: the optional "LDS host" (`host[:port]`) that the
+    /// LDS/mDNS search asks for the server list. Empty = not used.
+    #[serde(default)]
+    pub ua_lds_host: String,
     /// Preferred network adapter GUID. `None` means no adapter is selected.
     /// Old settings files without this field load as unselected.
     #[serde(default)]
@@ -202,6 +206,7 @@ impl Default for Settings {
             ua_session_timeout_ms: default_session_timeout(),
             ua_security_policy: UaSecurityPolicy::Auto,
             ua_security_mode: UaSecurityMode::Auto,
+            ua_lds_host: String::new(),
             preferred_adapter: None,
             selected_local_ip: None,
             cached_adapters: CachedAdapters::default(),
@@ -322,6 +327,15 @@ impl Settings {
     /// Current UI language, falling back to Russian for an unknown/missing code.
     pub fn lang(&self) -> Lang {
         Lang::from_str(&self.lang).unwrap_or(Lang::default())
+    }
+
+    /// Remember the LDS host of the connect dialog; saves only on a change.
+    pub fn set_ua_lds_host(&mut self, text: &str) {
+        let text = text.trim();
+        if self.ua_lds_host != text {
+            self.ua_lds_host = text.to_string();
+            self.save();
+        }
     }
 
     /// Set the UI language and normalize its stored code.
@@ -496,14 +510,93 @@ fn backup_damaged_file(path: &std::path::Path) -> Result<String, String> {
     Err("no free backup file name".to_string())
 }
 
+/// Per-thread redirect of the settings directory for headless tests of the
+/// application (`tests/*.rs`), which run in the same process and in parallel.
+///
+/// Redirecting through the process-wide `APPDATA` variable made such tests
+/// interleave: one test's `save()` landed in another test's directory, and
+/// `set_var` itself races with every other thread reading the environment. A
+/// thread-local directory cannot be seen by other tests. The application never
+/// installs one; without it `app_dir()` reads `%APPDATA%` as before.
+pub mod thread_dir {
+    use std::cell::RefCell;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    thread_local! {
+        static DIR: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+        static OWNED: RefCell<Option<Owned>> = const { RefCell::new(None) };
+    }
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    /// A private directory created for this thread; removed when the thread ends.
+    struct Owned(PathBuf);
+
+    impl Drop for Owned {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    pub(super) fn current() -> Option<PathBuf> {
+        DIR.with(|dir| dir.borrow().clone())
+    }
+
+    /// Redirect this thread's settings to `dir` until the guard is dropped.
+    pub fn redirect(dir: &Path) -> Redirect {
+        let previous = DIR.with(|cell| cell.borrow_mut().replace(dir.to_path_buf()));
+        Redirect { previous }
+    }
+
+    /// Restores the previous redirect of the thread.
+    pub struct Redirect {
+        previous: Option<PathBuf>,
+    }
+
+    impl Drop for Redirect {
+        fn drop(&mut self) {
+            let previous = self.previous.take();
+            DIR.with(|cell| *cell.borrow_mut() = previous);
+        }
+    }
+
+    /// Give this thread a private temporary settings directory unless it has a
+    /// redirect already, so a headless test that saves settings never writes to
+    /// the real `%APPDATA%` or into another test's directory.
+    pub fn ensure_private() {
+        if current().is_some() {
+            return;
+        }
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "opcda-egui-thread-settings-{}-{n}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        if std::fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+        DIR.with(|cell| *cell.borrow_mut() = Some(dir.clone()));
+        OWNED.with(|cell| *cell.borrow_mut() = Some(Owned(dir)));
+    }
+}
+
 pub fn app_dir() -> PathBuf {
     // Unit tests must never touch the developer's real settings: in test builds
     // the base directory is a per-test override or a private per-process temp
-    // directory (see `test_isolation`). The real `%APPDATA%` is only read by the
-    // non-test build (the application and the integration tests, which redirect
-    // `APPDATA` themselves).
+    // directory (see `test_isolation`). Headless tests of the application
+    // redirect per thread (see `thread_dir`). The real `%APPDATA%` is read only
+    // by the application itself.
     #[cfg(test)]
-    let base = test_isolation::current_override().unwrap_or_else(test_isolation::fallback_dir);
+    if let Some(dir) = test_isolation::current_override() {
+        return dir.join("opcda-egui");
+    }
+    if let Some(dir) = thread_dir::current() {
+        return dir.join("opcda-egui");
+    }
+    #[cfg(test)]
+    let base = test_isolation::fallback_dir();
     #[cfg(not(test))]
     let base = std::env::var_os("APPDATA")
         .map(PathBuf::from)
@@ -1306,6 +1399,23 @@ mod tests {
             assert_eq!(loaded.adapter_selection(), AdapterSelection::Adapter(id));
             assert_eq!(loaded.selected_local_ip(), Some(ip));
         });
+    }
+
+    #[test]
+    fn u15_lds_host_persists_and_old_files_load_without_it() {
+        let dir = std::env::temp_dir().join("opcda-egui-settings-lds-host");
+        let _ = std::fs::remove_dir_all(&dir);
+        with_appdata(&dir, || {
+            let mut s = Settings::default();
+            s.set_ua_lds_host("  lds.plant:4850 ");
+            assert_eq!(Settings::load().ua_lds_host, "lds.plant:4850");
+            s.set_ua_lds_host("");
+            assert_eq!(Settings::load().ua_lds_host, "");
+        });
+        let mut value = serde_json::to_value(Settings::default()).unwrap();
+        value.as_object_mut().unwrap().remove("ua_lds_host");
+        let old: Settings = serde_json::from_value(value).unwrap();
+        assert_eq!(old.ua_lds_host, "");
     }
 
     #[test]

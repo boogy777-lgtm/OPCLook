@@ -1,6 +1,6 @@
 use super::session::pki_dir;
 use crate::bff::mdns::{self, MdnService};
-use crate::bff::model::{UaEndpointInfo, UaNetworkInfo, UaServerInfo};
+use crate::bff::model::{BackendMsg, LdsTarget, UaEndpointInfo, UaNetworkInfo, UaServerInfo};
 use crate::bff::net::{BoundConnectorBuilder, NetworkBinding, endpoint_url_for};
 use crate::constants::{DISCOVERY_GUARD_TIMEOUT, DISCOVERY_URLS, MDNS_WINDOW, UA_SEARCH_TIMEOUT};
 use opcua::client::ClientBuilder;
@@ -14,7 +14,7 @@ use std::time::Duration;
 /// was skipped must say so here instead of printing to stderr.
 pub(super) struct Searched<T> {
     pub found: Vec<T>,
-    pub notes: Vec<String>,
+    pub notes: Vec<BackendMsg>,
 }
 
 /// Searches for OPC UA servers on `host:port` and returns their descriptions
@@ -29,13 +29,13 @@ pub(super) async fn search_servers(
     host: &str,
     port: u16,
     binding: Option<&NetworkBinding>,
-) -> Result<Searched<UaServerInfo>, String> {
+) -> Result<Searched<UaServerInfo>, BackendMsg> {
     let host = host.trim().trim_start_matches('[').trim_end_matches(']');
     if host.is_empty() {
-        return Err("укажите адрес сервера (хост)".to_string());
+        return Err(BackendMsg::HostRequired);
     }
     if port == 0 {
-        return Err("укажите корректный порт".to_string());
+        return Err(BackendMsg::PortInvalid);
     }
 
     // Resolve and try ALL addresses, IPv4 first. Many hosts ("localhost")
@@ -43,12 +43,17 @@ pub(super) async fn search_servers(
     // guessing just the first address would miss it.
     let mut addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
         .await
-        .map_err(|e| format!("не удалось разрешить адрес \"{host}\": {e}"))?
+        .map_err(|e| BackendMsg::ResolveAddressFailed {
+            host: host.to_string(),
+            detail: e.to_string(),
+        })?
         .collect();
     addresses.sort_by_key(|a| a.is_ipv6());
     addresses.dedup();
     if addresses.is_empty() {
-        return Err(format!("адрес \"{host}\" не дал ни одного IP-адреса"));
+        return Err(BackendMsg::AddressNoIp {
+            host: host.to_string(),
+        });
     }
 
     let client = build_discovery_client()?;
@@ -72,7 +77,10 @@ pub(super) async fn search_servers(
         let mut servers = match direct {
             Ok(servers) => servers,
             Err(e) => {
-                failures.push(format!("{url}: {e}"));
+                failures.push(BackendMsg::AtUrl {
+                    url: url.clone(),
+                    cause: Box::new(e),
+                });
                 Vec::new()
             }
         };
@@ -88,18 +96,22 @@ pub(super) async fn search_servers(
             // Only worth a line when the server itself was reachable; otherwise
             // the failure above already says it.
             Some(Err(LdsError::Timeout)) if reachable => {
-                notes.push(format!(
-                    "LDS {url}: FindServersOnNetwork не ответил (таймаут)"
-                ));
+                notes.push(BackendMsg::LdsTimeout { url: url.clone() });
             }
             Some(Err(LdsError::Failed(e))) if reachable => {
-                notes.push(format!("LDS {url}: FindServersOnNetwork не удался: {e}"));
+                notes.push(BackendMsg::LdsFailed {
+                    url: url.clone(),
+                    detail: e,
+                });
             }
             Some(Err(_)) => {}
         }
         if servers.is_empty() {
             if reachable {
-                failures.push(format!("{url}: серверы не найдены"));
+                failures.push(BackendMsg::AtUrl {
+                    url: url.clone(),
+                    cause: Box::new(BackendMsg::ServersNotFoundShort),
+                });
             }
             continue;
         }
@@ -109,12 +121,7 @@ pub(super) async fn search_servers(
         });
     }
 
-    let detail = if failures.is_empty() {
-        "OPC UA серверы не найдены".to_string()
-    } else {
-        format!("OPC UA серверы не найдены: {}", failures.join("; "))
-    };
-    Err(detail)
+    Err(BackendMsg::UaNoServers { failures })
 }
 
 /// Why a `FindServersOnNetwork` request gave no records.
@@ -243,7 +250,7 @@ async fn find_servers_at(
     client: &opcua::client::Client,
     url: &str,
     binding: Option<&NetworkBinding>,
-) -> Result<Vec<UaServerInfo>, String> {
+) -> Result<Vec<UaServerInfo>, BackendMsg> {
     use opcua::types::ApplicationDescription;
 
     let request = if let Some(binding) = binding {
@@ -261,8 +268,10 @@ async fn find_servers_at(
         .await
     };
     let descriptions: Vec<ApplicationDescription> = request
-        .map_err(|_| "таймаут поиска серверов".to_string())?
-        .map_err(|e| format!("запрос поиска отклонён: {e}"))?;
+        .map_err(|_| BackendMsg::TimeoutSearch)?
+        .map_err(|e| BackendMsg::SearchRejected {
+            detail: e.to_string(),
+        })?;
 
     // Fetch actual endpoint descriptions for this discovery endpoint so the
     // user gets a usable opc.tcp:// URL even if FindServers returns nothing.
@@ -380,26 +389,50 @@ async fn find_servers_at(
 /// returned in [`Searched::notes`] for the journal.
 pub(super) async fn search_network_servers(
     binding: Option<&NetworkBinding>,
-) -> Result<Searched<UaNetworkInfo>, String> {
+    lds: Option<&LdsTarget>,
+) -> Result<Searched<UaNetworkInfo>, BackendMsg> {
+    // An explicit LDS host with no adapter chosen: ask only that host, mDNS
+    // would run on every interface.
+    let mdns_enabled = lds.is_none() || binding.is_some();
     let mdns_binding = binding.cloned();
-    let mdns_task = tokio::task::spawn_blocking(move || mdns::discover(mdns_binding.as_ref()));
+    let mdns_task = tokio::task::spawn_blocking(move || {
+        if mdns_enabled {
+            mdns::discover(mdns_binding.as_ref())
+        } else {
+            mdns::MdnsOutcome {
+                services: Vec::new(),
+                notes: Vec::new(),
+            }
+        }
+    });
 
     let client = build_discovery_client();
-    let lds = async {
+    let lds_search = async {
         match &client {
             Ok(client) => {
-                let search = search_lds_servers(client, binding, &DISCOVERY_URLS);
+                let search = async {
+                    match lds {
+                        Some(target) => {
+                            let url = target.url();
+                            let urls = [url.as_str()];
+                            search_lds_servers(client, Some(&target.bind), &urls).await
+                        }
+                        None => search_lds_servers(client, binding, &DISCOVERY_URLS).await,
+                    }
+                };
                 match tokio::time::timeout(DISCOVERY_GUARD_TIMEOUT, search).await {
                     Ok(search) => search,
                     Err(_) => LdsSearch {
                         found: Vec::new(),
-                        notes: vec!["LDS: поиск прерван по таймауту".to_string()],
+                        notes: vec![BackendMsg::LdsSearchTimedOut],
                     },
                 }
             }
             Err(error) => LdsSearch {
                 found: Vec::new(),
-                notes: vec![format!("LDS: поиск недоступен: {error}")],
+                notes: vec![BackendMsg::LdsUnavailable {
+                    cause: Box::new(error.clone()),
+                }],
             },
         }
     };
@@ -410,15 +443,17 @@ pub(super) async fn search_network_servers(
             Ok(Ok(outcome)) => outcome,
             Ok(Err(error)) => mdns::MdnsOutcome {
                 services: Vec::new(),
-                notes: vec![format!("mDNS: поиск аварийно завершился: {error}")],
+                notes: vec![BackendMsg::MdnsCrashed {
+                    detail: error.to_string(),
+                }],
             },
             Err(_) => mdns::MdnsOutcome {
                 services: Vec::new(),
-                notes: vec!["mDNS: поиск не завершился вовремя".to_string()],
+                notes: vec![BackendMsg::MdnsNotInTime],
             },
         }
     };
-    let (lds, mdns_outcome) = tokio::join!(lds, mdns_result);
+    let (lds, mdns_outcome) = tokio::join!(lds_search, mdns_result);
     let mut found = lds.found;
     let mut notes = lds.notes;
     notes.extend(mdns_outcome.notes);
@@ -432,7 +467,7 @@ pub(super) async fn search_network_servers(
             }
         }
         Err(_) if !mdns_outcome.services.is_empty() => {
-            notes.push("mDNS: результаты отброшены, нет клиента OPC UA для проверки".to_string());
+            notes.push(BackendMsg::MdnsDiscarded);
         }
         Err(_) => {}
     }
@@ -443,7 +478,7 @@ pub(super) async fn search_network_servers(
 /// Result of polling the local discovery URLs.
 struct LdsSearch {
     found: Vec<UaNetworkInfo>,
-    notes: Vec<String>,
+    notes: Vec<BackendMsg>,
 }
 
 /// True for `opc.tcp://localhost…`, `127.x.x.x` and `[::1]`: spellings of this
@@ -492,7 +527,7 @@ where
     let mut notes = Vec::new();
     let mut loopback_answered = false;
     let mut answered = false;
-    let mut last_failure: Option<String> = None;
+    let mut last_failure: Option<BackendMsg> = None;
 
     for url in urls {
         let loopback = is_loopback_url(url);
@@ -515,9 +550,16 @@ where
             Err(LdsError::Timeout) => {
                 answered = true;
                 loopback_answered |= loopback;
-                notes.push(format!("LDS {url}: нет ответа (таймаут)"));
+                notes.push(BackendMsg::LdsTimeout {
+                    url: (*url).to_string(),
+                });
             }
-            Err(LdsError::Failed(error)) => last_failure = Some(format!("LDS {url}: {error}")),
+            Err(LdsError::Failed(error)) => {
+                last_failure = Some(BackendMsg::LdsFailed {
+                    url: (*url).to_string(),
+                    detail: error,
+                });
+            }
         }
     }
     // Nothing listening on the standard port is the normal case on a machine
@@ -606,9 +648,12 @@ async fn verify_mdns_services(
                     break;
                 }
                 Ok(Ok(_)) => {}
-                Ok(Err(error)) => notes.push(format!("mDNS {url}: проверка не удалась: {error}")),
+                Ok(Err(error)) => notes.push(BackendMsg::MdnsVerifyFailed {
+                    url: url.clone(),
+                    cause: Box::new(error),
+                }),
                 Err(_) => {
-                    notes.push(format!("mDNS {url}: проверка не уложилась во время"));
+                    notes.push(BackendMsg::MdnsVerifyTimeout { url: url.clone() });
                     break;
                 }
             }
@@ -712,19 +757,19 @@ pub(super) fn merge_network_info(found: &mut Vec<UaNetworkInfo>, incoming: UaNet
 /// temporary secure channel and drains the event loop before returning, so the
 /// channel is not dropped mid-response. The outer guard is only a hard stop for
 /// a wedged connect.
-pub(super) fn build_discovery_client() -> Result<opcua::client::Client, String> {
+pub(super) fn build_discovery_client() -> Result<opcua::client::Client, BackendMsg> {
     let pki = pki_dir();
-    ClientBuilder::new()
-        .application_name("OPC DA/UA Test Client")
-        .application_uri("urn:opcda-egui")
-        .product_uri("urn:opcda-egui")
-        .create_sample_keypair(true)
-        .trust_server_certs(true)
-        .pki_dir(pki)
-        .session_retry_limit(0)
-        .request_timeout(UA_SEARCH_TIMEOUT)
-        .client()
-        .map_err(|errors| errors.join("; "))
+    super::session::build_client(
+        ClientBuilder::new()
+            .application_name("OPC DA/UA Test Client")
+            .application_uri("urn:opcda-egui")
+            .product_uri("urn:opcda-egui")
+            .create_sample_keypair(true)
+            .trust_server_certs(true)
+            .pki_dir(pki)
+            .session_retry_limit(0)
+            .request_timeout(UA_SEARCH_TIMEOUT),
+    )
 }
 
 #[cfg(test)]
@@ -814,7 +859,11 @@ mod tests {
             "a second timeout would only double the wait"
         );
         assert_eq!(search.notes.len(), 1);
-        assert!(search.notes[0].contains(IP), "{:?}", search.notes);
+        assert!(
+            search.notes[0].to_string().contains(IP),
+            "{:?}",
+            search.notes
+        );
     }
 
     #[test]

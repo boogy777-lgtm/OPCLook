@@ -11,41 +11,20 @@ use opcda_egui::bff::model::{
     SubscriptionState, UaSecurityMode, UaSecurityPolicy, Value,
 };
 use opcda_egui::settings::Settings;
-use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Serializes tests that read or write the on-disk settings (via `set_lang` /
-/// `settings.save()` / `Settings::load()`). Those tests share the process-global
-/// `APPDATA` location, and running them in parallel can clobber each other's
-/// `settings.json` writes, making the suite flaky.
-static SETTINGS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static SETTINGS_DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 
-struct IsolatedAppData {
-    previous: Option<OsString>,
-    path: PathBuf,
-}
-
-impl Drop for IsolatedAppData {
-    fn drop(&mut self) {
-        match self.previous.take() {
-            Some(value) => unsafe { std::env::set_var("APPDATA", value) },
-            None => unsafe { std::env::remove_var("APPDATA") },
-        }
-        let _ = std::fs::remove_dir_all(&self.path);
-    }
-}
-
-/// Run `f` against a private temporary `%APPDATA%`. Tests that save settings
-/// must never overwrite the developer's real `settings.json`.
+/// Run `f` against a private temporary settings directory of THIS thread.
+///
+/// Tests that save settings must never overwrite the developer's real
+/// `settings.json`, nor another test's file. The directory is redirected per
+/// thread (`settings::thread_dir`), not through the process-wide `APPDATA`
+/// variable: parallel tests cannot see each other's files and nothing needs a
+/// lock or `set_var` (which races with every other thread reading the
+/// environment).
 fn with_settings_lock<R>(f: impl FnOnce() -> R) -> R {
-    // A failing settings test must not poison the lock for the rest of the
-    // suite: the next test still has to run with its own directory.
-    let _guard = SETTINGS_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-
     let seq = SETTINGS_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!(
         "opcda-egui-ui-settings-{}-{seq}",
@@ -53,13 +32,17 @@ fn with_settings_lock<R>(f: impl FnOnce() -> R) -> R {
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create isolated settings directory");
-    let previous = std::env::var_os("APPDATA");
-    unsafe { std::env::set_var("APPDATA", &dir) };
-    let _appdata = IsolatedAppData {
-        previous,
-        path: dir,
-    };
+    let _redirect = opcda_egui::settings::thread_dir::redirect(&dir);
+    let _cleanup = RemoveDir(dir);
     f()
+}
+
+struct RemoveDir(PathBuf);
+
+impl Drop for RemoveDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 /// Force the app's UI language to Russian even if not persisted. The
@@ -630,7 +613,7 @@ fn stale_reply_with_unknown_request_id_is_ignored() {
         9_999,
         EventKind::Connected {
             endpoint: EndpointSpec::da("", "Srv.Stale"),
-            info: "stale".to_string(),
+            info: opcda_egui::bff::model::BackendMsg::raw("stale"),
         },
     );
     assert_eq!(app.sessions[0].state, SessionState::Connected);
@@ -674,7 +657,7 @@ fn matching_request_id_reply_is_accepted() {
             connect_id,
             EventKind::Connected {
                 endpoint: EndpointSpec::da("", "Srv.Match"),
-                info: "ok".to_string(),
+                info: opcda_egui::bff::model::BackendMsg::raw("ok"),
             },
         );
         assert_eq!(app.sessions[0].state, SessionState::Connected);
@@ -686,7 +669,7 @@ fn matching_request_id_reply_is_accepted() {
             connect_id,
             EventKind::Connected {
                 endpoint: EndpointSpec::da("", "Srv.Match"),
-                info: "replayed".to_string(),
+                info: opcda_egui::bff::model::BackendMsg::raw("replayed"),
             },
         );
         assert_eq!(
@@ -735,7 +718,7 @@ fn disconnect_connect_does_not_let_old_connected_mutate_new_state() {
             old_connect,
             EventKind::Connected {
                 endpoint: EndpointSpec::da("", "Srv.Old"),
-                info: "old".to_string(),
+                info: opcda_egui::bff::model::BackendMsg::raw("old"),
             },
         );
         assert_eq!(
@@ -755,7 +738,7 @@ fn disconnect_connect_does_not_let_old_connected_mutate_new_state() {
             new_connect,
             EventKind::Connected {
                 endpoint: EndpointSpec::da("", "Srv.Old"),
-                info: "new".to_string(),
+                info: opcda_egui::bff::model::BackendMsg::raw("new"),
             },
         );
         assert_eq!(app.sessions[0].state, SessionState::Connected);
@@ -1228,10 +1211,68 @@ fn connect_dialog_ua_security_controls_render() {
     // The trust checkbox, the identity combo and the network-search button are
     // all present on the UA tab.
     assert_eq!(
-        h.query_all_by_label("Доверять сертификату сервера").count(),
+        h.query_all_by_label("Доверять сертификату сервера (только на эту сессию)")
+            .count(),
         1
     );
     assert_eq!(h.query_all_by_label("Поиск через LDS/mDNS").count(), 1);
+}
+
+/// U15: the UA tab has an optional «LDS-хост» field; a named host is what
+/// «Поиск через LDS/mDNS» asks, and it is remembered in the settings.
+#[test]
+fn u15_connect_dialog_has_an_lds_host_field_used_by_the_lds_search() {
+    with_settings_lock(|| {
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        app.open_connect_dialog();
+        let mut h = harness(app);
+        h.run_steps(5);
+        assert_eq!(
+            h.query_all_by_label("LDS-хост").count(),
+            0,
+            "the field belongs to the OPC UA tab"
+        );
+        h.get_by_label("OPC UA").click();
+        h.run_steps(5);
+        assert_eq!(h.query_all_by_label("LDS-хост").count(), 1);
+
+        h.state_mut().dialogs.connect.ua_lds_host = "127.0.0.1:48690".to_string();
+        h.run_steps(2);
+        h.get_by_label("Поиск через LDS/mDNS").click();
+        h.run_steps(5);
+        let state = h.state();
+        assert!(state.dialogs.connect.ua_network_searching);
+        assert!(state.dialogs.connect.error.is_none());
+        assert_eq!(state.settings.ua_lds_host, "127.0.0.1:48690");
+        assert_eq!(
+            opcda_egui::settings::Settings::load().ua_lds_host,
+            "127.0.0.1:48690",
+            "the field is persisted"
+        );
+    });
+}
+
+/// U15: a malformed LDS host is reported in the dialog and nothing is searched.
+#[test]
+fn u15_connect_dialog_rejects_a_malformed_lds_host() {
+    with_settings_lock(|| {
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        app.open_connect_dialog();
+        let mut h = harness(app);
+        h.run_steps(5);
+        h.get_by_label("OPC UA").click();
+        h.run_steps(5);
+        h.state_mut().dialogs.connect.ua_lds_host = "host:0".to_string();
+        h.run_steps(2);
+        h.get_by_label("Поиск через LDS/mDNS").click();
+        h.run_steps(5);
+        assert!(!h.state().dialogs.connect.ua_network_searching);
+        assert!(h.state().dialogs.connect.error.is_some());
+        assert!(h.query_all_by_label_contains("LDS-хост:").count() >= 1);
+        assert_eq!(h.state().settings.ua_lds_host, "");
+    });
 }
 
 /// The third popup tab renders a single adapter ComboBox. There is no
@@ -1985,7 +2026,8 @@ fn connect_dialog_trust_checkbox_defaults_and_toggles() {
     // Strict trust by default (settings default false).
     assert!(!h.state().dialogs.connect.ua_trust_server_cert);
     // Clicking the checkbox flips the dialog state.
-    h.get_by_label("Доверять сертификату сервера").click();
+    h.get_by_label("Доверять сертификату сервера (только на эту сессию)")
+        .click();
     h.run_steps(5);
     assert!(h.state().dialogs.connect.ua_trust_server_cert);
 }
@@ -2096,7 +2138,7 @@ fn disconnect_event_keeps_rows_and_marks_them_stale() {
     app.on_event_for_test_at(
         1,
         opcda_egui::bff::model::EventKind::Disconnected {
-            reason: "связь потеряна".to_string(),
+            reason: opcda_egui::bff::model::BackendMsg::raw("связь потеряна"),
         },
     );
 
@@ -2130,7 +2172,7 @@ fn reconnect_connected_resubscribes_rows_requests_browse_and_read() {
     app.on_event_for_test_at(
         1,
         opcda_egui::bff::model::EventKind::Disconnected {
-            reason: "связь потеряна".to_string(),
+            reason: opcda_egui::bff::model::BackendMsg::raw("связь потеряна"),
         },
     );
     assert_eq!(app.rows.len(), 2);
@@ -2140,7 +2182,7 @@ fn reconnect_connected_resubscribes_rows_requests_browse_and_read() {
         1,
         opcda_egui::bff::model::EventKind::Connected {
             endpoint: EndpointSpec::da("", "Srv.Test"),
-            info: "подключено".to_string(),
+            info: opcda_egui::bff::model::BackendMsg::raw("подключено"),
         },
     );
 
@@ -2283,7 +2325,7 @@ fn ua_reconnect_resubscribes_rows_and_resets_subscription_flag() {
     app.on_event_for_test_at(
         1,
         EventKind::Disconnected {
-            reason: "связь потеряна".to_string(),
+            reason: opcda_egui::bff::model::BackendMsg::raw("связь потеряна"),
         },
     );
     // While disconnected the subscription is gone.
@@ -2295,7 +2337,7 @@ fn ua_reconnect_resubscribes_rows_and_resets_subscription_flag() {
         1,
         EventKind::Connected {
             endpoint: EndpointSpec::ua("opc.tcp://127.0.0.1:4840"),
-            info: "подключено".to_string(),
+            info: opcda_egui::bff::model::BackendMsg::raw("подключено"),
         },
     );
     let view = app.sessions.iter().find(|s| s.id == 1).unwrap();
@@ -2390,7 +2432,7 @@ fn reconnect_attempts_cap_stops_the_loop_and_shows_exhausted() {
     app.on_event_for_test_at(
         1,
         EventKind::Disconnected {
-            reason: "опять".to_string(),
+            reason: opcda_egui::bff::model::BackendMsg::raw("опять"),
         },
     );
     // Re-scheduling must refuse: the state becomes Exhausted, no new timer.
@@ -2632,8 +2674,8 @@ fn tab_strip_is_in_tags_area_not_top_panel() {
     assert!(h.query_all_by_label("DA: Srv.One").count() >= 1);
 }
 
-/// An empty UA host without a selected adapter searches only the two loopback
-/// endpoints. LDS/mDNS and subnet discovery require an explicit adapter.
+/// An empty UA host without a selected adapter searches only the loopback
+/// endpoint (one request). mDNS and subnet discovery require an adapter.
 #[test]
 fn connect_dialog_ua_empty_host_without_adapter_searches_loopback_only() {
     let ctx = egui::Context::default();
@@ -2647,11 +2689,8 @@ fn connect_dialog_ua_empty_host_without_adapter_searches_loopback_only() {
         !d.ua_network_searching,
         "LDS/mDNS must not run without a selected adapter"
     );
-    assert_eq!(d.ua_auto_pending, 2, "127.0.0.1 + localhost");
-    let hosts = [
-        ("127.0.0.1".to_string(), 4840),
-        ("localhost".to_string(), 4840),
-    ];
+    assert_eq!(d.ua_auto_pending, 1, "one loopback request");
+    let hosts = [("127.0.0.1".to_string(), 4840)];
     for (h_name, p) in hosts {
         app.on_event_for_test(EventKind::UaServersFound {
             host: h_name.clone(),
@@ -2671,8 +2710,8 @@ fn connect_dialog_ua_empty_host_without_adapter_searches_loopback_only() {
     assert!(!app.dialogs.connect.ua_network_searching);
     assert_eq!(app.dialogs.connect.ua_auto_pending, 0);
     assert!(
-        app.dialogs.connect.ua_search_results.len() >= 2,
-        "the loopback results must be merged into one list"
+        app.dialogs.connect.ua_search_results.len() == 1,
+        "the loopback result must be in the list"
     );
 }
 
@@ -2956,41 +2995,25 @@ fn language_switch_persists_in_settings() {
     with_settings_lock(|| {
         use opcda_egui::i18n::Lang;
 
-        let dir = std::env::temp_dir().join(format!("opcda_egui_i18n_{}", std::process::id()));
-        // Start from a clean store: a previous run (or a reused PID) may have left
-        // a settings.json with a non-default language here.
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let previous = std::env::var_os("APPDATA");
-        unsafe { std::env::set_var("APPDATA", &dir) };
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        // A brand-new app has no persisted language: it inherits the Russian
+        // default.
+        assert_eq!(app.lang(), opcda_egui::i18n::Lang::Ru);
 
-        let result = std::panic::catch_unwind(|| {
-            let ctx = egui::Context::default();
-            let mut app = App::new_test(&ctx);
-            // A brand-new app has no persisted language: it inherits the Russian
-            // default.
-            assert_eq!(app.lang(), opcda_egui::i18n::Lang::Ru);
+        // Persisting Russian must survive a restart (the persisted value wins
+        // over the Russian default — here it equals it).
+        app.set_lang(Lang::Ru);
+        assert_eq!(app.lang(), Lang::Ru);
+        let reloaded = opcda_egui::settings::Settings::load();
+        assert_eq!(reloaded.lang(), Lang::Ru);
 
-            // Persisting Russian must survive a restart (the persisted value wins
-            // over the Russian default — here it equals it).
-            app.set_lang(Lang::Ru);
-            assert_eq!(app.lang(), Lang::Ru);
-            let reloaded = opcda_egui::settings::Settings::load();
-            assert_eq!(reloaded.lang(), Lang::Ru);
-
-            // And switching to Chinese persists through Settings::save() to
-            // settings.json; a persisted non-default language is never overridden.
-            app.set_lang(Lang::Zh);
-            assert_eq!(app.lang(), Lang::Zh);
-            let reloaded2 = opcda_egui::settings::Settings::load();
-            assert_eq!(reloaded2.lang(), Lang::Zh);
-        });
-
-        match previous {
-            Some(v) => unsafe { std::env::set_var("APPDATA", v) },
-            None => unsafe { std::env::remove_var("APPDATA") },
-        }
-        result.expect("language persistence assertion failed");
+        // And switching to Chinese persists through Settings::save() to
+        // settings.json; a persisted non-default language is never overridden.
+        app.set_lang(Lang::Zh);
+        assert_eq!(app.lang(), Lang::Zh);
+        let reloaded2 = opcda_egui::settings::Settings::load();
+        assert_eq!(reloaded2.lang(), Lang::Zh);
     });
 }
 
@@ -3613,7 +3636,7 @@ fn disconnect_keeps_container_and_does_not_arm_reconnect() {
     app.on_event_for_test_at(
         1,
         EventKind::Disconnected {
-            reason: "отключено".to_string(),
+            reason: opcda_egui::bff::model::BackendMsg::raw("отключено"),
         },
     );
     assert_eq!(
@@ -3999,45 +4022,28 @@ fn fresh_app_defaults_to_russian() {
 #[test]
 fn on_exit_shuts_down_the_gateway() {
     with_settings_lock(|| {
-        let dir = std::env::temp_dir().join(format!("opcda_egui_on_exit_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let previous = std::env::var_os("APPDATA");
-        unsafe { std::env::set_var("APPDATA", &dir) };
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let ctx = egui::Context::default();
-            let mut app = App::new_test(&ctx);
-            app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+        let started = std::time::Instant::now();
+        <App as eframe::App>::on_exit(&mut app, None);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(6),
+            "on_exit waited too long: {:?}",
+            started.elapsed()
+        );
 
-            let started = std::time::Instant::now();
-            <App as eframe::App>::on_exit(&mut app, None);
-            assert!(
-                started.elapsed() < std::time::Duration::from_secs(6),
-                "on_exit waited too long: {:?}",
-                started.elapsed()
-            );
-
-            let error = app
-                .gateway
-                .send(Command {
-                    request_id: 1,
-                    session: 1,
-                    protocol: Protocol::OpcDa,
-                    kind: CommandKind::Test,
-                })
-                .unwrap_err();
-            assert!(error.contains("shut down"), "unexpected error: {error}");
-        }));
-
-        match previous {
-            Some(value) => unsafe { std::env::set_var("APPDATA", value) },
-            None => unsafe { std::env::remove_var("APPDATA") },
-        }
-        let _ = std::fs::remove_dir_all(&dir);
-        if let Err(panic) = result {
-            std::panic::resume_unwind(panic);
-        }
+        let error = app
+            .gateway
+            .send(Command {
+                request_id: 1,
+                session: 1,
+                protocol: Protocol::OpcDa,
+                kind: CommandKind::Test,
+            })
+            .unwrap_err();
+        assert!(error.contains("shut down"), "unexpected error: {error}");
     });
 }
 
@@ -4071,7 +4077,7 @@ fn u9_dialog_stays_open_until_connected_then_closes() {
             request,
             EventKind::Connected {
                 endpoint: EndpointSpec::ua("opc.tcp://127.0.0.1:1"),
-                info: "ok".to_string(),
+                info: opcda_egui::bff::model::BackendMsg::raw("ok"),
             },
         );
         assert!(!app.dialogs.connect.open, "Connected closes the dialog");
@@ -4091,7 +4097,7 @@ fn u9_connect_error_stays_in_the_dialog_and_stops_the_retry_loop() {
             request,
             EventKind::Error {
                 operation: opcda_egui::bff::model::Operation::Connect,
-                message: "certificate rejected".to_string(),
+                message: opcda_egui::bff::model::BackendMsg::raw("certificate rejected"),
             },
         );
         assert!(
@@ -4129,7 +4135,7 @@ fn u9_cancel_aborts_the_wait_and_ignores_the_late_reply() {
             request,
             EventKind::Connected {
                 endpoint: EndpointSpec::ua("opc.tcp://127.0.0.1:1"),
-                info: "late".to_string(),
+                info: opcda_egui::bff::model::BackendMsg::raw("late"),
             },
         );
         assert_eq!(app.sessions[0].state, SessionState::Disconnected);
@@ -4150,7 +4156,7 @@ fn u9_other_session_connecting_does_not_close_the_dialog() {
             7,
             EventKind::Connected {
                 endpoint: EndpointSpec::ua("opc.tcp://127.0.0.1:2"),
-                info: "background".to_string(),
+                info: opcda_egui::bff::model::BackendMsg::raw("background"),
             },
         );
         assert!(
@@ -4192,7 +4198,7 @@ fn journal_text(app: &App) -> String {
 #[test]
 fn a2_damaged_settings_file_is_backed_up_and_reported_in_the_journal() {
     with_settings_lock(|| {
-        let dir = PathBuf::from(std::env::var_os("APPDATA").expect("APPDATA")).join("opcda-egui");
+        let dir = opcda_egui::settings::app_dir();
         std::fs::create_dir_all(&dir).expect("settings dir");
         std::fs::write(dir.join("settings.json"), "{ broken").expect("write damaged file");
         let settings = Settings::load();
@@ -4217,7 +4223,7 @@ fn a2_damaged_settings_file_is_backed_up_and_reported_in_the_journal() {
 #[test]
 fn a2_failed_settings_save_is_reported_in_the_journal() {
     with_settings_lock(|| {
-        let dir = PathBuf::from(std::env::var_os("APPDATA").expect("APPDATA")).join("opcda-egui");
+        let dir = opcda_egui::settings::app_dir();
         // A directory in place of settings.json makes the final rename fail.
         std::fs::create_dir_all(dir.join("settings.json")).expect("squatting dir");
         let ctx = egui::Context::default();
@@ -4248,7 +4254,7 @@ fn a3_failed_connectivity_test_marks_rows_stale_like_disconnected() {
         1,
         EventKind::Error {
             operation: opcda_egui::bff::model::Operation::Test,
-            message: "link down".to_string(),
+            message: opcda_egui::bff::model::BackendMsg::raw("link down"),
         },
     );
     assert_eq!(app.sessions[0].state, SessionState::Disconnected);

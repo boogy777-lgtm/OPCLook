@@ -25,6 +25,8 @@ pub struct ConnectDialog {
     /// OPC UA discovery search state.
     pub ua_search_host: String,
     pub ua_search_port: String,
+    /// Optional LDS host (`host[:port]`) for the LDS/mDNS search.
+    pub ua_lds_host: String,
     pub ua_searching: bool,
     pub ua_search_results: Vec<crate::bff::model::UaServerInfo>,
     /// Changes the collapse-state identity when a new search begins.
@@ -92,6 +94,7 @@ impl Default for ConnectDialog {
             error: None,
             ua_search_host: String::new(),
             ua_search_port: String::new(),
+            ua_lds_host: String::new(),
             ua_searching: false,
             ua_search_results: Vec::new(),
             ua_result_epoch: 0,

@@ -5,8 +5,8 @@ use super::da_variant::{
     clear_variant, filetime_to_utc, variant_from_value, variant_to_value, vt_name,
 };
 use super::model::{
-    BrowseNode, Command, CommandKind, DataValue, Event, EventKind, ItemInfo, ItemKey, ItemSpec,
-    NodeKind, Operation, Quality, ServerEntry, SessionId,
+    BackendMsg, BrowseNode, Command, CommandKind, DataValue, Event, EventKind, ItemInfo, ItemKey,
+    ItemSpec, NodeKind, Operation, Quality, ServerEntry, SessionId,
 };
 use crate::opc::bindings::comn::{IOPCServerList, IOPCServerList2};
 use crate::opc::bindings::da::{
@@ -67,7 +67,7 @@ struct DaSession {
     sync: IOPCSyncIO,
     group_handle: u32,
     items: HashMap<ItemKey, ItemSlot>,
-    info: String,
+    info: BackendMsg,
 }
 
 /// The COM side of the router: each session and each discovery runs on its
@@ -129,6 +129,22 @@ fn init_dcom_security() -> Result<(), String> {
     .map_err(|e| format!("{e}"))
 }
 
+/// Run [`init_dcom_security`] once per process. Only the call that actually
+/// performed the initialization returns its error; every later gateway (tests
+/// and the UI create several in one process) returns `None` instead of an
+/// `RPC_E_TOO_LATE` journal line of its own — CoInitializeSecurity is
+/// process-wide, so there is nothing more to report.
+fn init_dcom_security_once() -> Option<String> {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    let mut outcome = None;
+    ONCE.call_once(|| {
+        if let Err(error) = init_dcom_security() {
+            outcome = Some(error);
+        }
+    });
+    outcome
+}
+
 pub(crate) fn spawn(event_tx: Sender<Event>) -> super::WorkerHandle {
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
     let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
@@ -138,16 +154,14 @@ pub(crate) fn spawn(event_tx: Sender<Event>) -> super::WorkerHandle {
             // Keep the router thread in the MTA for as long as it runs, so the
             // process-wide COM security settings stay in force.
             let _com = ComGuard::new();
-            if let Err(e) = init_dcom_security() {
+            if let Some(e) = init_dcom_security_once() {
                 send(
                     &event_tx,
                     Event {
                         request_id: 0,
                         session: 0,
                         kind: EventKind::Log {
-                            message: format!(
-                                "параметры безопасности DCOM не заданы (уже настроены процессом): {e}"
-                            ),
+                            message: BackendMsg::DaDcomSecurityNotSet { detail: e },
                         },
                     },
                 );
@@ -197,14 +211,14 @@ fn handle_command(
             request_id,
             session_id,
             Operation::SearchServers,
-            "поиск OPC UA серверов не поддерживается для OPC DA",
+            BackendMsg::DaNoUaServerSearch,
         ),
         CommandKind::SearchUaNetwork { .. } => send_error(
             tx,
             request_id,
             session_id,
             Operation::SearchNetwork,
-            "поиск OPC UA сети не поддерживается для OPC DA",
+            BackendMsg::DaNoUaNetworkSearch,
         ),
         CommandKind::Connect { endpoint } => {
             if sessions.contains_key(&session_id) {
@@ -213,7 +227,7 @@ fn handle_command(
                     request_id,
                     session_id,
                     Operation::Connect,
-                    "сессия уже подключена",
+                    BackendMsg::SessionAlreadyConnected,
                 );
                 return;
             }
@@ -277,7 +291,7 @@ fn handle_command(
                 request_id,
                 session_id,
                 Operation::Browse,
-                "нет соединения",
+                BackendMsg::NoConnection,
             ),
         },
         CommandKind::BrowseViews => send_error(
@@ -285,14 +299,14 @@ fn handle_command(
             request_id,
             session_id,
             Operation::BrowseViews,
-            "представления поддерживаются только для OPC UA",
+            BackendMsg::DaNoViews,
         ),
         CommandKind::ResolveBrowsePath { .. } => send_error(
             tx,
             request_id,
             session_id,
             Operation::ResolveBrowsePath,
-            "разрешение пути BrowsePath поддерживается только для OPC UA",
+            BackendMsg::DaNoBrowsePath,
         ),
         CommandKind::AddItems { items } => match sessions.get_mut(&session_id) {
             Some(session) => {
@@ -309,7 +323,7 @@ fn handle_command(
             None => {
                 let results = items
                     .into_iter()
-                    .map(|item| (item.key, Err("нет соединения".to_string())))
+                    .map(|item| (item.key, Err(BackendMsg::NoConnection)))
                     .collect();
                 send(
                     tx,
@@ -338,7 +352,7 @@ fn handle_command(
                 request_id,
                 session_id,
                 Operation::Remove,
-                "нет соединения",
+                BackendMsg::NoConnection,
             ),
         },
         CommandKind::Read { keys } => match sessions.get_mut(&session_id) {
@@ -356,7 +370,7 @@ fn handle_command(
             None => {
                 let values = keys
                     .into_iter()
-                    .map(|key| (key, DataValue::bad("нет соединения")))
+                    .map(|key| (key, DataValue::bad(BackendMsg::NoConnection)))
                     .collect();
                 send(
                     tx,
@@ -386,7 +400,7 @@ fn handle_command(
                 request_id,
                 session_id,
                 Operation::Write,
-                "нет соединения",
+                BackendMsg::NoConnection,
             ),
         },
         CommandKind::Test => match sessions.get_mut(&session_id) {
@@ -406,7 +420,7 @@ fn handle_command(
                 request_id,
                 session_id,
                 Operation::Test,
-                "нет соединения",
+                BackendMsg::NoConnection,
             ),
         },
         // UA-only push subscription configuration; DA keeps periodic polling.
@@ -425,32 +439,29 @@ fn send_error(
     request_id: u64,
     session: SessionId,
     operation: Operation,
-    message: impl Into<String>,
+    message: BackendMsg,
 ) {
     send(
         tx,
         Event {
             request_id,
             session,
-            kind: EventKind::Error {
-                operation,
-                message: message.into(),
-            },
+            kind: EventKind::Error { operation, message },
         },
     );
 }
 
 impl DaSession {
-    fn connect(endpoint: super::model::EndpointSpec) -> Result<Self, String> {
+    fn connect(endpoint: super::model::EndpointSpec) -> Result<Self, BackendMsg> {
         let prog_id = endpoint.address.trim();
         if prog_id.is_empty() {
-            return Err("не указан программный идентификатор сервера".to_string());
+            return Err(BackendMsg::DaProgIdMissing);
         }
         let clsid = resolve_server_clsid(&endpoint.host, prog_id)?;
         let unknown = create_instance(&clsid, &endpoint.host)?;
-        let server: IOPCServer = unknown
-            .cast()
-            .map_err(|e| format!("сервер не поддерживает IOPCServer: {e}"))?;
+        let server: IOPCServer = unknown.cast().map_err(|e| BackendMsg::DaNoOpcServer {
+            detail: e.to_string(),
+        })?;
         let browse: Option<IOPCBrowseServerAddressSpace> = unknown.cast().ok();
 
         let mut group_handle: u32 = 0;
@@ -472,16 +483,17 @@ impl DaSession {
                     &IOPCItemMgt::IID,
                     &raw mut group_unknown,
                 )
-                .map_err(|e| format!("ошибка создания группы на сервере: {e}"))?;
+                .map_err(|e| BackendMsg::DaGroupCreateFailed {
+                    detail: e.to_string(),
+                })?;
         }
-        let group_unknown =
-            group_unknown.ok_or_else(|| "сервер вернул пустую группу".to_string())?;
-        let item_mgt: IOPCItemMgt = group_unknown
-            .cast()
-            .map_err(|e| format!("группа не поддерживает IOPCItemMgt: {e}"))?;
-        let sync: IOPCSyncIO = group_unknown
-            .cast()
-            .map_err(|e| format!("группа не поддерживает IOPCSyncIO: {e}"))?;
+        let group_unknown = group_unknown.ok_or(BackendMsg::DaGroupEmpty)?;
+        let item_mgt: IOPCItemMgt = group_unknown.cast().map_err(|e| BackendMsg::DaNoItemMgt {
+            detail: e.to_string(),
+        })?;
+        let sync: IOPCSyncIO = group_unknown.cast().map_err(|e| BackendMsg::DaNoSyncIo {
+            detail: e.to_string(),
+        })?;
 
         let mut status_info = None;
         if let Ok(status) = unsafe { server.GetStatus() } {
@@ -537,7 +549,7 @@ impl DaSession {
         })
     }
 
-    fn add_items(&mut self, items: &[ItemSpec]) -> Vec<(ItemKey, Result<ItemInfo, String>)> {
+    fn add_items(&mut self, items: &[ItemSpec]) -> Vec<(ItemKey, Result<ItemInfo, BackendMsg>)> {
         if items.is_empty() {
             return Vec::new();
         }
@@ -571,7 +583,7 @@ impl DaSession {
             unsafe { free_errors(errors_ptr) };
             return items
                 .iter()
-                .map(|i| (i.key, Err(format!("AddItems: {e}"))))
+                .map(|i| (i.key, Err(BackendMsg::raw(format!("AddItems: {e}")))))
                 .collect();
         }
 
@@ -579,11 +591,11 @@ impl DaSession {
         for (idx, item) in items.iter().enumerate() {
             let err = unsafe { read_hresult(errors_ptr, idx) };
             if err.is_err() {
-                out.push((item.key, Err(self.error_text(err))));
+                out.push((item.key, Err(BackendMsg::Raw(self.error_text(err)))));
                 continue;
             }
             if results_ptr.is_null() {
-                out.push((item.key, Err("сервер вернул пустой результат".to_string())));
+                out.push((item.key, Err(BackendMsg::DaEmptyResult)));
                 continue;
             }
             let result = unsafe { &*results_ptr.add(idx) };
@@ -657,7 +669,7 @@ impl DaSession {
         if handles.is_empty() {
             return keys
                 .iter()
-                .map(|key| (*key, DataValue::bad("сигнал не подписан")))
+                .map(|key| (*key, DataValue::bad(BackendMsg::SignalNotSubscribed)))
                 .collect();
         }
 
@@ -673,7 +685,7 @@ impl DaSession {
             )
         };
         if let Err(e) = call {
-            let message = self.error_text(e.code());
+            let message = BackendMsg::Raw(self.error_text(e.code()));
             return resolved
                 .iter()
                 .map(|key| (*key, DataValue::bad(message.clone())))
@@ -684,7 +696,7 @@ impl DaSession {
         let mut handle_idx = 0usize;
         for key in &resolved {
             if !self.items.contains_key(key) {
-                out.push((*key, DataValue::bad("сигнал не подписан")));
+                out.push((*key, DataValue::bad(BackendMsg::SignalNotSubscribed)));
                 continue;
             }
             let err = unsafe { read_hresult(errors, handle_idx) };
@@ -695,7 +707,7 @@ impl DaSession {
                     let state = unsafe { &mut *states.add(handle_idx) };
                     clear_variant(&mut state.vDataValue);
                 }
-                out.push((*key, DataValue::bad(self.error_text(err))));
+                out.push((*key, DataValue::bad(BackendMsg::Raw(self.error_text(err)))));
                 handle_idx += 1;
                 continue;
             }
@@ -708,6 +720,7 @@ impl DaSession {
                     value,
                     quality: Quality::from_da(state.wQuality),
                     timestamp: filetime_to_utc(state.ftTimeStamp),
+                    reason: None,
                 },
             ));
             handle_idx += 1;
@@ -722,11 +735,11 @@ impl DaSession {
         out
     }
 
-    fn write(&mut self, request: super::model::WriteRequest) -> Result<(), String> {
+    fn write(&mut self, request: super::model::WriteRequest) -> Result<(), BackendMsg> {
         let slot = self
             .items
             .get(&request.key)
-            .ok_or_else(|| "сигнал не подписан".to_string())?;
+            .ok_or(BackendMsg::SignalNotSubscribed)?;
         let mut variant = variant_from_value(&request.value, request.type_hint)?;
         let handles = [slot.server_handle];
         let mut errors: *mut HRESULT = std::ptr::null_mut();
@@ -739,11 +752,11 @@ impl DaSession {
             )
         };
         let result = match call {
-            Err(e) => Err(self.error_text(e.code())),
+            Err(e) => Err(BackendMsg::Raw(self.error_text(e.code()))),
             Ok(()) => {
                 let err = unsafe { read_hresult(errors, 0) };
                 if err.is_err() {
-                    Err(self.error_text(err))
+                    Err(BackendMsg::Raw(self.error_text(err)))
                 } else {
                     Ok(())
                 }
@@ -754,16 +767,15 @@ impl DaSession {
         result
     }
 
-    fn browse(&mut self, node_id: &str) -> Result<Vec<BrowseNode>, String> {
-        let browse = self
-            .browse
-            .as_ref()
-            .ok_or_else(|| "сервер не поддерживает обзор адресного пространства".to_string())?;
+    fn browse(&mut self, node_id: &str) -> Result<Vec<BrowseNode>, BackendMsg> {
+        let browse = self.browse.as_ref().ok_or(BackendMsg::DaNoBrowse)?;
         let empty = wide("");
         unsafe {
             browse
                 .ChangeBrowsePosition(OPC_BROWSE_TO, PCWSTR(empty.as_ptr()))
-                .map_err(|e| format!("не удалось перейти в корень: {e}"))?;
+                .map_err(|e| BackendMsg::DaBrowseRootFailed {
+                    detail: e.to_string(),
+                })?;
         }
 
         let path: Vec<&str> = if node_id.is_empty() {
@@ -776,12 +788,17 @@ impl DaSession {
             unsafe {
                 browse
                     .ChangeBrowsePosition(OPC_BROWSE_DOWN, PCWSTR(segment_w.as_ptr()))
-                    .map_err(|e| format!("не удалось открыть ветку \"{segment}\": {e}"))?;
+                    .map_err(|e| BackendMsg::DaBrowseBranchFailed {
+                        segment: (*segment).to_string(),
+                        detail: e.to_string(),
+                    })?;
             }
         }
 
-        let organization: tagOPCNAMESPACETYPE = unsafe { browse.QueryOrganization() }
-            .map_err(|e| format!("не удалось определить организацию пространства имён: {e}"))?;
+        let organization: tagOPCNAMESPACETYPE =
+            unsafe { browse.QueryOrganization() }.map_err(|e| BackendMsg::DaNamespaceFailed {
+                detail: e.to_string(),
+            })?;
 
         let mut nodes = Vec::new();
         let mut seen = std::collections::HashSet::new();
@@ -838,11 +855,12 @@ impl DaSession {
         Ok(nodes)
     }
 
-    fn test(&mut self) -> Result<String, String> {
-        let status =
-            unsafe { self.server.GetStatus() }.map_err(|e| format!("нет связи с сервером: {e}"))?;
+    fn test(&mut self) -> Result<BackendMsg, BackendMsg> {
+        let status = unsafe { self.server.GetStatus() }.map_err(|e| BackendMsg::DaLinkLost {
+            detail: e.to_string(),
+        })?;
         if status.is_null() {
-            return Err("сервер не вернул состояние".to_string());
+            return Err(BackendMsg::DaNoState);
         }
         // SAFETY: `status` is a non-null block returned by GetStatus; the state is
         // copied before it and the vendor string are freed with CoTaskMemFree.
@@ -878,21 +896,21 @@ impl DaSession {
         message
     }
 
-    fn shutdown(&self) -> String {
+    fn shutdown(&self) -> BackendMsg {
         unsafe {
             let _ = self.server.RemoveGroup(self.group_handle, true);
         }
-        "соединение закрыто".to_string()
+        BackendMsg::ConnectionClosed
     }
 }
 
 unsafe fn browse_enum(
     browse: &IOPCBrowseServerAddressSpace,
     filter: crate::opc::bindings::da::tagOPCBROWSETYPE,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, BackendMsg> {
     let empty = wide("");
     let enumerator = unsafe { browse.BrowseOPCItemIDs(filter, PCWSTR(empty.as_ptr()), 0, 0) }
-        .map_err(|e| format!("BrowseOPCItemIDs: {e}"))?;
+        .map_err(|e| BackendMsg::raw(format!("BrowseOPCItemIDs: {e}")))?;
     let mut out = Vec::new();
     loop {
         let mut buffer: [PWSTR; 32] = [PWSTR::null(); 32];
@@ -919,12 +937,14 @@ unsafe fn browse_enum(
     Ok(out)
 }
 
-fn enumerate_servers(host: &str) -> Result<Vec<ServerEntry>, String> {
+fn enumerate_servers(host: &str) -> Result<Vec<ServerEntry>, BackendMsg> {
     let unknown = create_instance(&CLSID_SERVER_LIST, host)
-        .map_err(|e| format!("не удалось получить список OPC серверов: {e}"))?;
+        .map_err(|e| BackendMsg::DaServerListFailed { cause: Box::new(e) })?;
     let list: IOPCServerList = unknown
         .cast()
-        .map_err(|e| format!("OPC Server List недоступен: {e}"))?;
+        .map_err(|e| BackendMsg::DaServerListUnavailable {
+            detail: e.to_string(),
+        })?;
 
     let mut found: Vec<ServerEntry> = Vec::new();
     for catid in [
@@ -958,7 +978,7 @@ fn enumerate_servers(host: &str) -> Result<Vec<ServerEntry>, String> {
 
     found.sort_by(|a, b| a.id.to_lowercase().cmp(&b.id.to_lowercase()));
     if found.is_empty() {
-        Err("OPC серверы не найдены".to_string())
+        Err(BackendMsg::DaServersNotFound)
     } else {
         Ok(found)
     }
@@ -1006,12 +1026,12 @@ fn class_details(list: &IOPCServerList, clsid: &GUID) -> Option<ServerEntry> {
     })
 }
 
-fn create_instance(clsid: &GUID, host: &str) -> Result<IUnknown, String> {
+fn create_instance(clsid: &GUID, host: &str) -> Result<IUnknown, BackendMsg> {
     let host = host.trim();
     if is_local_host(host) {
         return unsafe {
             CoCreateInstance(clsid, None::<&IUnknown>, CLSCTX_SERVER)
-                .map_err(|e| format!("CoCreateInstance: {e}"))
+                .map_err(|e| BackendMsg::raw(format!("CoCreateInstance: {e}")))
         };
     }
 
@@ -1035,15 +1055,17 @@ fn create_instance(clsid: &GUID, host: &str) -> Result<IUnknown, String> {
             Some(&server_info),
             &mut results,
         )
-        .map_err(|e| format!("CoCreateInstanceEx({host}): {e}"))?;
+        .map_err(|e| BackendMsg::raw(format!("CoCreateInstanceEx({host}): {e}")))?;
         if results[0].hr.is_err() {
-            return Err(format!(
+            return Err(BackendMsg::raw(format!(
                 "CoCreateInstanceEx({host}): 0x{:08X}",
                 results[0].hr.0 as u32
-            ));
+            )));
         }
         let result = ManuallyDrop::take(&mut results[0].pItf);
-        result.ok_or_else(|| format!("сервер {host} вернул пустой интерфейс"))
+        result.ok_or_else(|| BackendMsg::DaEmptyInterface {
+            host: host.to_string(),
+        })
     }
 }
 
@@ -1062,36 +1084,48 @@ fn remember_discovered(host: &str, prog_id: &str, clsid: &GUID) {
 }
 
 /// `CLSIDFromProgID` against the local registry.
-fn clsid_from_local_registry(prog_id: &str) -> Result<GUID, String> {
+fn clsid_from_local_registry(prog_id: &str) -> Result<GUID, BackendMsg> {
     let wide_id = wide(prog_id);
     // SAFETY: `wide_id` is a NUL-terminated UTF-16 buffer that outlives the call.
-    unsafe { CLSIDFromProgID(PCWSTR(wide_id.as_ptr())) }
-        .map_err(|e| format!("не удалось получить идентификатор сервера \"{prog_id}\": {e}"))
+    unsafe { CLSIDFromProgID(PCWSTR(wide_id.as_ptr())) }.map_err(|e| {
+        BackendMsg::DaProgIdLookupFailed {
+            prog_id: prog_id.to_string(),
+            detail: e.to_string(),
+        }
+    })
 }
 
 /// Ask the OPCEnum of `host` for the CLSID of `prog_id` (`IOPCServerList`,
 /// then `IOPCServerList2` for enumerators that only expose the 2.0 interface).
-fn clsid_from_remote_opcenum(host: &str, prog_id: &str) -> Result<GUID, String> {
-    let unknown = create_instance(&CLSID_SERVER_LIST, host)
-        .map_err(|e| format!("OPCEnum на {host} недоступен: {e}"))?;
+fn clsid_from_remote_opcenum(host: &str, prog_id: &str) -> Result<GUID, BackendMsg> {
+    let unknown = create_instance(&CLSID_SERVER_LIST, host).map_err(|e| {
+        BackendMsg::DaOpcEnumUnavailable {
+            host: host.to_string(),
+            cause: Box::new(e),
+        }
+    })?;
     let wide_id = wide(prog_id);
     if let Ok(list) = unknown.cast::<IOPCServerList>() {
         // SAFETY: `wide_id` is a NUL-terminated UTF-16 buffer that outlives the call.
         return unsafe { list.CLSIDFromProgID(PCWSTR(wide_id.as_ptr())) }
-            .map_err(|e| format!("IOPCServerList::CLSIDFromProgID: {e}"));
+            .map_err(|e| BackendMsg::raw(format!("IOPCServerList::CLSIDFromProgID: {e}")));
     }
-    let list2: IOPCServerList2 = unknown
-        .cast()
-        .map_err(|e| format!("OPC Server List на {host} недоступен: {e}"))?;
+    let list2: IOPCServerList2 =
+        unknown
+            .cast()
+            .map_err(|e| BackendMsg::DaServerListHostUnavailable {
+                host: host.to_string(),
+                detail: e.to_string(),
+            })?;
     // SAFETY: as above.
     unsafe { list2.CLSIDFromProgID(PCWSTR(wide_id.as_ptr())) }
-        .map_err(|e| format!("IOPCServerList2::CLSIDFromProgID: {e}"))
+        .map_err(|e| BackendMsg::raw(format!("IOPCServerList2::CLSIDFromProgID: {e}")))
 }
 
 struct WinClsidLookup;
 
 impl ClsidLookup for WinClsidLookup {
-    fn remote_enum(&mut self, host: &str, prog_id: &str) -> Result<u128, String> {
+    fn remote_enum(&mut self, host: &str, prog_id: &str) -> Result<u128, BackendMsg> {
         clsid_from_remote_opcenum(host, prog_id).map(|guid| guid.to_u128())
     }
 
@@ -1102,14 +1136,14 @@ impl ClsidLookup for WinClsidLookup {
             .get(host, prog_id)
     }
 
-    fn local_registry(&mut self, prog_id: &str) -> Result<u128, String> {
+    fn local_registry(&mut self, prog_id: &str) -> Result<u128, BackendMsg> {
         clsid_from_local_registry(prog_id).map(|guid| guid.to_u128())
     }
 }
 
 /// CLSID of `prog_id` on `host`: the local registry for this computer, the
 /// remote OPCEnum (then discovery cache, then local registry) for another one.
-fn resolve_server_clsid(host: &str, prog_id: &str) -> Result<GUID, String> {
+fn resolve_server_clsid(host: &str, prog_id: &str) -> Result<GUID, BackendMsg> {
     resolve_clsid(host, prog_id, &mut WinClsidLookup).map(GUID::from_u128)
 }
 

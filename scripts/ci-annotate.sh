@@ -6,10 +6,16 @@
 title="$1"
 log="$2"
 clean="${log}.clean"
-tr -d '\r' < "$log" > "$clean"
-msg=$( {
-  grep -E -A6 "^error(\[E[0-9]+\])?:" "$clean" | head -80
+# Cargo colours its output in CI: drop CRs and ANSI escapes before matching.
+tr -d '\r' < "$log" | sed -e 's/\x1b\[[0-9;]*[A-Za-z]//g' > "$clean"
+picked=$( {
+  grep -E -A14 "^error(\[E[0-9]+\])?:" "$clean" | head -150
   grep -E "^test .* FAILED$" "$clean"
   grep -E -A25 "^---- .* stdout ----$" "$clean"
-} | head -300 | sed -e 's/%/%25/g' | awk 'BEGIN{ORS="%0A"} {print}')
+} )
+# Nothing recognisable (e.g. a linker or build-script failure): show the tail.
+if [ -z "$picked" ]; then
+  picked=$(tail -n 80 "$clean")
+fi
+msg=$(printf '%s\n' "$picked" | head -300 | sed -e 's/%/%25/g' | awk 'BEGIN{ORS="%0A"} {print}')
 echo "::error title=${title}::${msg}"

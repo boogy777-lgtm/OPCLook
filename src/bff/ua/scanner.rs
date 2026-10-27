@@ -176,7 +176,7 @@ pub(super) async fn run_scan_job(
     let client = match build_discovery_client() {
         Ok(client) => Arc::new(client),
         Err(message) => {
-            send_scan_finished(tx, scan_id, false, 0, Some(message));
+            send_scan_finished(tx, scan_id, false, 0, Some(message.to_string()));
             return;
         }
     };

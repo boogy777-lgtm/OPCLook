@@ -6,7 +6,7 @@ use crate::bff::model::{
     BrowseNode, Event, EventKind, ItemInfo, ItemKey, NodeKind, Operation, Protocol, Quality,
     QualityKind, RequestId, SessionId, SubscriptionState,
 };
-use crate::i18n::{Tr, fmt, tr};
+use crate::i18n::{Tr, backend_text, fmt, tr};
 use chrono::Utc;
 use std::time::{Duration, Instant};
 
@@ -278,6 +278,7 @@ impl App {
                 }
             }
             EventKind::Connected { endpoint, info } => {
+                let info = backend_text(lang, &info);
                 let is_ua = self
                     .sessions
                     .iter()
@@ -327,6 +328,7 @@ impl App {
                     match result {
                         Ok(info) => self.apply_item_info(key, info),
                         Err(message) => {
+                            let message = backend_text(lang, &message);
                             if let Some(row) =
                                 self.row_position(key).and_then(|p| self.rows.get_mut(p))
                             {
@@ -452,6 +454,11 @@ impl App {
                     if let Some(row) = self.row_position(key).and_then(|p| self.rows.get_mut(p)) {
                         row.value = value.value;
                         row.quality = value.quality;
+                        if let Some(reason) = &value.reason {
+                            // The backend's reason for a Bad value, in the
+                            // interface language.
+                            row.quality.text = backend_text(lang, reason);
+                        }
                         row.timestamp = value.timestamp;
                         row.pending = false;
                     }
@@ -486,6 +493,7 @@ impl App {
                         self.journal.info_l(Tr::WrittenValue, &[&name]);
                     }
                     Err(message) => {
+                        let message = backend_text(lang, &message);
                         self.write_err += 1;
                         self.journal.error_l(Tr::WriteFailed, &[&name, &message]);
                         self.dialogs.message = Some(MessageDialog {
@@ -498,6 +506,7 @@ impl App {
                 self.finish_write_batch_if_done();
             }
             EventKind::Disconnected { reason } => {
+                let reason = backend_text(lang, &reason);
                 self.cancel_add_children(session);
                 let mut lost: Option<String> = None;
                 if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
@@ -518,16 +527,10 @@ impl App {
                 }
             }
             EventKind::Log { message } => {
-                self.journal.info(message);
+                self.journal.info(backend_text(lang, &message));
             }
             EventKind::Error { operation, message } => {
-                // Security-resolution failures carry a stable technical detail
-                // marker; wrap them in the localized message while keeping the
-                // server detail. Other errors pass through unchanged.
-                let message = match crate::bff::ua::security_error_detail(&message) {
-                    Some(detail) => fmt(lang, Tr::SecurityResolveFailed, &[&detail]),
-                    None => message,
-                };
+                let message = backend_text(lang, &message);
                 self.journal
                     .error_l(Tr::ErrorOp, &[&operation_label(lang, operation), &message]);
                 match operation {

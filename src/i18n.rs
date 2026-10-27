@@ -6,6 +6,7 @@
 //! variant must appear in each dictionary (RU/EN/ZH). A unit test walks
 //! `Tr::ALL` to assert every variant yields non-empty text in all languages.
 
+use crate::bff::model::{BackendMsg, UaProtection};
 use serde::{Deserialize, Serialize};
 
 /// The three supported UI languages. Russian is the default.
@@ -293,6 +294,16 @@ pub enum Tr {
     UaHostHint,
     /// UA-only placeholder for the port field (empty defaults to 4840).
     UaPortHint,
+    /// Label of the optional "LDS host" field of the UA search.
+    LdsHostLabel,
+    /// Placeholder of the LDS host field.
+    LdsHostHint,
+    /// Tooltip of the LDS host field.
+    LdsHostTip,
+    /// The LDS host text is not a host name / address with an optional port.
+    LdsHostInvalid,
+    /// Journal line: the LDS/mDNS search also asks this LDS (`{0}` = host:port).
+    SearchingUaLds,
     UserLabel,
     PasswordLabel,
     UrlLabel,
@@ -318,6 +329,9 @@ pub enum Tr {
     /// Security resolution failed against the server (placeholder: detail).
     SecurityResolveFailed,
     TrustServerCertCheck,
+    /// Tooltip of the trust checkbox: what "trust" means (this session only,
+    /// validity period / host name / ApplicationUri are not checked).
+    TrustServerCertTip,
     IdentityLabel,
     IdentityAnonymous,
     IdentityUserName,
@@ -947,6 +961,15 @@ fn ru(key: Tr) -> &'static str {
         EmptySearchHint => "Пусто — поиск на этом компьютере и в локальной сети",
         UaHostHint => "адрес или пусто",
         UaPortHint => "порт (по умолчанию 4840)",
+        LdsHostLabel => "LDS-хост",
+        LdsHostHint => "необязательно, хост[:порт]",
+        LdsHostTip => {
+            "Сервер обнаружения (LDS), у которого «Поиск через LDS/mDNS» спрашивает список серверов. Порт по умолчанию 4840. Пусто — только этот компьютер и mDNS."
+        }
+        LdsHostInvalid => {
+            "LDS-хост: ожидается имя или адрес, при необходимости с портом (хост:порт)"
+        }
+        SearchingUaLds => "Поиск OPC UA серверов у LDS {0} (и mDNS)...",
         UserLabel => "Пользователь:",
         PasswordLabel => "Пароль:",
         UrlLabel => "URL:",
@@ -966,7 +989,10 @@ fn ru(key: Tr) -> &'static str {
         SecModeSignAndEncrypt => "Подпись и шифрование",
         SecurityInvalidCombination => "Недопустимое сочетание политики и режима безопасности: {0}",
         SecurityResolveFailed => "Не удалось выбрать точку безопасности: {0}",
-        TrustServerCertCheck => "Доверять сертификату сервера",
+        TrustServerCertCheck => "Доверять сертификату сервера (только на эту сессию)",
+        TrustServerCertTip => {
+            "Сертификат сервера принимается только на время этого подключения и не сохраняется навсегда. Срок действия сертификата, имя хоста и ApplicationUri не проверяются. Чтобы доверять серверу постоянно, импортируйте его сертификат в PKI-хранилище."
+        }
         IdentityLabel => "Идентичность:",
         IdentityAnonymous => "Анонимно",
         IdentityUserName => "Имя пользователя",
@@ -1514,6 +1540,15 @@ fn en(key: Tr) -> &'static str {
         EmptySearchHint => "Empty — search this computer and the local network",
         UaHostHint => "address or empty",
         UaPortHint => "port (defaults to 4840)",
+        LdsHostLabel => "LDS host",
+        LdsHostHint => "optional, host[:port]",
+        LdsHostTip => {
+            "Discovery server (LDS) that \"Search via LDS/mDNS\" asks for the server list. The port defaults to 4840. Empty: this computer and mDNS only."
+        }
+        LdsHostInvalid => {
+            "LDS host: expected a name or address, optionally with a port (host:port)"
+        }
+        SearchingUaLds => "Searching for OPC UA servers at LDS {0} (and mDNS)...",
         UserLabel => "User:",
         PasswordLabel => "Password:",
         UrlLabel => "URL:",
@@ -1533,7 +1568,10 @@ fn en(key: Tr) -> &'static str {
         SecModeSignAndEncrypt => "Sign and Encrypt",
         SecurityInvalidCombination => "Invalid security policy/mode combination: {0}",
         SecurityResolveFailed => "Could not select a security endpoint: {0}",
-        TrustServerCertCheck => "Trust server certificate",
+        TrustServerCertCheck => "Trust the server certificate (this session only)",
+        TrustServerCertTip => {
+            "The server certificate is accepted only for the duration of this connection and is not kept permanently. The certificate's validity period, host name and ApplicationUri are not checked. To trust the server permanently, import its certificate into the PKI store."
+        }
         IdentityLabel => "Identity:",
         IdentityAnonymous => "Anonymous",
         IdentityUserName => "User name",
@@ -2065,6 +2103,13 @@ fn zh(key: Tr) -> &'static str {
         EmptySearchHint => "留空 — 搜索此计算机和本地网络",
         UaHostHint => "地址或留空",
         UaPortHint => "端口（默认 4840）",
+        LdsHostLabel => "LDS 主机",
+        LdsHostHint => "可选，主机[:端口]",
+        LdsHostTip => {
+            "“通过 LDS/mDNS 搜索”向其查询服务器列表的发现服务器 (LDS)。端口默认为 4840。留空：仅查询本机和 mDNS。"
+        }
+        LdsHostInvalid => "LDS 主机：应为名称或地址，可带端口（主机:端口）",
+        SearchingUaLds => "正在向 LDS {0} 搜索 OPC UA 服务器（及 mDNS）...",
         UserLabel => "用户:",
         PasswordLabel => "密码:",
         UrlLabel => "URL:",
@@ -2084,7 +2129,10 @@ fn zh(key: Tr) -> &'static str {
         SecModeSignAndEncrypt => "签名并加密",
         SecurityInvalidCombination => "安全策略/模式组合无效: {0}",
         SecurityResolveFailed => "无法选择安全端点: {0}",
-        TrustServerCertCheck => "信任服务器证书",
+        TrustServerCertCheck => "信任服务器证书（仅本次会话）",
+        TrustServerCertTip => {
+            "仅在本次连接期间接受服务器证书，不会永久保存。不检查证书的有效期、主机名和 ApplicationUri。若要永久信任该服务器，请将其证书导入 PKI 存储。"
+        }
         IdentityLabel => "身份:",
         IdentityAnonymous => "匿名",
         IdentityUserName => "用户名",
@@ -2380,9 +2428,1069 @@ fn zh(key: Tr) -> &'static str {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Backend messages (`BackendMsg`)
+// ---------------------------------------------------------------------------
+
+/// Picks the wording of one language and formats it with the variant's fields
+/// (named arguments are captured from the surrounding bindings).
+macro_rules! l {
+    ($lang:expr, $ru:literal, $en:literal, $zh:literal) => {
+        match $lang {
+            Lang::Ru => format!($ru),
+            Lang::En => format!($en),
+            Lang::Zh => format!($zh),
+        }
+    };
+}
+
+fn protection_text(lang: Lang, protection: UaProtection) -> &'static str {
+    match (protection, lang) {
+        (UaProtection::None, Lang::Ru) => "без шифрования",
+        (UaProtection::None, Lang::En) => "not encrypted",
+        (UaProtection::None, Lang::Zh) => "未加密",
+        (UaProtection::Sign, Lang::Ru) => "только подпись, данные не шифруются",
+        (UaProtection::Sign, Lang::En) => "signed only, data is not encrypted",
+        (UaProtection::Sign, Lang::Zh) => "仅签名，数据未加密",
+        (UaProtection::SignAndEncrypt, Lang::Ru) => "подпись и шифрование",
+        (UaProtection::SignAndEncrypt, Lang::En) => "signed and encrypted",
+        (UaProtection::SignAndEncrypt, Lang::Zh) => "签名并加密",
+        (UaProtection::Unknown, Lang::Ru) => "режим защиты не определён",
+        (UaProtection::Unknown, Lang::En) => "protection mode is not defined",
+        (UaProtection::Unknown, Lang::Zh) => "保护模式未定义",
+    }
+}
+
+/// Renders a backend message in `lang`. Exhaustive: every variant carries all
+/// three wordings, so a new variant cannot ship without a translation.
+pub fn backend_text(lang: Lang, msg: &BackendMsg) -> String {
+    use BackendMsg as M;
+    match msg {
+        // ---- pass-through / composition ----
+        M::Raw(text) => text.clone(),
+        M::Context { context, cause } => {
+            format!("{context}: {}", backend_text(lang, cause))
+        }
+        M::Lines(lines) => lines
+            .iter()
+            .map(|line| backend_text(lang, line))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        // ---- session state ----
+        M::NoConnection => l!(lang, "нет соединения", "no connection", "未连接"),
+        M::SessionAlreadyConnected => l!(
+            lang,
+            "сессия уже подключена",
+            "the session is already connected",
+            "会话已连接"
+        ),
+        M::ConnectInProgress => l!(
+            lang,
+            "подключение уже выполняется",
+            "a connection attempt is already in progress",
+            "正在连接中"
+        ),
+        M::ConnectCancelled => l!(
+            lang,
+            "подключение отменено",
+            "connection cancelled",
+            "连接已取消"
+        ),
+        M::ConnectionClosed => l!(
+            lang,
+            "соединение закрыто",
+            "connection closed",
+            "连接已关闭"
+        ),
+        M::SessionClosedAfterTimeout => l!(
+            lang,
+            "сессия закрыта после таймаута запроса",
+            "the session was closed after a request timeout",
+            "请求超时后会话已关闭"
+        ),
+        M::RequestTimedOutSessionClosed => l!(
+            lang,
+            "таймаут запроса OPC UA: сессия закрыта",
+            "OPC UA request timed out: the session was closed",
+            "OPC UA 请求超时：会话已关闭"
+        ),
+        M::SignalNotSubscribed => l!(
+            lang,
+            "сигнал не подписан",
+            "the signal is not subscribed",
+            "信号未订阅"
+        ),
+        M::NodeNotSubscribed => l!(
+            lang,
+            "узел не подписан",
+            "the node is not subscribed",
+            "节点未订阅"
+        ),
+        M::ServerReturnedNoValue => l!(
+            lang,
+            "сервер не вернул значение",
+            "the server returned no value",
+            "服务器未返回值"
+        ),
+        M::ItemNoResult => l!(
+            lang,
+            "сервер не вернул результат для элемента",
+            "the server returned no result for the item",
+            "服务器未返回该项的结果"
+        ),
+        // ---- unsupported / routing ----
+        M::DaOnlyOnWindows => l!(
+            lang,
+            "OPC DA поддерживается только в Windows (COM)",
+            "OPC DA is supported on Windows only (COM)",
+            "OPC DA 仅在 Windows 上受支持（COM）"
+        ),
+        M::DaNoUaServerSearch => l!(
+            lang,
+            "поиск OPC UA серверов не поддерживается для OPC DA",
+            "searching for OPC UA servers is not supported for OPC DA",
+            "OPC DA 不支持搜索 OPC UA 服务器"
+        ),
+        M::DaNoUaNetworkSearch => l!(
+            lang,
+            "поиск OPC UA сети не поддерживается для OPC DA",
+            "the OPC UA network search is not supported for OPC DA",
+            "OPC DA 不支持 OPC UA 网络搜索"
+        ),
+        M::DaNoViews => l!(
+            lang,
+            "представления поддерживаются только для OPC UA",
+            "views are supported for OPC UA only",
+            "仅 OPC UA 支持视图"
+        ),
+        M::DaNoBrowsePath => l!(
+            lang,
+            "разрешение пути BrowsePath поддерживается только для OPC UA",
+            "resolving a BrowsePath is supported for OPC UA only",
+            "仅 OPC UA 支持解析 BrowsePath"
+        ),
+        M::UaNeedsServerUrl => l!(
+            lang,
+            "для OPC UA укажите URL сервера (opc.tcp://host:port)",
+            "for OPC UA enter the server URL (opc.tcp://host:port)",
+            "OPC UA 请输入服务器 URL (opc.tcp://host:port)"
+        ),
+        M::UaUrlScheme => l!(
+            lang,
+            "URL OPC UA должен начинаться с opc.tcp://",
+            "the OPC UA URL must start with opc.tcp://",
+            "OPC UA URL 必须以 opc.tcp:// 开头"
+        ),
+        M::UaRuntimeStartFailed { detail } => l!(
+            lang,
+            "не удалось запустить tokio runtime: {detail}",
+            "could not start the tokio runtime: {detail}",
+            "无法启动 tokio 运行时：{detail}"
+        ),
+        // ---- DA router ----
+        M::DaSessionThreadCrashed => l!(
+            lang,
+            "поток сессии OPC DA завершился аварийно",
+            "the OPC DA session thread terminated abnormally",
+            "OPC DA 会话线程异常终止"
+        ),
+        M::DaSessionThreadSpawnFailed { detail } => l!(
+            lang,
+            "не удалось создать поток сессии: {detail}",
+            "could not create the session thread: {detail}",
+            "无法创建会话线程：{detail}"
+        ),
+        M::DaTooManyDiscoveries => l!(
+            lang,
+            "слишком много одновременных запросов обнаружения, подождите",
+            "too many simultaneous discovery requests, please wait",
+            "同时进行的发现请求过多，请稍候"
+        ),
+        M::DaDiscoveryCrashed => l!(
+            lang,
+            "обнаружение серверов завершилось аварийно",
+            "server discovery terminated abnormally",
+            "服务器发现异常终止"
+        ),
+        M::DaDiscoverySpawnFailed { detail } => l!(
+            lang,
+            "не удалось создать поток обнаружения: {detail}",
+            "could not create the discovery thread: {detail}",
+            "无法创建发现线程：{detail}"
+        ),
+        M::DaDcomSecurityNotSet { detail } => l!(
+            lang,
+            "параметры безопасности DCOM не заданы (уже настроены процессом): {detail}",
+            "DCOM security was not set (already configured by the process): {detail}",
+            "未设置 DCOM 安全参数（进程已配置）：{detail}"
+        ),
+        // ---- DA connect / browse / test ----
+        M::DaProgIdMissing => l!(
+            lang,
+            "не указан программный идентификатор сервера",
+            "the server ProgID is not specified",
+            "未指定服务器 ProgID"
+        ),
+        M::DaNoOpcServer { detail } => l!(
+            lang,
+            "сервер не поддерживает IOPCServer: {detail}",
+            "the server does not support IOPCServer: {detail}",
+            "服务器不支持 IOPCServer：{detail}"
+        ),
+        M::DaGroupCreateFailed { detail } => l!(
+            lang,
+            "ошибка создания группы на сервере: {detail}",
+            "could not create a group on the server: {detail}",
+            "在服务器上创建组失败：{detail}"
+        ),
+        M::DaGroupEmpty => l!(
+            lang,
+            "сервер вернул пустую группу",
+            "the server returned an empty group",
+            "服务器返回了空组"
+        ),
+        M::DaNoItemMgt { detail } => l!(
+            lang,
+            "группа не поддерживает IOPCItemMgt: {detail}",
+            "the group does not support IOPCItemMgt: {detail}",
+            "组不支持 IOPCItemMgt：{detail}"
+        ),
+        M::DaNoSyncIo { detail } => l!(
+            lang,
+            "группа не поддерживает IOPCSyncIO: {detail}",
+            "the group does not support IOPCSyncIO: {detail}",
+            "组不支持 IOPCSyncIO：{detail}"
+        ),
+        M::DaEmptyResult => l!(
+            lang,
+            "сервер вернул пустой результат",
+            "the server returned an empty result",
+            "服务器返回了空结果"
+        ),
+        M::DaNoBrowse => l!(
+            lang,
+            "сервер не поддерживает обзор адресного пространства",
+            "the server does not support browsing the address space",
+            "服务器不支持浏览地址空间"
+        ),
+        M::DaBrowseRootFailed { detail } => l!(
+            lang,
+            "не удалось перейти в корень: {detail}",
+            "could not move to the root: {detail}",
+            "无法转到根节点：{detail}"
+        ),
+        M::DaBrowseBranchFailed { segment, detail } => l!(
+            lang,
+            "не удалось открыть ветку \"{segment}\": {detail}",
+            "could not open the branch \"{segment}\": {detail}",
+            "无法打开分支“{segment}”：{detail}"
+        ),
+        M::DaNamespaceFailed { detail } => l!(
+            lang,
+            "не удалось определить организацию пространства имён: {detail}",
+            "could not determine the namespace organization: {detail}",
+            "无法确定命名空间组织方式：{detail}"
+        ),
+        M::DaLinkLost { detail } => l!(
+            lang,
+            "нет связи с сервером: {detail}",
+            "no connection to the server: {detail}",
+            "与服务器失去联系：{detail}"
+        ),
+        M::DaNoState => l!(
+            lang,
+            "сервер не вернул состояние",
+            "the server returned no state",
+            "服务器未返回状态"
+        ),
+        M::DaServerListFailed { cause } => {
+            let detail = backend_text(lang, cause);
+            l!(
+                lang,
+                "не удалось получить список OPC серверов: {detail}",
+                "could not get the list of OPC servers: {detail}",
+                "无法获取 OPC 服务器列表：{detail}"
+            )
+        }
+        M::DaServerListUnavailable { detail } => l!(
+            lang,
+            "OPC Server List недоступен: {detail}",
+            "OPC Server List is unavailable: {detail}",
+            "OPC Server List 不可用：{detail}"
+        ),
+        M::DaServersNotFound => l!(
+            lang,
+            "OPC серверы не найдены",
+            "no OPC servers found",
+            "未找到 OPC 服务器"
+        ),
+        M::DaEmptyInterface { host } => l!(
+            lang,
+            "сервер {host} вернул пустой интерфейс",
+            "the server {host} returned an empty interface",
+            "服务器 {host} 返回了空接口"
+        ),
+        M::DaProgIdLookupFailed { prog_id, detail } => l!(
+            lang,
+            "не удалось получить идентификатор сервера \"{prog_id}\": {detail}",
+            "could not get the identifier of the server \"{prog_id}\": {detail}",
+            "无法获取服务器“{prog_id}”的标识符：{detail}"
+        ),
+        M::DaOpcEnumUnavailable { host, cause } => {
+            let detail = backend_text(lang, cause);
+            l!(
+                lang,
+                "OPCEnum на {host} недоступен: {detail}",
+                "OPCEnum on {host} is unavailable: {detail}",
+                "{host} 上的 OPCEnum 不可用：{detail}"
+            )
+        }
+        M::DaServerListHostUnavailable { host, detail } => l!(
+            lang,
+            "OPC Server List на {host} недоступен: {detail}",
+            "OPC Server List on {host} is unavailable: {detail}",
+            "{host} 上的 OPC Server List 不可用：{detail}"
+        ),
+        M::DaClsidResolveFailed {
+            prog_id,
+            host,
+            remote,
+            local,
+        } => {
+            let (remote, local) = (backend_text(lang, remote), backend_text(lang, local));
+            l!(
+                lang,
+                "не удалось получить идентификатор сервера \"{prog_id}\" на {host}: OPCEnum: {remote}; локальный реестр: {local}",
+                "could not get the identifier of the server \"{prog_id}\" on {host}: OPCEnum: {remote}; local registry: {local}",
+                "无法获取 {host} 上服务器“{prog_id}”的标识符：OPCEnum：{remote}；本地注册表：{local}"
+            )
+        }
+        M::DaStateOk => l!(
+            lang,
+            "связь с сервером в порядке (состояние RUNNING)",
+            "the server connection is fine (state RUNNING)",
+            "与服务器的连接正常（状态 RUNNING）"
+        ),
+        M::DaNotReady { name, state } => l!(
+            lang,
+            "сервер не готов к работе: состояние {name} ({state})",
+            "the server is not ready: state {name} ({state})",
+            "服务器未就绪：状态 {name} ({state})"
+        ),
+        M::DaUnknownState { state } => l!(
+            lang,
+            "сервер вернул неизвестное состояние ({state})",
+            "the server returned an unknown state ({state})",
+            "服务器返回了未知状态 ({state})"
+        ),
+        M::DaConnected {
+            group_handle,
+            update_rate_ms,
+            server,
+        } => {
+            let mut text = l!(
+                lang,
+                "подключено, группа #{group_handle}, период {update_rate_ms} мс",
+                "connected, group #{group_handle}, period {update_rate_ms} ms",
+                "已连接，组 #{group_handle}，周期 {update_rate_ms} 毫秒"
+            );
+            if let Some(status) = server {
+                let (major, minor, build, count) =
+                    (status.major, status.minor, status.build, status.group_count);
+                text.push_str(&l!(
+                    lang,
+                    ", версия сервера {major}.{minor}.{build}, групп на сервере: {count}",
+                    ", server version {major}.{minor}.{build}, groups on the server: {count}",
+                    "，服务器版本 {major}.{minor}.{build}，服务器上的组数：{count}"
+                ));
+                let vendor = status.vendor.trim();
+                if !vendor.is_empty() {
+                    text.push_str(", ");
+                    text.push_str(vendor);
+                }
+            }
+            text
+        }
+        // ---- DA value conversion ----
+        M::DaDateRequired => l!(
+            lang,
+            "для типа DATE требуется дата/время",
+            "the DATE type requires a date/time",
+            "DATE 类型需要日期/时间"
+        ),
+        M::DaBadDate => l!(lang, "некорректная дата", "invalid date", "日期无效"),
+        M::DaVtUnsupported { vt } => l!(
+            lang,
+            "запись типа VT {vt} не поддерживается",
+            "writing type VT {vt} is not supported",
+            "不支持写入 VT {vt} 类型"
+        ),
+        M::DaArrayCreateFailed { vt } => l!(
+            lang,
+            "не удалось создать массив VT {vt}",
+            "could not create an array of VT {vt}",
+            "无法创建 VT {vt} 数组"
+        ),
+        M::DaArrayVtUnsupported { vt } => l!(
+            lang,
+            "запись массива VT {vt} не поддерживается",
+            "writing an array of VT {vt} is not supported",
+            "不支持写入 VT {vt} 数组"
+        ),
+        M::DaArrayLockFailed { vt } => l!(
+            lang,
+            "не удалось заблокировать массив VT {vt}",
+            "could not lock the array of VT {vt}",
+            "无法锁定 VT {vt} 数组"
+        ),
+        M::DaArrayAccessFailed => l!(
+            lang,
+            "не удалось получить доступ к данным массива",
+            "could not access the array data",
+            "无法访问数组数据"
+        ),
+        M::DaNotInteger { value } => l!(
+            lang,
+            "значение \"{value}\" не является целым числом",
+            "the value \"{value}\" is not an integer",
+            "值“{value}”不是整数"
+        ),
+        M::DaNotUnsigned { value } => l!(
+            lang,
+            "значение \"{value}\" не является целым числом без знака",
+            "the value \"{value}\" is not an unsigned integer",
+            "值“{value}”不是无符号整数"
+        ),
+        M::DaNegativeValue { value } => l!(
+            lang,
+            "значение {value} отрицательное",
+            "the value {value} is negative",
+            "值 {value} 为负数"
+        ),
+        M::DaNotIntegerAny => l!(
+            lang,
+            "значение не приводится к целому",
+            "the value cannot be converted to an integer",
+            "值无法转换为整数"
+        ),
+        M::DaNotUnsignedAny => l!(
+            lang,
+            "значение не приводится к целому без знака",
+            "the value cannot be converted to an unsigned integer",
+            "值无法转换为无符号整数"
+        ),
+        M::DaNotNumberAny => l!(
+            lang,
+            "значение не приводится к числу",
+            "the value cannot be converted to a number",
+            "值无法转换为数字"
+        ),
+        // ---- UA value conversion ----
+        M::WriteMultiDim => l!(
+            lang,
+            "запись многомерных массивов не поддерживается; введите одномерный массив",
+            "writing multi-dimensional arrays is not supported; enter a one-dimensional array",
+            "不支持写入多维数组；请输入一维数组"
+        ),
+        M::WriteNodeIdInvalid { value } => l!(
+            lang,
+            "некорректный NodeId: \"{value}\"",
+            "invalid NodeId: \"{value}\"",
+            "NodeId 无效：“{value}”"
+        ),
+        M::WriteOtherType { value } => l!(
+            lang,
+            "нельзя записать значение типа Other: {value}",
+            "a value of type Other cannot be written: {value}",
+            "无法写入 Other 类型的值：{value}"
+        ),
+        M::WriteNotBoolean { value } => l!(
+            lang,
+            "значение \"{value}\" не является логическим для Boolean",
+            "the value \"{value}\" is not a Boolean",
+            "值“{value}”不是 Boolean 类型的逻辑值"
+        ),
+        M::WriteOutOfRange { value, ty } => l!(
+            lang,
+            "значение {value} вне диапазона {ty}",
+            "the value {value} is out of range for {ty}",
+            "值 {value} 超出 {ty} 的范围"
+        ),
+        M::WriteNotInteger { value, ty } => l!(
+            lang,
+            "значение \"{value}\" не является целым числом для {ty}",
+            "the value \"{value}\" is not an integer for {ty}",
+            "值“{value}”不是 {ty} 所需的整数"
+        ),
+        M::WriteNotUnsigned { value } => l!(
+            lang,
+            "значение {value} не является беззнаковым целым для UInt64",
+            "the value {value} is not an unsigned integer for UInt64",
+            "值 {value} 不是 UInt64 所需的无符号整数"
+        ),
+        M::WriteNotDateTime { value } => l!(
+            lang,
+            "значение \"{value}\" не является датой/временем для DateTime",
+            "the value \"{value}\" is not a date/time for DateTime",
+            "值“{value}”不是 DateTime 所需的日期/时间"
+        ),
+        M::WriteNotByteString { value } => l!(
+            lang,
+            "значение {value} не является байтовой строкой для ByteString",
+            "the value {value} is not a byte string for ByteString",
+            "值 {value} 不是 ByteString 所需的字节串"
+        ),
+        M::WriteNotText { value } => l!(
+            lang,
+            "значение {value} не является текстом для LocalizedText",
+            "the value {value} is not text for LocalizedText",
+            "值 {value} 不是 LocalizedText 所需的文本"
+        ),
+        M::WriteNotNodeId { value } => l!(
+            lang,
+            "значение {value} не является NodeId",
+            "the value {value} is not a NodeId",
+            "值 {value} 不是 NodeId"
+        ),
+        M::WriteNotQualifiedName { value } => l!(
+            lang,
+            "значение {value} не является QualifiedName",
+            "the value {value} is not a QualifiedName",
+            "值 {value} 不是 QualifiedName"
+        ),
+        M::WriteBadNsPrefix { value } => l!(
+            lang,
+            "некорректный префикс пространства имён в \"{value}\"",
+            "invalid namespace prefix in \"{value}\"",
+            "“{value}”中的命名空间前缀无效"
+        ),
+        M::WriteNotNumber { value, ty } => l!(
+            lang,
+            "значение \"{value}\" не является числом для {ty}",
+            "the value \"{value}\" is not a number for {ty}",
+            "值“{value}”不是 {ty} 所需的数字"
+        ),
+        M::WriteStructUnsupported { ty } => l!(
+            lang,
+            "запись типа {ty} (структурированных данных) не поддерживается",
+            "writing type {ty} (structured data) is not supported",
+            "不支持写入 {ty} 类型（结构化数据）"
+        ),
+        M::WriteTypeUnsupported { ty } => l!(
+            lang,
+            "запись типа {ty} не поддерживается",
+            "writing type {ty} is not supported",
+            "不支持写入 {ty} 类型"
+        ),
+        M::WriteArrayBuildFailed { detail } => l!(
+            lang,
+            "не удалось собрать массив: {detail}",
+            "could not build the array: {detail}",
+            "无法构建数组：{detail}"
+        ),
+        // ---- UA timeouts ----
+        M::TimeoutBrowse => l!(
+            lang,
+            "таймаут обзора OPC UA",
+            "OPC UA browse timed out",
+            "OPC UA 浏览超时"
+        ),
+        M::TimeoutBrowseNext => l!(
+            lang,
+            "таймаут продолжения обзора OPC UA",
+            "OPC UA browse continuation timed out",
+            "OPC UA 继续浏览超时"
+        ),
+        M::TimeoutViews => l!(
+            lang,
+            "таймаут обзора представлений OPC UA",
+            "OPC UA views browse timed out",
+            "OPC UA 视图浏览超时"
+        ),
+        M::TimeoutResolvePath => l!(
+            lang,
+            "таймаут разрешения пути OPC UA",
+            "OPC UA path resolution timed out",
+            "OPC UA 路径解析超时"
+        ),
+        M::TimeoutRead => l!(
+            lang,
+            "таймаут чтения OPC UA",
+            "OPC UA read timed out",
+            "OPC UA 读取超时"
+        ),
+        M::TimeoutWrite => l!(
+            lang,
+            "таймаут записи OPC UA",
+            "OPC UA write timed out",
+            "OPC UA 写入超时"
+        ),
+        M::TimeoutCreateSubscription => l!(
+            lang,
+            "таймаут создания подписки OPC UA",
+            "OPC UA subscription creation timed out",
+            "OPC UA 订阅创建超时"
+        ),
+        M::TimeoutPublishingInterval => l!(
+            lang,
+            "таймаут изменения интервала публикации",
+            "changing the publishing interval timed out",
+            "更改发布间隔超时"
+        ),
+        M::TimeoutDeadband => l!(
+            lang,
+            "таймаут изменения мёртвой зоны",
+            "changing the deadband timed out",
+            "更改死区超时"
+        ),
+        M::TimeoutMonitoredItems => l!(
+            lang,
+            "таймаут создания контролируемых элементов",
+            "creating monitored items timed out",
+            "创建监视项超时"
+        ),
+        M::TimeoutActivateSession => l!(
+            lang,
+            "таймаут активации OPC UA сессии",
+            "OPC UA session activation timed out",
+            "OPC UA 会话激活超时"
+        ),
+        M::TimeoutSearch => l!(
+            lang,
+            "таймаут поиска серверов",
+            "server search timed out",
+            "服务器搜索超时"
+        ),
+        M::TimeoutEndpoints { url } => l!(
+            lang,
+            "таймаут запроса точек безопасности у {url}",
+            "timed out requesting the security endpoints from {url}",
+            "向 {url} 请求安全端点超时"
+        ),
+        // ---- UA browse / path / read / write / test ----
+        M::NoViews => l!(
+            lang,
+            "сервер не имеет представлений (views)",
+            "the server has no views",
+            "服务器没有视图 (views)"
+        ),
+        M::BrowsePathRequired => l!(
+            lang,
+            "укажите путь обзора (BrowsePath)",
+            "enter a browse path (BrowsePath)",
+            "请输入浏览路径 (BrowsePath)"
+        ),
+        M::ResolvePathFailed { status } => l!(
+            lang,
+            "не удалось разрешить путь: {status}",
+            "could not resolve the path: {status}",
+            "无法解析路径：{status}"
+        ),
+        M::PathNotFound => l!(
+            lang,
+            "путь не найден: ни одного совпадения",
+            "path not found: no matches",
+            "未找到路径：没有匹配项"
+        ),
+        M::PathBadNsPrefix { part } => l!(
+            lang,
+            "некорректный префикс пространства имён в \"{part}\"",
+            "invalid namespace prefix in \"{part}\"",
+            "“{part}”中的命名空间前缀无效"
+        ),
+        M::PathEmptyName { part } => l!(
+            lang,
+            "пустое имя в пути \"{part}\"",
+            "empty name in the path \"{part}\"",
+            "路径“{part}”中的名称为空"
+        ),
+        M::PathEmpty => l!(
+            lang,
+            "путь обзора пуст",
+            "the browse path is empty",
+            "浏览路径为空"
+        ),
+        M::InvalidNodeId { value } => l!(
+            lang,
+            "некорректный NodeId: {value}",
+            "invalid NodeId: {value}",
+            "NodeId 无效：{value}"
+        ),
+        M::WriteRejected { status } => l!(
+            lang,
+            "сервер отклонил запись: {status}",
+            "the server rejected the write: {status}",
+            "服务器拒绝了写入：{status}"
+        ),
+        M::NoWriteResult => l!(
+            lang,
+            "сервер не вернул результат записи",
+            "the server returned no write result",
+            "服务器未返回写入结果"
+        ),
+        M::UaLinkOk => l!(
+            lang,
+            "связь с OPC UA сервером в порядке",
+            "the OPC UA server connection is fine",
+            "与 OPC UA 服务器的连接正常"
+        ),
+        M::UaBadStatus { status } => l!(
+            lang,
+            "сервер вернул статус {status}",
+            "the server returned status {status}",
+            "服务器返回状态 {status}"
+        ),
+        M::NoStatus => l!(
+            lang,
+            "сервер не вернул статус",
+            "the server returned no status",
+            "服务器未返回状态"
+        ),
+        // ---- UA subscription ----
+        M::AttributesReadFailed { cause } => {
+            let detail = backend_text(lang, cause);
+            l!(
+                lang,
+                "не удалось прочитать атрибуты узлов OPC UA, тип/доступ не определён: {detail}",
+                "could not read the OPC UA node attributes, type/access is unknown: {detail}",
+                "无法读取 OPC UA 节点属性，类型/访问权限未知：{detail}"
+            )
+        }
+        M::TypesUnresolved { count } => l!(
+            lang,
+            "не удалось определить тип {count} узлов OPC UA, запись выполняется с авто-типом",
+            "could not determine the type of {count} OPC UA nodes, writes use the automatic type",
+            "无法确定 {count} 个 OPC UA 节点的类型，写入将使用自动类型"
+        ),
+        M::SubscriptionNotCreated { cause } => {
+            let cause = backend_text(lang, cause);
+            l!(
+                lang,
+                "подписка не создана: {cause}",
+                "the subscription was not created: {cause}",
+                "未创建订阅：{cause}"
+            )
+        }
+        M::CreateSubscriptionFailed { detail } => l!(
+            lang,
+            "не удалось создать подписку OPC UA: {detail}",
+            "could not create the OPC UA subscription: {detail}",
+            "无法创建 OPC UA 订阅：{detail}"
+        ),
+        M::SubscriptionProblem { cause } => {
+            let cause = backend_text(lang, cause);
+            l!(
+                lang,
+                "подписка: {cause}",
+                "subscription: {cause}",
+                "订阅：{cause}"
+            )
+        }
+        M::ChangeIntervalFailed { detail } => l!(
+            lang,
+            "не удалось изменить интервал: {detail}",
+            "could not change the interval: {detail}",
+            "无法更改间隔：{detail}"
+        ),
+        M::ChangeDeadbandFailed { detail } => l!(
+            lang,
+            "не удалось изменить мёртвую зону: {detail}",
+            "could not change the deadband: {detail}",
+            "无法更改死区：{detail}"
+        ),
+        M::DeadbandRejected { count } => l!(
+            lang,
+            "сервер отклонил изменение мёртвой зоны для {count} элементов",
+            "the server rejected the deadband change for {count} items",
+            "服务器拒绝了 {count} 个项的死区更改"
+        ),
+        M::DeleteRejected { count } => l!(
+            lang,
+            "сервер отклонил удаление {count} элементов",
+            "the server rejected the removal of {count} items",
+            "服务器拒绝删除 {count} 个项"
+        ),
+        M::DeleteFailed { detail } => l!(
+            lang,
+            "не удалось удалить элементы: {detail}",
+            "could not remove the items: {detail}",
+            "无法删除项：{detail}"
+        ),
+        M::MonitorFailed { detail } => l!(
+            lang,
+            "не удалось контролировать элементы: {detail}",
+            "could not monitor the items: {detail}",
+            "无法监视项：{detail}"
+        ),
+        // ---- UA connect ----
+        M::UaCertUntrusted { url, detail, pki } => l!(
+            lang,
+            "сертификат сервера {url} не доверенный: {detail}\nВключите «Доверять сертификату сервера (только на эту сессию)» или импортируйте сертификат в PKI-хранилище: {pki}",
+            "the certificate of the server {url} is not trusted: {detail}\nEnable \"Trust the server certificate (this session only)\" or import the certificate into the PKI store: {pki}",
+            "服务器 {url} 的证书不受信任：{detail}\n请启用“信任服务器证书（仅本次会话）”，或将证书导入 PKI 存储：{pki}"
+        ),
+        M::UaConnectFailed { url, detail } => l!(
+            lang,
+            "не удалось подключиться к {url}: {detail}",
+            "could not connect to {url}: {detail}",
+            "无法连接到 {url}：{detail}"
+        ),
+        M::UaSessionClosedOnConnect { url } => l!(
+            lang,
+            "сервер {url} закрыл сессию при подключении",
+            "the server {url} closed the session while connecting",
+            "服务器 {url} 在连接时关闭了会话"
+        ),
+        M::UaCertLoginUnsupported => l!(
+            lang,
+            "выбранная точка безопасности не поддерживает вход по сертификату (Certificate)",
+            "the selected endpoint does not support certificate login (Certificate)",
+            "所选端点不支持证书登录 (Certificate)"
+        ),
+        M::UaClientCertMissing { cert, key } => l!(
+            lang,
+            "клиентский сертификат не найден в PKI ({cert}, {key}) — подключитесь один раз с обычным входом, чтобы сгенерировать его",
+            "the client certificate was not found in the PKI ({cert}, {key}) — connect once with an ordinary login to generate it",
+            "在 PKI 中未找到客户端证书 ({cert}, {key}) — 请先用普通登录连接一次以生成证书"
+        ),
+        M::UaClientCertLoadFailed { detail } => l!(
+            lang,
+            "не удалось загрузить клиентский сертификат для X509: {detail}",
+            "could not load the client certificate for X509: {detail}",
+            "无法加载 X509 客户端证书：{detail}"
+        ),
+        M::EndpointsFailed { url, detail } => l!(
+            lang,
+            "не удалось получить точки безопасности от {url}: {detail}",
+            "could not get the security endpoints from {url}: {detail}",
+            "无法从 {url} 获取安全端点：{detail}"
+        ),
+        M::SecurityResolveFailed { detail } => fmt(lang, Tr::SecurityResolveFailed, &[detail]),
+        M::UaConnected {
+            url,
+            policy,
+            mode,
+            protection,
+            secure_available,
+        } => {
+            let protection = protection_text(lang, *protection);
+            let mut text = l!(
+                lang,
+                "подключено к {url} [{policy} / {mode}] — {protection}",
+                "connected to {url} [{policy} / {mode}] — {protection}",
+                "已连接到 {url} [{policy} / {mode}] — {protection}"
+            );
+            if *secure_available {
+                text.push_str(match lang {
+                    Lang::Ru => {
+                        "; сервер предлагает защищённое соединение — выберите политику и режим вручную"
+                    }
+                    Lang::En => {
+                        "; the server offers a secure connection — choose the policy and mode manually"
+                    }
+                    Lang::Zh => "；服务器提供安全连接 — 请手动选择策略和模式",
+                });
+            }
+            text
+        }
+        M::CertParseFailed { detail } => l!(
+            lang,
+            "не удалось разобрать сертификат сервера: {detail}",
+            "could not parse the server certificate: {detail}",
+            "无法解析服务器证书：{detail}"
+        ),
+        M::FsCreateFailed { path, detail } => l!(
+            lang,
+            "не удалось создать {path}: {detail}",
+            "could not create {path}: {detail}",
+            "无法创建 {path}：{detail}"
+        ),
+        M::FsSaveFailed { path, detail } => l!(
+            lang,
+            "не удалось сохранить {path}: {detail}",
+            "could not save {path}: {detail}",
+            "无法保存 {path}：{detail}"
+        ),
+        M::FsWriteFailed { path, detail } => l!(
+            lang,
+            "не удалось записать {path}: {detail}",
+            "could not write {path}: {detail}",
+            "无法写入 {path}：{detail}"
+        ),
+        // ---- UA / LDS / mDNS discovery ----
+        M::HostRequired => l!(
+            lang,
+            "укажите адрес сервера (хост)",
+            "enter the server address (host)",
+            "请输入服务器地址（主机）"
+        ),
+        M::PortInvalid => l!(
+            lang,
+            "укажите корректный порт",
+            "enter a valid port",
+            "请输入有效的端口"
+        ),
+        M::ResolveAddressFailed { host, detail } => l!(
+            lang,
+            "не удалось разрешить адрес \"{host}\": {detail}",
+            "could not resolve the address \"{host}\": {detail}",
+            "无法解析地址“{host}”：{detail}"
+        ),
+        M::AddressNoIp { host } => l!(
+            lang,
+            "адрес \"{host}\" не дал ни одного IP-адреса",
+            "the address \"{host}\" gave no IP addresses",
+            "地址“{host}”未解析出任何 IP 地址"
+        ),
+        M::UaNoServers { failures } => {
+            let mut text = l!(
+                lang,
+                "OPC UA серверы не найдены",
+                "no OPC UA servers found",
+                "未找到 OPC UA 服务器"
+            );
+            if !failures.is_empty() {
+                let details = failures
+                    .iter()
+                    .map(|failure| backend_text(lang, failure))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                text.push_str(": ");
+                text.push_str(&details);
+            }
+            text
+        }
+        M::AtUrl { url, cause } => format!("{url}: {}", backend_text(lang, cause)),
+        M::ServersNotFoundShort => l!(
+            lang,
+            "серверы не найдены",
+            "no servers found",
+            "未找到服务器"
+        ),
+        M::SearchRejected { detail } => l!(
+            lang,
+            "запрос поиска отклонён: {detail}",
+            "the search request was rejected: {detail}",
+            "搜索请求被拒绝：{detail}"
+        ),
+        M::LdsTimeout { url } => l!(
+            lang,
+            "LDS {url}: нет ответа (таймаут)",
+            "LDS {url}: no response (timeout)",
+            "LDS {url}：无响应（超时）"
+        ),
+        M::LdsFailed { url, detail } => l!(
+            lang,
+            "LDS {url}: {detail}",
+            "LDS {url}: {detail}",
+            "LDS {url}：{detail}"
+        ),
+        M::LdsSearchTimedOut => l!(
+            lang,
+            "LDS: поиск прерван по таймауту",
+            "LDS: the search was interrupted by a timeout",
+            "LDS：搜索因超时而中断"
+        ),
+        M::LdsUnavailable { cause } => {
+            let detail = backend_text(lang, cause);
+            l!(
+                lang,
+                "LDS: поиск недоступен: {detail}",
+                "LDS: the search is unavailable: {detail}",
+                "LDS：搜索不可用：{detail}"
+            )
+        }
+        M::MdnsFailed { cause } => {
+            let detail = backend_text(lang, cause);
+            l!(
+                lang,
+                "mDNS: поиск не удался: {detail}",
+                "mDNS: the search failed: {detail}",
+                "mDNS：搜索失败：{detail}"
+            )
+        }
+        M::MdnsCrashed { detail } => l!(
+            lang,
+            "mDNS: поиск аварийно завершился: {detail}",
+            "mDNS: the search terminated abnormally: {detail}",
+            "mDNS：搜索异常终止：{detail}"
+        ),
+        M::MdnsNotInTime => l!(
+            lang,
+            "mDNS: поиск не завершился вовремя",
+            "mDNS: the search did not finish in time",
+            "mDNS：搜索未能按时完成"
+        ),
+        M::MdnsDiscarded => l!(
+            lang,
+            "mDNS: результаты отброшены, нет клиента OPC UA для проверки",
+            "mDNS: the results were discarded, there is no OPC UA client to verify them",
+            "mDNS：结果已丢弃，没有可用于验证的 OPC UA 客户端"
+        ),
+        M::MdnsNotSupported => l!(
+            lang,
+            "mDNS: поиск не поддерживается на этой платформе",
+            "mDNS: the search is not supported on this platform",
+            "mDNS：此平台不支持搜索"
+        ),
+        M::MdnsVerifyFailed { url, cause } => {
+            let detail = backend_text(lang, cause);
+            l!(
+                lang,
+                "mDNS {url}: проверка не удалась: {detail}",
+                "mDNS {url}: verification failed: {detail}",
+                "mDNS {url}：验证失败：{detail}"
+            )
+        }
+        M::MdnsVerifyTimeout { url } => l!(
+            lang,
+            "mDNS {url}: проверка не уложилась во время",
+            "mDNS {url}: verification did not finish in time",
+            "mDNS {url}：验证未能按时完成"
+        ),
+        M::MdnsApiUnavailable { function } => l!(
+            lang,
+            "Windows DNS-SD API ({function}) недоступен",
+            "the Windows DNS-SD API ({function}) is unavailable",
+            "Windows DNS-SD API ({function}) 不可用"
+        ),
+        M::MdnsCallFailed { function, code } => l!(
+            lang,
+            "{function} завершился с кодом {code}",
+            "{function} failed with code {code}",
+            "{function} 失败，代码 {code}"
+        ),
+        M::MdnsBrowseCancelFailed { code } => l!(
+            lang,
+            "mDNS: не удалось отменить обзор, код {code}",
+            "mDNS: cancelling the browse failed with code {code}",
+            "mDNS：取消浏览失败，代码 {code}"
+        ),
+        M::MdnsResolveStartFailed { instance, code } => l!(
+            lang,
+            "mDNS: не удалось начать разрешение {instance}, код {code}",
+            "mDNS: could not start resolving {instance}, code {code}",
+            "mDNS：无法开始解析 {instance}，代码 {code}"
+        ),
+        M::MdnsResolveCompleted { code } => l!(
+            lang,
+            "mDNS: разрешение завершилось с кодом {code}",
+            "mDNS: the resolution finished with code {code}",
+            "mDNS：解析完成，代码 {code}"
+        ),
+        M::MdnsResolveCancelFailed { code } => l!(
+            lang,
+            "mDNS: не удалось отменить разрешение, код {code}",
+            "mDNS: cancelling the resolution failed with code {code}",
+            "mDNS：取消解析失败，代码 {code}"
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bff::model::DaServerStatus;
 
     #[test]
     fn lang_serde_roundtrips() {
@@ -2396,6 +3504,735 @@ mod tests {
         assert_eq!(Lang::from_str("en"), Some(Lang::En));
         assert_eq!(Lang::from_str("zh"), Some(Lang::Zh));
         assert_eq!(Lang::from_str("xx"), None);
+    }
+
+    /// One instance of every `BackendMsg` variant with the markers that its
+    /// text must contain (a substitution dropped from a language is a bug).
+    fn backend_samples() -> Vec<(BackendMsg, Vec<&'static str>)> {
+        vec![
+            (BackendMsg::Raw("§v§".to_string()), vec!["§v§"]),
+            (
+                BackendMsg::Context {
+                    context: "§context§".to_string(),
+                    cause: Box::new(BackendMsg::raw("§cause§")),
+                },
+                vec!["§context§", "§cause§"],
+            ),
+            (BackendMsg::Lines(vec![BackendMsg::raw("§v§")]), vec!["§v§"]),
+            (BackendMsg::NoConnection, vec![]),
+            (BackendMsg::SessionAlreadyConnected, vec![]),
+            (BackendMsg::ConnectInProgress, vec![]),
+            (BackendMsg::ConnectCancelled, vec![]),
+            (BackendMsg::ConnectionClosed, vec![]),
+            (BackendMsg::SessionClosedAfterTimeout, vec![]),
+            (BackendMsg::RequestTimedOutSessionClosed, vec![]),
+            (BackendMsg::SignalNotSubscribed, vec![]),
+            (BackendMsg::NodeNotSubscribed, vec![]),
+            (BackendMsg::ServerReturnedNoValue, vec![]),
+            (BackendMsg::ItemNoResult, vec![]),
+            (BackendMsg::DaOnlyOnWindows, vec![]),
+            (BackendMsg::DaNoUaServerSearch, vec![]),
+            (BackendMsg::DaNoUaNetworkSearch, vec![]),
+            (BackendMsg::DaNoViews, vec![]),
+            (BackendMsg::DaNoBrowsePath, vec![]),
+            (BackendMsg::UaNeedsServerUrl, vec![]),
+            (BackendMsg::UaUrlScheme, vec![]),
+            (
+                BackendMsg::UaRuntimeStartFailed {
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§detail§"],
+            ),
+            (BackendMsg::DaSessionThreadCrashed, vec![]),
+            (
+                BackendMsg::DaSessionThreadSpawnFailed {
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§detail§"],
+            ),
+            (BackendMsg::DaTooManyDiscoveries, vec![]),
+            (BackendMsg::DaDiscoveryCrashed, vec![]),
+            (
+                BackendMsg::DaDiscoverySpawnFailed {
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§detail§"],
+            ),
+            (
+                BackendMsg::DaDcomSecurityNotSet {
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§detail§"],
+            ),
+            (BackendMsg::DaProgIdMissing, vec![]),
+            (
+                BackendMsg::DaNoOpcServer {
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§detail§"],
+            ),
+            (
+                BackendMsg::DaGroupCreateFailed {
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§detail§"],
+            ),
+            (BackendMsg::DaGroupEmpty, vec![]),
+            (
+                BackendMsg::DaNoItemMgt {
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§detail§"],
+            ),
+            (
+                BackendMsg::DaNoSyncIo {
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§detail§"],
+            ),
+            (BackendMsg::DaEmptyResult, vec![]),
+            (BackendMsg::DaNoBrowse, vec![]),
+            (
+                BackendMsg::DaBrowseRootFailed {
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§detail§"],
+            ),
+            (
+                BackendMsg::DaBrowseBranchFailed {
+                    segment: "§segment§".to_string(),
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§segment§", "§detail§"],
+            ),
+            (
+                BackendMsg::DaNamespaceFailed {
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§detail§"],
+            ),
+            (
+                BackendMsg::DaLinkLost {
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§detail§"],
+            ),
+            (BackendMsg::DaNoState, vec![]),
+            (
+                BackendMsg::DaServerListFailed {
+                    cause: Box::new(BackendMsg::raw("§cause§")),
+                },
+                vec!["§cause§"],
+            ),
+            (
+                BackendMsg::DaServerListUnavailable {
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§detail§"],
+            ),
+            (BackendMsg::DaServersNotFound, vec![]),
+            (
+                BackendMsg::DaEmptyInterface {
+                    host: "§host§".to_string(),
+                },
+                vec!["§host§"],
+            ),
+            (
+                BackendMsg::DaProgIdLookupFailed {
+                    prog_id: "§prog_id§".to_string(),
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§prog_id§", "§detail§"],
+            ),
+            (
+                BackendMsg::DaOpcEnumUnavailable {
+                    host: "§host§".to_string(),
+                    cause: Box::new(BackendMsg::raw("§cause§")),
+                },
+                vec!["§host§", "§cause§"],
+            ),
+            (
+                BackendMsg::DaServerListHostUnavailable {
+                    host: "§host§".to_string(),
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§host§", "§detail§"],
+            ),
+            (
+                BackendMsg::DaClsidResolveFailed {
+                    prog_id: "§prog_id§".to_string(),
+                    host: "§host§".to_string(),
+                    remote: Box::new(BackendMsg::raw("§remote§")),
+                    local: Box::new(BackendMsg::raw("§local§")),
+                },
+                vec!["§prog_id§", "§host§", "§remote§", "§local§"],
+            ),
+            (BackendMsg::DaStateOk, vec![]),
+            (
+                BackendMsg::DaNotReady {
+                    name: "§name§".to_string(),
+                    state: 4242,
+                },
+                vec!["§name§", "4242"],
+            ),
+            (BackendMsg::DaUnknownState { state: 4242 }, vec!["4242"]),
+            (
+                BackendMsg::DaConnected {
+                    group_handle: 4242,
+                    update_rate_ms: 4242,
+                    server: Some(DaServerStatus {
+                        major: 7001,
+                        minor: 7002,
+                        build: 7003,
+                        group_count: 7004,
+                        vendor: "§vendor§".to_string(),
+                    }),
+                },
+                vec!["4242", "4242", "7001", "7002", "7003", "7004", "§vendor§"],
+            ),
+            (BackendMsg::DaDateRequired, vec![]),
+            (BackendMsg::DaBadDate, vec![]),
+            (BackendMsg::DaVtUnsupported { vt: 4242 }, vec!["4242"]),
+            (BackendMsg::DaArrayCreateFailed { vt: 4242 }, vec!["4242"]),
+            (BackendMsg::DaArrayVtUnsupported { vt: 4242 }, vec!["4242"]),
+            (BackendMsg::DaArrayLockFailed { vt: 4242 }, vec!["4242"]),
+            (BackendMsg::DaArrayAccessFailed, vec![]),
+            (
+                BackendMsg::DaNotInteger {
+                    value: "§value§".to_string(),
+                },
+                vec!["§value§"],
+            ),
+            (
+                BackendMsg::DaNotUnsigned {
+                    value: "§value§".to_string(),
+                },
+                vec!["§value§"],
+            ),
+            (
+                BackendMsg::DaNegativeValue {
+                    value: "§value§".to_string(),
+                },
+                vec!["§value§"],
+            ),
+            (BackendMsg::DaNotIntegerAny, vec![]),
+            (BackendMsg::DaNotUnsignedAny, vec![]),
+            (BackendMsg::DaNotNumberAny, vec![]),
+            (BackendMsg::WriteMultiDim, vec![]),
+            (
+                BackendMsg::WriteNodeIdInvalid {
+                    value: "§value§".to_string(),
+                },
+                vec!["§value§"],
+            ),
+            (
+                BackendMsg::WriteOtherType {
+                    value: "§value§".to_string(),
+                },
+                vec!["§value§"],
+            ),
+            (
+                BackendMsg::WriteNotBoolean {
+                    value: "§value§".to_string(),
+                },
+                vec!["§value§"],
+            ),
+            (
+                BackendMsg::WriteOutOfRange {
+                    value: "§value§".to_string(),
+                    ty: "§ty§".to_string(),
+                },
+                vec!["§value§", "§ty§"],
+            ),
+            (
+                BackendMsg::WriteNotInteger {
+                    value: "§value§".to_string(),
+                    ty: "§ty§".to_string(),
+                },
+                vec!["§value§", "§ty§"],
+            ),
+            (
+                BackendMsg::WriteNotUnsigned {
+                    value: "§value§".to_string(),
+                },
+                vec!["§value§"],
+            ),
+            (
+                BackendMsg::WriteNotDateTime {
+                    value: "§value§".to_string(),
+                },
+                vec!["§value§"],
+            ),
+            (
+                BackendMsg::WriteNotByteString {
+                    value: "§value§".to_string(),
+                },
+                vec!["§value§"],
+            ),
+            (
+                BackendMsg::WriteNotText {
+                    value: "§value§".to_string(),
+                },
+                vec!["§value§"],
+            ),
+            (
+                BackendMsg::WriteNotNodeId {
+                    value: "§value§".to_string(),
+                },
+                vec!["§value§"],
+            ),
+            (
+                BackendMsg::WriteNotQualifiedName {
+                    value: "§value§".to_string(),
+                },
+                vec!["§value§"],
+            ),
+            (
+                BackendMsg::WriteBadNsPrefix {
+                    value: "§value§".to_string(),
+                },
+                vec!["§value§"],
+            ),
+            (
+                BackendMsg::WriteNotNumber {
+                    value: "§value§".to_string(),
+                    ty: "§ty§".to_string(),
+                },
+                vec!["§value§", "§ty§"],
+            ),
+            (
+                BackendMsg::WriteStructUnsupported {
+                    ty: "§ty§".to_string(),
+                },
+                vec!["§ty§"],
+            ),
+            (
+                BackendMsg::WriteTypeUnsupported {
+                    ty: "§ty§".to_string(),
+                },
+                vec!["§ty§"],
+            ),
+            (
+                BackendMsg::WriteArrayBuildFailed {
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§detail§"],
+            ),
+            (BackendMsg::TimeoutBrowse, vec![]),
+            (BackendMsg::TimeoutBrowseNext, vec![]),
+            (BackendMsg::TimeoutViews, vec![]),
+            (BackendMsg::TimeoutResolvePath, vec![]),
+            (BackendMsg::TimeoutRead, vec![]),
+            (BackendMsg::TimeoutWrite, vec![]),
+            (BackendMsg::TimeoutCreateSubscription, vec![]),
+            (BackendMsg::TimeoutPublishingInterval, vec![]),
+            (BackendMsg::TimeoutDeadband, vec![]),
+            (BackendMsg::TimeoutMonitoredItems, vec![]),
+            (BackendMsg::TimeoutActivateSession, vec![]),
+            (BackendMsg::TimeoutSearch, vec![]),
+            (
+                BackendMsg::TimeoutEndpoints {
+                    url: "§url§".to_string(),
+                },
+                vec!["§url§"],
+            ),
+            (BackendMsg::NoViews, vec![]),
+            (BackendMsg::BrowsePathRequired, vec![]),
+            (
+                BackendMsg::ResolvePathFailed {
+                    status: "§status§".to_string(),
+                },
+                vec!["§status§"],
+            ),
+            (BackendMsg::PathNotFound, vec![]),
+            (
+                BackendMsg::PathBadNsPrefix {
+                    part: "§part§".to_string(),
+                },
+                vec!["§part§"],
+            ),
+            (
+                BackendMsg::PathEmptyName {
+                    part: "§part§".to_string(),
+                },
+                vec!["§part§"],
+            ),
+            (BackendMsg::PathEmpty, vec![]),
+            (
+                BackendMsg::InvalidNodeId {
+                    value: "§value§".to_string(),
+                },
+                vec!["§value§"],
+            ),
+            (
+                BackendMsg::WriteRejected {
+                    status: "§status§".to_string(),
+                },
+                vec!["§status§"],
+            ),
+            (BackendMsg::NoWriteResult, vec![]),
+            (BackendMsg::UaLinkOk, vec![]),
+            (
+                BackendMsg::UaBadStatus {
+                    status: "§status§".to_string(),
+                },
+                vec!["§status§"],
+            ),
+            (BackendMsg::NoStatus, vec![]),
+            (
+                BackendMsg::AttributesReadFailed {
+                    cause: Box::new(BackendMsg::raw("§cause§")),
+                },
+                vec!["§cause§"],
+            ),
+            (BackendMsg::TypesUnresolved { count: 4242 }, vec!["4242"]),
+            (
+                BackendMsg::SubscriptionNotCreated {
+                    cause: Box::new(BackendMsg::raw("§cause§")),
+                },
+                vec!["§cause§"],
+            ),
+            (
+                BackendMsg::CreateSubscriptionFailed {
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§detail§"],
+            ),
+            (
+                BackendMsg::SubscriptionProblem {
+                    cause: Box::new(BackendMsg::raw("§cause§")),
+                },
+                vec!["§cause§"],
+            ),
+            (
+                BackendMsg::ChangeIntervalFailed {
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§detail§"],
+            ),
+            (
+                BackendMsg::ChangeDeadbandFailed {
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§detail§"],
+            ),
+            (BackendMsg::DeadbandRejected { count: 4242 }, vec!["4242"]),
+            (BackendMsg::DeleteRejected { count: 4242 }, vec!["4242"]),
+            (
+                BackendMsg::DeleteFailed {
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§detail§"],
+            ),
+            (
+                BackendMsg::MonitorFailed {
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§detail§"],
+            ),
+            (
+                BackendMsg::UaCertUntrusted {
+                    url: "§url§".to_string(),
+                    detail: "§detail§".to_string(),
+                    pki: "§pki§".to_string(),
+                },
+                vec!["§url§", "§detail§", "§pki§"],
+            ),
+            (
+                BackendMsg::UaConnectFailed {
+                    url: "§url§".to_string(),
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§url§", "§detail§"],
+            ),
+            (
+                BackendMsg::UaSessionClosedOnConnect {
+                    url: "§url§".to_string(),
+                },
+                vec!["§url§"],
+            ),
+            (BackendMsg::UaCertLoginUnsupported, vec![]),
+            (
+                BackendMsg::UaClientCertMissing {
+                    cert: "§cert§".to_string(),
+                    key: "§key§".to_string(),
+                },
+                vec!["§cert§", "§key§"],
+            ),
+            (
+                BackendMsg::UaClientCertLoadFailed {
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§detail§"],
+            ),
+            (
+                BackendMsg::EndpointsFailed {
+                    url: "§url§".to_string(),
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§url§", "§detail§"],
+            ),
+            (
+                BackendMsg::SecurityResolveFailed {
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§detail§"],
+            ),
+            (
+                BackendMsg::UaConnected {
+                    url: "§url§".to_string(),
+                    policy: "§policy§".to_string(),
+                    mode: "§mode§".to_string(),
+                    protection: UaProtection::Sign,
+                    secure_available: true,
+                },
+                vec!["§url§", "§policy§", "§mode§"],
+            ),
+            (
+                BackendMsg::CertParseFailed {
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§detail§"],
+            ),
+            (
+                BackendMsg::FsCreateFailed {
+                    path: "§path§".to_string(),
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§path§", "§detail§"],
+            ),
+            (
+                BackendMsg::FsSaveFailed {
+                    path: "§path§".to_string(),
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§path§", "§detail§"],
+            ),
+            (
+                BackendMsg::FsWriteFailed {
+                    path: "§path§".to_string(),
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§path§", "§detail§"],
+            ),
+            (BackendMsg::HostRequired, vec![]),
+            (BackendMsg::PortInvalid, vec![]),
+            (
+                BackendMsg::ResolveAddressFailed {
+                    host: "§host§".to_string(),
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§host§", "§detail§"],
+            ),
+            (
+                BackendMsg::AddressNoIp {
+                    host: "§host§".to_string(),
+                },
+                vec!["§host§"],
+            ),
+            (
+                BackendMsg::UaNoServers {
+                    failures: vec![BackendMsg::raw("§failures§")],
+                },
+                vec!["§failures§"],
+            ),
+            (
+                BackendMsg::AtUrl {
+                    url: "§url§".to_string(),
+                    cause: Box::new(BackendMsg::raw("§cause§")),
+                },
+                vec!["§url§", "§cause§"],
+            ),
+            (BackendMsg::ServersNotFoundShort, vec![]),
+            (
+                BackendMsg::SearchRejected {
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§detail§"],
+            ),
+            (
+                BackendMsg::LdsTimeout {
+                    url: "§url§".to_string(),
+                },
+                vec!["§url§"],
+            ),
+            (
+                BackendMsg::LdsFailed {
+                    url: "§url§".to_string(),
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§url§", "§detail§"],
+            ),
+            (BackendMsg::LdsSearchTimedOut, vec![]),
+            (
+                BackendMsg::LdsUnavailable {
+                    cause: Box::new(BackendMsg::raw("§cause§")),
+                },
+                vec!["§cause§"],
+            ),
+            (
+                BackendMsg::MdnsFailed {
+                    cause: Box::new(BackendMsg::raw("§cause§")),
+                },
+                vec!["§cause§"],
+            ),
+            (
+                BackendMsg::MdnsCrashed {
+                    detail: "§detail§".to_string(),
+                },
+                vec!["§detail§"],
+            ),
+            (BackendMsg::MdnsNotInTime, vec![]),
+            (BackendMsg::MdnsDiscarded, vec![]),
+            (BackendMsg::MdnsNotSupported, vec![]),
+            (
+                BackendMsg::MdnsVerifyFailed {
+                    url: "§url§".to_string(),
+                    cause: Box::new(BackendMsg::raw("§cause§")),
+                },
+                vec!["§url§", "§cause§"],
+            ),
+            (
+                BackendMsg::MdnsVerifyTimeout {
+                    url: "§url§".to_string(),
+                },
+                vec!["§url§"],
+            ),
+            (
+                BackendMsg::MdnsApiUnavailable {
+                    function: "§function§".to_string(),
+                },
+                vec!["§function§"],
+            ),
+            (
+                BackendMsg::MdnsCallFailed {
+                    function: "§function§".to_string(),
+                    code: 4242,
+                },
+                vec!["§function§", "4242"],
+            ),
+            (
+                BackendMsg::MdnsBrowseCancelFailed { code: 4242 },
+                vec!["4242"],
+            ),
+            (
+                BackendMsg::MdnsResolveStartFailed {
+                    instance: "§instance§".to_string(),
+                    code: 4242,
+                },
+                vec!["§instance§", "4242"],
+            ),
+            (
+                BackendMsg::MdnsResolveCompleted { code: 4242 },
+                vec!["4242"],
+            ),
+            (
+                BackendMsg::MdnsResolveCancelFailed { code: 4242 },
+                vec!["4242"],
+            ),
+        ]
+    }
+
+    fn has_cyrillic(text: &str) -> bool {
+        text.chars().any(|c| matches!(c as u32, 0x0400..=0x052F))
+    }
+
+    #[test]
+    fn every_backend_message_is_localized_in_all_languages() {
+        for (msg, markers) in backend_samples() {
+            for lang in Lang::ALL {
+                let text = backend_text(lang, &msg);
+                assert!(
+                    !text.trim().is_empty(),
+                    "empty backend text for {msg:?} in {lang:?}"
+                );
+                for marker in &markers {
+                    assert!(
+                        text.contains(marker),
+                        "{lang:?}: the text of {msg:?} dropped the substitution {marker}: {text}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// U13: the trust checkbox says that trust lasts one session, the tooltip
+    /// says what is not checked, and the "untrusted certificate" error points at
+    /// the checkbox by its exact label — in every language.
+    #[test]
+    fn u13_trust_texts_say_session_only_and_what_is_not_checked() {
+        for lang in Lang::ALL {
+            let label = tr(lang, Tr::TrustServerCertCheck);
+            let tip = tr(lang, Tr::TrustServerCertTip);
+            let error = backend_text(
+                lang,
+                &BackendMsg::UaCertUntrusted {
+                    url: "opc.tcp://h:1".to_string(),
+                    detail: "d".to_string(),
+                    pki: "p".to_string(),
+                },
+            );
+            assert!(error.contains(label), "{lang:?}: {error}");
+            assert!(tip.contains("ApplicationUri"), "{lang:?}: {tip}");
+            assert!(tip.contains("PKI"), "{lang:?}: {tip}");
+        }
+        assert!(tr(Lang::Ru, Tr::TrustServerCertCheck).contains("только на эту сессию"));
+        assert!(tr(Lang::En, Tr::TrustServerCertCheck).contains("this session only"));
+        assert!(tr(Lang::Zh, Tr::TrustServerCertCheck).contains("仅本次会话"));
+        assert!(tr(Lang::Ru, Tr::TrustServerCertTip).contains("не сохраняется навсегда"));
+        assert!(tr(Lang::En, Tr::TrustServerCertTip).contains("not kept permanently"));
+        assert!(tr(Lang::Zh, Tr::TrustServerCertTip).contains("不会永久保存"));
+    }
+
+    #[test]
+    fn backend_messages_follow_the_interface_language() {
+        // English and Chinese carry no Russian wording (the substitutions of the
+        // samples are ASCII); Russian does (variants that are only a
+        // substitution are the pass-through ones).
+        for (msg, _) in backend_samples() {
+            let passthrough = matches!(
+                msg,
+                BackendMsg::Raw(_)
+                    | BackendMsg::Context { .. }
+                    | BackendMsg::Lines(_)
+                    | BackendMsg::LdsFailed { .. }
+                    | BackendMsg::AtUrl { .. }
+            );
+            for lang in [Lang::En, Lang::Zh] {
+                let text = backend_text(lang, &msg);
+                assert!(!has_cyrillic(&text), "{lang:?}: {msg:?} -> {text}");
+            }
+            if !passthrough {
+                let ru = backend_text(Lang::Ru, &msg);
+                assert!(has_cyrillic(&ru), "RU text of {msg:?} is not Russian: {ru}");
+            }
+            // Display is the English wording.
+            assert_eq!(msg.to_string(), backend_text(Lang::En, &msg));
+        }
+    }
+
+    #[test]
+    fn backend_samples_cover_every_variant() {
+        // The enum body is counted from the source so that a variant added
+        // without a sample (and so without the checks above) fails here.
+        let source = include_str!("bff/model.rs");
+        let start = source
+            .find("pub enum BackendMsg {")
+            .expect("BackendMsg is defined in model.rs");
+        let body = &source[start..];
+        let end = body.find("\n}\n").expect("end of the enum");
+        let variants = body[..end]
+            .lines()
+            .skip(1)
+            .filter(|line| {
+                line.starts_with("    ")
+                    && !line.starts_with("     ")
+                    && line
+                        .trim_start()
+                        .starts_with(|c: char| c.is_ascii_uppercase())
+            })
+            .count();
+        assert_eq!(backend_samples().len(), variants);
     }
 
     #[test]

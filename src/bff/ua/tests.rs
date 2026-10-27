@@ -5,16 +5,16 @@ use super::scanner::{merge_scan_batch, run_scan_job, scan_server_key, scan_targe
 use super::security::{
     SECURITY_MODE_AUTO, SECURITY_MODE_SIGN, SECURITY_MODE_SIGN_AND_ENCRYPT, SECURITY_POLICY_AUTO,
     SECURITY_POLICY_BASIC256_SHA256, SECURITY_POLICY_NONE, resolve_security, security_error,
-    security_error_detail,
 };
 use super::values::{data_change_filter, ua_type_name, value_to_ua_variant, variant_to_value};
 use super::worker::{CommandQueue, is_control_command};
 use crate::bff::model::{
-    Command, CommandKind, EndpointSpec, EventKind, Protocol, UaEndpointInfo, UaNetworkInfo,
-    UaSecurityMode, UaSecurityPolicy, UaServerInfo, Value, WriteRequest,
+    BackendMsg, Command, CommandKind, EndpointSpec, EventKind, Protocol, UaEndpointInfo,
+    UaNetworkInfo, UaSecurityMode, UaSecurityPolicy, UaServerInfo, Value, WriteRequest,
 };
 use crate::bff::net::NetworkBinding;
 use crate::constants::{DEFAULT_UA_PORT, SCAN_CONFIRM_THRESHOLD};
+use crate::i18n::{Lang, backend_text};
 use crate::net::SubnetSpec;
 use chrono::TimeZone;
 use opcua::types::VariantScalarTypeId as Vt;
@@ -668,13 +668,21 @@ fn concrete_mode_with_auto_policy_picks_first_matching() {
 }
 
 #[test]
-fn security_error_prefix_roundtrips_for_the_ui_wrapper() {
+fn security_error_keeps_the_detail_inside_the_localized_wrapper() {
     let message = security_error("policy Basic256 / mode Sign is not offered");
     assert_eq!(
-        security_error_detail(&message),
-        Some("policy Basic256 / mode Sign is not offered")
+        message,
+        BackendMsg::SecurityResolveFailed {
+            detail: "policy Basic256 / mode Sign is not offered".to_string()
+        }
     );
-    assert_eq!(security_error_detail("ordinary failure"), None);
+    for lang in Lang::ALL {
+        let text = backend_text(lang, &message);
+        assert!(
+            text.contains("policy Basic256 / mode Sign is not offered"),
+            "{lang}: {text}"
+        );
+    }
 }
 
 fn network_info(name: &str, uri: &str, urls: &[&str]) -> UaNetworkInfo {
@@ -1069,7 +1077,7 @@ fn x509_identity_requires_actual_advertised_certificate_token() {
         Err(message) => message,
         Ok(_) => panic!("a signed endpoint is not evidence of an X509 user-token policy"),
     };
-    assert!(err.contains("не поддерживает"), "unexpected error: {err}");
+    assert_eq!(err, BackendMsg::UaCertLoginUnsupported);
 }
 
 #[test]
@@ -1125,14 +1133,14 @@ fn rejected_items_come_back_as_errors_in_request_order() {
         writable,
     };
     let infos = HashMap::from([(7, info(true)), (3, info(false)), (9, info(true))]);
-    let rejected = HashMap::from([(3, "BadNodeIdUnknown (0x80340000)".to_string())]);
+    let rejected = HashMap::from([(3, BackendMsg::raw("BadNodeIdUnknown (0x80340000)"))]);
     let merged = merge_add_results(&items, infos, &rejected);
     let keys: Vec<_> = merged.iter().map(|(k, _)| *k).collect();
     assert_eq!(keys, [7, 3, 9]);
     assert!(merged[0].1.is_ok());
     assert_eq!(
         merged[1].1.as_ref().unwrap_err(),
-        "BadNodeIdUnknown (0x80340000)"
+        &BackendMsg::raw("BadNodeIdUnknown (0x80340000)")
     );
     assert!(merged[2].1.is_ok());
 }
@@ -1151,7 +1159,7 @@ fn create_results_are_paired_with_their_items_and_bad_statuses_are_failures() {
     assert!(matches!(outcomes[0], (10, Ok(11))));
     assert!(matches!(
         &outcomes[1],
-        (20, Err(failure)) if failure.text().starts_with("BadNodeIdUnknown")
+        (20, Err(failure)) if failure.text().to_string().starts_with("BadNodeIdUnknown")
     ));
     assert!(matches!(
         &outcomes[2],
@@ -1220,25 +1228,36 @@ fn aes_policies_resolve_to_their_wire_uris() {
 #[test]
 fn session_info_states_how_the_channel_is_protected() {
     use super::security::security_summary;
-    let none = security_summary("opc.tcp://h:4840", "None", MessageSecurityMode::None, false);
+    let ru = |message: BackendMsg| backend_text(Lang::Ru, &message);
+    let none = ru(security_summary(
+        "opc.tcp://h:4840",
+        "None",
+        MessageSecurityMode::None,
+        false,
+    ));
     assert!(none.contains("без шифрования"), "{none}");
     assert!(!none.contains("TLS"), "OPC UA is not TLS: {none}");
-    let sign = security_summary(
+    let sign = ru(security_summary(
         "opc.tcp://h:4840",
         "Basic256Sha256",
         MessageSecurityMode::Sign,
         false,
-    );
+    ));
     assert!(sign.contains("не шифруются"), "{sign}");
-    let full = security_summary(
+    let full = ru(security_summary(
         "opc.tcp://h:4840",
         "Basic256Sha256",
         MessageSecurityMode::SignAndEncrypt,
         false,
-    );
+    ));
     assert!(full.contains("подпись и шифрование"), "{full}");
     assert!(!full.contains("без шифрования"));
-    let hinted = security_summary("opc.tcp://h:4840", "None", MessageSecurityMode::None, true);
+    let hinted = ru(security_summary(
+        "opc.tcp://h:4840",
+        "None",
+        MessageSecurityMode::None,
+        true,
+    ));
     assert!(hinted.contains("предлагает защищённое"), "{hinted}");
 }
 

@@ -1,7 +1,7 @@
 use super::session::UaSession;
 use super::values::{parse_node, ua_data_value, value_to_ua_variant};
 use super::worker::timeout_drain;
-use crate::bff::model::{BrowseNode, DataValue, ItemKey, NodeKind, WriteRequest};
+use crate::bff::model::{BackendMsg, BrowseNode, DataValue, ItemKey, NodeKind, WriteRequest};
 use crate::constants::{
     BROWSE_MAX_REFERENCES_PER_NODE, IO_TIMEOUT, MAX_BROWSE_NODES, READ_MAX_ITEMS_PER_CALL,
 };
@@ -32,7 +32,7 @@ pub(super) async fn browse(
     node_id: &str,
     filter: Option<u8>,
     view_id: Option<String>,
-) -> Result<Vec<BrowseNode>, String> {
+) -> Result<Vec<BrowseNode>, BackendMsg> {
     let node = parse_node(node_id).unwrap_or_else(|| NodeId::from(ObjectId::RootFolder));
     let view = view_id
         .as_deref()
@@ -61,11 +61,11 @@ pub(super) async fn browse(
     .await;
     if timed_out {
         session.timed_out = true;
-        return Err("таймаут обзора OPC UA".to_string());
+        return Err(BackendMsg::TimeoutBrowse);
     }
     let mut results = browse_result
         .expect("request future completes unless it timed out")
-        .map_err(|e| format!("browse: {e}"))?;
+        .map_err(|e| BackendMsg::raw(format!("browse: {e}")))?;
 
     let mut nodes = Vec::new();
     let mut seen = HashSet::new();
@@ -137,11 +137,11 @@ pub(super) async fn browse(
             timeout_drain(session.session.browse_next(false, &points), IO_TIMEOUT).await;
         if next_timed_out {
             session.timed_out = true;
-            return Err("таймаут продолжения обзора OPC UA".to_string());
+            return Err(BackendMsg::TimeoutBrowseNext);
         }
         results = next_result
             .expect("request future completes unless it timed out")
-            .map_err(|e| format!("browse_next: {e}"))?;
+            .map_err(|e| BackendMsg::raw(format!("browse_next: {e}")))?;
     }
 
     Ok(nodes)
@@ -149,7 +149,7 @@ pub(super) async fn browse(
 
 /// Lists the server's Views by browsing the standard Views folder reference
 /// (`Root/Views`, ObjectId 84) and keeping only `NodeClass::View` references.
-pub(super) async fn browse_views(session: &mut UaSession) -> Result<Vec<BrowseNode>, String> {
+pub(super) async fn browse_views(session: &mut UaSession) -> Result<Vec<BrowseNode>, BackendMsg> {
     let views_node = NodeId::from(ObjectId::ViewsFolder);
     let description = BrowseDescription {
         node_id: views_node,
@@ -168,11 +168,11 @@ pub(super) async fn browse_views(session: &mut UaSession) -> Result<Vec<BrowseNo
     .await;
     if timed_out {
         session.timed_out = true;
-        return Err("таймаут обзора представлений OPC UA".to_string());
+        return Err(BackendMsg::TimeoutViews);
     }
     let results = views_result
         .expect("request future completes unless it timed out")
-        .map_err(|e| format!("browse views: {e}"))?;
+        .map_err(|e| BackendMsg::raw(format!("browse views: {e}")))?;
 
     let mut nodes = Vec::new();
     let mut seen = HashSet::new();
@@ -212,7 +212,7 @@ pub(super) async fn browse_views(session: &mut UaSession) -> Result<Vec<BrowseNo
     // Reject an empty result: a server with no Views should surface a clear
     // message instead of silently returning nothing.
     if nodes.is_empty() {
-        return Err("сервер не имеет представлений (views)".to_string());
+        return Err(BackendMsg::NoViews);
     }
     Ok(nodes)
 }
@@ -223,10 +223,10 @@ pub(super) async fn resolve_browse_path(
     session: &mut UaSession,
     start_node: Option<String>,
     path: &str,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, BackendMsg> {
     let path = path.trim();
     if path.is_empty() {
-        return Err("укажите путь обзора (BrowsePath)".to_string());
+        return Err(BackendMsg::BrowsePathRequired);
     }
     let starting_node = start_node
         .as_deref()
@@ -248,20 +248,22 @@ pub(super) async fn resolve_browse_path(
     .await;
     if timed_out {
         session.timed_out = true;
-        return Err("таймаут разрешения пути OPC UA".to_string());
+        return Err(BackendMsg::TimeoutResolvePath);
     }
     let results = path_result
         .expect("request future completes unless it timed out")
-        .map_err(|e| format!("translate browse path: {e}"))?;
+        .map_err(|e| BackendMsg::raw(format!("translate browse path: {e}")))?;
 
     let mut targets = Vec::new();
     for result in &results {
         if result.status_code.is_bad() {
-            return Err(format!(
-                "не удалось разрешить путь: {} (0x{:08X})",
-                result.status_code.to_string(),
-                result.status_code.bits()
-            ));
+            return Err(BackendMsg::ResolvePathFailed {
+                status: format!(
+                    "{} (0x{:08X})",
+                    result.status_code.to_string(),
+                    result.status_code.bits()
+                ),
+            });
         }
         for target in result.targets.iter().flatten() {
             let id = target.target_id.node_id.to_string();
@@ -271,7 +273,7 @@ pub(super) async fn resolve_browse_path(
         }
     }
     if targets.is_empty() {
-        return Err("путь не найден: ни одного совпадения".to_string());
+        return Err(BackendMsg::PathNotFound);
     }
     Ok(targets)
 }
@@ -279,7 +281,7 @@ pub(super) async fn resolve_browse_path(
 /// Parses a relative browse path string of the form "0:Objects/2:MyVar" into
 /// `RelativePathElement`s. Each element targets the `HierarchicalReferences`
 /// (including subtypes) browse name given by `namespace:name`.
-pub(super) fn parse_relative_path(path: &str) -> Result<Vec<RelativePathElement>, String> {
+pub(super) fn parse_relative_path(path: &str) -> Result<Vec<RelativePathElement>, BackendMsg> {
     let mut elements = Vec::new();
     for part in path.split('/') {
         let part = part.trim();
@@ -288,16 +290,17 @@ pub(super) fn parse_relative_path(path: &str) -> Result<Vec<RelativePathElement>
         }
         let (namespace_index, name) = match part.split_once(':') {
             Some((ns, name)) => {
-                let ns: u16 = ns
-                    .trim()
-                    .parse()
-                    .map_err(|_| format!("некорректный префикс пространства имён в \"{part}\""))?;
+                let ns: u16 = ns.trim().parse().map_err(|_| BackendMsg::PathBadNsPrefix {
+                    part: part.to_string(),
+                })?;
                 (ns, name.trim().to_string())
             }
             None => (0, part.to_string()),
         };
         if name.is_empty() {
-            return Err(format!("пустое имя в пути \"{part}\""));
+            return Err(BackendMsg::PathEmptyName {
+                part: part.to_string(),
+            });
         }
         elements.push(RelativePathElement {
             reference_type_id: ReferenceTypeId::HierarchicalReferences.into(),
@@ -307,7 +310,7 @@ pub(super) fn parse_relative_path(path: &str) -> Result<Vec<RelativePathElement>
         });
     }
     if elements.is_empty() {
-        return Err("путь обзора пуст".to_string());
+        return Err(BackendMsg::PathEmpty);
     }
     Ok(elements)
 }
@@ -324,18 +327,18 @@ pub(super) async fn read_values_chunked(
     requests: &[ReadValueId],
     timestamps: TimestampsToReturn,
     max_age: f64,
-) -> Result<Vec<UaDataValue>, String> {
+) -> Result<Vec<UaDataValue>, BackendMsg> {
     let mut values = Vec::with_capacity(requests.len());
     for chunk in requests.chunks(READ_MAX_ITEMS_PER_CALL.max(1)) {
         let (chunk_result, timed_out) =
             timeout_drain(session.session.read(chunk, timestamps, max_age), IO_TIMEOUT).await;
         if timed_out {
             session.timed_out = true;
-            return Err("таймаут чтения OPC UA".to_string());
+            return Err(BackendMsg::TimeoutRead);
         }
         match chunk_result.expect("request future completes unless it timed out") {
             Ok(mut chunk_values) => values.append(&mut chunk_values),
-            Err(e) => return Err(format!("{e}")),
+            Err(e) => return Err(BackendMsg::Raw(e.to_string())),
         }
     }
     Ok(values)
@@ -363,7 +366,7 @@ pub(super) async fn read(session: &mut UaSession, keys: &[ItemKey]) -> Vec<(Item
     if requests.is_empty() {
         return keys
             .iter()
-            .map(|key| (*key, DataValue::bad("узел не подписан")))
+            .map(|key| (*key, DataValue::bad(BackendMsg::NodeNotSubscribed)))
             .collect();
     }
 
@@ -375,9 +378,12 @@ pub(super) async fn read(session: &mut UaSession, keys: &[ItemKey]) -> Vec<(Item
                 .iter()
                 .map(|key| {
                     if index_of.contains_key(key) {
-                        (*key, DataValue::bad(format!("read: {message}")))
+                        (
+                            *key,
+                            DataValue::bad(BackendMsg::context("read", message.clone())),
+                        )
                     } else {
-                        (*key, DataValue::bad("узел не подписан"))
+                        (*key, DataValue::bad(BackendMsg::NodeNotSubscribed))
                     }
                 })
                 .collect();
@@ -387,11 +393,11 @@ pub(super) async fn read(session: &mut UaSession, keys: &[ItemKey]) -> Vec<(Item
     let mut out = Vec::with_capacity(keys.len());
     for key in keys {
         let Some(index) = index_of.get(key) else {
-            out.push((*key, DataValue::bad("узел не подписан")));
+            out.push((*key, DataValue::bad(BackendMsg::NodeNotSubscribed)));
             continue;
         };
         let Some(dv) = values.get(*index) else {
-            out.push((*key, DataValue::bad("сервер не вернул значение")));
+            out.push((*key, DataValue::bad(BackendMsg::ServerReturnedNoValue)));
             continue;
         };
         out.push((*key, ua_data_value(dv)));
@@ -399,13 +405,17 @@ pub(super) async fn read(session: &mut UaSession, keys: &[ItemKey]) -> Vec<(Item
     out
 }
 
-pub(super) async fn write(session: &mut UaSession, request: WriteRequest) -> Result<(), String> {
+pub(super) async fn write(
+    session: &mut UaSession,
+    request: WriteRequest,
+) -> Result<(), BackendMsg> {
     let node_text = session
         .items
         .get(&request.key)
-        .ok_or_else(|| "узел не подписан".to_string())?;
-    let node_id =
-        parse_node(node_text).ok_or_else(|| format!("некорректный NodeId: {node_text}"))?;
+        .ok_or(BackendMsg::NodeNotSubscribed)?;
+    let node_id = parse_node(node_text).ok_or_else(|| BackendMsg::InvalidNodeId {
+        value: node_text.to_string(),
+    })?;
     let data_type = session.node_types.get(&request.key).copied();
     let variant = value_to_ua_variant(&request.value, data_type)?;
     let value = UaDataValue {
@@ -426,23 +436,21 @@ pub(super) async fn write(session: &mut UaSession, request: WriteRequest) -> Res
         timeout_drain(session.session.write(&[write]), IO_TIMEOUT).await;
     if timed_out {
         session.timed_out = true;
-        return Err("таймаут записи OPC UA".to_string());
+        return Err(BackendMsg::TimeoutWrite);
     }
     let result = write_result
         .expect("request future completes unless it timed out")
-        .map_err(|e| format!("write: {e}"))?;
+        .map_err(|e| BackendMsg::raw(format!("write: {e}")))?;
     match result.first() {
-        Some(status) if status.is_bad() => Err(format!(
-            "сервер отклонил запись: {} (0x{:08X})",
-            status.to_string(),
-            status.bits()
-        )),
+        Some(status) if status.is_bad() => Err(BackendMsg::WriteRejected {
+            status: format!("{} (0x{:08X})", status.to_string(), status.bits()),
+        }),
         Some(_) => Ok(()),
-        None => Err("сервер не вернул результат записи".to_string()),
+        None => Err(BackendMsg::NoWriteResult),
     }
 }
 
-pub(super) async fn test(session: &mut UaSession) -> Result<String, String> {
+pub(super) async fn test(session: &mut UaSession) -> Result<BackendMsg, BackendMsg> {
     let node = NodeId::from(NodeId::new(0, 2256u32));
     let request = ReadValueId {
         node_id: node,
@@ -457,15 +465,12 @@ pub(super) async fn test(session: &mut UaSession) -> Result<String, String> {
         0.0,
     )
     .await
-    .map_err(|e| format!("test: {e}"))?;
+    .map_err(|e| BackendMsg::context("test", e))?;
     match result.first() {
-        Some(dv) if dv.status.map(|s| !s.is_bad()).unwrap_or(true) => {
-            Ok("связь с OPC UA сервером в порядке".to_string())
-        }
-        Some(dv) => Err(format!(
-            "сервер вернул статус {}",
-            dv.status.unwrap_or(StatusCode::Bad).to_string()
-        )),
-        None => Err("сервер не вернул статус".to_string()),
+        Some(dv) if dv.status.map(|s| !s.is_bad()).unwrap_or(true) => Ok(BackendMsg::UaLinkOk),
+        Some(dv) => Err(BackendMsg::UaBadStatus {
+            status: dv.status.unwrap_or(StatusCode::Bad).to_string(),
+        }),
+        None => Err(BackendMsg::NoStatus),
     }
 }
