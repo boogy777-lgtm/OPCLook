@@ -1,6 +1,8 @@
 use super::discovery::build_discovery_client;
 use super::io::read_values_chunked;
-use super::security::{resolve_security, security_error};
+use super::security::{
+    auto_chose_unprotected_over_secure, resolve_security, security_error, security_summary,
+};
 use super::values::{
     data_change_filter, parse_node, ua_access_current_write, ua_data_value, ua_type_name,
     ua_variant_scalar,
@@ -945,20 +947,18 @@ pub(super) async fn connect(
         (session, event_loop)
     };
 
-    let mode_text = format!("{mode:?}");
+    let secure_was_available = auto_chose_unprotected_over_secure(
+        endpoint.ua_security_policy.unwrap_or_default(),
+        endpoint.ua_security_mode.unwrap_or_default(),
+        mode,
+        &discovered,
+    );
     Ok(UaSession {
         session,
         event_loop,
         items: HashMap::new(),
         node_types: HashMap::new(),
-        info: format!(
-            "подключено к {url} [{policy_short} / {mode_text}]{}",
-            if mode == MessageSecurityMode::None {
-                ""
-            } else {
-                " (TLS)"
-            }
-        ),
+        info: security_summary(url, &policy_short, mode, secure_was_available),
         session_id,
         subscription_id: None,
         publishing_interval_ms: 0,

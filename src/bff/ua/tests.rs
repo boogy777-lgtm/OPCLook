@@ -1216,3 +1216,57 @@ fn aes_policies_resolve_to_their_wire_uris() {
     // endpoint".
     assert!(resolve_security(SECURITY_POLICY_AUTO, SECURITY_MODE_AUTO, &offered).is_ok());
 }
+
+#[test]
+fn session_info_states_how_the_channel_is_protected() {
+    use super::security::security_summary;
+    let none = security_summary("opc.tcp://h:4840", "None", MessageSecurityMode::None, false);
+    assert!(none.contains("без шифрования"), "{none}");
+    assert!(!none.contains("TLS"), "OPC UA is not TLS: {none}");
+    let sign = security_summary(
+        "opc.tcp://h:4840",
+        "Basic256Sha256",
+        MessageSecurityMode::Sign,
+        false,
+    );
+    assert!(sign.contains("не шифруются"), "{sign}");
+    let full = security_summary(
+        "opc.tcp://h:4840",
+        "Basic256Sha256",
+        MessageSecurityMode::SignAndEncrypt,
+        false,
+    );
+    assert!(full.contains("подпись и шифрование"), "{full}");
+    assert!(!full.contains("без шифрования"));
+    let hinted = security_summary("opc.tcp://h:4840", "None", MessageSecurityMode::None, true);
+    assert!(hinted.contains("предлагает защищённое"), "{hinted}");
+}
+
+#[test]
+fn auto_reports_when_it_chose_no_protection_over_a_secure_endpoint() {
+    use super::security::auto_chose_unprotected_over_secure as chose;
+    let both = vec![
+        ep("opc.tcp://h:4840", "None", "None"),
+        ep("opc.tcp://h:4840", "Basic256Sha256", "SignAndEncrypt"),
+    ];
+    let only_none = vec![ep("opc.tcp://h:4840", "None", "None")];
+    let auto = (UaSecurityPolicy::Auto, UaSecurityMode::Auto);
+    assert!(chose(auto.0, auto.1, MessageSecurityMode::None, &both));
+    assert!(
+        !chose(auto.0, auto.1, MessageSecurityMode::None, &only_none),
+        "nothing better was offered"
+    );
+    assert!(
+        !chose(auto.0, auto.1, MessageSecurityMode::Sign, &both),
+        "a protected channel needs no warning"
+    );
+    assert!(
+        !chose(
+            UaSecurityPolicy::None,
+            UaSecurityMode::None,
+            MessageSecurityMode::None,
+            &both
+        ),
+        "an explicit None is the user's decision"
+    );
+}

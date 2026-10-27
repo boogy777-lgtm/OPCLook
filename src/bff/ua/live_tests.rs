@@ -995,3 +995,22 @@ fn u8_aes256_sha256_rsapss_sign_and_encrypt_connects() {
 fn u8_aes128_sha256_rsaoaep_sign_and_encrypt_connects() {
     secure_connect_and_read(48642, UaSecurityPolicy::Aes128Sha256RsaOaep);
 }
+
+// ---------------------------------------------------------------------------
+// U12: the session info says how the channel is protected
+// ---------------------------------------------------------------------------
+
+#[test]
+fn u12_auto_connect_reports_the_unencrypted_channel_and_the_secure_alternative() {
+    let server = TestServer::start(48651);
+    let mut app = Harness::new();
+    // Auto/Auto, as a user who never touched the security fields.
+    let info = app
+        .connect(1, EndpointSpec::ua(&server.url))
+        .expect("connect");
+    assert!(info.contains("без шифрования"), "{info:?}");
+    assert!(
+        info.contains("предлагает защищённое"),
+        "the sample server also offers secure endpoints: {info:?}"
+    );
+}
