@@ -8,7 +8,7 @@ use super::test_hooks::{record_header_cell, record_table_scroll, set_tags_rect_f
 use super::tree::refresh_selected;
 use crate::app::{App, TableLine, is_numeric_value};
 use crate::columns::ColumnId;
-use crate::constants::{MIN_COLUMN_WIDTH, TABLE_HEADER_HEIGHT, TABLE_ROW_HEIGHT};
+use crate::constants::{MIN_COLUMN_WIDTH, TABLE_HEADER_HEIGHT, TABLE_ROW_GAP, TABLE_ROW_HEIGHT};
 use crate::i18n::{Tr, fmt, tr};
 use egui_extras::{Column, TableBuilder};
 
@@ -103,6 +103,10 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                         )
                         .scroll_source(egui::scroll_area::ScrollSource::SCROLL_BAR)
                         .show(ui, |ui| {
+                            // UI8: rows are 24 px; the global 6 px item gap between
+                            // them would make the list loose (30 px per row), so the
+                            // table keeps a 2 px gap of its own.
+                            ui.spacing_mut().item_spacing.y = TABLE_ROW_GAP;
                             let mut table = TableBuilder::new(ui)
                                 .id_salt("signal_table")
                                 .striped(true)

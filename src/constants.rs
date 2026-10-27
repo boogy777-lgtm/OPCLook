@@ -155,6 +155,8 @@ pub const BUTTON_PADDING: (f32, f32) = (8.0, 4.0);
 /// UI8 spacing scale: inner margin of windows and dialogs.
 pub const WINDOW_MARGIN: i8 = 12;
 /// Height of one signal-table row.
+/// Vertical gap between signal table rows (UI8).
+pub const TABLE_ROW_GAP: f32 = 2.0;
 pub const TABLE_ROW_HEIGHT: f32 = 24.0;
 /// Height of the signal-table header row.
 pub const TABLE_HEADER_HEIGHT: f32 = 22.0;
