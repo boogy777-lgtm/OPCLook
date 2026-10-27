@@ -1779,7 +1779,8 @@ fn connect_dialog_anonymous_identity_does_not_send_credentials() {
         {
             let connect = h
                 .query_all_by_label("Подключиться")
-                .find(|n| !n.accesskit_node().is_disabled())
+                .filter(|n| !n.accesskit_node().is_disabled())
+                .last()
                 .expect("enabled connect button");
             connect.click();
         }
@@ -1827,7 +1828,8 @@ fn connect_dialog_username_identity_requires_user() {
         {
             let connect = h
                 .query_all_by_label("Подключиться")
-                .find(|n| !n.accesskit_node().is_disabled())
+                .filter(|n| !n.accesskit_node().is_disabled())
+                .last()
                 .expect("enabled connect button");
             connect.click();
         }
@@ -1906,7 +1908,8 @@ fn connect_dialog_invalid_security_pair_shows_error_and_does_not_connect() {
     {
         let connect = h
             .query_all_by_label("Подключиться")
-            .find(|n| !n.accesskit_node().is_disabled())
+            .filter(|n| !n.accesskit_node().is_disabled())
+            .last()
             .expect("enabled connect button");
         connect.click();
     }
@@ -1947,7 +1950,8 @@ fn connect_dialog_unadvertised_security_choice_shows_error_and_does_not_connect(
     {
         let connect = h
             .query_all_by_label("Подключиться")
-            .find(|n| !n.accesskit_node().is_disabled())
+            .filter(|n| !n.accesskit_node().is_disabled())
+            .last()
             .expect("enabled connect button");
         connect.click();
     }
@@ -2841,7 +2845,8 @@ fn rejected_ua_connect_keeps_popup_open_with_error() {
     let mut h = harness(app);
     h.run_steps(4);
     h.query_all_by_label("Подключиться")
-        .find(|n| !n.accesskit_node().is_disabled())
+        .filter(|n| !n.accesskit_node().is_disabled())
+        .last()
         .expect("connect button")
         .click();
     h.run_steps(3);
@@ -3879,6 +3884,37 @@ fn toolbar_enable_states_follow_active_session() {
     assert!(widget_enabled(&h, "Подключиться"));
     assert!(widget_enabled(&h, "Отключиться"));
     assert!(widget_enabled(&h, "Переподключиться"));
+}
+
+/// A12: a branch with thousands of nodes builds only the visible rows.
+#[test]
+fn a12_a_huge_tree_builds_only_the_visible_rows() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.activate_session(1);
+    for index in 0..5000 {
+        app.seed_tree_item(
+            1,
+            None,
+            0,
+            BrowseNode {
+                node_id: format!("ns=2;i={index}"),
+                name: format!("Node{index:05}"),
+                kind: NodeKind::Item,
+                has_children: false,
+            },
+        );
+    }
+    let mut h = harness(app);
+    h.run_steps(3);
+    let drawn = h.query_all_by_label_contains("Node0").count();
+    assert!(drawn > 5, "the top of the tree is visible: {drawn}");
+    assert!(
+        drawn < 120,
+        "only the viewport is built, not 5000 rows: {drawn}"
+    );
+    assert!(h.query_by_label_contains("Node04999").is_none());
 }
 
 /// A7: «Подключиться» works on a fresh start (no sessions) and opens the

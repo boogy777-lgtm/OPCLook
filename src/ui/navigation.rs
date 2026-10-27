@@ -342,13 +342,25 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                     }
                 } else {
                     let selected = app.selected_tree;
+                    // A12: only the rows inside the viewport are built (a branch
+                    // can hold thousands of nodes and the panel repaints every
+                    // 200 ms).
+                    let visible = visible_tree_indices(view);
                     let scroll_out = egui::ScrollArea::vertical()
                         .id_salt("tree_scroll")
                         .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            for index in visible_tree_indices(view) {
-                                let item = &view.tree[index];
-                                draw_tree_item(ui, item, session_id, selected, &mut actions, lang);
+                        .show_rows(ui, TREE_ROW_HEIGHT, visible.len(), |ui, range| {
+                            for index in visible.get(range).into_iter().flatten() {
+                                if let Some(item) = view.tree.get(*index) {
+                                    draw_tree_item(
+                                        ui,
+                                        item,
+                                        session_id,
+                                        selected,
+                                        &mut actions,
+                                        lang,
+                                    );
+                                }
                             }
                         });
                     // Clicking anywhere in the tree pane (including empty space
@@ -392,6 +404,9 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
             }
         });
 }
+
+/// Height of one tree row without the spacing between rows (virtualized list).
+const TREE_ROW_HEIGHT: f32 = 20.0;
 
 pub(super) fn draw_tree_item(
     ui: &mut egui::Ui,
