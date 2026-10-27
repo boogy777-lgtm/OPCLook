@@ -4,18 +4,32 @@ use crate::bff::model::{UaEndpointInfo, UaNetworkInfo, UaServerInfo};
 use crate::bff::net::{BoundConnectorBuilder, NetworkBinding, endpoint_url_for};
 use crate::constants::{DISCOVERY_GUARD_TIMEOUT, DISCOVERY_URLS, MDNS_WINDOW, UA_SEARCH_TIMEOUT};
 use opcua::client::ClientBuilder;
+use opcua::types::{ServerOnNetwork, StatusCode};
+use std::future::Future;
 use std::net::SocketAddr;
 use std::time::Duration;
+
+/// What a discovery step found plus its diagnostics. The notes are journal lines
+/// (`EventKind::Log`): a release build has no console, so a step that failed or
+/// was skipped must say so here instead of printing to stderr.
+pub(super) struct Searched<T> {
+    pub found: Vec<T>,
+    pub notes: Vec<String>,
+}
 
 /// Searches for OPC UA servers on `host:port` and returns their descriptions
 /// plus endpoint details. Uses `find_servers` on a one-shot connection (which
 /// needs no session); if the discovery endpoint does not advertise servers it
 /// falls back to the endpoint descriptions of the discovery endpoint itself.
+///
+/// For a host that is not this machine, `FindServersOnNetwork` is asked at the
+/// same `host:port` as well: that is how a remote LDS lists the servers
+/// registered with it. Both answers are merged.
 pub(super) async fn search_servers(
     host: &str,
     port: u16,
     binding: Option<&NetworkBinding>,
-) -> Result<Vec<UaServerInfo>, String> {
+) -> Result<Searched<UaServerInfo>, String> {
     let host = host.trim().trim_start_matches('[').trim_end_matches(']');
     if host.is_empty() {
         return Err("укажите адрес сервера (хост)".to_string());
@@ -43,11 +57,56 @@ pub(super) async fn search_servers(
     for addr in &addresses {
         // IPv6 literals must be bracketed in endpoint URLs.
         let url = endpoint_url_for(addr.ip(), port);
-        match find_servers_at(&client, &url, binding).await {
-            Ok(servers) if !servers.is_empty() => return Ok(servers),
-            Ok(_) => failures.push(format!("{url}: серверы не найдены")),
-            Err(e) => failures.push(format!("{url}: {e}")),
+        // A remote host may be a Local Discovery Server: ask it for the servers
+        // registered with it while FindServers runs. This machine's own LDS is
+        // covered by the network search, so loopback is not asked twice.
+        let ask_lds = !addr.ip().is_loopback();
+        let (direct, on_network) = tokio::join!(find_servers_at(&client, &url, binding), async {
+            if ask_lds {
+                Some(find_on_network_at(&client, &url, binding).await)
+            } else {
+                None
+            }
+        });
+        let reachable = direct.is_ok();
+        let mut servers = match direct {
+            Ok(servers) => servers,
+            Err(e) => {
+                failures.push(format!("{url}: {e}"));
+                Vec::new()
+            }
+        };
+        let mut notes = Vec::new();
+        match on_network {
+            Some(Ok(records)) => {
+                for record in &records {
+                    merge_server_info(&mut servers, server_from_record(record));
+                }
+            }
+            // An ordinary server answers "service unsupported": expected.
+            Some(Err(LdsError::Unsupported)) | None => {}
+            // Only worth a line when the server itself was reachable; otherwise
+            // the failure above already says it.
+            Some(Err(LdsError::Timeout)) if reachable => {
+                notes.push(format!(
+                    "LDS {url}: FindServersOnNetwork не ответил (таймаут)"
+                ));
+            }
+            Some(Err(LdsError::Failed(e))) if reachable => {
+                notes.push(format!("LDS {url}: FindServersOnNetwork не удался: {e}"));
+            }
+            Some(Err(_)) => {}
         }
+        if servers.is_empty() {
+            if reachable {
+                failures.push(format!("{url}: серверы не найдены"));
+            }
+            continue;
+        }
+        return Ok(Searched {
+            found: servers,
+            notes,
+        });
     }
 
     let detail = if failures.is_empty() {
@@ -56,6 +115,128 @@ pub(super) async fn search_servers(
         format!("OPC UA серверы не найдены: {}", failures.join("; "))
     };
     Err(detail)
+}
+
+/// Why a `FindServersOnNetwork` request gave no records.
+#[derive(Debug, PartialEq, Eq)]
+enum LdsError {
+    /// The peer answered, but is not a discovery server (`BadServiceUnsupported`).
+    Unsupported,
+    /// The peer did not answer within the time budget.
+    Timeout,
+    /// The request failed (for example nothing listens there); the text says why.
+    Failed(String),
+}
+
+/// `FindServersOnNetwork` on `url`: the servers a (remote) LDS has registered.
+async fn find_on_network_at(
+    client: &opcua::client::Client,
+    url: &str,
+    binding: Option<&NetworkBinding>,
+) -> Result<Vec<ServerOnNetwork>, LdsError> {
+    let request = if let Some(binding) = binding {
+        let connector = BoundConnectorBuilder::new(url, binding.clone());
+        tokio::time::timeout(
+            DISCOVERY_GUARD_TIMEOUT,
+            client.find_servers_on_network(connector, 0, 0, None),
+        )
+        .await
+    } else {
+        tokio::time::timeout(
+            DISCOVERY_GUARD_TIMEOUT,
+            client.find_servers_on_network(url, 0, 0, None),
+        )
+        .await
+    };
+    match request {
+        Ok(Ok(response)) => Ok(response.servers.unwrap_or_default()),
+        Ok(Err(e)) if e.status() == StatusCode::BadServiceUnsupported => Err(LdsError::Unsupported),
+        Ok(Err(e)) if e.status() == StatusCode::BadTimeout => Err(LdsError::Timeout),
+        Ok(Err(e)) => Err(LdsError::Failed(e.to_string())),
+        Err(_) => Err(LdsError::Timeout),
+    }
+}
+
+/// One `ServerOnNetwork` record as a server entry. The record carries no
+/// ApplicationUri, so the URI stays empty (the entry is matched by URL).
+fn server_from_record(record: &ServerOnNetwork) -> UaServerInfo {
+    let url = record.discovery_url.to_string();
+    let url = url.trim();
+    let endpoints = if url.to_ascii_lowercase().starts_with("opc.tcp://") {
+        vec![UaEndpointInfo {
+            url: url.to_string(),
+            security_policy: String::new(),
+            security_mode: String::new(),
+        }]
+    } else {
+        Vec::new()
+    };
+    UaServerInfo {
+        application_name: record.server_name.to_string(),
+        application_uri: String::new(),
+        endpoints,
+    }
+}
+
+/// Merge one server into a list: the same application URI, or failing that a
+/// shared endpoint URL, is the same server; endpoints are unioned.
+pub(super) fn merge_server_info(servers: &mut Vec<UaServerInfo>, incoming: UaServerInfo) {
+    let uri = incoming.application_uri.trim().to_ascii_lowercase();
+    let position = servers
+        .iter()
+        .position(|existing| {
+            !uri.is_empty() && existing.application_uri.trim().to_ascii_lowercase() == uri
+        })
+        .or_else(|| {
+            servers.iter().position(|existing| {
+                existing
+                    .endpoints
+                    .iter()
+                    .any(|a| incoming.endpoints.iter().any(|b| same_url(&a.url, &b.url)))
+            })
+        });
+    match position.and_then(|i| servers.get_mut(i)) {
+        Some(existing) => {
+            if existing.application_name.trim().is_empty() {
+                existing.application_name = incoming.application_name;
+            }
+            if existing.application_uri.trim().is_empty() {
+                existing.application_uri = incoming.application_uri;
+            }
+            for endpoint in incoming.endpoints {
+                let incoming_is_bare =
+                    endpoint.security_policy.is_empty() && endpoint.security_mode.is_empty();
+                // A bare URL (an LDS record) adds nothing to the same URL that is
+                // already known, with or without security details.
+                if incoming_is_bare
+                    && existing
+                        .endpoints
+                        .iter()
+                        .any(|e| same_url(&e.url, &endpoint.url))
+                {
+                    continue;
+                }
+                // The same URL with security details supersedes the bare URL
+                // an LDS record gave.
+                if let Some(bare) = existing.endpoints.iter_mut().find(|e| {
+                    same_url(&e.url, &endpoint.url)
+                        && e.security_policy.is_empty()
+                        && e.security_mode.is_empty()
+                }) {
+                    if !endpoint.security_policy.is_empty() || !endpoint.security_mode.is_empty() {
+                        *bare = endpoint;
+                    }
+                } else if !existing.endpoints.iter().any(|e| {
+                    same_url(&e.url, &endpoint.url)
+                        && e.security_policy == endpoint.security_policy
+                        && e.security_mode == endpoint.security_mode
+                }) {
+                    existing.endpoints.push(endpoint);
+                }
+            }
+        }
+        None => servers.push(incoming),
+    }
 }
 
 async fn find_servers_at(
@@ -195,10 +376,11 @@ async fn find_servers_at(
 /// Every mDNS URL is verified with `FindServers`/`GetEndpoints` through the
 /// same binding before it is reported. A URL that does not answer as OPC UA is
 /// dropped; when verification is impossible the result is dropped as well
-/// instead of producing a false positive.
+/// instead of producing a false positive. Whatever failed or was skipped is
+/// returned in [`Searched::notes`] for the journal.
 pub(super) async fn search_network_servers(
     binding: Option<&NetworkBinding>,
-) -> Result<Vec<UaNetworkInfo>, String> {
+) -> Result<Searched<UaNetworkInfo>, String> {
     let mdns_binding = binding.cloned();
     let mdns_task = tokio::task::spawn_blocking(move || mdns::discover(mdns_binding.as_ref()));
 
@@ -206,113 +388,166 @@ pub(super) async fn search_network_servers(
     let lds = async {
         match &client {
             Ok(client) => {
-                let search = search_lds_servers(client, binding);
+                let search = search_lds_servers(client, binding, &DISCOVERY_URLS);
                 match tokio::time::timeout(DISCOVERY_GUARD_TIMEOUT, search).await {
-                    Ok(found) => found,
-                    Err(_) => {
-                        eprintln!("LDS search timed out");
-                        Vec::new()
-                    }
+                    Ok(search) => search,
+                    Err(_) => LdsSearch {
+                        found: Vec::new(),
+                        notes: vec!["LDS: поиск прерван по таймауту".to_string()],
+                    },
                 }
             }
-            Err(error) => {
-                eprintln!("LDS search unavailable: {error}");
-                Vec::new()
-            }
+            Err(error) => LdsSearch {
+                found: Vec::new(),
+                notes: vec![format!("LDS: поиск недоступен: {error}")],
+            },
         }
     };
     let mdns_result = async {
         // The worker owns a strict MDNS_WINDOW; this is only a hard guard for a
         // wedged blocking task and adds no UI-visible wait.
         match tokio::time::timeout(MDNS_WINDOW + Duration::from_secs(2), mdns_task).await {
-            Ok(Ok(services)) => services,
-            Ok(Err(error)) => {
-                eprintln!("mDNS worker failed: {error}");
-                Vec::new()
-            }
-            Err(_) => {
-                eprintln!("mDNS worker timed out");
-                Vec::new()
-            }
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(error)) => mdns::MdnsOutcome {
+                services: Vec::new(),
+                notes: vec![format!("mDNS: поиск аварийно завершился: {error}")],
+            },
+            Err(_) => mdns::MdnsOutcome {
+                services: Vec::new(),
+                notes: vec!["mDNS: поиск не завершился вовремя".to_string()],
+            },
         }
     };
-    let (mut found, mdns_services) = tokio::join!(lds, mdns_result);
+    let (lds, mdns_outcome) = tokio::join!(lds, mdns_result);
+    let mut found = lds.found;
+    let mut notes = lds.notes;
+    notes.extend(mdns_outcome.notes);
 
     match &client {
         Ok(client) => {
-            let verified = verify_mdns_services(client, &mdns_services, binding).await;
-            for info in verified {
+            let verified = verify_mdns_services(client, &mdns_outcome.services, binding).await;
+            notes.extend(verified.notes);
+            for info in verified.found {
                 merge_network_info(&mut found, info);
             }
         }
-        Err(_) if !mdns_services.is_empty() => {
-            eprintln!("mDNS results discarded: no OPC UA discovery client for verification");
+        Err(_) if !mdns_outcome.services.is_empty() => {
+            notes.push("mDNS: результаты отброшены, нет клиента OPC UA для проверки".to_string());
         }
         Err(_) => {}
     }
 
-    Ok(found)
+    Ok(Searched { found, notes })
 }
 
-/// LDS discovery over the standard local endpoints. Errors are diagnostics
-/// only; the caller always receives whatever was found.
+/// Result of polling the local discovery URLs.
+struct LdsSearch {
+    found: Vec<UaNetworkInfo>,
+    notes: Vec<String>,
+}
+
+/// True for `opc.tcp://localhost…`, `127.x.x.x` and `[::1]`: spellings of this
+/// machine's own discovery endpoint.
+fn is_loopback_url(url: &str) -> bool {
+    let rest = url
+        .trim()
+        .trim_start_matches("opc.tcp://")
+        .trim_start_matches("OPC.TCP://");
+    let host = rest.split(['/', '?']).next().unwrap_or(rest);
+    let host = if let Some(stripped) = host.strip_prefix('[') {
+        stripped.split(']').next().unwrap_or(stripped)
+    } else {
+        host.rsplit_once(':').map_or(host, |(name, _)| name)
+    };
+    let host = host.to_ascii_lowercase();
+    host == "localhost" || host == "::1" || host.starts_with("127.")
+}
+
+/// LDS discovery over the standard local endpoints. `localhost` and `127.0.0.1`
+/// are two names of ONE endpoint: once one of them answered (even "not an LDS" or
+/// a timeout) the other is skipped, so the machine's LDS is not polled twice and
+/// a silent host does not cost two timeouts. Only an unreachable first name
+/// (refused, unresolvable) lets the alias try.
+///
+/// Errors are diagnostics only; the caller always receives whatever was found.
 async fn search_lds_servers(
     client: &opcua::client::Client,
     binding: Option<&NetworkBinding>,
-) -> Vec<UaNetworkInfo> {
-    let mut found: Vec<UaNetworkInfo> = Vec::new();
+    urls: &[&str],
+) -> LdsSearch {
+    poll_lds_urls(urls, |url| async move {
+        find_on_network_at(client, &url, binding).await
+    })
+    .await
+}
 
-    for url in DISCOVERY_URLS {
-        let request = if let Some(binding) = binding {
-            let connector = BoundConnectorBuilder::new(url, binding.clone());
-            tokio::time::timeout(
-                DISCOVERY_GUARD_TIMEOUT,
-                client.find_servers_on_network(connector, 0, 0, None),
-            )
-            .await
-        } else {
-            tokio::time::timeout(
-                DISCOVERY_GUARD_TIMEOUT,
-                client.find_servers_on_network(url, 0, 0, None),
-            )
-            .await
-        };
-        let result = request.map(|inner| {
-            inner
-                .map(|response| response.servers.unwrap_or_default())
-                .map_err(|e| e.to_string())
-        });
-        match result {
-            Ok(Ok(servers)) => {
-                for record in servers {
-                    let discovery_url = record.discovery_url.to_string();
-                    // ServerOnNetwork carries no ApplicationUri. Never use the
-                    // URL as a fake URI: it would keep this row from merging
-                    // with the same server found by a host search (by URL).
-                    let app_uri = if discovery_url.is_empty() {
-                        format!("urn:lds-server-{}", record.record_id)
-                    } else {
-                        String::new()
-                    };
-                    let mut urls = vec![discovery_url];
-                    urls.retain(|u| !u.is_empty());
-                    urls.dedup();
-                    merge_network_info(
-                        &mut found,
-                        UaNetworkInfo {
-                            application_name: record.server_name.to_string(),
-                            application_uri: app_uri,
-                            discovery_urls: urls,
-                        },
-                    );
+/// The polling policy of [`search_lds_servers`], independent of the transport so
+/// it can be tested with a fake `ask`.
+async fn poll_lds_urls<F, Fut>(urls: &[&str], mut ask: F) -> LdsSearch
+where
+    F: FnMut(String) -> Fut,
+    Fut: Future<Output = Result<Vec<ServerOnNetwork>, LdsError>>,
+{
+    let mut found: Vec<UaNetworkInfo> = Vec::new();
+    let mut notes = Vec::new();
+    let mut loopback_answered = false;
+    let mut answered = false;
+    let mut last_failure: Option<String> = None;
+
+    for url in urls {
+        let loopback = is_loopback_url(url);
+        if loopback && loopback_answered {
+            continue;
+        }
+        match ask((*url).to_string()).await {
+            Ok(records) => {
+                answered = true;
+                loopback_answered |= loopback;
+                for record in &records {
+                    merge_network_info(&mut found, network_info_from_record(record));
                 }
             }
-            Ok(Err(error)) => eprintln!("LDS {url}: {error}"),
-            Err(_) => eprintln!("LDS {url}: timeout"),
+            // Reachable, but not a discovery server: nothing to report.
+            Err(LdsError::Unsupported) => {
+                answered = true;
+                loopback_answered |= loopback;
+            }
+            Err(LdsError::Timeout) => {
+                answered = true;
+                loopback_answered |= loopback;
+                notes.push(format!("LDS {url}: нет ответа (таймаут)"));
+            }
+            Err(LdsError::Failed(error)) => last_failure = Some(format!("LDS {url}: {error}")),
         }
     }
+    // Nothing listening on the standard port is the normal case on a machine
+    // without an LDS: one line, not one per spelling.
+    if !answered {
+        if let Some(failure) = last_failure {
+            notes.push(failure);
+        }
+    }
+    LdsSearch { found, notes }
+}
 
-    found
+/// A `ServerOnNetwork` record as a network-search row. It carries no
+/// ApplicationUri; the URL is never used as a fake one (it would keep this row
+/// from merging with the same server found by a host search).
+fn network_info_from_record(record: &ServerOnNetwork) -> UaNetworkInfo {
+    let discovery_url = record.discovery_url.to_string();
+    let application_uri = if discovery_url.is_empty() {
+        format!("urn:lds-server-{}", record.record_id)
+    } else {
+        String::new()
+    };
+    let mut urls = vec![discovery_url];
+    urls.retain(|u| !u.is_empty());
+    urls.dedup();
+    UaNetworkInfo {
+        application_name: record.server_name.to_string(),
+        application_uri,
+        discovery_urls: urls,
+    }
 }
 
 /// Verify mDNS results through the same binding. Only URLs that answer
@@ -321,9 +556,10 @@ async fn verify_mdns_services(
     client: &opcua::client::Client,
     services: &[MdnService],
     binding: Option<&NetworkBinding>,
-) -> Vec<UaNetworkInfo> {
+) -> Searched<UaNetworkInfo> {
     let deadline = std::time::Instant::now() + DISCOVERY_GUARD_TIMEOUT;
     let mut verified = Vec::new();
+    let mut notes = Vec::new();
 
     for service in services {
         let mut discovery_urls = Vec::new();
@@ -370,9 +606,9 @@ async fn verify_mdns_services(
                     break;
                 }
                 Ok(Ok(_)) => {}
-                Ok(Err(error)) => eprintln!("mDNS verify {url}: {error}"),
+                Ok(Err(error)) => notes.push(format!("mDNS {url}: проверка не удалась: {error}")),
                 Err(_) => {
-                    eprintln!("mDNS verify {url}: timeout");
+                    notes.push(format!("mDNS {url}: проверка не уложилась во время"));
                     break;
                 }
             }
@@ -394,7 +630,10 @@ async fn verify_mdns_services(
         });
     }
 
-    verified
+    Searched {
+        found: verified,
+        notes,
+    }
 }
 
 fn normalized_url(url: &str) -> String {
@@ -486,4 +725,205 @@ pub(super) fn build_discovery_client() -> Result<opcua::client::Client, String> 
         .request_timeout(UA_SEARCH_TIMEOUT)
         .client()
         .map_err(|errors| errors.join("; "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    fn record(id: u32, name: &str, url: &str) -> ServerOnNetwork {
+        ServerOnNetwork {
+            record_id: id,
+            server_name: name.into(),
+            discovery_url: url.into(),
+            server_capabilities: None,
+        }
+    }
+
+    /// Runs `poll_lds_urls` with scripted answers; returns what it asked.
+    fn poll(
+        urls: &[&str],
+        mut answers: Vec<Result<Vec<ServerOnNetwork>, LdsError>>,
+    ) -> (LdsSearch, Vec<String>) {
+        answers.reverse();
+        let answers = Arc::new(Mutex::new(answers));
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let (answers_in, asked_in) = (Arc::clone(&answers), Arc::clone(&asked));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("test runtime");
+        let search = runtime.block_on(poll_lds_urls(urls, move |url| {
+            asked_in.lock().unwrap().push(url);
+            let next = answers_in.lock().unwrap().pop();
+            async move { next.expect("an unexpected extra request") }
+        }));
+        let asked = asked.lock().unwrap().clone();
+        (search, asked)
+    }
+
+    const IP: &str = "opc.tcp://127.0.0.1:4840";
+    const NAME: &str = "opc.tcp://localhost:4840";
+
+    #[test]
+    fn loopback_spellings_are_recognised() {
+        for url in [
+            "opc.tcp://localhost:4840",
+            "opc.tcp://LOCALHOST:4840/",
+            "opc.tcp://127.0.0.1:4840",
+            "opc.tcp://127.1.2.3:4840/path",
+            "opc.tcp://[::1]:4840",
+        ] {
+            assert!(is_loopback_url(url), "{url}");
+        }
+        for url in [
+            "opc.tcp://192.168.1.10:4840",
+            "opc.tcp://plc-1:4840",
+            "opc.tcp://[fe80::1]:4840",
+            "opc.tcp://1127.0.0.1:4840",
+        ] {
+            assert!(!is_loopback_url(url), "{url}");
+        }
+    }
+
+    #[test]
+    fn an_answering_loopback_lds_is_not_polled_a_second_time() {
+        let (search, asked) = poll(
+            &[IP, NAME],
+            vec![Ok(vec![record(1, "Srv", "opc.tcp://pc:4841")])],
+        );
+        assert_eq!(
+            asked,
+            vec![IP.to_string()],
+            "localhost is the same endpoint"
+        );
+        assert_eq!(search.found.len(), 1);
+        assert!(search.notes.is_empty());
+    }
+
+    #[test]
+    fn a_loopback_that_is_not_an_lds_or_times_out_costs_one_request() {
+        let (search, asked) = poll(&[IP, NAME], vec![Err(LdsError::Unsupported)]);
+        assert_eq!(asked.len(), 1);
+        assert!(search.notes.is_empty(), "not an LDS is the expected case");
+
+        let (search, asked) = poll(&[IP, NAME], vec![Err(LdsError::Timeout)]);
+        assert_eq!(
+            asked.len(),
+            1,
+            "a second timeout would only double the wait"
+        );
+        assert_eq!(search.notes.len(), 1);
+        assert!(search.notes[0].contains(IP), "{:?}", search.notes);
+    }
+
+    #[test]
+    fn an_unreachable_first_spelling_lets_the_alias_try() {
+        let (search, asked) = poll(
+            &[IP, NAME],
+            vec![
+                Err(LdsError::Failed("refused".into())),
+                Ok(vec![record(2, "Srv", "opc.tcp://pc:4841")]),
+            ],
+        );
+        assert_eq!(asked, vec![IP.to_string(), NAME.to_string()]);
+        assert_eq!(search.found.len(), 1);
+        assert!(
+            search.notes.is_empty(),
+            "the alias answered: {:?}",
+            search.notes
+        );
+    }
+
+    #[test]
+    fn nothing_listening_is_one_journal_line_not_one_per_spelling() {
+        let (search, asked) = poll(
+            &[IP, NAME],
+            vec![
+                Err(LdsError::Failed("refused".into())),
+                Err(LdsError::Failed("refused".into())),
+            ],
+        );
+        assert_eq!(asked.len(), 2);
+        assert!(search.found.is_empty());
+        assert_eq!(search.notes.len(), 1, "{:?}", search.notes);
+    }
+
+    #[test]
+    fn non_loopback_discovery_urls_are_each_asked() {
+        let (_, asked) = poll(
+            &["opc.tcp://10.0.0.5:4840", IP, NAME],
+            vec![Err(LdsError::Unsupported), Err(LdsError::Unsupported)],
+        );
+        assert_eq!(
+            asked,
+            vec!["opc.tcp://10.0.0.5:4840".to_string(), IP.to_string()]
+        );
+    }
+
+    #[test]
+    fn the_default_discovery_urls_start_with_the_numeric_loopback() {
+        assert_eq!(DISCOVERY_URLS[0], IP);
+        assert!(DISCOVERY_URLS.iter().all(|url| is_loopback_url(url)));
+    }
+
+    fn endpoint(url: &str, policy: &str, mode: &str) -> UaEndpointInfo {
+        UaEndpointInfo {
+            url: url.to_string(),
+            security_policy: policy.to_string(),
+            security_mode: mode.to_string(),
+        }
+    }
+
+    #[test]
+    fn an_lds_record_and_find_servers_describe_one_server() {
+        // FindServers: the application with its URI and the full endpoint list.
+        let mut servers = vec![UaServerInfo {
+            application_name: "Plant".into(),
+            application_uri: "urn:plant".into(),
+            endpoints: vec![endpoint("opc.tcp://pc:4841", "None", "None")],
+        }];
+        // FindServersOnNetwork: the same server by URL, no URI, and one more.
+        merge_server_info(
+            &mut servers,
+            server_from_record(&record(1, "Plant", "opc.tcp://PC:4841/")),
+        );
+        merge_server_info(
+            &mut servers,
+            server_from_record(&record(2, "Other", "opc.tcp://pc:4842")),
+        );
+        assert_eq!(servers.len(), 2, "{servers:?}");
+        assert_eq!(servers[0].application_uri, "urn:plant");
+        assert_eq!(servers[0].endpoints.len(), 1, "no duplicate endpoint");
+        assert_eq!(servers[1].application_name, "Other");
+    }
+
+    #[test]
+    fn security_details_replace_a_bare_lds_url() {
+        let mut servers = vec![server_from_record(&record(1, "Plant", "opc.tcp://pc:4841"))];
+        merge_server_info(
+            &mut servers,
+            UaServerInfo {
+                application_name: "Plant".into(),
+                application_uri: "urn:plant".into(),
+                endpoints: vec![endpoint("opc.tcp://pc:4841", "None", "None")],
+            },
+        );
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].application_uri, "urn:plant");
+        assert_eq!(servers[0].endpoints.len(), 1);
+        assert_eq!(servers[0].endpoints[0].security_policy, "None");
+    }
+
+    #[test]
+    fn records_without_a_discovery_url_get_a_synthetic_uri() {
+        let info = network_info_from_record(&record(7, "NoUrl", ""));
+        assert_eq!(info.application_uri, "urn:lds-server-7");
+        assert!(info.discovery_urls.is_empty());
+        let info = network_info_from_record(&record(8, "Srv", "opc.tcp://pc:4841"));
+        assert!(
+            info.application_uri.is_empty(),
+            "the URL is never a fake URI"
+        );
+    }
 }

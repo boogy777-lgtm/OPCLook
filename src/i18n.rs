@@ -633,6 +633,8 @@ pub enum Tr {
     UaTreeUnsupported,
     /// Server row body when the server reported no connection URL.
     UaTreeNoEndpoints,
+    SecPolicyAes128Sha256RsaOaep,
+    SecPolicyAes256Sha256RsaPss,
 
     // ---- UA session cap ----
     UaSessionCounter,
@@ -1273,6 +1275,8 @@ fn ru(key: Tr) -> &'static str {
         }
         UaTreeUnsupported => "не поддерживается клиентом",
         UaTreeNoEndpoints => "Сервер не сообщил адресов подключения",
+        SecPolicyAes128Sha256RsaOaep => "Aes128_Sha256_RsaOaep",
+        SecPolicyAes256Sha256RsaPss => "Aes256_Sha256_RsaPss",
         UaSessionCounter => "UA-сессии: {0}/{1}",
         UaSessionLimitReached => "Достигнут предел UA-сессий ({0}). Удалите или закройте сессию.",
         SelectAdapterRequired => "Выберите сетевой адаптер",
@@ -1828,6 +1832,8 @@ fn en(key: Tr) -> &'static str {
         }
         UaTreeUnsupported => "not supported by this client",
         UaTreeNoEndpoints => "The server reported no connection URL",
+        SecPolicyAes128Sha256RsaOaep => "Aes128_Sha256_RsaOaep",
+        SecPolicyAes256Sha256RsaPss => "Aes256_Sha256_RsaPss",
         UaSessionCounter => "UA sessions: {0}/{1}",
         UaSessionLimitReached => {
             "The UA session limit ({0}) is reached. Remove or close a session."
@@ -2355,6 +2361,8 @@ fn zh(key: Tr) -> &'static str {
         UaTreeSecurityOnConnect => "服务器未报告此地址的安全配置 — 将在连接时请求（自动）",
         UaTreeUnsupported => "此客户端不支持",
         UaTreeNoEndpoints => "服务器未报告连接地址",
+        SecPolicyAes128Sha256RsaOaep => "Aes128_Sha256_RsaOaep",
+        SecPolicyAes256Sha256RsaPss => "Aes256_Sha256_RsaPss",
         UaSessionCounter => "UA 会话：{0}/{1}",
         UaSessionLimitReached => "已达到 UA 会话上限（{0}）。请删除或关闭一个会话。",
         SelectAdapterRequired => "请选择网络适配器",

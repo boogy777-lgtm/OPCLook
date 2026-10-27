@@ -18,6 +18,8 @@ pub(super) fn security_policy_label(lang: Lang, policy: UaSecurityPolicy) -> &'s
         UaSecurityPolicy::Basic128Rsa15 => tr(lang, Tr::SecPolicyBasic128Rsa15),
         UaSecurityPolicy::Basic256 => tr(lang, Tr::SecPolicyBasic256),
         UaSecurityPolicy::Basic256Sha256 => tr(lang, Tr::SecPolicyBasic256Sha256),
+        UaSecurityPolicy::Aes128Sha256RsaOaep => tr(lang, Tr::SecPolicyAes128Sha256RsaOaep),
+        UaSecurityPolicy::Aes256Sha256RsaPss => tr(lang, Tr::SecPolicyAes256Sha256RsaPss),
     }
 }
 

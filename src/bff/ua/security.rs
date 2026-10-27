@@ -87,9 +87,19 @@ fn advertised_summary(endpoints: &[UaEndpointInfo]) -> String {
 
 /// Resolve the wire security policy URI and mode to request.
 ///
-/// `Auto` keeps the historical preference order: None policy first, then
-/// Basic256Sha256/Sign, then Basic256Sha256/SignAndEncrypt, then the first
-/// recognized endpoint. An explicit policy/mode is honored only when the server
+/// **Decision on `Auto` (U12):** this is a test/diagnostic client. `Auto` keeps
+/// the historical preference order: None policy first (it connects to every
+/// server without certificate exchange, which is what an engineer checking a
+/// controller wants), then Basic256Sha256/Sign, then
+/// Basic256Sha256/SignAndEncrypt, then the first recognized endpoint. Because
+/// `Auto` can therefore pick an unencrypted channel while the server offers a
+/// secure one, the session info always states the real protection
+/// ([`security_summary`]) and says so when a secure endpoint was available. Anyone
+/// who needs protection picks the policy and mode explicitly, and an explicit
+/// choice is never downgraded.
+///
+/// An explicit choice aside, the order is: None, then Basic256Sha256/Sign, then
+/// Basic256Sha256/SignAndEncrypt, then the first recognized endpoint. An explicit policy/mode is honored only when the server
 /// advertises that exact endpoint; otherwise this returns a clear error and the
 /// caller must NOT connect with a guessed/fallback policy.
 ///
@@ -183,4 +193,55 @@ pub fn resolve_security(
     };
 
     resolved.resolve()
+}
+
+/// True when `Auto`/`Auto` was requested, the connection ended up without any
+/// protection and the server also offers a secure endpoint the user could have
+/// asked for.
+pub fn auto_chose_unprotected_over_secure(
+    requested_policy: UaSecurityPolicy,
+    requested_mode: UaSecurityMode,
+    resolved_mode: MessageSecurityMode,
+    endpoints: &[UaEndpointInfo],
+) -> bool {
+    if requested_policy != UaSecurityPolicy::Auto
+        || requested_mode != UaSecurityMode::Auto
+        || resolved_mode != MessageSecurityMode::None
+    {
+        return false;
+    }
+    endpoints
+        .iter()
+        .filter_map(AdvertisedEndpoint::parse)
+        .any(|e| {
+            e.policy != UaSecurityPolicy::None
+                && matches!(
+                    e.mode,
+                    UaSecurityMode::Sign | UaSecurityMode::SignAndEncrypt
+                )
+                && validate_security_pair(e.policy, e.mode).is_ok()
+        })
+}
+
+/// The session info line shown to the user and written to the journal: where it
+/// is connected and, in plain words, how the channel is protected.
+pub fn security_summary(
+    url: &str,
+    policy: &str,
+    mode: MessageSecurityMode,
+    secure_was_available: bool,
+) -> String {
+    let protection = match mode {
+        MessageSecurityMode::None => "без шифрования",
+        MessageSecurityMode::Sign => "только подпись, данные не шифруются",
+        MessageSecurityMode::SignAndEncrypt => "подпись и шифрование",
+        MessageSecurityMode::Invalid => "режим защиты не определён",
+    };
+    let mut text = format!("подключено к {url} [{policy} / {mode:?}] — {protection}");
+    if secure_was_available {
+        text.push_str(
+            "; сервер предлагает защищённое соединение — выберите политику и режим вручную",
+        );
+    }
+    text
 }

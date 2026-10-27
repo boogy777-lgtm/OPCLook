@@ -1,10 +1,13 @@
 mod discovery;
 mod io;
+#[cfg(test)]
+mod live_tests;
 mod scanner;
 mod security;
 mod session;
 #[cfg(test)]
 mod tests;
+mod trust;
 mod values;
 mod worker;
 
