@@ -44,7 +44,7 @@ pub use state::{
     AddChildrenJob, BottomTab, CsvImportJob, CsvImportRow, ReconnectState, Row, SessionState,
     SessionView, TreeItem, WriteKind, WriteTypeChoice, write_type_choices,
 };
-pub use view::{MAX_FIELD_LINES, TableLine};
+pub use view::{CHANGE_FLASH, MAX_FIELD_LINES, TableLine, is_numeric_value};
 
 use self::present::{is_loopback_host, operation_label};
 
@@ -822,6 +822,7 @@ impl App {
             description: String::new(),
             pending: false,
             poll_only: false,
+            changed_at: None,
         });
         key
     }

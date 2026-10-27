@@ -129,6 +129,44 @@ impl App {
     }
 }
 
+/// UI4: how long a changed value stays lit in the table.
+pub const CHANGE_FLASH: std::time::Duration = std::time::Duration::from_secs(1);
+
+impl Row {
+    /// UI4: whether `new` is a real change of the value this row shows. The
+    /// first value of a row (still pending, a placeholder quality or no value
+    /// yet) is not a change, nor is the same value arriving again (two NaN are
+    /// the same value too).
+    pub fn is_value_change(&self, new: &Value) -> bool {
+        if self.pending
+            || self.quality.is_placeholder_no_data()
+            || self.quality.is_placeholder_waiting()
+            || self.value == Value::Empty
+        {
+            return false;
+        }
+        match (&self.value, new) {
+            (Value::F64(old), Value::F64(new)) => old != new && !(old.is_nan() && new.is_nan()),
+            (old, new) => old != new,
+        }
+    }
+
+    /// UI4: how lit the value cell is `now`: 1.0 right after a change, fading
+    /// out to 0.0 over [`CHANGE_FLASH`]; 0.0 for a row that never changed.
+    pub fn change_flash(&self, now: std::time::Instant) -> f32 {
+        let Some(at) = self.changed_at else {
+            return 0.0;
+        };
+        let t = now.saturating_duration_since(at).as_secs_f32() / CHANGE_FLASH.as_secs_f32();
+        if t >= 1.0 {
+            0.0
+        } else {
+            let left = 1.0 - t.max(0.0);
+            left * left
+        }
+    }
+}
+
 /// One line of the signal table (V3): a signal row, or a field / element of
 /// an expanded structured or array value under it.
 #[derive(Clone, Debug, PartialEq)]
@@ -153,7 +191,14 @@ pub enum TableLine {
         type_text: String,
         expandable: bool,
         expanded: bool,
+        /// UI5: a number: shown monospace and right-aligned.
+        numeric: bool,
     },
+}
+
+/// UI5: whether a value is a number (right-aligned, monospace in the table).
+pub fn is_numeric_value(value: &Value) -> bool {
+    matches!(value, Value::I64(_) | Value::U64(_) | Value::F64(_))
 }
 
 /// At most this many field lines are built per frame; a huge array never
@@ -215,6 +260,7 @@ impl App {
                 type_text,
                 expandable,
                 expanded,
+                numeric: is_numeric_value(field),
             });
             if expanded {
                 self.push_fields(lines, budget, index, key, field, &child_path, depth + 1);

@@ -6,7 +6,7 @@ use super::servers::session_tab_strip;
 #[cfg(test)]
 use super::test_hooks::{record_header_cell, record_table_scroll, set_tags_rect_for_test};
 use super::tree::refresh_selected;
-use crate::app::{App, TableLine};
+use crate::app::{App, TableLine, is_numeric_value};
 use crate::columns::ColumnId;
 use crate::constants::{MIN_COLUMN_WIDTH, TABLE_HEADER_HEIGHT, TABLE_ROW_HEIGHT};
 use crate::i18n::{Tr, fmt, tr};
@@ -238,6 +238,8 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                         return;
                                     }
                                     body.rows(text_height, lines.len(), |mut row| {
+                                        let show_colors = app.settings.options.show_colors;
+                                        let now = std::time::Instant::now();
                                         // `index` is the visible position (selection and
                                         // keyboard work on it); `position` is in `rows`.
                                         let (index, position) = match lines.get(row.index()) {
@@ -254,6 +256,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                 type_text,
                                                 expandable,
                                                 expanded,
+                                                numeric,
                                             }) => {
                                                 let field = FieldLine {
                                                     key: *key,
@@ -264,10 +267,12 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                     type_text,
                                                     expandable: *expandable,
                                                     expanded: *expanded,
+                                                    numeric: *numeric,
                                                 };
                                                 draw_field_line(
                                                     &mut row,
                                                     &columns,
+                                                    lang,
                                                     &field,
                                                     *index,
                                                     &mut actions,
@@ -288,11 +293,13 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                             match column {
                                                 ColumnId::Status => {
                                                     row.col(|ui| {
-                                                        let color = if signal.pending {
-                                                            yellow()
-                                                        } else {
-                                                            quality_color(signal.quality.kind)
-                                                        };
+                                                        // UI2: the dot follows «show colors» too.
+                                                        let color = quality_tint(
+                                                            ui,
+                                                            show_colors,
+                                                            signal.pending,
+                                                            signal.quality.kind,
+                                                        );
                                                         ui.colored_label(color, "●");
                                                     });
                                                 }
@@ -302,8 +309,16 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                             let expanded = app
                                                                 .expanded_values
                                                                 .contains(&(key, Vec::new()));
-                                                            toggle_rect =
-                                                                Some(value_toggle(ui, expanded));
+                                                            toggle_rect = Some(value_toggle(
+                                                                ui,
+                                                                lang,
+                                                                egui::Id::NULL.with((
+                                                                    "value_toggle",
+                                                                    key,
+                                                                    Vec::<u32>::new(),
+                                                                )),
+                                                                expanded,
+                                                            ));
                                                         }
                                                         ui.label(&signal.display_name)
                                                             .on_hover_text(&signal.item_id);
@@ -326,35 +341,38 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                 }
                                                 ColumnId::Value => {
                                                     row.col(|ui| {
-                                                        let color =
-                                                            if app.settings.options.show_colors {
-                                                                quality_color(signal.quality.kind)
-                                                            } else {
-                                                                ui.visuals().text_color()
-                                                            };
-                                                        ui.label(
-                                                            egui::RichText::new(
-                                                                signal.value.to_string(),
-                                                            )
-                                                            .monospace()
-                                                            .color(color),
+                                                        // UI2: the value is always neutral; the
+                                                        // quality is told by the pill / dot.
+                                                        let color = ui.visuals().text_color();
+                                                        paint_change_flash(
+                                                            ui,
+                                                            signal.change_flash(now),
+                                                        );
+                                                        let numeric =
+                                                            is_numeric_value(&signal.value);
+                                                        value_text_cell(
+                                                            ui,
+                                                            signal.value.to_string(),
+                                                            numeric,
+                                                            color,
                                                         )
                                                         .on_hover_text(&signal.quality.text);
                                                     });
                                                 }
                                                 ColumnId::Quality => {
                                                     row.col(|ui| {
-                                                        let color =
-                                                            if app.settings.options.show_colors {
-                                                                quality_color(signal.quality.kind)
-                                                            } else {
-                                                                ui.visuals().text_color()
-                                                            };
-                                                        ui.label(
-                                                            egui::RichText::new(
-                                                                &signal.quality.text,
+                                                        let tint = show_colors.then(|| {
+                                                            quality_tint(
+                                                                ui,
+                                                                true,
+                                                                signal.pending,
+                                                                signal.quality.kind,
                                                             )
-                                                            .color(color),
+                                                        });
+                                                        quality_pill(
+                                                            ui,
+                                                            &signal.quality.text,
+                                                            tint,
                                                         );
                                                     });
                                                 }
@@ -437,17 +455,20 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                         });
                     let table_out = table_out.inner;
 
-                    // Localized hint INSIDE the (otherwise empty) table body. Painted, not
-                    // a widget, so it cannot swallow drops.
+                    // UI10: the empty-table prompt, INSIDE the (otherwise empty)
+                    // table body: a big hint, a second line and (without a
+                    // session) a connect button. Only the button takes the
+                    // pointer; everything else is painted / non-interactive,
+                    // so the area stays a drop zone and Enter stays the table's.
                     if empty {
-                        let rect = table_out.inner_rect;
-                        ui.painter().text(
-                            rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            tr(lang, Tr::TableEmptyInner),
-                            egui::FontId::proportional(15.0),
-                            ui.visuals().weak_text_color(),
+                        let area = egui::Rect::from_x_y_ranges(
+                            ui.max_rect().x_range(),
+                            (table_out.inner_rect.top() + TABLE_HEADER_HEIGHT)
+                                ..=ui.max_rect().bottom(),
                         );
+                        if empty_table_prompt(ui, lang, area, app.active_session.is_some()) {
+                            app.open_connect_dialog();
+                        }
                     }
 
                     #[cfg(test)]
@@ -549,6 +570,153 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
             }
         });
 }
+/// Height reserved for the empty-table prompt (hint, second line, button).
+const EMPTY_PROMPT_HEIGHT: f32 = 110.0;
+
+/// UI10: the prompt of an empty table, centred in `area`. Without an active
+/// session it offers «Connect (Ctrl+N)» (returns true when pressed); with one
+/// it says how to fill the table. Never keeps the keyboard focus, so Enter and
+/// the arrows stay with the table / tree.
+fn empty_table_prompt(
+    ui: &mut egui::Ui,
+    lang: crate::i18n::Lang,
+    area: egui::Rect,
+    has_session: bool,
+) -> bool {
+    let rect = egui::Rect::from_center_size(
+        area.center(),
+        egui::vec2(area.width(), EMPTY_PROMPT_HEIGHT.min(area.height())),
+    );
+    let mut connect = false;
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::top_down(egui::Align::Center)),
+        |ui| {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(tr(lang, Tr::TableEmptyInner))
+                        .size(18.0)
+                        .color(ui.visuals().weak_text_color()),
+                )
+                .selectable(false),
+            );
+            ui.add_space(6.0);
+            let second = if has_session {
+                Tr::TableEmptyDragHint
+            } else {
+                Tr::TableEmptyKeys
+            };
+            ui.add(
+                egui::Label::new(egui::RichText::new(tr(lang, second)).weak()).selectable(false),
+            );
+            if !has_session {
+                ui.add_space(12.0);
+                let button = ui.add(
+                    egui::Button::new(tr(lang, Tr::TableEmptyConnect))
+                        .min_size(egui::vec2(180.0, 28.0)),
+                );
+                // A pressed button must not keep egui's focus: Enter would press
+                // it again (the table owns Enter).
+                if button.has_focus() {
+                    button.surrender_focus();
+                }
+                connect = button.clicked();
+            }
+        },
+    );
+    connect
+}
+
+/// UI4: the accent-coloured glow behind a value that has just changed. `flash`
+/// runs from 1.0 (just changed) to 0.0; while it fades the table keeps asking
+/// for new frames, so the glow dies out smoothly even with no other input.
+fn paint_change_flash(ui: &egui::Ui, flash: f32) {
+    if flash <= 0.0 {
+        return;
+    }
+    let accent = ui.visuals().selection.bg_fill;
+    ui.painter().rect_filled(
+        ui.max_rect(),
+        2.0,
+        accent.gamma_multiply(CHANGE_FLASH_MAX_ALPHA * flash),
+    );
+    ui.ctx().request_repaint();
+}
+
+/// The glow's opacity right after a change.
+const CHANGE_FLASH_MAX_ALPHA: f32 = 0.8;
+
+/// Gap between a right-aligned number and the right edge of its cell.
+const NUMBER_RIGHT_PADDING: f32 = 8.0;
+
+/// UI5: a value in the «Value» column. A number is monospace and sticks to the
+/// right edge of the cell; strings, structure summaries, dates and the rest
+/// keep the left edge.
+fn value_text_cell(
+    ui: &mut egui::Ui,
+    text: impl Into<String>,
+    numeric: bool,
+    color: egui::Color32,
+) -> egui::Response {
+    let text = text.into();
+    if numeric {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            // A little air before the next column (the quality pill).
+            ui.add_space(NUMBER_RIGHT_PADDING);
+            ui.label(egui::RichText::new(text).monospace().color(color))
+        })
+        .inner
+    } else {
+        ui.label(egui::RichText::new(text).color(color))
+    }
+}
+
+/// UI2: the color a quality is shown in: yellow while the first value is still
+/// pending, else the quality's color; the neutral text color when the
+/// «show colors» option is off.
+fn quality_tint(
+    ui: &egui::Ui,
+    show_colors: bool,
+    pending: bool,
+    kind: crate::bff::model::QualityKind,
+) -> egui::Color32 {
+    if !show_colors {
+        ui.visuals().weak_text_color()
+    } else if pending {
+        yellow()
+    } else {
+        quality_color(kind)
+    }
+}
+
+/// UI2: a quality as a small rounded pill: the quality's color on a soft
+/// background of the same color. `tint` is `None` when colors are switched off:
+/// then the pill is neutral.
+fn quality_pill(ui: &mut egui::Ui, text: &str, tint: Option<egui::Color32>) {
+    let (fg, bg) = match tint {
+        Some(color) => (color, color.gamma_multiply(QUALITY_PILL_BG_STRENGTH)),
+        None => (
+            ui.visuals().text_color(),
+            ui.visuals().widgets.noninteractive.weak_bg_fill,
+        ),
+    };
+    egui::Frame::new()
+        .fill(bg)
+        .corner_radius(8)
+        .inner_margin(egui::Margin::symmetric(6, 1))
+        .show(ui, |ui| {
+            ui.add(
+                egui::Label::new(egui::RichText::new(text).color(fg).size(12.0))
+                    .selectable(false)
+                    .truncate(),
+            );
+        });
+}
+
+/// How strongly the quality color shows through in the pill's background.
+const QUALITY_PILL_BG_STRENGTH: f32 = 0.18;
+
 /// One expanded field of a row value, borrowed from its [`TableLine`].
 struct FieldLine<'a> {
     key: crate::bff::model::ItemKey,
@@ -559,20 +727,37 @@ struct FieldLine<'a> {
     type_text: &'a str,
     expandable: bool,
     expanded: bool,
+    numeric: bool,
 }
 
-/// The ">" / "v" expander of a structured value (same look as the tag tree).
-/// Returns its rect: the table row owns the pointer, so the caller turns a row
-/// click inside this rect into expand / collapse.
-fn value_toggle(ui: &mut egui::Ui, expanded: bool) -> egui::Rect {
-    let arrow = if expanded { "v" } else { ">" };
-    ui.add_sized(
-        [16.0, 16.0],
-        egui::Label::new(egui::RichText::new(arrow).strong())
-            .selectable(false)
-            .sense(egui::Sense::hover()),
-    )
-    .rect
+/// The expander of a structured value (same look as the tag tree): a painted
+/// triangle that turns smoothly between closed and open. Returns its rect: the
+/// table row owns the pointer, so the caller turns a row click inside this rect
+/// into expand / collapse. The accessible name says what a click does.
+fn value_toggle(
+    ui: &mut egui::Ui,
+    lang: crate::i18n::Lang,
+    id: egui::Id,
+    expanded: bool,
+) -> egui::Rect {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+    let name = tr(
+        lang,
+        if expanded {
+            Tr::TableValueCollapse
+        } else {
+            Tr::TableValueExpand
+        },
+    );
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
+    let openness = ui.ctx().animate_bool(id, expanded);
+    let color = if response.hovered() {
+        ui.visuals().strong_text_color()
+    } else {
+        ui.visuals().text_color()
+    };
+    super::paint::paint_expander(ui.painter(), rect, openness, color);
+    rect
 }
 
 /// V3: a field / element line under an expanded row: indented name with its
@@ -581,6 +766,7 @@ fn value_toggle(ui: &mut egui::Ui, expanded: bool) -> egui::Rect {
 fn draw_field_line(
     row: &mut egui_extras::TableRow<'_, '_>,
     columns: &[ColumnId],
+    lang: crate::i18n::Lang,
     field: &FieldLine<'_>,
     index: usize,
     actions: &mut Vec<TableAction>,
@@ -592,7 +778,12 @@ fn draw_field_line(
                 row.col(|ui| {
                     ui.add_space(field.depth as f32 * 16.0);
                     if field.expandable {
-                        toggle_rect = Some(value_toggle(ui, field.expanded));
+                        toggle_rect = Some(value_toggle(
+                            ui,
+                            lang,
+                            egui::Id::NULL.with(("value_toggle", field.key, field.path)),
+                            field.expanded,
+                        ));
                     } else {
                         ui.add_space(16.0 + ui.spacing().item_spacing.x);
                     }
@@ -601,7 +792,8 @@ fn draw_field_line(
             }
             ColumnId::Value => {
                 row.col(|ui| {
-                    ui.label(egui::RichText::new(field.value_text).monospace());
+                    let color = ui.visuals().text_color();
+                    value_text_cell(ui, field.value_text, field.numeric, color);
                 });
             }
             ColumnId::Type => {

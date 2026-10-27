@@ -2338,7 +2338,7 @@ fn v3_structured_value_expands_into_field_lines() {
     );
     assert!(h.query_by_label("Speed").is_none(), "collapsed at first");
 
-    let at = h.get_by_label(">").rect().center();
+    let at = h.get_by_label("Развернуть значение").rect().center();
     pointer_click(&h, at, PointerButton::Primary);
     h.run_steps(3);
     assert!(h.state().expanded_values.contains(&(key, vec![])));
@@ -2352,7 +2352,7 @@ fn v3_structured_value_expands_into_field_lines() {
 
     // Expand the nested structure (the first closed expander is Motor's).
     let at = h
-        .get_all_by_label(">")
+        .get_all_by_label("Развернуть значение")
         .next()
         .expect("nested expander")
         .rect()

@@ -194,6 +194,15 @@ pub enum Tr {
     /// Tells the user how to populate it; rendered on the same column grid so
     /// the table headers stay visible (it never replaces the table).
     TableEmptyInner,
+    /// UI1: accessible name / tooltip of the expander of a structured value.
+    TableValueExpand,
+    TableValueCollapse,
+    /// UI10: second line of the empty table without a session: the keys.
+    TableEmptyKeys,
+    /// UI10: second line of the empty table with an active session.
+    TableEmptyDragHint,
+    /// UI10: the button of the empty table without a session.
+    TableEmptyConnect,
     EscHint,
     PkmMoveColumn,
     MoveLeft,
@@ -876,6 +885,11 @@ fn ru(key: Tr) -> &'static str {
         TableEmptyHelp => "Подключитесь к серверу, раскройте ветку и добавьте сигналы.",
         TableHint => "Подсказка: двойной щелчок в дереве по сигналу или ПКМ → Добавить.",
         TableEmptyInner => "Нет сигналов — добавьте из дерева, через ПКМ или перетащите сюда",
+        TableValueExpand => "Развернуть значение",
+        TableValueCollapse => "Свернуть значение",
+        TableEmptyKeys => "Ctrl+N — подключиться к серверу · Tab / F6 — дерево и таблица",
+        TableEmptyDragHint => "Перетащите теги из дерева или нажмите Enter на узле",
+        TableEmptyConnect => "Подключиться (Ctrl+N)",
         EscHint => "Нажмите Esc, чтобы снять выделение. ПКМ по строке — меню.",
         PkmMoveColumn => "ПКМ — переместить столбец",
         MoveLeft => "Влево",
@@ -1455,6 +1469,11 @@ fn en(key: Tr) -> &'static str {
         TableEmptyHelp => "Connect to a server, expand a branch and add signals.",
         TableHint => "Hint: double-click a signal in the tree or right-click → Add.",
         TableEmptyInner => "No signals — add from the tree, via right-click or drag them here",
+        TableValueExpand => "Expand value",
+        TableValueCollapse => "Collapse value",
+        TableEmptyKeys => "Ctrl+N — connect to a server · Tab / F6 — tree and table",
+        TableEmptyDragHint => "Drag tags from the tree or press Enter on a node",
+        TableEmptyConnect => "Connect (Ctrl+N)",
         EscHint => "Press Esc to clear the selection. Right-click a row for the menu.",
         PkmMoveColumn => "Right-click to move the column",
         MoveLeft => "Left",
@@ -2020,6 +2039,11 @@ fn zh(key: Tr) -> &'static str {
         TableEmptyHelp => "连接到服务器，展开分支并添加信号。",
         TableHint => "提示: 在树中双击信号或右键单击 → 添加。",
         TableEmptyInner => "无信号 — 请从树中添加、右键添加或拖放到此处",
+        TableValueExpand => "展开值",
+        TableValueCollapse => "折叠值",
+        TableEmptyKeys => "Ctrl+N — 连接服务器 · Tab / F6 — 切换树和表格",
+        TableEmptyDragHint => "从树中拖动标签，或在节点上按 Enter",
+        TableEmptyConnect => "连接 (Ctrl+N)",
         EscHint => "按 Esc 清除选择。右键单击行可打开菜单。",
         PkmMoveColumn => "右键单击以移动列",
         MoveLeft => "左移",
