@@ -1,5 +1,6 @@
 use super::colors::{green, red, yellow};
 use super::dialogs::{security_mode_label, security_policy_label};
+use super::paint::{paint_lock_icon, painter_x_button};
 use super::truncate_text;
 use crate::app::{App, SessionState};
 use crate::bff::model::{Protocol, SessionId, UaSecurityMode, UaSecurityPolicy};
@@ -23,15 +24,27 @@ pub(super) fn session_tab_strip(app: &mut App, ui: &mut egui::Ui) {
     let mut remove = None;
     let mut new_connection = false;
 
-    // (id, name, state, tooltip head, security suffix)
-    type TabRow = (SessionId, String, SessionState, String, Option<String>);
+    // (id, name, state, tooltip head, security suffix, protocol prefix)
+    type TabRow = (
+        SessionId,
+        String,
+        SessionState,
+        String,
+        Option<String>,
+        &'static str,
+    );
     let visible: Vec<TabRow> = app
         .sessions
         .iter()
         .filter(|s| s.visible)
         .map(|s| {
+            let prefix = match s.protocol() {
+                Protocol::OpcDa => "DA",
+                _ => "UA",
+            };
             // V2: endpoints of one server differ by security only, so an
-            // explicit choice is part of the tab and of its tooltip.
+            // explicit choice is part of the tab (a padlock), of its tooltip
+            // and of its accessible name.
             match security_suffix(&s.endpoint, lang) {
                 Some((short, long)) => (
                     s.id,
@@ -39,6 +52,7 @@ pub(super) fn session_tab_strip(app: &mut App, ui: &mut egui::Ui) {
                     s.state,
                     format!("{}\n{long}", s.display_name),
                     Some(short),
+                    prefix,
                 ),
                 None => (
                     s.id,
@@ -46,6 +60,7 @@ pub(super) fn session_tab_strip(app: &mut App, ui: &mut egui::Ui) {
                     s.state,
                     s.display_name.clone(),
                     None,
+                    prefix,
                 ),
             }
         })
@@ -59,46 +74,39 @@ pub(super) fn session_tab_strip(app: &mut App, ui: &mut egui::Ui) {
             .auto_shrink([false, true])
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    for (id, label, state, full, security) in &visible {
-                        let color = tab_state_color(*state);
-                        let prefix = match app
-                            .sessions
-                            .iter()
-                            .find(|s| s.id == *id)
-                            .map(|s| s.protocol())
-                        {
-                            Some(Protocol::OpcDa) => "DA",
-                            _ => "UA",
-                        };
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    for (id, label, state, full, security, prefix) in &visible {
                         let short = truncate_text(label, TRUNCATE_TAB_LABEL);
-                        let tab_label = match security {
-                            Some(security) => format!("{prefix}: {short} · {security}"),
-                            None => format!("{prefix}: {short}"),
+                        let tab_label = format!("{prefix}: {short}");
+                        let access_label = match security {
+                            Some(security) => format!("{tab_label} · {security}"),
+                            None => tab_label.clone(),
                         };
                         let tooltip = format!("{}\n{}", full, state_text(*state, lang));
                         let selected = app.active_session == Some(*id);
-                        ui.horizontal(|ui| {
-                            ui.colored_label(color, "●");
-                            let response = ui.selectable_label(selected, tab_label.as_str());
-                            if response.clicked() {
-                                switch = Some(*id);
+                        let (response, closed) = session_tab(
+                            ui,
+                            &TabContent {
+                                selected,
+                                dot: tab_state_color(*state),
+                                text: &tab_label,
+                                access_label: &access_label,
+                                locked: security.is_some(),
+                                close_tooltip: tr(lang, Tr::CloseTabTooltip),
+                            },
+                        );
+                        let response = response.on_hover_text(&tooltip);
+                        if closed {
+                            close = Some(*id);
+                        } else if response.clicked() {
+                            switch = Some(*id);
+                        }
+                        response.context_menu(|ui| {
+                            if ui.button(tr(lang, Tr::RemoveFromList)).clicked() {
+                                remove = Some(*id);
+                                ui.close();
                             }
-                            response.context_menu(|ui| {
-                                if ui.button(tr(lang, Tr::RemoveFromList)).clicked() {
-                                    remove = Some(*id);
-                                    ui.close();
-                                }
-                            });
-                            if ui
-                                .small_button("×")
-                                .on_hover_text(tr(lang, Tr::CloseTabTooltip))
-                                .clicked()
-                            {
-                                close = Some(*id);
-                            }
-                        })
-                        .response
-                        .on_hover_text(&tooltip);
+                        });
                     }
                     // «+» at the END of the tab strip opens the connect dialog
                     // (a new connection). Unlike a tab's «×», this never hides
@@ -137,6 +145,130 @@ pub(super) fn session_tab_strip(app: &mut App, ui: &mut egui::Ui) {
     if new_connection {
         app.open_connect_dialog();
     }
+}
+
+/// What one session tab shows.
+struct TabContent<'a> {
+    selected: bool,
+    /// State dot colour.
+    dot: egui::Color32,
+    /// Visible text («DA: name»).
+    text: &'a str,
+    /// Accessible name: the visible text plus the security, if any.
+    access_label: &'a str,
+    /// Draw the padlock (an explicitly chosen UA security).
+    locked: bool,
+    /// Tooltip and accessible name of the close button.
+    close_tooltip: &'a str,
+}
+
+const TAB_HEIGHT: f32 = 26.0;
+const TAB_ACCENT_HEIGHT: f32 = 2.0;
+const TAB_PAD_X: f32 = 8.0;
+const TAB_GAP: f32 = 6.0;
+const TAB_DOT: f32 = 8.0;
+const TAB_LOCK: f32 = 12.0;
+const TAB_CLOSE: f32 = 18.0;
+
+/// UI3: one session tab, painted. The active tab sits on a slightly lighter
+/// background with an accent bar along its bottom edge; an inactive one has no
+/// background until the pointer is over it. The state dot and the padlock are
+/// painted (no font glyph), and «×» shows only on the active tab or while the
+/// pointer is over the tab (its place is always reserved, so the tabs do not
+/// jump). Returns the tab's response and whether «×» was clicked.
+fn session_tab(ui: &mut egui::Ui, tab: &TabContent<'_>) -> (egui::Response, bool) {
+    let visuals = ui.visuals();
+    let text_color = if tab.selected {
+        visuals.strong_text_color()
+    } else {
+        visuals.weak_text_color()
+    };
+    let galley = ui.painter().layout_no_wrap(
+        tab.text.to_string(),
+        egui::TextStyle::Button.resolve(ui.style()),
+        text_color,
+    );
+    let lock_width = if tab.locked { TAB_GAP + TAB_LOCK } else { 0.0 };
+    let width = TAB_PAD_X
+        + TAB_DOT
+        + TAB_GAP
+        + galley.size().x
+        + lock_width
+        + TAB_GAP
+        + TAB_CLOSE
+        + TAB_PAD_X * 0.5;
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(width, TAB_HEIGHT), egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::Role::Button, true, tab.selected, tab.access_label)
+    });
+    let hovered = ui.rect_contains_pointer(rect);
+
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.visuals();
+        let fill = if tab.selected {
+            visuals
+                .panel_fill
+                .lerp_to_gamma(visuals.strong_text_color(), 0.13)
+        } else if hovered {
+            visuals
+                .panel_fill
+                .lerp_to_gamma(visuals.strong_text_color(), 0.05)
+        } else {
+            egui::Color32::TRANSPARENT
+        };
+        let top_round = egui::CornerRadius {
+            nw: 5,
+            ne: 5,
+            sw: 0,
+            se: 0,
+        };
+        if fill != egui::Color32::TRANSPARENT {
+            ui.painter().rect_filled(rect, top_round, fill);
+        }
+        if tab.selected {
+            let bar = egui::Rect::from_min_size(
+                egui::pos2(rect.min.x, rect.max.y - TAB_ACCENT_HEIGHT),
+                egui::vec2(rect.width(), TAB_ACCENT_HEIGHT),
+            );
+            ui.painter()
+                .rect_filled(bar, 0.0, visuals.selection.stroke.color);
+        }
+        let mut x = rect.min.x + TAB_PAD_X;
+        let cy = rect.center().y - TAB_ACCENT_HEIGHT * 0.5;
+        ui.painter()
+            .circle_filled(egui::pos2(x + TAB_DOT * 0.5, cy), TAB_DOT * 0.5, tab.dot);
+        x += TAB_DOT + TAB_GAP;
+        let text_pos = egui::pos2(x, cy - galley.size().y * 0.5);
+        x += galley.size().x;
+        ui.painter().galley(text_pos, galley, text_color);
+        if tab.locked {
+            x += TAB_GAP;
+            let lock_rect = egui::Rect::from_center_size(
+                egui::pos2(x + TAB_LOCK * 0.5, cy),
+                egui::vec2(TAB_LOCK, TAB_LOCK),
+            );
+            paint_lock_icon(ui.painter(), lock_rect, text_color);
+        }
+    }
+
+    let mut closed = false;
+    if tab.selected || hovered {
+        let close_rect = egui::Rect::from_center_size(
+            egui::pos2(
+                rect.max.x - TAB_PAD_X * 0.5 - TAB_CLOSE * 0.5,
+                rect.center().y - TAB_ACCENT_HEIGHT * 0.5,
+            ),
+            egui::vec2(TAB_CLOSE, TAB_CLOSE),
+        );
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(close_rect)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        closed = painter_x_button(&mut child, TAB_CLOSE, tab.close_tooltip);
+    }
+    (response, closed)
 }
 
 /// Short and full security text of an explicitly chosen UA endpoint

@@ -4088,8 +4088,10 @@ fn tab_close_button_only_hides_view() {
     let mut h = harness(app);
 
     // The tab × is inside the central panel (x >= 400), unlike the servers ×.
+    // UI3: the tab's close button is painted; its accessible name is the
+    // tooltip. The active tab shows it without hovering.
     let tab_close = h
-        .query_all_by_label("×")
+        .query_all_by_label("Скрыть вкладку (контейнер сохраняется)")
         .find(|n| n.rect().center().x >= 400.0)
         .expect("tab ×");
     tab_close.click();
