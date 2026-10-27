@@ -43,6 +43,9 @@ pub const MAX_UA_SESSIONS: usize = 100;
 /// server is asked to sample at "its fastest rate" (`0`), which a PLC-class
 /// server may take as a request to sample every cycle.
 pub const UA_SAMPLING_INTERVAL_MS: f64 = -1.0;
+/// Subscription lifetime / keep-alive counts (lifetime must be >= 3 * keep-alive).
+pub const UA_SUBSCRIPTION_LIFETIME_COUNT: u32 = 60;
+pub const UA_SUBSCRIPTION_KEEPALIVE_COUNT: u32 = 20;
 /// Worker threads of the OPC UA runtime. Sessions, searches and connects are
 /// separate tasks; a couple of threads keep the CPU-bound part of a secure
 /// handshake (RSA) of one session from stalling the I/O of the others.

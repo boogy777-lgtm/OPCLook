@@ -13,16 +13,17 @@ use crate::bff::model::{
 use crate::bff::net::{BoundConnectionSource, BoundConnectorBuilder, NetworkBinding};
 use crate::constants::{
     CONNECT_TIMEOUT, DISCOVERY_GUARD_TIMEOUT, GRACEFUL_CLOSE_TIMEOUT, IO_TIMEOUT,
-    READ_MAX_ITEMS_PER_CALL, UA_SAMPLING_INTERVAL_MS,
+    READ_MAX_ITEMS_PER_CALL, UA_SAMPLING_INTERVAL_MS, UA_SUBSCRIPTION_KEEPALIVE_COUNT,
+    UA_SUBSCRIPTION_LIFETIME_COUNT,
 };
 use opcua::client::{
     ClientBuilder, DataChangeCallback, IdentityToken, MonitoredItem, Password, Session,
 };
 use opcua::types::{
     AttributeId, DataValue as UaDataValue, EndpointDescription, ExtensionObject,
-    MessageSecurityMode, MonitoredItemCreateRequest, MonitoringMode, MonitoringParameters, NodeId,
-    NumericRange, QualifiedName, ReadValueId, StatusCode, TimestampsToReturn, UserTokenPolicy,
-    UserTokenType, VariantScalarTypeId,
+    MessageSecurityMode, MonitoredItemCreateRequest, MonitoredItemModifyRequest, MonitoringMode,
+    MonitoringParameters, NodeId, NumericRange, QualifiedName, ReadValueId, StatusCode,
+    TimestampsToReturn, UserTokenPolicy, UserTokenType, VariantScalarTypeId,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -47,8 +48,13 @@ pub(super) struct UaSession {
     /// Requested publishing interval (ms) for the push subscription; mirrors the
     /// app's update interval. 0 until ConfigureUaSubscription arrives.
     pub(super) publishing_interval_ms: u64,
-    /// Absolute deadband for DataChangeFilter (0 = off). Applied at creation.
+    /// Absolute deadband for DataChangeFilter (0 = off). Used for new items and
+    /// pushed to the live ones by `apply_subscription_settings`.
     pub(super) deadband: f64,
+    /// Publishing interval (ms) the live subscription actually runs with.
+    pub(super) applied_interval_ms: u64,
+    /// Deadband the live monitored items actually carry.
+    pub(super) applied_deadband: f64,
     /// Server-assigned monitored item id of every item that is really monitored
     /// (created with a Good status). `delete`/`modify` address items by this id,
     /// NOT by the client handle (`ItemKey`).
@@ -376,8 +382,9 @@ impl UaSession {
             });
         let (created, timed_out) = timeout_drain(
             self.session.create_subscription(
-                interval, 60,   // lifetime count (>= 3 * keep_alive)
-                20,   // keep_alive count
+                interval,
+                UA_SUBSCRIPTION_LIFETIME_COUNT,
+                UA_SUBSCRIPTION_KEEPALIVE_COUNT,
                 0,    // max_notifications_per_publish (0 = no limit)
                 0,    // priority
                 true, // publishing_enabled
@@ -395,7 +402,133 @@ impl UaSession {
         };
         let sub_id = created.map_err(|e| format!("не удалось создать подписку OPC UA: {e}"))?;
         self.subscription_id = Some(sub_id);
+        self.applied_interval_ms = interval_ms;
+        self.applied_deadband = self.deadband;
         Ok(())
+    }
+
+    /// Applies new update-interval / deadband settings to the LIVE subscription
+    /// (`ModifySubscription` + `ModifyMonitoredItems`). Without a subscription the
+    /// values are only stored and used when it is created. Returns the problems
+    /// found, each one a journal line; an empty list means everything applied.
+    pub(super) async fn apply_subscription_settings(
+        &mut self,
+        publishing_interval_ms: u64,
+        deadband: f64,
+    ) -> Vec<String> {
+        let interval_ms = publishing_interval_ms.clamp(100, 3600_000);
+        let deadband = if deadband.is_finite() {
+            deadband.max(0.0)
+        } else {
+            0.0
+        };
+        self.publishing_interval_ms = interval_ms;
+        self.deadband = deadband;
+        let Some(sub_id) = self.subscription_id else {
+            return Vec::new();
+        };
+        let mut problems = Vec::new();
+
+        if interval_ms != self.applied_interval_ms {
+            let (modified, timed_out) = timeout_drain(
+                self.session.modify_subscription(
+                    sub_id,
+                    Duration::from_millis(interval_ms),
+                    UA_SUBSCRIPTION_LIFETIME_COUNT,
+                    UA_SUBSCRIPTION_KEEPALIVE_COUNT,
+                    0,
+                    0,
+                ),
+                IO_TIMEOUT,
+            )
+            .await;
+            if timed_out {
+                self.timed_out = true;
+                problems.push("подписка: таймаут изменения интервала публикации".to_string());
+                return problems;
+            }
+            match modified {
+                Some(Ok(())) => self.applied_interval_ms = interval_ms,
+                Some(Err(e)) => {
+                    problems.push(format!("подписка: не удалось изменить интервал: {e}"))
+                }
+                None => {}
+            }
+        }
+
+        if deadband != self.applied_deadband {
+            let mut targets: Vec<(ItemKey, u32)> = self
+                .monitored
+                .iter()
+                .filter(|(key, _)| !self.unfiltered.contains(key))
+                .map(|(key, id)| (*key, *id))
+                .collect();
+            targets.sort_unstable();
+            let mut failed = 0usize;
+            for chunk in targets.chunks(READ_MAX_ITEMS_PER_CALL.max(1)) {
+                let requests: Vec<MonitoredItemModifyRequest> = chunk
+                    .iter()
+                    .map(|(key, id)| MonitoredItemModifyRequest {
+                        monitored_item_id: *id,
+                        requested_parameters: MonitoringParameters {
+                            client_handle: *key,
+                            sampling_interval: UA_SAMPLING_INTERVAL_MS,
+                            filter: data_change_filter(deadband),
+                            queue_size: 1,
+                            discard_oldest: true,
+                        },
+                    })
+                    .collect();
+                let (modified, timed_out) = timeout_drain(
+                    self.session.modify_monitored_items(
+                        sub_id,
+                        TimestampsToReturn::Both,
+                        &requests,
+                    ),
+                    IO_TIMEOUT,
+                )
+                .await;
+                if timed_out {
+                    self.timed_out = true;
+                    problems.push("подписка: таймаут изменения мёртвой зоны".to_string());
+                    return problems;
+                }
+                match modified {
+                    Some(Ok(results)) => {
+                        for (index, (key, id)) in chunk.iter().enumerate() {
+                            let status = results.get(index).map(|r| r.status_code);
+                            match status {
+                                Some(status) if status.is_bad() => {
+                                    if is_filter_refusal(status) {
+                                        // Not a numeric node: it simply has no
+                                        // deadband. Keep it monitored as it is.
+                                        self.unfiltered.insert(*key);
+                                    } else {
+                                        failed += 1;
+                                    }
+                                }
+                                Some(_) => {}
+                                None => failed += 1,
+                            }
+                            let _ = id;
+                        }
+                    }
+                    Some(Err(e)) => {
+                        problems.push(format!("подписка: не удалось изменить мёртвую зону: {e}"));
+                        return problems;
+                    }
+                    None => return problems,
+                }
+            }
+            if failed > 0 {
+                problems.push(format!(
+                    "подписка: сервер отклонил изменение мёртвой зоны для {failed} элементов"
+                ));
+            } else {
+                self.applied_deadband = deadband;
+            }
+        }
+        problems
     }
 
     /// Builds the `CreateMonitoredItems` entry of one node.
@@ -830,6 +963,8 @@ pub(super) async fn connect(
         subscription_id: None,
         publishing_interval_ms: 0,
         deadband: 0.0,
+        applied_interval_ms: 0,
+        applied_deadband: 0.0,
         monitored: HashMap::new(),
         unfiltered: HashSet::new(),
         timed_out: false,

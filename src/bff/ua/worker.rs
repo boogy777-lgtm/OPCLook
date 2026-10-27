@@ -835,8 +835,22 @@ impl Actor {
                 publishing_interval_ms,
                 deadband,
             } => {
-                self.session.publishing_interval_ms = publishing_interval_ms.max(100);
-                self.session.deadband = deadband.max(0.0);
+                let problems = self
+                    .session
+                    .apply_subscription_settings(publishing_interval_ms, deadband)
+                    .await;
+                for message in problems {
+                    self.send_event(0, EventKind::Log { message });
+                }
+                if self.session.timed_out {
+                    return self
+                        .close_timed_out(
+                            request_id,
+                            Operation::Subscription,
+                            "таймаут запроса OPC UA: сессия закрыта".to_string(),
+                        )
+                        .await;
+                }
                 Flow::Continue
             }
             CommandKind::AddItems { items } => {

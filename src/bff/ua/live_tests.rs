@@ -785,3 +785,131 @@ fn u1_shutdown_closes_live_sessions_and_pending_connects_promptly() {
         started.elapsed()
     );
 }
+
+// ---------------------------------------------------------------------------
+// U4: ConfigureUaSubscription reaches the live subscription
+// ---------------------------------------------------------------------------
+
+#[test]
+fn u4_deadband_change_is_applied_to_a_live_subscription() {
+    let server = TestServer::start(48621);
+    let mut app = Harness::new();
+    app.connect(1, Harness::endpoint(&server.url))
+        .expect("connect");
+    let added = app.add_items(1, &[(1, server.node("Level"))]);
+    assert!(matches!(added.first(), Some((1, Ok(_)))), "{added:?}");
+    assert!(
+        app.value_of(1, Duration::from_secs(10), |v| *v == Value::F64(1.0))
+            .is_some(),
+        "the initial value is pushed"
+    );
+
+    // The subscription is already running: a new deadband must reach it.
+    let _ = app.send(
+        1,
+        CommandKind::ConfigureUaSubscription {
+            publishing_interval_ms: 100,
+            deadband: 5.0,
+        },
+    );
+    std::thread::sleep(Duration::from_millis(500));
+    server.set("Level", Variant::Double(2.0));
+    assert!(
+        app.value_of(1, Duration::from_secs(2), |v| *v == Value::F64(2.0))
+            .is_none(),
+        "a change inside the deadband must be filtered out"
+    );
+    server.set("Level", Variant::Double(10.0));
+    assert!(
+        app.value_of(1, Duration::from_secs(10), |v| *v == Value::F64(10.0))
+            .is_some(),
+        "a change beyond the deadband is delivered"
+    );
+
+    // And switching the deadband off again also reaches the live items.
+    let _ = app.send(
+        1,
+        CommandKind::ConfigureUaSubscription {
+            publishing_interval_ms: 100,
+            deadband: 0.0,
+        },
+    );
+    std::thread::sleep(Duration::from_millis(500));
+    server.set("Level", Variant::Double(10.5));
+    assert!(
+        app.value_of(1, Duration::from_secs(10), |v| *v == Value::F64(10.5))
+            .is_some(),
+        "without a deadband every change is delivered"
+    );
+}
+
+#[test]
+fn u4_publishing_interval_change_is_applied_to_a_live_subscription() {
+    let server = TestServer::start(48622);
+    let mut app = Harness::new();
+    app.connect(1, Harness::endpoint(&server.url))
+        .expect("connect");
+    let added = app.add_items(1, &[(1, server.node("Level"))]);
+    assert!(matches!(added.first(), Some((1, Ok(_)))), "{added:?}");
+    assert!(
+        app.value_of(1, Duration::from_secs(10), |v| *v == Value::F64(1.0))
+            .is_some()
+    );
+
+    // An hour between publishes: a change must not arrive any time soon.
+    let _ = app.send(
+        1,
+        CommandKind::ConfigureUaSubscription {
+            publishing_interval_ms: 3_600_000,
+            deadband: 0.0,
+        },
+    );
+    std::thread::sleep(Duration::from_millis(500));
+    server.set("Level", Variant::Double(3.0));
+    assert!(
+        app.value_of(1, Duration::from_secs(3), |v| *v == Value::F64(3.0))
+            .is_none(),
+        "the subscription still publishes at the old, fast interval"
+    );
+
+    // Back to a fast interval: the pending change is delivered.
+    let _ = app.send(
+        1,
+        CommandKind::ConfigureUaSubscription {
+            publishing_interval_ms: 100,
+            deadband: 0.0,
+        },
+    );
+    assert!(
+        app.value_of(1, Duration::from_secs(10), |v| *v == Value::F64(3.0))
+            .is_some(),
+        "the restored interval publishes the change"
+    );
+}
+
+#[test]
+fn u4_configure_before_the_first_item_is_used_when_the_subscription_is_created() {
+    let server = TestServer::start(48623);
+    let mut app = Harness::new();
+    app.connect(1, Harness::endpoint(&server.url))
+        .expect("connect");
+    let _ = app.send(
+        1,
+        CommandKind::ConfigureUaSubscription {
+            publishing_interval_ms: 100,
+            deadband: 5.0,
+        },
+    );
+    let added = app.add_items(1, &[(1, server.node("Level"))]);
+    assert!(matches!(added.first(), Some((1, Ok(_)))), "{added:?}");
+    assert!(
+        app.value_of(1, Duration::from_secs(10), |v| *v == Value::F64(1.0))
+            .is_some()
+    );
+    server.set("Level", Variant::Double(2.0));
+    assert!(
+        app.value_of(1, Duration::from_secs(2), |v| *v == Value::F64(2.0))
+            .is_none(),
+        "the stored deadband applies to items created later"
+    );
+}
