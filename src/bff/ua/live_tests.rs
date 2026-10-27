@@ -1401,3 +1401,95 @@ fn v3_custom_structure_reads_as_named_fields() {
         "a known structure is not an unresolved type"
     );
 }
+
+// ---------------------------------------------------------------------------
+// P1: a large dropped tree must keep pushing every tag
+// ---------------------------------------------------------------------------
+
+impl TestServer {
+    /// `count` Int32 variables `Big0..` (value 0) in a `Big` folder.
+    fn add_many(&self, count: usize) -> Vec<String> {
+        let space = self.nm.address_space();
+        let mut space = space.write();
+        let folder = NodeId::new(self.ns, "Big");
+        space.add_folder(&folder, "Big", "Big", &ObjectId::ObjectsFolder.into());
+        let rw = AccessLevel::CURRENT_READ | AccessLevel::CURRENT_WRITE;
+        let vars = (0..count)
+            .map(|i| {
+                let name = format!("Big{i}");
+                VariableBuilder::new(&NodeId::new(self.ns, name.as_str()), &name, &name)
+                    .data_type(DataTypeId::Int32)
+                    .value(Variant::Int32(0))
+                    .access_level(rw)
+                    .user_access_level(rw)
+                    .build()
+            })
+            .collect();
+        space.add_variables(vars, &folder);
+        (0..count).map(|i| self.node(&format!("Big{i}"))).collect()
+    }
+}
+
+#[test]
+fn p1_large_tree_in_batches_pushes_every_tag() {
+    let server = TestServer::start(48701);
+    let nodes = server.add_many(2000);
+    let mut app = Harness::new();
+    app.connect(1, Harness::endpoint(&server.url))
+        .expect("connect");
+    app.send(
+        1,
+        CommandKind::ConfigureUaSubscription {
+            publishing_interval_ms: 1000,
+            deadband: 0.0,
+        },
+    );
+    // Like «add children»: many AddItems batches sent without waiting.
+    let mut requests = Vec::new();
+    for (batch, chunk) in nodes.chunks(100).enumerate() {
+        let items = chunk
+            .iter()
+            .enumerate()
+            .map(|(i, node)| ItemSpec {
+                key: (batch * 100 + i + 1) as ItemKey,
+                item_id: node.clone(),
+            })
+            .collect();
+        requests.push(app.send(1, CommandKind::AddItems { items }));
+    }
+    for id in requests {
+        let reply = app.reply(id, Duration::from_secs(60)).expect("AddItems reply");
+        match reply.kind {
+            EventKind::AddItems { results } => {
+                assert!(results.iter().all(|(_, r)| r.is_ok()), "{results:?}")
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    let total = nodes.len();
+    let seen = |app: &mut Harness, want: Value, secs: u64| {
+        let mut got = std::collections::HashSet::new();
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        while got.len() < total && Instant::now() < deadline {
+            let _ = app.wait(Duration::from_millis(200), |event| match &event.kind {
+                EventKind::Values { values } => {
+                    for (k, v) in values {
+                        if v.value == want {
+                            got.insert(*k);
+                        }
+                    }
+                    Some(())
+                }
+                _ => None,
+            });
+        }
+        got.len()
+    };
+    let initial = seen(&mut app, Value::I64(0), 30);
+    assert_eq!(initial, total, "initial values pushed");
+    for i in 0..total {
+        server.set(&format!("Big{i}"), Variant::Int32(7));
+    }
+    let changed = seen(&mut app, Value::I64(7), 30);
+    assert_eq!(changed, total, "changed values pushed");
+}
