@@ -1,4 +1,4 @@
-use crate::bff::model::{DataValue, Quality, Value};
+use crate::bff::model::{BackendMsg, DataValue, Quality, Value};
 use opcua::types::{
     DataChangeFilter, DataChangeTrigger, DataValue as UaDataValue, DeadbandType, ExtensionObject,
     LocalizedText, NodeId, ObjectId, QualifiedName, StatusCode, UAString, Variant,
@@ -98,6 +98,7 @@ pub(super) fn ua_data_value(dv: &UaDataValue) -> DataValue {
         value,
         quality,
         timestamp: dv.source_timestamp.map(|dt| dt.as_chrono()),
+        reason: None,
     }
 }
 
@@ -186,14 +187,14 @@ fn flatten_dimensions(values: &Vec<Value>, dims: &[u32]) -> Vec<Value> {
 pub(crate) fn value_to_ua_variant(
     value: &Value,
     data_type: Option<VariantScalarTypeId>,
-) -> Result<Variant, String> {
+) -> Result<Variant, BackendMsg> {
     match data_type {
         Some(scalar) => scalar_value_to_variant(value, scalar),
         None => infer_value_to_variant(value),
     }
 }
 
-fn infer_value_to_variant(value: &Value) -> Result<Variant, String> {
+fn infer_value_to_variant(value: &Value) -> Result<Variant, BackendMsg> {
     Ok(match value {
         Value::Empty => Variant::Empty,
         Value::Bool(v) => Variant::Boolean(*v),
@@ -204,7 +205,7 @@ fn infer_value_to_variant(value: &Value) -> Result<Variant, String> {
         Value::Bytes(v) => Variant::ByteString(opcua::types::ByteString::from(v.clone())),
         Value::DateTime(v) => Variant::DateTime(Box::new(opcua::types::DateTime::from(*v))),
         Value::NodeId(v) => Variant::NodeId(Box::new(
-            parse_node(v).ok_or_else(|| format!("некорректный NodeId при записи: \"{v}\""))?,
+            parse_node(v).ok_or_else(|| BackendMsg::WriteNodeIdInvalid { value: v.clone() })?,
         )),
         Value::QualifiedName {
             namespace_index,
@@ -224,10 +225,7 @@ fn infer_value_to_variant(value: &Value) -> Result<Variant, String> {
         }
         Value::Array(items) => {
             if items.iter().any(|i| matches!(i, Value::Array(_))) {
-                return Err(
-                    "запись многомерных массивов не поддерживается; введите одномерный массив"
-                        .to_string(),
-                );
+                return Err(BackendMsg::WriteMultiDim);
             }
             let values = items
                 .iter()
@@ -243,7 +241,11 @@ fn infer_value_to_variant(value: &Value) -> Result<Variant, String> {
                 dimensions: None,
             }))
         }
-        Value::Other(v) => return Err(format!("нельзя записать значение типа Other: {v}")),
+        Value::Other(v) => {
+            return Err(BackendMsg::WriteOtherType {
+                value: v.to_string(),
+            });
+        }
     })
 }
 
@@ -251,8 +253,11 @@ fn infer_value_to_variant(value: &Value) -> Result<Variant, String> {
 ///
 /// Returns a descriptive error on a type/range mismatch so the caller can surface
 /// it in the journal instead of silently writing a value of the wrong type.
-fn scalar_value_to_variant(value: &Value, scalar: VariantScalarTypeId) -> Result<Variant, String> {
-    let build_scalar = |value: &Value| -> Result<Variant, String> {
+fn scalar_value_to_variant(
+    value: &Value,
+    scalar: VariantScalarTypeId,
+) -> Result<Variant, BackendMsg> {
+    let build_scalar = |value: &Value| -> Result<Variant, BackendMsg> {
         match scalar {
             VariantScalarTypeId::Boolean => {
                 let b = match value {
@@ -264,67 +269,95 @@ fn scalar_value_to_variant(value: &Value, scalar: VariantScalarTypeId) -> Result
                         "true" | "1" | "да" | "on" => true,
                         "false" | "0" | "нет" | "off" => false,
                         _ => {
-                            return Err(format!(
-                                "\"{s}\" не является логическим значением для Boolean"
-                            ));
+                            return Err(BackendMsg::WriteNotBoolean { value: s.clone() });
                         }
                     },
-                    _ => return Err("значение не является логическим для Boolean".to_string()),
+                    other => {
+                        return Err(BackendMsg::WriteNotBoolean {
+                            value: other.to_string(),
+                        });
+                    }
                 };
                 Ok(Variant::Boolean(b))
             }
             VariantScalarTypeId::SByte => {
                 let v = to_i64(value, "SByte")?;
-                i8::try_from(v)
-                    .map(|n| Variant::SByte(n))
-                    .map_err(|_| format!("значение {v} вне диапазона SByte"))
+                i8::try_from(v).map(|n| Variant::SByte(n)).map_err(|_| {
+                    BackendMsg::WriteOutOfRange {
+                        value: v.to_string(),
+                        ty: "SByte".to_string(),
+                    }
+                })
             }
             VariantScalarTypeId::Byte => {
                 let v = to_i64(value, "Byte")?;
                 u8::try_from(v)
                     .map(Variant::Byte)
-                    .map_err(|_| format!("значение {v} вне диапазона Byte"))
+                    .map_err(|_| BackendMsg::WriteOutOfRange {
+                        value: v.to_string(),
+                        ty: "Byte".to_string(),
+                    })
             }
             VariantScalarTypeId::Int16 => {
                 let v = to_i64(value, "Int16")?;
                 i16::try_from(v)
                     .map(Variant::Int16)
-                    .map_err(|_| format!("значение {v} вне диапазона Int16"))
+                    .map_err(|_| BackendMsg::WriteOutOfRange {
+                        value: v.to_string(),
+                        ty: "Int16".to_string(),
+                    })
             }
             VariantScalarTypeId::UInt16 => {
                 let v = to_i64(value, "UInt16")?;
                 u16::try_from(v)
                     .map(Variant::UInt16)
-                    .map_err(|_| format!("значение {v} вне диапазона UInt16"))
+                    .map_err(|_| BackendMsg::WriteOutOfRange {
+                        value: v.to_string(),
+                        ty: "UInt16".to_string(),
+                    })
             }
             VariantScalarTypeId::Int32 => {
                 let v = to_i64(value, "Int32")?;
                 i32::try_from(v)
                     .map(Variant::Int32)
-                    .map_err(|_| format!("значение {v} вне диапазона Int32"))
+                    .map_err(|_| BackendMsg::WriteOutOfRange {
+                        value: v.to_string(),
+                        ty: "Int32".to_string(),
+                    })
             }
             VariantScalarTypeId::UInt32 => {
                 let v = to_i64(value, "UInt32")?;
                 u32::try_from(v)
                     .map(Variant::UInt32)
-                    .map_err(|_| format!("значение {v} вне диапазона UInt32"))
+                    .map_err(|_| BackendMsg::WriteOutOfRange {
+                        value: v.to_string(),
+                        ty: "UInt32".to_string(),
+                    })
             }
             VariantScalarTypeId::Int64 => to_i64(value, "Int64").map(Variant::Int64),
             VariantScalarTypeId::UInt64 => {
                 let v = match value {
                     Value::U64(v) => *v,
-                    Value::I64(v) => u64::try_from(*v)
-                        .map_err(|_| format!("значение {v} вне диапазона UInt64"))?,
+                    Value::I64(v) => {
+                        u64::try_from(*v).map_err(|_| BackendMsg::WriteOutOfRange {
+                            value: v.to_string(),
+                            ty: "UInt64".to_string(),
+                        })?
+                    }
                     Value::F64(v) if *v >= 0.0 => *v as u64,
-                    Value::Str(s) => s
-                        .trim()
-                        .parse::<u64>()
-                        .map_err(|_| format!("\"{s}\" не является целым числом UInt64"))?,
+                    Value::Str(s) => {
+                        s.trim()
+                            .parse::<u64>()
+                            .map_err(|_| BackendMsg::WriteNotInteger {
+                                value: s.clone(),
+                                ty: "UInt64".to_string(),
+                            })?
+                    }
                     Value::Bool(b) => u64::from(*b),
                     other => {
-                        return Err(format!(
-                            "значение {other} не является беззнаковым целым для UInt64"
-                        ));
+                        return Err(BackendMsg::WriteNotUnsigned {
+                            value: other.to_string(),
+                        });
                     }
                 };
                 Ok(Variant::UInt64(v))
@@ -348,10 +381,10 @@ fn scalar_value_to_variant(value: &Value, scalar: VariantScalarTypeId) -> Result
                 Value::Str(s) => s
                     .parse::<opcua::types::DateTime>()
                     .map(|dt| Variant::DateTime(Box::new(dt)))
-                    .map_err(|_| format!("\"{s}\" не является датой/временем DateTime")),
-                other => Err(format!(
-                    "значение {other} не является датой/временем для DateTime"
-                )),
+                    .map_err(|_| BackendMsg::WriteNotDateTime { value: s.clone() }),
+                other => Err(BackendMsg::WriteNotDateTime {
+                    value: other.to_string(),
+                }),
             },
             VariantScalarTypeId::ByteString => match value {
                 Value::Bytes(v) => Ok(Variant::ByteString(opcua::types::ByteString::from(
@@ -360,27 +393,29 @@ fn scalar_value_to_variant(value: &Value, scalar: VariantScalarTypeId) -> Result
                 Value::Str(s) => Ok(Variant::ByteString(opcua::types::ByteString::from(
                     s.as_bytes().to_vec(),
                 ))),
-                other => Err(format!(
-                    "значение {other} не является байтовой строкой для ByteString"
-                )),
+                other => Err(BackendMsg::WriteNotByteString {
+                    value: other.to_string(),
+                }),
             },
             VariantScalarTypeId::LocalizedText => match value {
                 Value::Str(s) => Ok(Variant::LocalizedText(Box::new(LocalizedText::new("", s)))),
                 Value::LocalizedText { locale, text } => Ok(Variant::LocalizedText(Box::new(
                     LocalizedText::new(locale, text),
                 ))),
-                other => Err(format!(
-                    "значение {other} не является текстом для LocalizedText"
-                )),
+                other => Err(BackendMsg::WriteNotText {
+                    value: other.to_string(),
+                }),
             },
             VariantScalarTypeId::NodeId => match value {
                 Value::NodeId(s) => parse_node(s)
                     .map(|n| Variant::NodeId(Box::new(n)))
-                    .ok_or_else(|| format!("некорректный NodeId: \"{s}\"")),
+                    .ok_or_else(|| BackendMsg::WriteNodeIdInvalid { value: s.clone() }),
                 Value::Str(s) => parse_node(s)
                     .map(|n| Variant::NodeId(Box::new(n)))
-                    .ok_or_else(|| format!("некорректный NodeId: \"{s}\"")),
-                other => Err(format!("значение {other} не является NodeId")),
+                    .ok_or_else(|| BackendMsg::WriteNodeIdInvalid { value: s.clone() }),
+                other => Err(BackendMsg::WriteNotNodeId {
+                    value: other.to_string(),
+                }),
             },
             VariantScalarTypeId::QualifiedName => match value {
                 Value::QualifiedName {
@@ -399,74 +434,93 @@ fn scalar_value_to_variant(value: &Value, scalar: VariantScalarTypeId) -> Result
                 Value::Str(s) => {
                     let qn = match s.split_once(':') {
                         Some((ns, name)) => {
-                            let ns = ns.trim().parse::<u16>().map_err(|_| {
-                                format!("некорректный префикс пространства имён в \"{s}\"")
-                            })?;
+                            let ns = ns
+                                .trim()
+                                .parse::<u16>()
+                                .map_err(|_| BackendMsg::WriteBadNsPrefix { value: s.clone() })?;
                             QualifiedName::new(ns, name.trim().to_string())
                         }
                         None => QualifiedName::new(0, s.clone()),
                     };
                     Ok(Variant::QualifiedName(Box::new(qn)))
                 }
-                other => Err(format!("значение {other} не является QualifiedName")),
+                other => Err(BackendMsg::WriteNotQualifiedName {
+                    value: other.to_string(),
+                }),
             },
             VariantScalarTypeId::ExtensionObject
             | VariantScalarTypeId::Guid
-            | VariantScalarTypeId::XmlElement => Err(format!(
-                "запись типа {scalar} (структурированных данных) не поддерживается"
-            )),
-            other => Err(format!("запись типа {other} не поддерживается")),
+            | VariantScalarTypeId::XmlElement => Err(BackendMsg::WriteStructUnsupported {
+                ty: scalar.to_string(),
+            }),
+            other => Err(BackendMsg::WriteTypeUnsupported {
+                ty: other.to_string(),
+            }),
         }
     };
 
     match value {
         Value::Array(items) => {
             if items.iter().any(|i| matches!(i, Value::Array(_))) {
-                return Err(
-                    "запись многомерных массивов не поддерживается; введите одномерный массив"
-                        .to_string(),
-                );
+                return Err(BackendMsg::WriteMultiDim);
             }
             let values = items
                 .iter()
                 .map(&build_scalar)
                 .collect::<Result<Vec<_>, _>>()?;
-            let array = opcua::types::Array::new(scalar, values)
-                .map_err(|e| format!("не удалось собрать массив: {e}"))?;
+            let array = opcua::types::Array::new(scalar, values).map_err(|e| {
+                BackendMsg::WriteArrayBuildFailed {
+                    detail: e.to_string(),
+                }
+            })?;
             Ok(Variant::Array(Box::new(array)))
         }
         single => build_scalar(single),
     }
 }
 
-fn to_i64(value: &Value, ty: &str) -> Result<i64, String> {
+fn to_i64(value: &Value, ty: &str) -> Result<i64, BackendMsg> {
     match value {
         Value::Bool(b) => Ok(i64::from(*b)),
         Value::I64(v) => Ok(*v),
-        Value::U64(v) => i64::try_from(*v).map_err(|_| format!("значение {v} вне диапазона {ty}")),
+        Value::U64(v) => i64::try_from(*v).map_err(|_| BackendMsg::WriteOutOfRange {
+            value: v.to_string(),
+            ty: ty.to_string(),
+        }),
         Value::F64(v) if v.is_finite() => Ok(*v as i64),
         Value::Str(s) => s
             .trim()
             .parse::<i64>()
-            .map_err(|_| format!("\"{s}\" не является целым числом для {ty}")),
-        other => Err(format!(
-            "значение {other} не является целым числом для {ty}"
-        )),
+            .map_err(|_| BackendMsg::WriteNotInteger {
+                value: s.clone(),
+                ty: ty.to_string(),
+            }),
+        other => Err(BackendMsg::WriteNotInteger {
+            value: other.to_string(),
+            ty: ty.to_string(),
+        }),
     }
 }
 
-fn to_f64(value: &Value, ty: &str) -> Result<f64, String> {
+fn to_f64(value: &Value, ty: &str) -> Result<f64, BackendMsg> {
     match value {
         Value::F64(v) => Ok(*v),
         Value::I64(v) => Ok(*v as f64),
         Value::U64(v) => Ok(*v as f64),
         Value::Bool(b) => Ok(if *b { 1.0 } else { 0.0 }),
-        Value::Str(s) => s
-            .trim()
-            .replace(',', ".")
-            .parse::<f64>()
-            .map_err(|_| format!("\"{s}\" не является числом для {ty}")),
-        other => Err(format!("значение {other} не является числом для {ty}")),
+        Value::Str(s) => {
+            s.trim()
+                .replace(',', ".")
+                .parse::<f64>()
+                .map_err(|_| BackendMsg::WriteNotNumber {
+                    value: s.clone(),
+                    ty: ty.to_string(),
+                })
+        }
+        other => Err(BackendMsg::WriteNotNumber {
+            value: other.to_string(),
+            ty: ty.to_string(),
+        }),
     }
 }
 

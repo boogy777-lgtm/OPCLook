@@ -196,6 +196,7 @@ fn main() {
                     value,
                     quality,
                     timestamp,
+                    ..
                 },
             ) in values
             {

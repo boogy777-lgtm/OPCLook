@@ -7,7 +7,9 @@
 //! mock implementation.
 #![cfg_attr(not(windows), allow(dead_code))]
 
-use super::model::{Command, CommandKind, DataValue, Event, EventKind, Operation, SessionId};
+use super::model::{
+    BackendMsg, Command, CommandKind, DataValue, Event, EventKind, Operation, SessionId,
+};
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
@@ -15,10 +17,6 @@ use std::sync::mpsc::Sender;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
-
-/// Text of the error sent for a command addressed to a session that is not
-/// connected (never connected, failed to connect, already disconnected).
-pub const NO_CONNECTION: &str = "нет соединения";
 
 /// Upper bound on simultaneously running discovery threads. A discovery against
 /// an unreachable host can hang for minutes (DCOM timeout); the cap keeps the
@@ -36,12 +34,12 @@ pub const SESSION_JOIN_BUDGET: Duration = Duration::from_secs(5);
 // ---------------------------------------------------------------------------
 
 /// What the router does with a command.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Route {
     /// Runs on a discovery thread, independent of every session.
     Discover,
     /// Never forwarded: the router answers with this operation and text.
-    Unsupported(Operation, &'static str),
+    Unsupported(Operation, BackendMsg),
     /// Silently ignored (UA-only commands that DA has no equivalent for).
     Ignored,
     /// Creates a session thread.
@@ -57,22 +55,18 @@ pub enum Route {
 pub fn route_of(kind: &CommandKind) -> Route {
     match kind {
         CommandKind::Discover { .. } => Route::Discover,
-        CommandKind::SearchUaServers { .. } => Route::Unsupported(
-            Operation::SearchServers,
-            "поиск OPC UA серверов не поддерживается для OPC DA",
-        ),
-        CommandKind::SearchUaNetwork { .. } => Route::Unsupported(
-            Operation::SearchNetwork,
-            "поиск OPC UA сети не поддерживается для OPC DA",
-        ),
-        CommandKind::BrowseViews => Route::Unsupported(
-            Operation::BrowseViews,
-            "представления поддерживаются только для OPC UA",
-        ),
-        CommandKind::ResolveBrowsePath { .. } => Route::Unsupported(
-            Operation::ResolveBrowsePath,
-            "разрешение пути BrowsePath поддерживается только для OPC UA",
-        ),
+        CommandKind::SearchUaServers { .. } => {
+            Route::Unsupported(Operation::SearchServers, BackendMsg::DaNoUaServerSearch)
+        }
+        CommandKind::SearchUaNetwork { .. } => {
+            Route::Unsupported(Operation::SearchNetwork, BackendMsg::DaNoUaNetworkSearch)
+        }
+        CommandKind::BrowseViews => {
+            Route::Unsupported(Operation::BrowseViews, BackendMsg::DaNoViews)
+        }
+        CommandKind::ResolveBrowsePath { .. } => {
+            Route::Unsupported(Operation::ResolveBrowsePath, BackendMsg::DaNoBrowsePath)
+        }
         // UA-only push subscription configuration; DA keeps periodic polling.
         CommandKind::ConfigureUaSubscription { .. } => Route::Ignored,
         // UA-only streaming subnet scan; DA has no equivalent command.
@@ -88,14 +82,11 @@ pub fn route_of(kind: &CommandKind) -> Route {
     }
 }
 
-fn error_event(command: &Command, operation: Operation, message: impl Into<String>) -> Event {
+fn error_event(command: &Command, operation: Operation, message: BackendMsg) -> Event {
     Event {
         request_id: command.request_id,
         session: command.session,
-        kind: EventKind::Error {
-            operation,
-            message: message.into(),
-        },
+        kind: EventKind::Error { operation, message },
     }
 }
 
@@ -109,17 +100,21 @@ pub fn no_connection_reply(command: &Command) -> Option<Event> {
         CommandKind::AddItems { items } => EventKind::AddItems {
             results: items
                 .iter()
-                .map(|item| (item.key, Err(NO_CONNECTION.to_string())))
+                .map(|item| (item.key, Err(BackendMsg::NoConnection)))
                 .collect(),
         },
         CommandKind::Read { keys } => EventKind::Values {
             values: keys
                 .iter()
-                .map(|key| (*key, DataValue::bad(NO_CONNECTION)))
+                .map(|key| (*key, DataValue::bad(BackendMsg::NoConnection)))
                 .collect(),
         },
         CommandKind::RemoveItems { .. } => {
-            return Some(error_event(command, Operation::Remove, NO_CONNECTION));
+            return Some(error_event(
+                command,
+                Operation::Remove,
+                BackendMsg::NoConnection,
+            ));
         }
         CommandKind::Disconnect => return None,
         other => match route_of(other) {
@@ -128,7 +123,11 @@ pub fn no_connection_reply(command: &Command) -> Option<Event> {
                 return Some(error_event(command, operation, text));
             }
             _ => {
-                return Some(error_event(command, other.operation(), NO_CONNECTION));
+                return Some(error_event(
+                    command,
+                    other.operation(),
+                    BackendMsg::NoConnection,
+                ));
             }
         },
     };
@@ -253,7 +252,7 @@ impl<H: DaHost> Router<H> {
             self.send(error_event(
                 &command,
                 Operation::Connect,
-                "сессия уже подключена",
+                BackendMsg::SessionAlreadyConnected,
             ));
             return;
         }
@@ -271,7 +270,7 @@ impl<H: DaHost> Router<H> {
                         request_id: 0,
                         session: id,
                         kind: EventKind::Log {
-                            message: "поток сессии OPC DA завершился аварийно".to_string(),
+                            message: BackendMsg::DaSessionThreadCrashed,
                         },
                     });
                 }
@@ -291,7 +290,9 @@ impl<H: DaHost> Router<H> {
                 self.send(error_event(
                     &command,
                     Operation::Connect,
-                    format!("не удалось создать поток сессии: {e}"),
+                    BackendMsg::DaSessionThreadSpawnFailed {
+                        detail: e.to_string(),
+                    },
                 ));
                 return;
             }
@@ -310,7 +311,7 @@ impl<H: DaHost> Router<H> {
             self.send(error_event(
                 &command,
                 Operation::Discover,
-                "слишком много одновременных запросов обнаружения, подождите",
+                BackendMsg::DaTooManyDiscoveries,
             ));
             return;
         }
@@ -330,7 +331,7 @@ impl<H: DaHost> Router<H> {
                         session,
                         kind: EventKind::Error {
                             operation: Operation::Discover,
-                            message: "обнаружение серверов завершилось аварийно".to_string(),
+                            message: BackendMsg::DaDiscoveryCrashed,
                         },
                     });
                 }
@@ -342,7 +343,9 @@ impl<H: DaHost> Router<H> {
                 session,
                 kind: EventKind::Error {
                     operation: Operation::Discover,
-                    message: format!("не удалось создать поток обнаружения: {e}"),
+                    message: BackendMsg::DaDiscoverySpawnFailed {
+                        detail: e.to_string(),
+                    },
                 },
             }),
         }
@@ -504,20 +507,20 @@ mod tests {
                         if endpoint.address == "fail" {
                             reply(EventKind::Error {
                                 operation: Operation::Connect,
-                                message: "boom".to_string(),
+                                message: BackendMsg::raw("boom"),
                             });
                             return;
                         }
                         connected = true;
                         reply(EventKind::Connected {
                             endpoint,
-                            info: String::new(),
+                            info: BackendMsg::raw(""),
                         });
                     }
                     CommandKind::Read { keys } => reply(EventKind::Values {
                         values: keys
                             .into_iter()
-                            .map(|k| (k, DataValue::bad("mock")))
+                            .map(|k| (k, DataValue::bad(BackendMsg::raw("mock"))))
                             .collect(),
                     }),
                     CommandKind::Disconnect => {
@@ -528,14 +531,14 @@ mod tests {
                                 .push(session);
                         }
                         reply(EventKind::Disconnected {
-                            reason: "closed".to_string(),
+                            reason: BackendMsg::raw("closed"),
                         });
                         return;
                     }
                     other => {
                         reply(EventKind::Error {
                             operation: other.operation(),
-                            message: "mock".to_string(),
+                            message: BackendMsg::raw("mock"),
                         });
                     }
                 }
@@ -652,10 +655,7 @@ mod tests {
         match e1.kind {
             EventKind::AddItems { results } => {
                 assert_eq!(results.len(), 1);
-                assert_eq!(
-                    results[0].1.as_ref().err(),
-                    Some(&NO_CONNECTION.to_string())
-                );
+                assert_eq!(results[0].1.as_ref().err(), Some(&BackendMsg::NoConnection));
             }
             other => panic!("{other:?}"),
         }
@@ -663,7 +663,7 @@ mod tests {
         match next(&rx).kind {
             EventKind::Error { operation, message } => {
                 assert_eq!(operation, Operation::Remove);
-                assert_eq!(message, NO_CONNECTION);
+                assert_eq!(message, BackendMsg::NoConnection);
             }
             other => panic!("{other:?}"),
         }
@@ -704,7 +704,7 @@ mod tests {
 
         router.dispatch(command(2, 1, CommandKind::Test));
         match next(&rx).kind {
-            EventKind::Error { message, .. } => assert_eq!(message, NO_CONNECTION),
+            EventKind::Error { message, .. } => assert_eq!(message, BackendMsg::NoConnection),
             other => panic!("{other:?}"),
         }
         router.dispatch(connect(3, 1, "ok"));
@@ -824,7 +824,7 @@ mod tests {
         while let Ok(event) = rx.recv_timeout(Duration::from_millis(500)) {
             seen.insert(event.request_id);
             if let EventKind::Log { message } = &event.kind {
-                assert!(!message.is_empty());
+                assert!(!message.to_string().is_empty());
             }
         }
         // request 0 = the crash log line, 2 = the queued Test answered.

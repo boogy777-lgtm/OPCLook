@@ -84,6 +84,457 @@ impl fmt::Display for Operation {
     }
 }
 
+/// Protection of an OPC UA channel as shown in the connection info line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UaProtection {
+    None,
+    Sign,
+    SignAndEncrypt,
+    Unknown,
+}
+
+/// Server data that `IOPCServer::GetStatus` adds to the DA connection info.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DaServerStatus {
+    pub major: u16,
+    pub minor: u16,
+    pub build: u16,
+    pub group_count: u32,
+    pub vendor: String,
+}
+
+/// A message of the backend (DA/UA workers, discovery, mDNS) for the user.
+///
+/// The backend never writes display text: it sends one of these variants and
+/// the application renders it in the interface language with
+/// [`crate::i18n::backend_text`] (an exhaustive `match`, so a variant cannot
+/// miss a translation). Technical details that come from a library, the OS or
+/// the server (a `StatusCode`, an `HRESULT`, an `io::Error`) travel as `String`
+/// substitutions and are shown as they are. [`BackendMsg::Raw`] is text that is
+/// already final (for example, the application's own localized wording).
+///
+/// `Display` renders the English wording; it is meant for tests, logs and the
+/// probe binaries, never for the interface.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BackendMsg {
+    // ---- pass-through / composition ----
+    Raw(String),
+    Context {
+        context: String,
+        cause: Box<BackendMsg>,
+    },
+    Lines(Vec<BackendMsg>),
+    // ---- session state ----
+    NoConnection,
+    SessionAlreadyConnected,
+    ConnectInProgress,
+    ConnectCancelled,
+    ConnectionClosed,
+    SessionClosedAfterTimeout,
+    RequestTimedOutSessionClosed,
+    SignalNotSubscribed,
+    NodeNotSubscribed,
+    ServerReturnedNoValue,
+    ItemNoResult,
+    // ---- unsupported / routing ----
+    DaOnlyOnWindows,
+    DaNoUaServerSearch,
+    DaNoUaNetworkSearch,
+    DaNoViews,
+    DaNoBrowsePath,
+    UaNeedsServerUrl,
+    UaUrlScheme,
+    UaRuntimeStartFailed {
+        detail: String,
+    },
+    // ---- DA router ----
+    DaSessionThreadCrashed,
+    DaSessionThreadSpawnFailed {
+        detail: String,
+    },
+    DaTooManyDiscoveries,
+    DaDiscoveryCrashed,
+    DaDiscoverySpawnFailed {
+        detail: String,
+    },
+    DaDcomSecurityNotSet {
+        detail: String,
+    },
+    // ---- DA connect / browse / test ----
+    DaProgIdMissing,
+    DaNoOpcServer {
+        detail: String,
+    },
+    DaGroupCreateFailed {
+        detail: String,
+    },
+    DaGroupEmpty,
+    DaNoItemMgt {
+        detail: String,
+    },
+    DaNoSyncIo {
+        detail: String,
+    },
+    DaEmptyResult,
+    DaNoBrowse,
+    DaBrowseRootFailed {
+        detail: String,
+    },
+    DaBrowseBranchFailed {
+        segment: String,
+        detail: String,
+    },
+    DaNamespaceFailed {
+        detail: String,
+    },
+    DaLinkLost {
+        detail: String,
+    },
+    DaNoState,
+    DaServerListFailed {
+        cause: Box<BackendMsg>,
+    },
+    DaServerListUnavailable {
+        detail: String,
+    },
+    DaServersNotFound,
+    DaEmptyInterface {
+        host: String,
+    },
+    DaProgIdLookupFailed {
+        prog_id: String,
+        detail: String,
+    },
+    DaOpcEnumUnavailable {
+        host: String,
+        cause: Box<BackendMsg>,
+    },
+    DaServerListHostUnavailable {
+        host: String,
+        detail: String,
+    },
+    DaClsidResolveFailed {
+        prog_id: String,
+        host: String,
+        remote: Box<BackendMsg>,
+        local: Box<BackendMsg>,
+    },
+    DaStateOk,
+    DaNotReady {
+        name: String,
+        state: i32,
+    },
+    DaUnknownState {
+        state: i32,
+    },
+    DaConnected {
+        group_handle: u32,
+        update_rate_ms: u32,
+        server: Option<DaServerStatus>,
+    },
+    // ---- DA value conversion ----
+    DaDateRequired,
+    DaBadDate,
+    DaVtUnsupported {
+        vt: u16,
+    },
+    DaArrayCreateFailed {
+        vt: u16,
+    },
+    DaArrayVtUnsupported {
+        vt: u16,
+    },
+    DaArrayLockFailed {
+        vt: u16,
+    },
+    DaArrayAccessFailed,
+    DaNotInteger {
+        value: String,
+    },
+    DaNotUnsigned {
+        value: String,
+    },
+    DaNegativeValue {
+        value: String,
+    },
+    DaNotIntegerAny,
+    DaNotUnsignedAny,
+    DaNotNumberAny,
+    // ---- UA value conversion ----
+    WriteMultiDim,
+    WriteNodeIdInvalid {
+        value: String,
+    },
+    WriteOtherType {
+        value: String,
+    },
+    WriteNotBoolean {
+        value: String,
+    },
+    WriteOutOfRange {
+        value: String,
+        ty: String,
+    },
+    WriteNotInteger {
+        value: String,
+        ty: String,
+    },
+    WriteNotUnsigned {
+        value: String,
+    },
+    WriteNotDateTime {
+        value: String,
+    },
+    WriteNotByteString {
+        value: String,
+    },
+    WriteNotText {
+        value: String,
+    },
+    WriteNotNodeId {
+        value: String,
+    },
+    WriteNotQualifiedName {
+        value: String,
+    },
+    WriteBadNsPrefix {
+        value: String,
+    },
+    WriteNotNumber {
+        value: String,
+        ty: String,
+    },
+    WriteStructUnsupported {
+        ty: String,
+    },
+    WriteTypeUnsupported {
+        ty: String,
+    },
+    WriteArrayBuildFailed {
+        detail: String,
+    },
+    // ---- UA timeouts ----
+    TimeoutBrowse,
+    TimeoutBrowseNext,
+    TimeoutViews,
+    TimeoutResolvePath,
+    TimeoutRead,
+    TimeoutWrite,
+    TimeoutCreateSubscription,
+    TimeoutPublishingInterval,
+    TimeoutDeadband,
+    TimeoutMonitoredItems,
+    TimeoutActivateSession,
+    TimeoutSearch,
+    TimeoutEndpoints {
+        url: String,
+    },
+    // ---- UA browse / path / read / write / test ----
+    NoViews,
+    BrowsePathRequired,
+    ResolvePathFailed {
+        status: String,
+    },
+    PathNotFound,
+    PathBadNsPrefix {
+        part: String,
+    },
+    PathEmptyName {
+        part: String,
+    },
+    PathEmpty,
+    InvalidNodeId {
+        value: String,
+    },
+    WriteRejected {
+        status: String,
+    },
+    NoWriteResult,
+    UaLinkOk,
+    UaBadStatus {
+        status: String,
+    },
+    NoStatus,
+    // ---- UA subscription ----
+    AttributesReadFailed {
+        cause: Box<BackendMsg>,
+    },
+    TypesUnresolved {
+        count: usize,
+    },
+    SubscriptionNotCreated {
+        cause: Box<BackendMsg>,
+    },
+    CreateSubscriptionFailed {
+        detail: String,
+    },
+    SubscriptionProblem {
+        cause: Box<BackendMsg>,
+    },
+    ChangeIntervalFailed {
+        detail: String,
+    },
+    ChangeDeadbandFailed {
+        detail: String,
+    },
+    DeadbandRejected {
+        count: usize,
+    },
+    DeleteRejected {
+        count: usize,
+    },
+    DeleteFailed {
+        detail: String,
+    },
+    MonitorFailed {
+        detail: String,
+    },
+    // ---- UA connect ----
+    UaCertUntrusted {
+        url: String,
+        detail: String,
+        pki: String,
+    },
+    UaConnectFailed {
+        url: String,
+        detail: String,
+    },
+    UaSessionClosedOnConnect {
+        url: String,
+    },
+    UaCertLoginUnsupported,
+    UaClientCertMissing {
+        cert: String,
+        key: String,
+    },
+    UaClientCertLoadFailed {
+        detail: String,
+    },
+    EndpointsFailed {
+        url: String,
+        detail: String,
+    },
+    SecurityResolveFailed {
+        detail: String,
+    },
+    UaConnected {
+        url: String,
+        policy: String,
+        mode: String,
+        protection: UaProtection,
+        secure_available: bool,
+    },
+    CertParseFailed {
+        detail: String,
+    },
+    FsCreateFailed {
+        path: String,
+        detail: String,
+    },
+    FsSaveFailed {
+        path: String,
+        detail: String,
+    },
+    FsWriteFailed {
+        path: String,
+        detail: String,
+    },
+    // ---- UA / LDS / mDNS discovery ----
+    HostRequired,
+    PortInvalid,
+    ResolveAddressFailed {
+        host: String,
+        detail: String,
+    },
+    AddressNoIp {
+        host: String,
+    },
+    UaNoServers {
+        failures: Vec<BackendMsg>,
+    },
+    AtUrl {
+        url: String,
+        cause: Box<BackendMsg>,
+    },
+    ServersNotFoundShort,
+    SearchRejected {
+        detail: String,
+    },
+    LdsTimeout {
+        url: String,
+    },
+    LdsFailed {
+        url: String,
+        detail: String,
+    },
+    LdsSearchTimedOut,
+    LdsUnavailable {
+        cause: Box<BackendMsg>,
+    },
+    MdnsFailed {
+        cause: Box<BackendMsg>,
+    },
+    MdnsCrashed {
+        detail: String,
+    },
+    MdnsNotInTime,
+    MdnsDiscarded,
+    MdnsNotSupported,
+    MdnsVerifyFailed {
+        url: String,
+        cause: Box<BackendMsg>,
+    },
+    MdnsVerifyTimeout {
+        url: String,
+    },
+    MdnsApiUnavailable {
+        function: String,
+    },
+    MdnsCallFailed {
+        function: String,
+        code: i32,
+    },
+    MdnsBrowseCancelFailed {
+        code: i32,
+    },
+    MdnsResolveStartFailed {
+        instance: String,
+        code: i32,
+    },
+    MdnsResolveCompleted {
+        code: u32,
+    },
+    MdnsResolveCancelFailed {
+        code: i32,
+    },
+}
+
+impl BackendMsg {
+    /// Already-final text shown as it is.
+    pub fn raw(text: impl Into<String>) -> Self {
+        Self::Raw(text.into())
+    }
+
+    /// Technical detail of a library/OS error as a substitution.
+    pub fn detail(error: impl fmt::Display) -> String {
+        error.to_string()
+    }
+
+    /// `"{context}: {cause}"` (for example `read: <reason>`).
+    pub fn context(context: impl Into<String>, cause: BackendMsg) -> Self {
+        Self::Context {
+            context: context.into(),
+            cause: Box::new(cause),
+        }
+    }
+}
+
+impl fmt::Display for BackendMsg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&crate::i18n::backend_text(crate::i18n::Lang::En, self))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Protocol {
     #[default]
@@ -667,7 +1118,7 @@ impl fmt::Display for Value {
                     write!(f, "{item}")?;
                 }
                 if items.len() > ARRAY_SHOWN {
-                    write!(f, "…{} эл.", items.len())?;
+                    write!(f, "…({})", items.len())?;
                 }
                 f.write_str("]")
             }
@@ -699,18 +1150,25 @@ pub struct DataValue {
     pub value: Value,
     pub quality: Quality,
     pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    /// Why the backend produced no value (set by [`DataValue::bad`]); `None`
+    /// for a value the server delivered.
+    pub reason: Option<BackendMsg>,
 }
 
 impl DataValue {
-    pub fn bad(reason: impl Into<String>) -> Self {
+    /// A Bad value that carries the backend's reason. `quality.text` holds the
+    /// English wording; the application replaces it with the interface language
+    /// from `reason` when the value arrives.
+    pub fn bad(reason: BackendMsg) -> Self {
         Self {
             value: Value::Empty,
             quality: Quality {
                 code: 0,
                 kind: QualityKind::Bad,
-                text: reason.into(),
+                text: reason.to_string(),
             },
             timestamp: None,
+            reason: Some(reason),
         }
     }
 }
@@ -930,10 +1388,10 @@ pub enum EventKind {
     },
     Connected {
         endpoint: EndpointSpec,
-        info: String,
+        info: BackendMsg,
     },
     AddItems {
-        results: Vec<(ItemKey, Result<ItemInfo, String>)>,
+        results: Vec<(ItemKey, Result<ItemInfo, BackendMsg>)>,
     },
     Removed {
         keys: Vec<ItemKey>,
@@ -959,17 +1417,17 @@ pub enum EventKind {
     },
     Wrote {
         key: ItemKey,
-        result: Result<(), String>,
+        result: Result<(), BackendMsg>,
     },
     Disconnected {
-        reason: String,
+        reason: BackendMsg,
     },
     Log {
-        message: String,
+        message: BackendMsg,
     },
     Error {
         operation: Operation,
-        message: String,
+        message: BackendMsg,
     },
 }
 
@@ -1225,7 +1683,7 @@ mod tests {
             s.starts_with("[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15"),
             "got: {s}"
         );
-        assert!(s.ends_with("…20 эл.]"), "got: {s}");
+        assert!(s.ends_with("…(20)]"), "got: {s}");
     }
 
     #[test]

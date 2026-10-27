@@ -128,6 +128,7 @@ fn server_connect_explicit_none_policy() {
     match connected.kind {
         EventKind::Connected { endpoint, info } => {
             assert_eq!(endpoint.ua_session_timeout, Some(90_000));
+            let info = info.to_string();
             assert!(
                 info.contains("None"),
                 "session info should include the resolved policy: {info}"
@@ -149,6 +150,7 @@ fn server_connect_auto_resolves_security() {
     let connected = connect_endpoint(&gateway, session, EndpointSpec::ua(test_url()));
     match connected.kind {
         EventKind::Connected { info, .. } => {
+            let info = info.to_string();
             assert!(
                 info.contains('[') && info.contains('/'),
                 "session info should describe policy/mode: {info}"

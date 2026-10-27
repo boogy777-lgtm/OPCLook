@@ -2,6 +2,8 @@
 //! line): platform-neutral.
 #![cfg_attr(not(windows), allow(dead_code))]
 
+use super::model::{BackendMsg, DaServerStatus};
+
 /// `OPC_STATUS_RUNNING` (OPCSERVERSTATE in the OPC DA 2.0 spec).
 pub const STATE_RUNNING: i32 = 1;
 pub const STATE_FAILED: i32 = 2;
@@ -25,13 +27,14 @@ pub fn server_state_name(state: i32) -> Option<&'static str> {
 
 /// Verdict of "test connection" for the state returned by `GetStatus`: only
 /// `RUNNING` is a success. The error names the state.
-pub fn check_server_state(state: i32) -> Result<String, String> {
+pub fn check_server_state(state: i32) -> Result<BackendMsg, BackendMsg> {
     match server_state_name(state) {
-        Some("RUNNING") => Ok("связь с сервером в порядке (состояние RUNNING)".to_string()),
-        Some(name) => Err(format!(
-            "сервер не готов к работе: состояние {name} ({state})"
-        )),
-        None => Err(format!("сервер вернул неизвестное состояние ({state})")),
+        Some("RUNNING") => Ok(BackendMsg::DaStateOk),
+        Some(name) => Err(BackendMsg::DaNotReady {
+            name: name.to_string(),
+            state,
+        }),
+        None => Err(BackendMsg::DaUnknownState { state }),
     }
 }
 
@@ -48,39 +51,39 @@ pub struct ServerStatusInfo<'a> {
     pub vendor: &'a str,
 }
 
-/// "подключено, группа #1, период 1000 мс, версия сервера 5.2.1, групп на
-/// сервере: 3, Vendor". `wMajorVersion.wMinorVersion.wBuildNumber` is the
-/// version; `dwGroupCount` is a separate, labelled number.
+/// The connection info line: group, update period and, when the server
+/// reported it, its version, group count and vendor. `wMajorVersion.
+/// wMinorVersion.wBuildNumber` is the version; `dwGroupCount` is a separate,
+/// labelled number.
 pub fn format_connect_info(
     group_handle: u32,
     update_rate_ms: u32,
     status: Option<&ServerStatusInfo<'_>>,
-) -> String {
-    let mut info = format!("подключено, группа #{group_handle}, период {update_rate_ms} мс");
-    if let Some(s) = status {
-        info.push_str(&format!(
-            ", версия сервера {}.{}.{}, групп на сервере: {}",
-            s.major, s.minor, s.build, s.group_count
-        ));
-        let vendor = s.vendor.trim();
-        if !vendor.is_empty() {
-            info.push_str(", ");
-            info.push_str(vendor);
-        }
+) -> BackendMsg {
+    BackendMsg::DaConnected {
+        group_handle,
+        update_rate_ms,
+        server: status.map(|s| DaServerStatus {
+            major: s.major,
+            minor: s.minor,
+            build: s.build,
+            group_count: s.group_count,
+            vendor: s.vendor.to_string(),
+        }),
     }
-    info
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::i18n::{Lang, backend_text};
 
     // --- D6 ---------------------------------------------------------------
 
     #[test]
     fn only_running_is_a_successful_connection_test() {
         // Before D6 every state was reported as "ok".
-        assert!(check_server_state(STATE_RUNNING).is_ok());
+        assert_eq!(check_server_state(STATE_RUNNING), Ok(BackendMsg::DaStateOk));
         for (state, name) in [
             (STATE_FAILED, "FAILED"),
             (STATE_NOCONFIG, "NOCONFIG"),
@@ -88,11 +91,11 @@ mod tests {
             (STATE_TEST, "TEST"),
             (STATE_COMM_FAULT, "COMM_FAULT"),
         ] {
-            let err = check_server_state(state).unwrap_err();
+            let err = check_server_state(state).unwrap_err().to_string();
             assert!(err.contains(name), "{err}");
             assert_eq!(server_state_name(state), Some(name));
         }
-        let err = check_server_state(42).unwrap_err();
+        let err = check_server_state(42).unwrap_err().to_string();
         assert!(err.contains("42"), "{err}");
         assert_eq!(server_state_name(0), None);
         assert_eq!(server_state_name(-1), None);
@@ -110,19 +113,24 @@ mod tests {
             group_count: 3,
             vendor: " Acme ",
         };
-        let info = format_connect_info(4, 1000, Some(&status));
+        let info = backend_text(Lang::Ru, &format_connect_info(4, 1000, Some(&status)));
         assert!(info.contains("версия сервера 5.2.1,"), "{info}");
         assert!(info.contains("групп на сервере: 3"), "{info}");
         assert!(!info.contains("5.2.1.3"), "{info}");
         assert!(info.ends_with(", Acme"), "{info}");
         assert_eq!(
-            format_connect_info(4, 1000, None),
+            backend_text(Lang::Ru, &format_connect_info(4, 1000, None)),
             "подключено, группа #4, период 1000 мс"
+        );
+        assert_eq!(
+            backend_text(Lang::En, &format_connect_info(4, 1000, None)),
+            "connected, group #4, period 1000 ms"
         );
         let no_vendor = ServerStatusInfo {
             vendor: "",
             ..status
         };
-        assert!(format_connect_info(1, 500, Some(&no_vendor)).ends_with("групп на сервере: 3"));
+        let info = backend_text(Lang::Ru, &format_connect_info(1, 500, Some(&no_vendor)));
+        assert!(info.ends_with("групп на сервере: 3"), "{info}");
     }
 }

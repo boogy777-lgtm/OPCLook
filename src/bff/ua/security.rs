@@ -1,4 +1,7 @@
-use crate::bff::model::{UaEndpointInfo, UaSecurityMode, UaSecurityPolicy, validate_security_pair};
+use crate::bff::model::{
+    BackendMsg, UaEndpointInfo, UaProtection, UaSecurityMode, UaSecurityPolicy,
+    validate_security_pair,
+};
 use opcua::types::MessageSecurityMode;
 
 /// Canonical typed selections. These aliases exist so tests and callers can name
@@ -12,19 +15,12 @@ pub const SECURITY_MODE_NONE: UaSecurityMode = UaSecurityMode::None;
 pub const SECURITY_MODE_SIGN: UaSecurityMode = UaSecurityMode::Sign;
 pub const SECURITY_MODE_SIGN_AND_ENCRYPT: UaSecurityMode = UaSecurityMode::SignAndEncrypt;
 
-/// Marker prefix distinguishing a security-resolution failure from an arbitrary
-/// connect error. The app strips it to render a localized wrapper around the
-/// technical detail; the worker keeps the raw detail in its string result.
-pub const SECURITY_ERROR_PREFIX: &str = "security: ";
-
-/// Prefix a security-resolution detail for transport through `EventKind::Error`.
-pub fn security_error(detail: impl Into<String>) -> String {
-    format!("{SECURITY_ERROR_PREFIX}{}", detail.into())
-}
-
-/// Return the technical detail of a security error, or `None` for other errors.
-pub fn security_error_detail(message: &str) -> Option<&str> {
-    message.strip_prefix(SECURITY_ERROR_PREFIX)
+/// A security-resolution failure for transport through `EventKind::Error`: the
+/// application wraps the (English, technical) detail in its localized sentence.
+pub fn security_error(detail: impl Into<String>) -> BackendMsg {
+    BackendMsg::SecurityResolveFailed {
+        detail: detail.into(),
+    }
 }
 
 /// One advertised endpoint normalized to the typed selections.
@@ -230,18 +226,18 @@ pub fn security_summary(
     policy: &str,
     mode: MessageSecurityMode,
     secure_was_available: bool,
-) -> String {
+) -> BackendMsg {
     let protection = match mode {
-        MessageSecurityMode::None => "без шифрования",
-        MessageSecurityMode::Sign => "только подпись, данные не шифруются",
-        MessageSecurityMode::SignAndEncrypt => "подпись и шифрование",
-        MessageSecurityMode::Invalid => "режим защиты не определён",
+        MessageSecurityMode::None => UaProtection::None,
+        MessageSecurityMode::Sign => UaProtection::Sign,
+        MessageSecurityMode::SignAndEncrypt => UaProtection::SignAndEncrypt,
+        MessageSecurityMode::Invalid => UaProtection::Unknown,
     };
-    let mut text = format!("подключено к {url} [{policy} / {mode:?}] — {protection}");
-    if secure_was_available {
-        text.push_str(
-            "; сервер предлагает защищённое соединение — выберите политику и режим вручную",
-        );
+    BackendMsg::UaConnected {
+        url: url.to_string(),
+        policy: policy.to_string(),
+        mode: format!("{mode:?}"),
+        protection,
+        secure_available: secure_was_available,
     }
-    text
 }

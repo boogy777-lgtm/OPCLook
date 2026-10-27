@@ -630,7 +630,7 @@ fn stale_reply_with_unknown_request_id_is_ignored() {
         9_999,
         EventKind::Connected {
             endpoint: EndpointSpec::da("", "Srv.Stale"),
-            info: "stale".to_string(),
+            info: opcda_egui::bff::model::BackendMsg::raw("stale"),
         },
     );
     assert_eq!(app.sessions[0].state, SessionState::Connected);
@@ -674,7 +674,7 @@ fn matching_request_id_reply_is_accepted() {
             connect_id,
             EventKind::Connected {
                 endpoint: EndpointSpec::da("", "Srv.Match"),
-                info: "ok".to_string(),
+                info: opcda_egui::bff::model::BackendMsg::raw("ok"),
             },
         );
         assert_eq!(app.sessions[0].state, SessionState::Connected);
@@ -686,7 +686,7 @@ fn matching_request_id_reply_is_accepted() {
             connect_id,
             EventKind::Connected {
                 endpoint: EndpointSpec::da("", "Srv.Match"),
-                info: "replayed".to_string(),
+                info: opcda_egui::bff::model::BackendMsg::raw("replayed"),
             },
         );
         assert_eq!(
@@ -735,7 +735,7 @@ fn disconnect_connect_does_not_let_old_connected_mutate_new_state() {
             old_connect,
             EventKind::Connected {
                 endpoint: EndpointSpec::da("", "Srv.Old"),
-                info: "old".to_string(),
+                info: opcda_egui::bff::model::BackendMsg::raw("old"),
             },
         );
         assert_eq!(
@@ -755,7 +755,7 @@ fn disconnect_connect_does_not_let_old_connected_mutate_new_state() {
             new_connect,
             EventKind::Connected {
                 endpoint: EndpointSpec::da("", "Srv.Old"),
-                info: "new".to_string(),
+                info: opcda_egui::bff::model::BackendMsg::raw("new"),
             },
         );
         assert_eq!(app.sessions[0].state, SessionState::Connected);
@@ -2096,7 +2096,7 @@ fn disconnect_event_keeps_rows_and_marks_them_stale() {
     app.on_event_for_test_at(
         1,
         opcda_egui::bff::model::EventKind::Disconnected {
-            reason: "связь потеряна".to_string(),
+            reason: opcda_egui::bff::model::BackendMsg::raw("связь потеряна"),
         },
     );
 
@@ -2130,7 +2130,7 @@ fn reconnect_connected_resubscribes_rows_requests_browse_and_read() {
     app.on_event_for_test_at(
         1,
         opcda_egui::bff::model::EventKind::Disconnected {
-            reason: "связь потеряна".to_string(),
+            reason: opcda_egui::bff::model::BackendMsg::raw("связь потеряна"),
         },
     );
     assert_eq!(app.rows.len(), 2);
@@ -2140,7 +2140,7 @@ fn reconnect_connected_resubscribes_rows_requests_browse_and_read() {
         1,
         opcda_egui::bff::model::EventKind::Connected {
             endpoint: EndpointSpec::da("", "Srv.Test"),
-            info: "подключено".to_string(),
+            info: opcda_egui::bff::model::BackendMsg::raw("подключено"),
         },
     );
 
@@ -2283,7 +2283,7 @@ fn ua_reconnect_resubscribes_rows_and_resets_subscription_flag() {
     app.on_event_for_test_at(
         1,
         EventKind::Disconnected {
-            reason: "связь потеряна".to_string(),
+            reason: opcda_egui::bff::model::BackendMsg::raw("связь потеряна"),
         },
     );
     // While disconnected the subscription is gone.
@@ -2295,7 +2295,7 @@ fn ua_reconnect_resubscribes_rows_and_resets_subscription_flag() {
         1,
         EventKind::Connected {
             endpoint: EndpointSpec::ua("opc.tcp://127.0.0.1:4840"),
-            info: "подключено".to_string(),
+            info: opcda_egui::bff::model::BackendMsg::raw("подключено"),
         },
     );
     let view = app.sessions.iter().find(|s| s.id == 1).unwrap();
@@ -2390,7 +2390,7 @@ fn reconnect_attempts_cap_stops_the_loop_and_shows_exhausted() {
     app.on_event_for_test_at(
         1,
         EventKind::Disconnected {
-            reason: "опять".to_string(),
+            reason: opcda_egui::bff::model::BackendMsg::raw("опять"),
         },
     );
     // Re-scheduling must refuse: the state becomes Exhausted, no new timer.
@@ -3613,7 +3613,7 @@ fn disconnect_keeps_container_and_does_not_arm_reconnect() {
     app.on_event_for_test_at(
         1,
         EventKind::Disconnected {
-            reason: "отключено".to_string(),
+            reason: opcda_egui::bff::model::BackendMsg::raw("отключено"),
         },
     );
     assert_eq!(
@@ -4071,7 +4071,7 @@ fn u9_dialog_stays_open_until_connected_then_closes() {
             request,
             EventKind::Connected {
                 endpoint: EndpointSpec::ua("opc.tcp://127.0.0.1:1"),
-                info: "ok".to_string(),
+                info: opcda_egui::bff::model::BackendMsg::raw("ok"),
             },
         );
         assert!(!app.dialogs.connect.open, "Connected closes the dialog");
@@ -4091,7 +4091,7 @@ fn u9_connect_error_stays_in_the_dialog_and_stops_the_retry_loop() {
             request,
             EventKind::Error {
                 operation: opcda_egui::bff::model::Operation::Connect,
-                message: "certificate rejected".to_string(),
+                message: opcda_egui::bff::model::BackendMsg::raw("certificate rejected"),
             },
         );
         assert!(
@@ -4129,7 +4129,7 @@ fn u9_cancel_aborts_the_wait_and_ignores_the_late_reply() {
             request,
             EventKind::Connected {
                 endpoint: EndpointSpec::ua("opc.tcp://127.0.0.1:1"),
-                info: "late".to_string(),
+                info: opcda_egui::bff::model::BackendMsg::raw("late"),
             },
         );
         assert_eq!(app.sessions[0].state, SessionState::Disconnected);
@@ -4150,7 +4150,7 @@ fn u9_other_session_connecting_does_not_close_the_dialog() {
             7,
             EventKind::Connected {
                 endpoint: EndpointSpec::ua("opc.tcp://127.0.0.1:2"),
-                info: "background".to_string(),
+                info: opcda_egui::bff::model::BackendMsg::raw("background"),
             },
         );
         assert!(
@@ -4248,7 +4248,7 @@ fn a3_failed_connectivity_test_marks_rows_stale_like_disconnected() {
         1,
         EventKind::Error {
             operation: opcda_egui::bff::model::Operation::Test,
-            message: "link down".to_string(),
+            message: opcda_egui::bff::model::BackendMsg::raw("link down"),
         },
     );
     assert_eq!(app.sessions[0].state, SessionState::Disconnected);

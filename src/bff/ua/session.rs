@@ -10,8 +10,8 @@ use super::values::{
 };
 use super::worker::{send, timeout_drain};
 use crate::bff::model::{
-    EndpointSpec, Event, EventKind, ItemInfo, ItemKey, ItemSpec, SessionId, SubscriptionState,
-    UaEndpointInfo, UaSecurityPolicy,
+    BackendMsg, EndpointSpec, Event, EventKind, ItemInfo, ItemKey, ItemSpec, SessionId,
+    SubscriptionState, UaEndpointInfo, UaSecurityPolicy,
 };
 use crate::bff::net::{BoundConnectionSource, BoundConnectorBuilder, NetworkBinding};
 use crate::constants::{
@@ -43,7 +43,7 @@ pub(super) struct UaSession {
     /// UA built-in variant scalar type of each subscribed node, resolved from
     /// the node's DataType attribute when the attribute could be read.
     pub(super) node_types: HashMap<ItemKey, VariantScalarTypeId>,
-    pub(super) info: String,
+    pub(super) info: BackendMsg,
     /// The owning session id, used by the DataChange callback to tag pushes.
     pub(super) session_id: SessionId,
     /// Server-assigned subscription id, created lazily on the first AddItems.
@@ -121,14 +121,14 @@ pub(super) fn is_missing_node(status: StatusCode) -> bool {
 pub(super) enum ItemFailure {
     /// The server answered the item with a Bad status.
     Status(StatusCode),
-    /// The call itself failed or timed out; the text says why.
-    Call(String),
+    /// The call itself failed or timed out; the message says why.
+    Call(BackendMsg),
 }
 
 impl ItemFailure {
-    pub(super) fn text(&self) -> String {
+    pub(super) fn text(&self) -> BackendMsg {
         match self {
-            ItemFailure::Status(status) => status_text(*status),
+            ItemFailure::Status(status) => BackendMsg::Raw(status_text(*status)),
             ItemFailure::Call(reason) => reason.clone(),
         }
     }
@@ -159,9 +159,7 @@ pub(super) fn create_outcomes(
             let outcome = match results.get(index) {
                 Some((status, _)) if status.is_bad() => Err(ItemFailure::Status(*status)),
                 Some((_, id)) => Ok(*id),
-                None => Err(ItemFailure::Call(
-                    "сервер не вернул результат для элемента".to_string(),
-                )),
+                None => Err(ItemFailure::Call(BackendMsg::ItemNoResult)),
             };
             (*key, outcome)
         })
@@ -173,8 +171,8 @@ pub(super) fn create_outcomes(
 pub(super) fn merge_add_results(
     items: &[ItemSpec],
     mut infos: HashMap<ItemKey, ItemInfo>,
-    rejected: &HashMap<ItemKey, String>,
-) -> Vec<(ItemKey, Result<ItemInfo, String>)> {
+    rejected: &HashMap<ItemKey, BackendMsg>,
+) -> Vec<(ItemKey, Result<ItemInfo, BackendMsg>)> {
     items
         .iter()
         .map(|item| {
@@ -212,17 +210,22 @@ impl UaSession {
         &mut self,
         items: &[ItemSpec],
         tx: &Sender<Event>,
-    ) -> (Vec<(ItemKey, Result<ItemInfo, String>)>, Option<String>) {
+    ) -> (
+        Vec<(ItemKey, Result<ItemInfo, BackendMsg>)>,
+        Option<BackendMsg>,
+    ) {
         // Query the DataType and AccessLevel attributes once per node so the
         // write path can honor the server's actual type and writability.
-        let mut rejected: HashMap<ItemKey, String> = HashMap::new();
+        let mut rejected: HashMap<ItemKey, BackendMsg> = HashMap::new();
         let mut requests = Vec::new();
         let mut plan: Vec<(ItemKey, NodeId)> = Vec::new();
         for item in items {
             let Some(node) = parse_node(&item.item_id) else {
                 rejected.insert(
                     item.key,
-                    format!("некорректный NodeId: {}", item.item_id.trim()),
+                    BackendMsg::InvalidNodeId {
+                        value: item.item_id.trim().to_string(),
+                    },
                 );
                 continue;
             };
@@ -263,9 +266,7 @@ impl UaSession {
                         .collect();
                     return (
                         merge_add_results(items, infos, &rejected),
-                        Some(format!(
-                            "не удалось прочитать атрибуты узлов OPC UA, тип/доступ не определён: {e}"
-                        )),
+                        Some(BackendMsg::AttributesReadFailed { cause: Box::new(e) }),
                     );
                 }
             }
@@ -308,7 +309,7 @@ impl UaSession {
             for (idx, (key, _)) in plan.iter().enumerate() {
                 let status = values.get(idx * 2).and_then(|dv| dv.status);
                 if let Some(status) = status.filter(|s| is_missing_node(*s)) {
-                    rejected.insert(*key, status_text(status));
+                    rejected.insert(*key, BackendMsg::Raw(status_text(status)));
                     self.items.remove(key);
                     self.node_types.remove(key);
                 }
@@ -323,9 +324,9 @@ impl UaSession {
             .filter(|(key, _)| !self.node_types.contains_key(key))
             .count();
         let warning = if attribute_failures > 0 {
-            Some(format!(
-                "не удалось определить тип {attribute_failures} узлов OPC UA, запись выполняется с авто-типом"
-            ))
+            Some(BackendMsg::TypesUnresolved {
+                count: attribute_failures,
+            })
         } else {
             None
         };
@@ -354,12 +355,12 @@ impl UaSession {
                 }
             }
             Err(message) => {
+                let not_created = BackendMsg::SubscriptionNotCreated {
+                    cause: Box::new(message),
+                };
                 let warning = match warning {
-                    Some(mut warning) => {
-                        warning.push_str(&format!("\nподписка не создана: {message}"));
-                        warning
-                    }
-                    None => format!("подписка не создана: {message}"),
+                    Some(warning) => BackendMsg::Lines(vec![warning, not_created]),
+                    None => not_created,
                 };
                 return (merge_add_results(items, infos, &rejected), Some(warning));
             }
@@ -371,7 +372,7 @@ impl UaSession {
     /// Create the single per-session subscription on its first use. Publishing
     /// interval mirrors the app update interval (default 1000 ms) and the
     /// DataChange callback forwards quality/timestamp-mapped values to the UI.
-    async fn ensure_subscription(&mut self, tx: &Sender<Event>) -> Result<(), String> {
+    async fn ensure_subscription(&mut self, tx: &Sender<Event>) -> Result<(), BackendMsg> {
         if self.subscription_id.is_some() {
             return Ok(());
         }
@@ -405,12 +406,14 @@ impl UaSession {
         .await;
         if timed_out {
             self.timed_out = true;
-            return Err("таймаут создания подписки OPC UA".to_string());
+            return Err(BackendMsg::TimeoutCreateSubscription);
         }
         let Some(created) = created else {
-            return Err("таймаут создания подписки OPC UA".to_string());
+            return Err(BackendMsg::TimeoutCreateSubscription);
         };
-        let sub_id = created.map_err(|e| format!("не удалось создать подписку OPC UA: {e}"))?;
+        let sub_id = created.map_err(|e| BackendMsg::CreateSubscriptionFailed {
+            detail: e.to_string(),
+        })?;
         self.subscription_id = Some(sub_id);
         self.applied_interval_ms = interval_ms;
         self.applied_deadband = self.deadband;
@@ -425,7 +428,7 @@ impl UaSession {
         &mut self,
         publishing_interval_ms: u64,
         deadband: f64,
-    ) -> Vec<String> {
+    ) -> Vec<BackendMsg> {
         let interval_ms = publishing_interval_ms.clamp(100, 3600_000);
         let deadband = if deadband.is_finite() {
             deadband.max(0.0)
@@ -454,14 +457,18 @@ impl UaSession {
             .await;
             if timed_out {
                 self.timed_out = true;
-                problems.push("подписка: таймаут изменения интервала публикации".to_string());
+                problems.push(BackendMsg::SubscriptionProblem {
+                    cause: Box::new(BackendMsg::TimeoutPublishingInterval),
+                });
                 return problems;
             }
             match modified {
                 Some(Ok(())) => self.applied_interval_ms = interval_ms,
-                Some(Err(e)) => {
-                    problems.push(format!("подписка: не удалось изменить интервал: {e}"))
-                }
+                Some(Err(e)) => problems.push(BackendMsg::SubscriptionProblem {
+                    cause: Box::new(BackendMsg::ChangeIntervalFailed {
+                        detail: e.to_string(),
+                    }),
+                }),
                 None => {}
             }
         }
@@ -500,7 +507,9 @@ impl UaSession {
                 .await;
                 if timed_out {
                     self.timed_out = true;
-                    problems.push("подписка: таймаут изменения мёртвой зоны".to_string());
+                    problems.push(BackendMsg::SubscriptionProblem {
+                        cause: Box::new(BackendMsg::TimeoutDeadband),
+                    });
                     return problems;
                 }
                 match modified {
@@ -524,16 +533,20 @@ impl UaSession {
                         }
                     }
                     Some(Err(e)) => {
-                        problems.push(format!("подписка: не удалось изменить мёртвую зону: {e}"));
+                        problems.push(BackendMsg::SubscriptionProblem {
+                            cause: Box::new(BackendMsg::ChangeDeadbandFailed {
+                                detail: e.to_string(),
+                            }),
+                        });
                         return problems;
                     }
                     None => return problems,
                 }
             }
             if failed > 0 {
-                problems.push(format!(
-                    "подписка: сервер отклонил изменение мёртвой зоны для {failed} элементов"
-                ));
+                problems.push(BackendMsg::SubscriptionProblem {
+                    cause: Box::new(BackendMsg::DeadbandRejected { count: failed }),
+                });
             } else {
                 self.applied_deadband = deadband;
             }
@@ -584,7 +597,7 @@ impl UaSession {
             .await;
             let failure = if timed_out {
                 self.timed_out = true;
-                Some("таймаут создания контролируемых элементов".to_string())
+                Some(BackendMsg::TimeoutMonitoredItems)
             } else {
                 match created {
                     Some(Ok(results)) => {
@@ -596,14 +609,21 @@ impl UaSession {
                         out.extend(create_outcomes(&keys, &statuses));
                         None
                     }
-                    Some(Err(e)) => Some(format!("не удалось контролировать элементы: {e}")),
-                    None => Some("таймаут создания контролируемых элементов".to_string()),
+                    Some(Err(e)) => Some(BackendMsg::MonitorFailed {
+                        detail: e.to_string(),
+                    }),
+                    None => Some(BackendMsg::TimeoutMonitoredItems),
                 }
             };
             if let Some(reason) = failure {
                 // The whole call failed: every item of this and the remaining
                 // chunks is reported with the reason, never silently dropped.
-                self.log(tx, format!("подписка: {reason}"));
+                self.log(
+                    tx,
+                    BackendMsg::SubscriptionProblem {
+                        cause: Box::new(reason.clone()),
+                    },
+                );
                 let done = out.len();
                 for (key, _) in round.iter().skip(done) {
                     out.push((*key, Err(ItemFailure::Call(reason.clone()))));
@@ -626,12 +646,12 @@ impl UaSession {
         tx: &Sender<Event>,
         subscription_id: u32,
         nodes: &[(ItemKey, NodeId)],
-    ) -> Vec<(ItemKey, String)> {
+    ) -> Vec<(ItemKey, BackendMsg)> {
         let round: Vec<(ItemKey, MonitoredItemCreateRequest)> = nodes
             .iter()
             .map(|(key, node)| (*key, self.monitor_request(*key, node, true)))
             .collect();
-        let mut rejected: Vec<(ItemKey, String)> = Vec::new();
+        let mut rejected: Vec<(ItemKey, BackendMsg)> = Vec::new();
         let mut retry: Vec<(ItemKey, NodeId)> = Vec::new();
         for (key, outcome) in self.create_round(subscription_id, &round, tx).await {
             match outcome {
@@ -685,7 +705,7 @@ impl UaSession {
     }
 
     /// Unsolicited diagnostic line for the application journal.
-    fn log(&self, tx: &Sender<Event>, message: String) {
+    fn log(&self, tx: &Sender<Event>, message: BackendMsg) {
         send(
             tx,
             Event {
@@ -704,7 +724,7 @@ impl UaSession {
         &mut self,
         tx: &Sender<Event>,
         keys: &[ItemKey],
-    ) -> Vec<String> {
+    ) -> Vec<BackendMsg> {
         let mut problems = Vec::new();
         let known: Vec<ItemKey> = keys
             .iter()
@@ -742,13 +762,17 @@ impl UaSession {
                             })
                             .count();
                         if bad > 0 {
-                            problems.push(format!(
-                                "подписка: сервер отклонил удаление {bad} элементов"
-                            ));
+                            problems.push(BackendMsg::SubscriptionProblem {
+                                cause: Box::new(BackendMsg::DeleteRejected { count: bad }),
+                            });
                         }
                     }
                     Some(Err(e)) => {
-                        problems.push(format!("подписка: не удалось удалить элементы: {e}"));
+                        problems.push(BackendMsg::SubscriptionProblem {
+                            cause: Box::new(BackendMsg::DeleteFailed {
+                                detail: e.to_string(),
+                            }),
+                        });
                         break;
                     }
                     None => break,
@@ -795,15 +819,19 @@ pub(super) fn describe_connect_error(
     url: &str,
     pki: &std::path::Path,
     error: opcua::types::Error,
-) -> String {
+) -> BackendMsg {
     let msg = error.to_string();
     if certification_error(&msg) {
-        format!(
-            "сертификат сервера {url} не доверенный: {msg}\nВключите «Доверять сертификату сервера» или импортируйте сертификат в PKI-хранилище: {}",
-            pki.display()
-        )
+        BackendMsg::UaCertUntrusted {
+            url: url.to_string(),
+            detail: msg,
+            pki: pki.display().to_string(),
+        }
     } else {
-        format!("не удалось подключиться к {url}: {msg}")
+        BackendMsg::UaConnectFailed {
+            url: url.to_string(),
+            detail: msg,
+        }
     }
 }
 
@@ -816,7 +844,7 @@ async fn activate_ua_session<C>(
     event_loop: opcua::client::SessionEventLoop<C>,
     url: &str,
     cancel: &CancellationToken,
-) -> Result<JoinHandle<StatusCode>, String>
+) -> Result<JoinHandle<StatusCode>, BackendMsg>
 where
     C: opcua::client::transport::Connector + Send + Sync + 'static,
 {
@@ -833,7 +861,9 @@ where
         Some(Ok(false)) => {
             let _ = tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, session.disconnect()).await;
             let _ = tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, &mut event_loop).await;
-            Err(format!("сервер {url} закрыл сессию при подключении"))
+            Err(BackendMsg::UaSessionClosedOnConnect {
+                url: url.to_string(),
+            })
         }
         Some(Err(_)) => {
             // Timeout activating the session: the transport is already connected
@@ -841,27 +871,24 @@ where
             // channel down gracefully instead of aborting the loop mid-request.
             let _ = tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, session.disconnect()).await;
             let _ = tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, &mut event_loop).await;
-            Err("таймаут активации OPC UA сессии".to_string())
+            Err(BackendMsg::TimeoutActivateSession)
         }
         None => {
             let _ = tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, session.disconnect()).await;
             let _ = tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, &mut event_loop).await;
-            Err(CONNECT_CANCELLED.to_string())
+            Err(BackendMsg::ConnectCancelled)
         }
     }
 }
-
-/// Text of the error a cancelled connect attempt ends with.
-pub(super) const CONNECT_CANCELLED: &str = "подключение отменено";
 
 pub(super) async fn connect(
     session_id: SessionId,
     endpoint: EndpointSpec,
     cancel: &CancellationToken,
-) -> Result<UaSession, String> {
+) -> Result<UaSession, BackendMsg> {
     let url = endpoint.address.trim();
     if !url.starts_with("opc.tcp://") {
-        return Err("URL OPC UA должен начинаться с opc.tcp://".to_string());
+        return Err(BackendMsg::UaUrlScheme);
     }
     let binding = endpoint.ua_bind.clone();
 
@@ -873,7 +900,7 @@ pub(super) async fn connect(
     //    with BadIdentityTokenInvalid).
     let server_endpoints = tokio::select! {
         biased;
-        _ = cancel.cancelled() => return Err(CONNECT_CANCELLED.to_string()),
+        _ = cancel.cancelled() => return Err(BackendMsg::ConnectCancelled),
         found = discover_endpoints(url, binding.as_ref()) => found?,
     };
     let discovered: Vec<UaEndpointInfo> = server_endpoints
@@ -924,7 +951,9 @@ pub(super) async fn connect(
         builder = builder.session_timeout(timeout_ms);
     }
 
-    let client = builder.client().map_err(|errors| errors.join("; "))?;
+    let client = builder
+        .client()
+        .map_err(|errors| BackendMsg::Raw(errors.join("; ")))?;
 
     // 5. Reuse the selected server's full endpoint description, including its
     //    actual user-token policies.
@@ -1026,29 +1055,28 @@ pub(super) fn endpoint_description_for(
 pub(super) fn resolve_identity_token(
     endpoint: &EndpointSpec,
     description: &EndpointDescription,
-) -> Result<IdentityToken, String> {
+) -> Result<IdentityToken, BackendMsg> {
     if endpoint.ua_use_certificate {
         if description
             .find_policy(UserTokenType::Certificate)
             .is_none()
         {
-            return Err(
-                "выбранная точка безопасности не поддерживает вход по сертификату (Certificate)"
-                    .to_string(),
-            );
+            return Err(BackendMsg::UaCertLoginUnsupported);
         }
         let pki = pki_dir();
         let cert_path = pki.join("own").join("cert.der");
         let key_path = pki.join("private").join("private.pem");
         if !cert_path.exists() || !key_path.exists() {
-            return Err(format!(
-                "клиентский сертификат не найден в PKI ({}, {}) — подключитесь один раз с обычным входом, чтобы сгенерировать его",
-                cert_path.display(),
-                key_path.display()
-            ));
+            return Err(BackendMsg::UaClientCertMissing {
+                cert: cert_path.display().to_string(),
+                key: key_path.display().to_string(),
+            });
         }
-        return IdentityToken::new_x509_path(&cert_path, &key_path)
-            .map_err(|e| format!("не удалось загрузить клиентский сертификат для X509: {e}"));
+        return IdentityToken::new_x509_path(&cert_path, &key_path).map_err(|e| {
+            BackendMsg::UaClientCertLoadFailed {
+                detail: e.to_string(),
+            }
+        });
     }
 
     if endpoint.user.trim().is_empty() {
@@ -1076,7 +1104,7 @@ fn certification_error(message: &str) -> bool {
 async fn discover_endpoints(
     url: &str,
     binding: Option<&NetworkBinding>,
-) -> Result<Vec<EndpointDescription>, String> {
+) -> Result<Vec<EndpointDescription>, BackendMsg> {
     let client = build_discovery_client()?;
     let request = if let Some(binding) = binding {
         let connector = BoundConnectorBuilder::new(url, binding.clone());
@@ -1093,8 +1121,13 @@ async fn discover_endpoints(
         .await
     };
     let endpoints = request
-        .map_err(|_| format!("таймаут запроса точек безопасности у {url}"))?
-        .map_err(|e| format!("не удалось получить точки безопасности от {url}: {e}"))?;
+        .map_err(|_| BackendMsg::TimeoutEndpoints {
+            url: url.to_string(),
+        })?
+        .map_err(|e| BackendMsg::EndpointsFailed {
+            url: url.to_string(),
+            detail: e.to_string(),
+        })?;
 
     Ok(endpoints)
 }

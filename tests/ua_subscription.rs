@@ -101,7 +101,10 @@ fn add_batch(
     session: u64,
     ids: &[String],
     first_key: u32,
-) -> Vec<(u32, Result<opcda_egui::bff::model::ItemInfo, String>)> {
+) -> Vec<(
+    u32,
+    Result<opcda_egui::bff::model::ItemInfo, opcda_egui::bff::model::BackendMsg>,
+)> {
     let specs: Vec<ItemSpec> = ids
         .iter()
         .enumerate()

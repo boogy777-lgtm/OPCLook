@@ -120,7 +120,7 @@ fn array_value_truncates_after_sixteen_elements() {
         s.starts_with("[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15"),
         "got: {s}"
     );
-    assert!(s.ends_with("…20 эл.]"), "expected truncation suffix: {s}");
+    assert!(s.ends_with("…(20)]"), "expected truncation suffix: {s}");
 }
 
 #[test]

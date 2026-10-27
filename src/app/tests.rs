@@ -2,7 +2,9 @@ use super::present::operation_label;
 use super::sessions::reconnect_delay;
 use super::table::infer_kind;
 use super::*;
-use crate::bff::model::{BrowseNode, EndpointSpec, EventKind, NodeKind, Operation, WriteRequest};
+use crate::bff::model::{
+    BackendMsg, BrowseNode, EndpointSpec, EventKind, NodeKind, Operation, WriteRequest,
+};
 use crate::constants::{RECONNECT_MAX_ATTEMPTS, RECONNECT_MAX_DELAY_SECS};
 use crate::i18n::Lang;
 use crate::settings::Options;
@@ -414,7 +416,7 @@ fn add_children_disconnect_cancels_job() {
     app.on_event_for_test_at(
         1,
         EventKind::Disconnected {
-            reason: "lost".to_string(),
+            reason: BackendMsg::raw("lost"),
         },
     );
     assert!(app.add_children.is_none());
@@ -481,7 +483,7 @@ fn da_search_error_clears_pending_state() {
     app.dialogs.connect.da_pending = true;
     app.on_event_for_test(EventKind::Error {
         operation: Operation::Discover,
-        message: "OPCEnum unavailable".to_string(),
+        message: BackendMsg::raw("OPCEnum unavailable"),
     });
     assert_eq!(app.dialogs.connect.da_auto_pending, 0);
     assert!(!app.dialogs.connect.da_pending);
@@ -943,7 +945,7 @@ fn d4_discover_error_releases_only_the_failing_hosts_route() {
         501,
         EventKind::Error {
             operation: Operation::Discover,
-            message: "RPC unavailable".to_string(),
+            message: BackendMsg::raw("RPC unavailable"),
         },
     );
     let hosts: Vec<&str> = app.da_route_holds.iter().map(|h| h.host.as_str()).collect();
@@ -1010,7 +1012,7 @@ fn u14_resolve_error_is_shown_in_the_dialog_and_frees_pending() {
         request,
         EventKind::Error {
             operation: Operation::ResolveBrowsePath,
-            message: "BadNoMatch".to_string(),
+            message: BackendMsg::raw("BadNoMatch"),
         },
     );
     assert!(app.dialogs.add_signal.open);
@@ -1528,4 +1530,103 @@ fn a11_writes_lost_with_the_session_complete_the_batch_as_failed() {
     assert_eq!(app.pending_writes, 0, "no reply can arrive any more");
     assert_eq!((app.write_ok, app.write_err), (0, 2));
     assert!(app.last_write_summary.is_some());
+}
+
+// ---------------------------------------------------------------------------
+// A9: backend messages follow the interface language
+// ---------------------------------------------------------------------------
+
+fn has_cyrillic(text: &str) -> bool {
+    text.chars().any(|c| matches!(c as u32, 0x0400..=0x052F))
+}
+
+/// A real connect to a port nobody listens on: before A9 the backend's
+/// hardcoded Russian error reached the English and Chinese interface.
+#[test]
+fn a9_connect_failure_to_an_unreachable_ua_server_is_in_the_interface_language() {
+    for lang in [Lang::En, Lang::Zh] {
+        let ctx = egui::Context::default();
+        let mut settings = Settings::default();
+        settings.set_lang(lang);
+        let mut app = App::new_test_with_settings(&ctx, settings);
+        let journal_before = app.journal.entries().len();
+        assert!(app.connect_endpoint(EndpointSpec::ua("opc.tcp://127.0.0.1:1")));
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            app.poll_events();
+            let settled = app
+                .sessions
+                .first()
+                .is_some_and(|view| view.state != SessionState::Connecting);
+            if settled {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{lang:?}: the connect attempt did not finish"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let view = app.sessions.first().expect("the session tab");
+        assert_eq!(view.state, SessionState::Disconnected);
+        assert!(!view.info.trim().is_empty(), "{lang:?}: empty error text");
+        assert!(
+            !has_cyrillic(&view.info),
+            "{lang:?}: Russian text in the session info: {}",
+            view.info
+        );
+        let lines: Vec<String> = app
+            .journal
+            .entries()
+            .iter()
+            .skip(journal_before)
+            .map(|entry| entry.render(lang))
+            .collect();
+        assert!(
+            lines.iter().any(|line| line.contains(&view.info)),
+            "{lang:?}: the error is in the journal: {lines:?}"
+        );
+        for line in &lines {
+            assert!(
+                !has_cyrillic(line),
+                "{lang:?}: Russian text in the journal line: {line}"
+            );
+        }
+    }
+}
+
+/// Every backend message kind is shown in the interface language when it
+/// arrives as an event (the application, not the worker, picks the wording).
+#[test]
+fn a9_backend_events_are_rendered_in_the_interface_language() {
+    let ctx = egui::Context::default();
+    let mut settings = Settings::default();
+    settings.set_lang(Lang::En);
+    let mut app = App::new_test_with_settings(&ctx, settings);
+    let before = app.journal.entries().len();
+    app.on_event_for_test(EventKind::Log {
+        message: BackendMsg::MdnsNotSupported,
+    });
+    app.on_event_for_test(EventKind::Error {
+        operation: Operation::Test,
+        message: BackendMsg::NoConnection,
+    });
+    let lines: Vec<String> = app
+        .journal
+        .entries()
+        .iter()
+        .skip(before)
+        .map(|entry| entry.render(Lang::En))
+        .collect();
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("mDNS: the search is not supported")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("no connection")),
+        "{lines:?}"
+    );
+    assert!(lines.iter().all(|line| !has_cyrillic(line)), "{lines:?}");
 }
