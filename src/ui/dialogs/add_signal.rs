@@ -10,6 +10,7 @@ pub(super) fn add_signal_dialog(app: &mut App, ui: &mut egui::Ui) {
     }
     let sessions = app.active_sessions();
     let mut submit = false;
+    let mut cancel = false;
     let lang = app.lang();
     let dialog = &mut app.dialogs.add_signal;
     egui::Window::new(tr(lang, Tr::AddSignal))
@@ -62,23 +63,34 @@ pub(super) fn add_signal_dialog(app: &mut App, ui: &mut egui::Ui) {
                 ui.colored_label(red(), error);
             }
             ui.separator();
+            let resolving = dialog.resolving.is_some();
             ui.horizontal(|ui| {
                 if ui
-                    .add_enabled(session_selected, egui::Button::new(tr(lang, Tr::Add)))
+                    .add_enabled(
+                        session_selected && !resolving,
+                        egui::Button::new(tr(lang, Tr::Add)),
+                    )
                     .clicked()
                 {
                     submit = true;
                 }
+                if resolving {
+                    ui.spinner();
+                    ui.label(tr(lang, Tr::ResolvingName));
+                }
                 if ui.button(tr(lang, Tr::Cancel)).clicked() {
-                    dialog.open = false;
+                    cancel = true;
                 }
             });
-            if enter && session_selected && !opening_frame {
+            if enter && session_selected && !resolving && !opening_frame {
                 submit = true;
             } else if esc && !opening_frame {
-                dialog.open = false;
+                cancel = true;
             }
         });
+    if cancel {
+        app.close_add_signal_dialog();
+    }
     if submit {
         app.add_by_name();
     }

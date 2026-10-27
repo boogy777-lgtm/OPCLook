@@ -33,10 +33,11 @@ impl App {
             fmt(self.lang(), Tr::ServerHostSuffix, &[&host])
         };
         self.journal.info_l(Tr::ReqServerList, &[&host_suffix]);
-        self.send(
+        self.send_with(
             0,
             Protocol::OpcDa,
             CommandKind::Discover { host: host.clone() },
+            PendingCtx::Host(host.clone()),
         );
         self.hold_da_route(0, &host, prepared);
     }

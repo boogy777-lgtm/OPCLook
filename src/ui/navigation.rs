@@ -252,6 +252,7 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
             let root_loading = view.root_loading;
             let connected = view.state == SessionState::Connected;
 
+            let mut vars_only_changed: Option<bool> = None;
             ui.horizontal_wrapped(|ui| {
                 if ui
                     .add_enabled(
@@ -281,16 +282,21 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                     open_add_signal(app);
                 }
                 if protocol == Protocol::OpcUa {
-                    let mut fallback = false;
                     let mut only = app
                         .sessions
-                        .iter_mut()
+                        .iter()
                         .find(|s| s.id == session_id)
-                        .map(|s| &mut s.ua_browse_vars_only)
-                        .unwrap_or(&mut fallback);
-                    ui.checkbox(&mut only, tr(lang, Tr::OnlyVars));
+                        .is_some_and(|s| s.ua_browse_vars_only);
+                    if ui.checkbox(&mut only, tr(lang, Tr::OnlyVars)).changed() {
+                        // U5: the filter applies to what is loaded, so the
+                        // tree is re-read.
+                        vars_only_changed = Some(only);
+                    }
                 }
             });
+            if let Some(only) = vars_only_changed {
+                app.set_ua_browse_vars_only(session_id, only);
+            }
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(fmt(lang, Tr::BrowseProto, &[&protocol.to_string()]))

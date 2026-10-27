@@ -605,8 +605,16 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                             Protocol::OpcUa => !dialog.ua_url.trim().is_empty(),
                         }
                     };
+                    let waiting = dialog.connecting.is_some();
                     ui.horizontal(|ui| {
-                        if ui
+                        if waiting {
+                            // U9: the dialog stays open until this attempt ends.
+                            ui.add_enabled(
+                                false,
+                                egui::Button::new(tr(lang, Tr::ConnectInProgress)),
+                            );
+                            ui.spinner();
+                        } else if ui
                             .add_enabled(
                                 can_connect_dialog,
                                 egui::Button::new(tr(lang, Tr::Connect)),
@@ -629,6 +637,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                         }
                     } else if enter
                         && !opening_frame
+                        && !waiting
                         && can_connect_dialog
                         && (focus_in_url_field || ui.memory(|m| m.focused().is_none()))
                     {
@@ -697,6 +706,11 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
     }
     if close {
         app.close_connect_dialog();
+    }
+    if app.dialogs.connect.connecting.is_some() {
+        // U9: one attempt at a time; a second click/double-click is ignored.
+        connect = None;
+        quick_connect = None;
     }
     if let Some(protocol) = connect {
         if protocol == Protocol::OpcUa
@@ -773,15 +787,15 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                     app.settings.ua_security_policy =
                         endpoint.ua_security_policy.unwrap_or_default();
                     app.settings.ua_security_mode = endpoint.ua_security_mode.unwrap_or_default();
-                    app.settings.ua_trust_server_cert = endpoint.ua_trust_server_cert;
+                    // U13: «Доверять сертификату» is a per-connection choice
+                    // (kept on the recent endpoint), never a global setting.
                     app.settings.ua_session_timeout_ms = endpoint
                         .ua_session_timeout
                         .unwrap_or_else(crate::settings::default_session_timeout);
                     app.settings.save();
                 }
-                if app.connect_endpoint(endpoint) {
-                    app.close_connect_dialog();
-                }
+                // U9: the dialog closes on `Connected`, shows `Error` inline.
+                app.connect_from_dialog(endpoint);
             } else {
                 app.dialogs.connect.error = Some(tr(lang, Tr::ValueNotServer).to_string());
             }
@@ -797,19 +811,15 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
             {
                 return;
             }
-            if app.open_tab_for_endpoint(endpoint.clone()) {
-                if endpoint.protocol == Protocol::OpcUa {
-                    app.settings.ua_security_policy =
-                        endpoint.ua_security_policy.unwrap_or_default();
-                    app.settings.ua_security_mode = endpoint.ua_security_mode.unwrap_or_default();
-                    app.settings.ua_trust_server_cert = endpoint.ua_trust_server_cert;
-                    app.settings.ua_session_timeout_ms = endpoint
-                        .ua_session_timeout
-                        .unwrap_or_else(crate::settings::default_session_timeout);
-                    app.settings.save();
-                }
-                app.close_connect_dialog();
+            if endpoint.protocol == Protocol::OpcUa {
+                app.settings.ua_security_policy = endpoint.ua_security_policy.unwrap_or_default();
+                app.settings.ua_security_mode = endpoint.ua_security_mode.unwrap_or_default();
+                app.settings.ua_session_timeout_ms = endpoint
+                    .ua_session_timeout
+                    .unwrap_or_else(crate::settings::default_session_timeout);
+                app.settings.save();
             }
+            app.connect_from_dialog(endpoint);
         }
     }
 }

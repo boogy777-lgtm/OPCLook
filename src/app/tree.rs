@@ -13,12 +13,50 @@ impl App {
             self.browse_views(session);
             return None;
         }
-        let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) else {
+        // By NodeId only the first tree item carrying it is meant; callers that
+        // know the exact item use `browse_item`.
+        let item_id = self
+            .sessions
+            .iter()
+            .find(|s| s.id == session)?
+            .tree
+            .iter()
+            .find(|t| !node_id.is_empty() && t.node.node_id == node_id)
+            .map(|t| t.id);
+        self.browse_target(session, node_id, item_id)
+    }
+
+    /// Browse the children of one specific tree item (U7). The reply is routed
+    /// back to this exact item even when the same NodeId occurs elsewhere.
+    pub fn browse_item(&mut self, session: SessionId, item_id: u64) -> Option<RequestId> {
+        let node_id = self
+            .sessions
+            .iter()
+            .find(|s| s.id == session)?
+            .tree
+            .iter()
+            .find(|t| t.id == item_id)?
+            .node
+            .node_id
+            .clone();
+        if node_id == "\u{1}views" {
+            self.browse_views(session);
             return None;
-        };
+        }
+        self.browse_target(session, node_id, Some(item_id))
+    }
+
+    fn browse_target(
+        &mut self,
+        session: SessionId,
+        node_id: String,
+        item_id: Option<u64>,
+    ) -> Option<RequestId> {
+        let view = self.sessions.iter_mut().find(|s| s.id == session)?;
         if node_id.is_empty() {
             view.root_loading = true;
-        } else if let Some(item) = view.tree.iter_mut().find(|t| t.node.node_id == node_id) {
+        } else if let Some(item) = item_id.and_then(|id| view.tree.iter_mut().find(|t| t.id == id))
+        {
             item.loading = true;
         }
         let protocol = view.protocol();
@@ -32,7 +70,11 @@ impl App {
         } else {
             None
         };
-        let request_id = self.send(
+        let ctx = match item_id {
+            Some(id) if !node_id.is_empty() => PendingCtx::TreeItem(id),
+            _ => PendingCtx::None,
+        };
+        let request_id = self.send_with(
             session,
             protocol,
             CommandKind::Browse {
@@ -40,9 +82,10 @@ impl App {
                 filter,
                 view_id,
             },
+            ctx,
         );
         self.pending_requests
-            .contains(&(session, request_id))
+            .contains_key(&(session, request_id))
             .then_some(request_id)
     }
 
@@ -82,10 +125,31 @@ impl App {
     }
 
     /// Toggles the UA «Только переменные» browse filter for a session.
+    ///
+    /// U5: a changed filter re-reads the session's tree from the root (the
+    /// already loaded nodes were fetched with the previous filter).
     pub fn set_ua_browse_vars_only(&mut self, session: SessionId, only: bool) {
-        if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
-            view.ua_browse_vars_only = only;
+        let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) else {
+            return;
+        };
+        let changed = view.ua_browse_vars_only != only;
+        view.ua_browse_vars_only = only;
+        let live = view.state == SessionState::Connected && view.protocol() == Protocol::OpcUa;
+        if changed && live {
+            self.reread_tree(session);
         }
+    }
+
+    /// Drop the loaded tree of `session` and browse the root again.
+    pub fn reread_tree(&mut self, session: SessionId) {
+        self.cancel_add_children(session);
+        if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
+            view.tree.clear();
+            view.root_loaded = false;
+        }
+        self.selected_tree = self.selected_tree.filter(|(sid, _)| *sid != session);
+        self.tree_focus = self.tree_focus.filter(|(sid, _)| *sid != session);
+        self.browse(session, String::new());
     }
 }
 
@@ -143,7 +207,7 @@ impl App {
             return;
         }
         let node_id = item.node.node_id.clone();
-        self.start_add_children(session, &node_id);
+        self.start_add_children_at(session, &node_id, Some(id));
     }
 
     /// Start (or restart) a recursive «Добавить дочерние» job for `branch_node`.
@@ -154,6 +218,17 @@ impl App {
     /// every direct Item to the table, and enqueues every Branch child for a
     /// further browse. Cycles and duplicates are guarded by a visited set.
     pub fn start_add_children(&mut self, session: SessionId, branch_node: &str) {
+        self.start_add_children_at(session, branch_node, None);
+    }
+
+    /// [`App::start_add_children`] for a known tree item (the one the user
+    /// selected), so the first browse is routed to that exact item.
+    fn start_add_children_at(
+        &mut self,
+        session: SessionId,
+        branch_node: &str,
+        item_id: Option<u64>,
+    ) {
         // A new job for the same session replaces the previous one.
         if let Some(job) = self.add_children.as_ref() {
             if job.session == session {
@@ -167,7 +242,11 @@ impl App {
         let queue = std::collections::VecDeque::new();
         // Issue the first browse and record its request id; the job only
         // consumes a Browse event whose id is in this map.
-        let Some(request_id) = self.browse(session, branch_node.to_string()) else {
+        let started = match item_id {
+            Some(id) => self.browse_item(session, id),
+            None => self.browse(session, branch_node.to_string()),
+        };
+        let Some(request_id) = started else {
             return;
         };
         let mut in_flight = std::collections::HashMap::new();
@@ -194,6 +273,7 @@ impl App {
         session: SessionId,
         request_id: RequestId,
         node_id: &str,
+        target_item: Option<u64>,
     ) {
         let job_active = match self.add_children {
             Some(ref job) => job.session == session,
@@ -217,7 +297,11 @@ impl App {
             let mut items: Vec<(String, String)> = Vec::new();
             let mut branches: Vec<String> = Vec::new();
             if let Some(view) = self.sessions.iter().find(|s| s.id == session) {
-                if let Some(parent) = view.tree.iter().find(|t| t.node.node_id == node_id) {
+                let parent = match target_item {
+                    Some(id) => view.tree.iter().find(|t| t.id == id),
+                    None => view.tree.iter().find(|t| t.node.node_id == node_id),
+                };
+                if let Some(parent) = parent {
                     for child in view.tree.iter().filter(|t| t.parent == Some(parent.id)) {
                         match child.node.kind {
                             NodeKind::Item => {
@@ -360,6 +444,10 @@ impl App {
             self.dialogs.add_signal.error = Some(tr(self.lang(), Tr::NoServerSelected).to_string());
             return;
         };
+        if self.dialogs.add_signal.resolving.is_some() {
+            // One resolution at a time; the dialog shows a spinner meanwhile.
+            return;
+        }
         let item_id = self.dialogs.add_signal.item_id.trim().to_string();
         if item_id.is_empty() {
             self.dialogs.add_signal.error = Some(tr(self.lang(), Tr::NameRequired).to_string());
@@ -372,9 +460,9 @@ impl App {
         let protocol = view.protocol();
         // For UA, a bare name that is not a valid NodeId is treated as a
         // relative BrowsePath from the root (e.g. "0:Objects/2:MyVar"); resolve
-        // it first and add the first target when it arrives.
+        // it first and add the first target when it arrives. The dialog stays
+        // open until the answer (or its error) is in.
         if protocol == Protocol::OpcUa && !is_valid_ua_node_id(&item_id) {
-            self.pending_path_resolve = Some((session, item_id.clone(), name));
             self.dialogs.add_signal.error = None;
             let path = if item_id.contains('/') {
                 item_id.clone()
@@ -382,25 +470,46 @@ impl App {
                 // A single segment has no namespace; browse from the root by name.
                 format!("0:{item_id}")
             };
-            self.send(
+            let request_id = self.send_with(
                 session,
                 protocol,
                 CommandKind::ResolveBrowsePath {
                     start_node: None,
                     path,
                 },
+                PendingCtx::ResolvePath {
+                    requested: item_id,
+                    name,
+                },
             );
-            self.dialogs.add_signal.open = false;
-            self.dialogs.add_signal.item_id.clear();
-            self.dialogs.add_signal.display_name.clear();
-            self.dialogs.add_signal.error = None;
+            if self.pending_requests.contains_key(&(session, request_id)) {
+                self.dialogs.add_signal.resolving = Some((session, request_id));
+            } else {
+                // The command never left (dead worker): the journal has the
+                // reason; say it in the dialog as well.
+                self.dialogs.add_signal.error = Some(
+                    self.sessions
+                        .iter()
+                        .find(|s| s.id == session)
+                        .map(|s| s.info.clone())
+                        .unwrap_or_default(),
+                );
+            }
             return;
         }
         self.add_items(session, vec![(item_id, name)]);
-        self.dialogs.add_signal.open = false;
-        self.dialogs.add_signal.item_id.clear();
-        self.dialogs.add_signal.display_name.clear();
-        self.dialogs.add_signal.error = None;
+        self.close_add_signal_dialog();
+    }
+
+    /// Close «Добавить по имени» and reset its fields (also abandons a pending
+    /// path resolution: its late answer is ignored).
+    pub fn close_add_signal_dialog(&mut self) {
+        let d = &mut self.dialogs.add_signal;
+        d.open = false;
+        d.resolving = None;
+        d.item_id.clear();
+        d.display_name.clear();
+        d.error = None;
     }
 }
 
@@ -433,70 +542,70 @@ pub(super) fn replace_roots(view: &mut SessionView, children: Vec<BrowseNode>) {
     view.next_tree_id = id;
 }
 
-pub(super) fn insert_children(
-    view: &mut SessionView,
-    parent_node: &str,
-    children: Vec<BrowseNode>,
-) {
-    let Some(parent_index) = view.tree.iter().position(|t| t.node.node_id == parent_node) else {
-        return;
+/// Index one past the last descendant of the item at `index`. The tree is kept
+/// in depth-first order, so the descendants are exactly the contiguous run of
+/// deeper items that follows the parent: O(subtree), no per-item parent walk.
+pub(super) fn subtree_end(tree: &[TreeItem], index: usize) -> usize {
+    let Some(parent) = tree.get(index) else {
+        return index;
     };
-    let parent_id = view.tree[parent_index].id;
-    let parent_depth = view.tree[parent_index].depth;
-
-    let old_ids: Vec<u64> = view
-        .tree
-        .iter()
-        .filter(|item| is_descendant(view, item.id, parent_id))
-        .map(|item| item.id)
-        .collect();
-    view.tree.retain(|item| !old_ids.contains(&item.id));
-
-    let parent_index = view
-        .tree
-        .iter()
-        .position(|t| t.id == parent_id)
-        .unwrap_or(parent_index);
-    let mut insert_at = parent_index + 1;
-    while insert_at < view.tree.len() && view.tree[insert_at].depth > parent_depth {
-        insert_at += 1;
+    let depth = parent.depth;
+    let mut end = index + 1;
+    while tree.get(end).is_some_and(|item| item.depth > depth) {
+        end += 1;
     }
-
-    let mut new_items = Vec::new();
-    let mut id = view.next_tree_id;
-    for node in children {
-        new_items.push(TreeItem {
-            id,
-            parent: Some(parent_id),
-            node,
-            depth: parent_depth + 1,
-            expanded: false,
-            loaded: false,
-            loading: false,
-        });
-        id += 1;
-    }
-    view.next_tree_id = id;
-    view.tree.splice(insert_at..insert_at, new_items);
+    end
 }
 
-fn is_descendant(view: &SessionView, item_id: u64, ancestor: u64) -> bool {
-    let mut current = item_id;
-    let mut guard = 0;
-    loop {
-        guard += 1;
-        if guard > 100_000 {
-            return false;
-        }
-        let Some(item) = view.tree.iter().find(|t| t.id == current) else {
-            return false;
-        };
-        match item.parent {
-            Some(parent) if parent == ancestor => return true,
-            Some(parent) => current = parent,
-            None => return false,
-        }
-    }
+/// Replace the children of the item at `parent_index` with `children` in a
+/// single splice (U6/A4). Any previous descendants of that item are dropped;
+/// nothing outside its subtree is touched.
+pub(super) fn set_children(
+    view: &mut SessionView,
+    parent_index: usize,
+    children: Vec<BrowseNode>,
+    loaded: bool,
+) {
+    let Some(parent) = view.tree.get(parent_index) else {
+        return;
+    };
+    let parent_id = parent.id;
+    let depth = parent.depth + 1;
+    let end = subtree_end(&view.tree, parent_index);
+    let mut id = view.next_tree_id;
+    let new_items: Vec<TreeItem> = children
+        .into_iter()
+        .map(|node| {
+            let item = TreeItem {
+                id,
+                parent: Some(parent_id),
+                node,
+                depth,
+                expanded: false,
+                loaded,
+                loading: false,
+            };
+            id += 1;
+            item
+        })
+        .collect();
+    view.next_tree_id = id;
+    view.tree.splice(parent_index + 1..end, new_items);
+}
+
+/// Insert (replacing previous ones) the browse result of the tree item with id
+/// `parent_item`. Returns false when that item no longer exists (the tree was
+/// refreshed meanwhile), so the caller can drop the stale reply.
+pub(super) fn insert_children(
+    view: &mut SessionView,
+    parent_item: u64,
+    children: Vec<BrowseNode>,
+) -> bool {
+    let Some(parent_index) = view.tree.iter().position(|t| t.id == parent_item) else {
+        return false;
+    };
+    set_children(view, parent_index, children, false);
+    true
 }
 
 /// Best-effort check whether `text` is a legal OPC UA NodeId string

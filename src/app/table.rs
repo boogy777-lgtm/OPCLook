@@ -18,11 +18,9 @@ impl App {
             if item_id.trim().is_empty() {
                 continue;
             }
-            if self
-                .rows
-                .iter()
-                .any(|row| row.session == session && row.item_id == item_id)
-            {
+            // Index lookup (A4): a CSV import or an add-children job calls this
+            // once per item, so a scan of all rows would be O(N^2).
+            if self.has_row_for_item(session, &item_id) {
                 continue;
             }
             let key = self.next_key;
@@ -32,7 +30,7 @@ impl App {
             } else {
                 display_name
             };
-            self.rows.push(Row {
+            self.push_row(Row {
                 key,
                 session,
                 item_id: item_id.clone(),

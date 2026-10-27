@@ -76,6 +76,9 @@ pub const DA_HELPER_EXE_ENV: &str = "OPCDA_NETHELPER_EXE";
 pub const RECONNECT_MAX_ATTEMPTS: u32 = 20;
 /// Base backoff (seconds) for the first reconnect attempt; doubles each time.
 pub const RECONNECT_BASE_DELAY_SECS: u64 = 1;
+/// Ceiling of the reconnect backoff: an unreachable server is retried at least
+/// once a minute instead of at 2^n seconds (U10).
+pub const RECONNECT_MAX_DELAY_SECS: u64 = 60;
 
 // ---------------------------------------------------------------------------
 // Option ranges and defaults (seconds unless noted)
@@ -194,6 +197,7 @@ mod tests {
     fn reconnect_cap_is_the_single_source_of_truth() {
         assert_eq!(RECONNECT_MAX_ATTEMPTS, 20);
         assert_eq!(RECONNECT_BASE_DELAY_SECS, 1);
+        assert!(RECONNECT_MAX_DELAY_SECS >= RECONNECT_BASE_DELAY_SECS);
     }
 
     #[test]

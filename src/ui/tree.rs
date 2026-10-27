@@ -21,18 +21,20 @@ pub(super) fn visible_tree_indices(view: &crate::app::SessionView) -> Vec<usize>
 }
 
 pub(super) fn toggle_tree_item(app: &mut App, session: SessionId, id: u64) {
-    let mut browse = None;
+    let mut browse = false;
     if let Some(view) = app.sessions.iter_mut().find(|s| s.id == session) {
         if let Some(item) = view.tree.iter_mut().find(|t| t.id == id) {
             item.expanded = !item.expanded;
             if item.expanded && !item.loaded && item.node.has_children {
                 item.loading = true;
-                browse = Some(item.node.node_id.clone());
+                browse = true;
             }
         }
     }
-    if let Some(node_id) = browse {
-        app.browse(session, node_id);
+    if browse {
+        // U7: the reply lands under THIS item, not the first node with the
+        // same NodeId.
+        app.browse_item(session, id);
     }
 }
 
@@ -44,13 +46,13 @@ pub(super) fn refresh_selected(app: &mut App) {
         if sid == session {
             app.tree_item(session, id)
                 .filter(|item| item.node.kind == NodeKind::Branch)
-                .map(|item| item.node.node_id.clone())
+                .map(|item| item.id)
         } else {
             None
         }
     });
-    if let Some(node_id) = selected {
-        app.browse(session, node_id);
+    if let Some(item_id) = selected {
+        app.browse_item(session, item_id);
     } else {
         if let Some(view) = app.sessions.iter_mut().find(|s| s.id == session) {
             view.tree.clear();

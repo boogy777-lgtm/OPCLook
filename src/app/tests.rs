@@ -2,13 +2,15 @@ use super::present::operation_label;
 use super::sessions::reconnect_delay;
 use super::*;
 use crate::bff::model::{BrowseNode, EndpointSpec, EventKind, NodeKind, Operation};
+use crate::constants::{RECONNECT_MAX_ATTEMPTS, RECONNECT_MAX_DELAY_SECS};
 use crate::i18n::Lang;
 use crate::settings::Options;
 
 #[test]
 fn reconnect_delay_doubles_exponentially() {
-    // Attempts 1..=21 give 1, 2, 4, ..., 2^20 (1048576) seconds.
-    let expected: Vec<u64> = (0..21).map(|shift| 1u64 << shift).collect();
+    // Attempts 1..=7 double: 1, 2, 4, ... 64 would be next but the ceiling
+    // (RECONNECT_MAX_DELAY_SECS = 60) applies from attempt 7 on.
+    let expected = [1u64, 2, 4, 8, 16, 32, 60, 60, 60];
     for (attempt, secs) in expected.iter().enumerate() {
         assert_eq!(
             reconnect_delay(attempt as u32 + 1).as_secs(),
@@ -18,15 +20,32 @@ fn reconnect_delay_doubles_exponentially() {
             secs
         );
     }
-    assert_eq!(reconnect_delay(21).as_secs(), 1 << 20);
+}
+
+#[test]
+fn reconnect_delay_has_a_ceiling_for_every_attempt() {
+    // U10: the old loop reached 2^19 s (about 6 days) at attempt 20.
+    for attempt in 1..=RECONNECT_MAX_ATTEMPTS {
+        assert!(
+            reconnect_delay(attempt).as_secs() <= RECONNECT_MAX_DELAY_SECS,
+            "attempt {attempt}"
+        );
+    }
+    assert_eq!(
+        reconnect_delay(RECONNECT_MAX_ATTEMPTS).as_secs(),
+        RECONNECT_MAX_DELAY_SECS
+    );
 }
 
 #[test]
 fn reconnect_delay_never_overflows() {
-    // Beyond the 64-bit shift width the helper pins to u64::MAX instead of
-    // panicking; the retry loop never gets this far (cap is 20).
-    assert_eq!(reconnect_delay(65).as_secs(), u64::MAX);
-    assert_eq!(reconnect_delay(u32::MAX).as_secs(), u64::MAX);
+    // Beyond the 64-bit shift width the helper pins to the ceiling instead of
+    // panicking.
+    assert_eq!(reconnect_delay(65).as_secs(), RECONNECT_MAX_DELAY_SECS);
+    assert_eq!(
+        reconnect_delay(u32::MAX).as_secs(),
+        RECONNECT_MAX_DELAY_SECS
+    );
 }
 
 #[test]
@@ -640,4 +659,489 @@ fn different_application_uris_are_never_merged_by_url() {
         );
     }
     assert_eq!(app.dialogs.connect.ua_search_results.len(), 2);
+}
+
+// ---- Tree helpers shared by the U6 / U7 / A4 tests ----
+
+fn tree_app() -> (egui::Context, App) {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    (ctx, app)
+}
+
+fn tree_names(app: &App) -> Vec<(usize, String)> {
+    app.sessions[0]
+        .tree
+        .iter()
+        .map(|t| (t.depth, t.node.name.clone()))
+        .collect()
+}
+
+fn item_id_named(app: &App, name: &str) -> u64 {
+    app.sessions[0]
+        .tree
+        .iter()
+        .find(|t| t.node.name == name)
+        .unwrap_or_else(|| panic!("no tree item named {name}"))
+        .id
+}
+
+// ---- U6: «Представления» replaces only its own children ----
+
+#[test]
+fn u6_views_event_keeps_the_rest_of_the_tree() {
+    let (_ctx, mut app) = tree_app();
+    app.on_event_for_test_at(
+        1,
+        EventKind::Browse {
+            node_id: String::new(),
+            children: vec![
+                branch_node("ns=1;s=R1", "R1", true),
+                branch_node("ns=1;s=R2", "R2", true),
+            ],
+        },
+    );
+    app.on_event_for_test_at(
+        1,
+        EventKind::Browse {
+            node_id: "ns=1;s=R1".to_string(),
+            children: vec![item_node("ns=1;s=C1", "C1")],
+        },
+    );
+    let r1 = item_id_named(&app, "R1");
+
+    app.on_event_for_test_at(
+        1,
+        EventKind::Views {
+            children: vec![
+                branch_node("ns=0;i=1", "View1", false),
+                branch_node("ns=0;i=2", "View2", false),
+            ],
+        },
+    );
+    let names: Vec<String> = tree_names(&app).into_iter().map(|(_, n)| n).collect();
+    assert_eq!(
+        names,
+        ["Представления", "View1", "View2", "R1", "C1", "R2"],
+        "R1's expanded child must survive the Views event"
+    );
+    let r1_item = app.tree_item(1, r1).expect("R1 still present");
+    assert!(r1_item.expanded && r1_item.loaded, "R1 keeps its state");
+
+    // A second Views event replaces only the previous views.
+    app.on_event_for_test_at(
+        1,
+        EventKind::Views {
+            children: vec![branch_node("ns=0;i=3", "View3", false)],
+        },
+    );
+    let names: Vec<String> = tree_names(&app).into_iter().map(|(_, n)| n).collect();
+    assert_eq!(names, ["Представления", "View3", "R1", "C1", "R2"]);
+}
+
+// ---- U7: replies land under the item that was expanded ----
+
+#[test]
+fn u7_browse_reply_goes_to_the_expanded_instance_of_a_duplicated_node_id() {
+    let (_ctx, mut app) = tree_app();
+    app.on_event_for_test_at(
+        1,
+        EventKind::Browse {
+            node_id: String::new(),
+            children: vec![
+                branch_node("ns=1;s=P", "P", true),
+                branch_node("ns=1;s=Q", "Q", true),
+            ],
+        },
+    );
+    for parent in ["ns=1;s=P", "ns=1;s=Q"] {
+        app.on_event_for_test_at(
+            1,
+            EventKind::Browse {
+                node_id: parent.to_string(),
+                children: vec![branch_node("ns=1;s=SHARED", "Shared", true)],
+            },
+        );
+    }
+    let shared: Vec<u64> = app.sessions[0]
+        .tree
+        .iter()
+        .filter(|t| t.node.name == "Shared")
+        .map(|t| t.id)
+        .collect();
+    assert_eq!(shared.len(), 2, "same NodeId appears under P and Q");
+
+    // The user expands the SECOND instance (under Q).
+    let request = app.browse_item(1, shared[1]).expect("dispatched");
+    app.on_event_for_test_with_request(
+        1,
+        request,
+        EventKind::Browse {
+            node_id: "ns=1;s=SHARED".to_string(),
+            children: vec![item_node("ns=1;s=LEAF", "Leaf")],
+        },
+    );
+    let names = tree_names(&app);
+    let leaf_pos = names.iter().position(|(_, n)| n == "Leaf").expect("leaf");
+    let second_pos = app.sessions[0]
+        .tree
+        .iter()
+        .position(|t| t.id == shared[1])
+        .expect("second instance");
+    assert_eq!(leaf_pos, second_pos + 1, "leaf is under the 2nd instance");
+    let first = app.tree_item(1, shared[0]).expect("first instance");
+    assert!(!first.loaded && !first.expanded, "1st instance untouched");
+    let second = app.tree_item(1, shared[1]).expect("second instance");
+    assert!(second.loaded && second.expanded && !second.loading);
+}
+
+#[test]
+fn u7_reply_for_a_removed_item_is_dropped() {
+    let (_ctx, mut app) = tree_app();
+    app.on_event_for_test_at(
+        1,
+        EventKind::Browse {
+            node_id: String::new(),
+            children: vec![branch_node("ns=1;s=P", "P", true)],
+        },
+    );
+    let p = item_id_named(&app, "P");
+    let request = app.browse_item(1, p).expect("dispatched");
+    // The tree is re-read meanwhile: the old item ids are gone.
+    app.reread_tree(1);
+    app.on_event_for_test_with_request(
+        1,
+        request,
+        EventKind::Browse {
+            node_id: "ns=1;s=P".to_string(),
+            children: vec![item_node("ns=1;s=LEAF", "Leaf")],
+        },
+    );
+    assert!(
+        app.sessions[0].tree.iter().all(|t| t.node.name != "Leaf"),
+        "a reply for a dead item must not attach anywhere"
+    );
+}
+
+// ---- U5 (app side): toggling «Только переменные» re-reads the tree ----
+
+#[test]
+fn u5_toggling_vars_only_rereads_the_tree_from_the_root() {
+    let (_ctx, mut app) = tree_app();
+    app.on_event_for_test_at(
+        1,
+        EventKind::Browse {
+            node_id: String::new(),
+            children: vec![branch_node("ns=1;s=P", "P", true)],
+        },
+    );
+    assert_eq!(app.sessions[0].tree.len(), 1);
+    app.set_ua_browse_vars_only(1, true);
+    let view = &app.sessions[0];
+    assert!(view.ua_browse_vars_only);
+    assert!(view.tree.is_empty(), "stale tree dropped");
+    assert!(view.root_loading, "root browse issued");
+    assert_eq!(app.pending_request_ids_for_test(1).len(), 1);
+    // Setting the same value again must not browse again.
+    app.set_ua_browse_vars_only(1, true);
+    assert_eq!(app.pending_request_ids_for_test(1).len(), 1);
+}
+
+// ---- U11: URL host parsing ----
+
+#[test]
+fn u11_ipv6_url_host_and_port_are_parsed() {
+    use super::present::ua_url_host;
+    assert_eq!(ua_url_host("opc.tcp://[::1]:4840").as_deref(), Some("::1"));
+    assert_eq!(
+        ua_url_host("opc.tcp://[2001:db8::7]:4840/path").as_deref(),
+        Some("2001:db8::7")
+    );
+    assert_eq!(ua_url_host("opc.tcp://[::1]").as_deref(), Some("::1"));
+    assert_eq!(
+        ua_url_host("opc.tcp://user@plant:4840/x").as_deref(),
+        Some("plant")
+    );
+    assert_eq!(ua_url_host("opc.tcp://:4840"), None);
+}
+
+#[test]
+fn u11_server_name_brackets_ipv6_and_treats_loopback_as_local() {
+    let local = EndpointSpec::ua("opc.tcp://[::1]:4840");
+    assert_eq!(compose_server_name(&local), "[::1]:4840");
+    let advertised_local =
+        EndpointSpec::ua("opc.tcp://[::1]:4840").with_advertised_name(Some("Sim".into()));
+    assert_eq!(compose_server_name(&advertised_local), "Sim");
+    let remote =
+        EndpointSpec::ua("opc.tcp://[2001:db8::7]:4840").with_advertised_name(Some("Sim".into()));
+    assert_eq!(compose_server_name(&remote), "Sim — 2001:db8::7");
+    // Any 127.x.x.x address is this machine.
+    let loop2 =
+        EndpointSpec::ua("opc.tcp://127.0.0.2:4840").with_advertised_name(Some("Sim".into()));
+    assert_eq!(compose_server_name(&loop2), "Sim");
+}
+
+#[test]
+fn u11_loopback_detection_covers_the_whole_127_block_and_v6() {
+    use super::present::is_loopback_host;
+    for host in [
+        "localhost",
+        "LOCALHOST",
+        "127.0.0.1",
+        "127.0.0.2",
+        "127.255.255.254",
+        "::1",
+        "[::1]",
+        "::ffff:127.0.0.1",
+    ] {
+        assert!(is_loopback_host(host), "{host} is loopback");
+    }
+    for host in [
+        "128.0.0.1",
+        "10.0.0.1",
+        "127.0.0.1.evil.example",
+        "plant",
+        "",
+    ] {
+        assert!(!is_loopback_host(host), "{host} is not loopback");
+    }
+}
+
+// ---- D4 / D5: DA discovery routes ----
+
+fn hold_discovery(app: &mut App, host: &str) {
+    app.da_route_holds.push(DaRouteHold {
+        session: 0,
+        host: host.to_string(),
+        prepared: PreparedRoutes::default(),
+    });
+}
+
+fn pend_discover(app: &mut App, request_id: RequestId, host: &str) {
+    app.pending_requests.insert(
+        (0, request_id),
+        PendingRequest {
+            operation: Operation::Discover,
+            sent: Instant::now(),
+            ctx: PendingCtx::Host(host.to_string()),
+        },
+    );
+}
+
+#[test]
+fn d4_discover_error_releases_only_the_failing_hosts_route() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    hold_discovery(&mut app, "pc-a");
+    hold_discovery(&mut app, "pc-b");
+    pend_discover(&mut app, 501, "pc-a");
+    pend_discover(&mut app, 502, "pc-b");
+    app.on_event_for_test_with_request(
+        0,
+        501,
+        EventKind::Error {
+            operation: Operation::Discover,
+            message: "RPC unavailable".to_string(),
+        },
+    );
+    let hosts: Vec<&str> = app.da_route_holds.iter().map(|h| h.host.as_str()).collect();
+    assert_eq!(hosts, ["pc-b"], "the other search keeps its route");
+}
+
+#[test]
+fn d5_closing_the_connect_dialog_releases_discovery_routes() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    hold_discovery(&mut app, "pc-a");
+    hold_discovery(&mut app, "pc-b");
+    // A session route (not a discovery one) must survive.
+    app.da_route_holds.push(DaRouteHold {
+        session: 9,
+        host: "pc-c".to_string(),
+        prepared: PreparedRoutes::default(),
+    });
+    app.close_connect_dialog();
+    let left: Vec<(SessionId, &str)> = app
+        .da_route_holds
+        .iter()
+        .map(|h| (h.session, h.host.as_str()))
+        .collect();
+    assert_eq!(left, [(9, "pc-c")]);
+}
+
+// ---- U14: «Добавить по имени» waits for the resolution ----
+
+fn open_add_by_name(app: &mut App, session: SessionId, path: &str) {
+    app.dialogs.add_signal.open = true;
+    app.dialogs.add_signal.session = Some(session);
+    app.dialogs.add_signal.item_id = path.to_string();
+    app.add_by_name();
+}
+
+#[test]
+fn u14_dialog_stays_open_until_the_path_is_resolved() {
+    let (_ctx, mut app) = tree_app();
+    open_add_by_name(&mut app, 1, "0:Objects/2:Sim/2:Tag1");
+    let (session, request) = app.dialogs.add_signal.resolving.expect("waiting");
+    assert_eq!(session, 1);
+    assert!(app.dialogs.add_signal.open, "dialog must stay open");
+    app.on_event_for_test_with_request(
+        1,
+        request,
+        EventKind::PathResolved {
+            targets: vec!["ns=2;s=Tag1".to_string()],
+        },
+    );
+    assert!(!app.dialogs.add_signal.open, "closed after the answer");
+    assert_eq!(app.dialogs.add_signal.resolving, None);
+    assert!(app.rows.iter().any(|r| r.item_id == "ns=2;s=Tag1"));
+}
+
+#[test]
+fn u14_resolve_error_is_shown_in_the_dialog_and_frees_pending() {
+    let (_ctx, mut app) = tree_app();
+    open_add_by_name(&mut app, 1, "0:Objects/2:Nope");
+    let (_, request) = app.dialogs.add_signal.resolving.expect("waiting");
+    app.on_event_for_test_with_request(
+        1,
+        request,
+        EventKind::Error {
+            operation: Operation::ResolveBrowsePath,
+            message: "BadNoMatch".to_string(),
+        },
+    );
+    assert!(app.dialogs.add_signal.open);
+    assert_eq!(app.dialogs.add_signal.resolving, None);
+    assert_eq!(app.dialogs.add_signal.error.as_deref(), Some("BadNoMatch"));
+    assert!(app.rows.is_empty());
+}
+
+#[test]
+fn u14_empty_target_list_reports_name_not_resolved_in_the_dialog() {
+    let (_ctx, mut app) = tree_app();
+    open_add_by_name(&mut app, 1, "0:Objects/2:Nope");
+    let (_, request) = app.dialogs.add_signal.resolving.expect("waiting");
+    app.on_event_for_test_with_request(
+        1,
+        request,
+        EventKind::PathResolved {
+            targets: Vec::new(),
+        },
+    );
+    assert!(app.dialogs.add_signal.open);
+    assert!(app.dialogs.add_signal.error.is_some());
+    assert_eq!(app.dialogs.add_signal.resolving, None);
+}
+
+#[test]
+fn u14_another_sessions_answer_is_not_consumed() {
+    let (_ctx, mut app) = tree_app();
+    app.seed_session(2, EndpointSpec::ua("opc.tcp://127.0.0.1:4841"));
+    open_add_by_name(&mut app, 1, "0:Objects/2:Tag1");
+    let (_, request) = app.dialogs.add_signal.resolving.expect("waiting");
+    // A reply with the same request id but from session 2 is unsolicited for
+    // this dialog: it is dropped and the wait continues.
+    app.on_event_for_test_with_request(
+        2,
+        request,
+        EventKind::PathResolved {
+            targets: vec!["ns=2;s=Other".to_string()],
+        },
+    );
+    assert!(app.rows.is_empty());
+    assert_eq!(app.dialogs.add_signal.resolving, Some((1, request)));
+}
+
+#[test]
+fn u14_cancelled_dialog_ignores_the_late_answer() {
+    let (_ctx, mut app) = tree_app();
+    open_add_by_name(&mut app, 1, "0:Objects/2:Tag1");
+    let (_, request) = app.dialogs.add_signal.resolving.expect("waiting");
+    app.close_add_signal_dialog();
+    app.on_event_for_test_with_request(
+        1,
+        request,
+        EventKind::PathResolved {
+            targets: vec!["ns=2;s=Tag1".to_string()],
+        },
+    );
+    assert!(app.rows.is_empty(), "a cancelled dialog adds nothing");
+}
+
+#[test]
+fn u14_disconnect_frees_a_waiting_dialog_with_an_error() {
+    let (_ctx, mut app) = tree_app();
+    open_add_by_name(&mut app, 1, "0:Objects/2:Tag1");
+    app.disconnect_session(1);
+    assert_eq!(app.dialogs.add_signal.resolving, None);
+    assert!(app.dialogs.add_signal.error.is_some());
+}
+
+// ---- A1: CJK font candidates ----
+
+#[test]
+fn a1_cjk_candidates_cover_windows_fonts_and_honor_the_override() {
+    use super::present::cjk_candidates_with;
+    let names: Vec<String> = cjk_candidates_with(None)
+        .iter()
+        .map(|f| f.path.display().to_string())
+        .collect();
+    assert!(names.iter().any(|p| p.ends_with("msyh.ttc")), "{names:?}");
+    assert!(names.iter().any(|p| p.ends_with("simsun.ttc")), "{names:?}");
+
+    let list = cjk_candidates_with(Some("/fonts/My.ttc#3".to_string()));
+    assert_eq!(list[0].path.display().to_string(), "/fonts/My.ttc");
+    assert_eq!(list[0].index, 3);
+    let plain = cjk_candidates_with(Some("/fonts/Plain.ttf".to_string()));
+    assert_eq!(
+        (plain[0].index, plain[0].path.display().to_string()),
+        (0, "/fonts/Plain.ttf".to_string())
+    );
+    let bad_face = cjk_candidates_with(Some("/fonts/X.ttc#abc".to_string()));
+    assert_eq!(
+        bad_face[0].index, 0,
+        "an unparsable face index falls back to 0"
+    );
+}
+
+#[test]
+fn a1_build_fonts_appends_the_cjk_face_as_a_fallback_only() {
+    use super::present::{FontFile, build_fonts};
+    // A readable file stands in for the font (the bytes are not parsed here).
+    let dir = std::env::temp_dir().join(format!("opcda-egui-fonts-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let fake = dir.join("fake.ttc");
+    std::fs::write(&fake, b"not a real font").expect("write fake font");
+    let missing = dir.join("missing.ttc");
+    let (fonts, loaded) = build_fonts(
+        &[],
+        &[],
+        &[
+            FontFile {
+                path: missing,
+                index: 0,
+            },
+            FontFile {
+                path: fake.clone(),
+                index: 2,
+            },
+        ],
+    );
+    assert_eq!(loaded.as_deref(), Some(fake.display().to_string().as_str()));
+    let data = fonts.font_data.get("cjk").expect("cjk font registered");
+    assert_eq!(data.index, 2);
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        let names = fonts.families.get(&family).expect("family");
+        assert_eq!(
+            names.last().map(String::as_str),
+            Some("cjk"),
+            "fallback is last"
+        );
+    }
+    // No candidate readable: nothing is registered.
+    let (fonts, loaded) = build_fonts(&[], &[], &[]);
+    assert!(loaded.is_none() && !fonts.font_data.contains_key("cjk"));
+    let _ = std::fs::remove_dir_all(&dir);
 }

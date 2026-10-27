@@ -1986,10 +1986,11 @@ fn connect_dialog_trust_checkbox_defaults_and_toggles() {
     assert!(h.state().dialogs.connect.ua_trust_server_cert);
 }
 
-/// The dialog picks up a trust flag and a custom timeout persisted in settings,
-/// surfacing them as the defaults when the connect dialog is opened.
+/// The dialog picks up a custom timeout persisted in settings. U13: the trust
+/// flag is a per-connection choice, so a legacy global `true` in an old
+/// settings file is NOT re-applied to a freshly opened dialog.
 #[test]
-fn connect_dialog_trust_and_timeout_restore_from_settings() {
+fn connect_dialog_timeout_restores_but_trust_stays_opt_in() {
     use opcda_egui::bff::model::Protocol;
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
@@ -1998,7 +1999,7 @@ fn connect_dialog_trust_and_timeout_restore_from_settings() {
     app.open_connect_dialog();
     app.dialogs.connect.protocol = Protocol::OpcUa;
     let h = harness(app);
-    assert!(h.state().dialogs.connect.ua_trust_server_cert);
+    assert!(!h.state().dialogs.connect.ua_trust_server_cert);
     assert_eq!(h.state().dialogs.connect.ua_session_timeout, 300_000);
 }
 
@@ -3933,4 +3934,222 @@ fn on_exit_shuts_down_the_gateway() {
             std::panic::resume_unwind(panic);
         }
     });
+}
+
+// ---- U9: the connect dialog waits for Connected / Error of its attempt ----
+
+fn u9_start_attempt(app: &mut App, url: &str) -> (u64, u64) {
+    app.open_connect_dialog();
+    app.dialogs.connect.protocol = Protocol::OpcUa;
+    app.dialogs.connect.ua_url = url.to_string();
+    assert!(app.connect_from_dialog(EndpointSpec::ua(url)));
+    let session = app.active_session.expect("session created by the attempt");
+    let request = *app
+        .pending_request_ids_for_test(session)
+        .last()
+        .expect("connect request is outstanding");
+    (session, request)
+}
+
+#[test]
+fn u9_dialog_stays_open_until_connected_then_closes() {
+    with_settings_lock(|| {
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        let (session, request) = u9_start_attempt(&mut app, "opc.tcp://127.0.0.1:1");
+        assert!(app.dialogs.connect.open, "dialog must stay open");
+        assert_eq!(app.dialogs.connect.connecting, Some(session));
+        assert_eq!(app.sessions[0].state, SessionState::Connecting);
+
+        app.on_event_for_test_with_request(
+            session,
+            request,
+            EventKind::Connected {
+                endpoint: EndpointSpec::ua("opc.tcp://127.0.0.1:1"),
+                info: "ok".to_string(),
+            },
+        );
+        assert!(!app.dialogs.connect.open, "Connected closes the dialog");
+        assert_eq!(app.dialogs.connect.connecting, None);
+        assert_eq!(app.sessions[0].state, SessionState::Connected);
+    });
+}
+
+#[test]
+fn u9_connect_error_stays_in_the_dialog_and_stops_the_retry_loop() {
+    with_settings_lock(|| {
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        let (session, request) = u9_start_attempt(&mut app, "opc.tcp://127.0.0.1:1");
+        app.on_event_for_test_with_request(
+            session,
+            request,
+            EventKind::Error {
+                operation: opcda_egui::bff::model::Operation::Connect,
+                message: "certificate rejected".to_string(),
+            },
+        );
+        assert!(
+            app.dialogs.connect.open,
+            "the error must stay in the dialog"
+        );
+        assert_eq!(
+            app.dialogs.connect.error.as_deref(),
+            Some("certificate rejected")
+        );
+        assert_eq!(app.dialogs.connect.connecting, None);
+        assert_eq!(app.sessions[0].state, SessionState::Disconnected);
+        assert_eq!(
+            app.sessions[0].reconnect,
+            ReconnectState::Stopped,
+            "a failed dialog attempt must not loop in the background"
+        );
+    });
+}
+
+#[test]
+fn u9_cancel_aborts_the_wait_and_ignores_the_late_reply() {
+    with_settings_lock(|| {
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        let (session, request) = u9_start_attempt(&mut app, "opc.tcp://127.0.0.1:1");
+        app.close_connect_dialog();
+        assert!(!app.dialogs.connect.open);
+        assert_eq!(app.dialogs.connect.connecting, None);
+        assert_eq!(app.sessions[0].state, SessionState::Disconnected);
+        assert_eq!(app.sessions[0].reconnect, ReconnectState::Stopped);
+        // The abandoned attempt's reply must not resurrect the session.
+        app.on_event_for_test_with_request(
+            session,
+            request,
+            EventKind::Connected {
+                endpoint: EndpointSpec::ua("opc.tcp://127.0.0.1:1"),
+                info: "late".to_string(),
+            },
+        );
+        assert_eq!(app.sessions[0].state, SessionState::Disconnected);
+        // The half-open session can still be removed.
+        app.remove_session(session);
+        assert!(app.sessions.is_empty());
+    });
+}
+
+#[test]
+fn u9_other_session_connecting_does_not_close_the_dialog() {
+    with_settings_lock(|| {
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        app.seed_session(7, EndpointSpec::ua("opc.tcp://127.0.0.1:2"));
+        app.open_connect_dialog();
+        app.on_event_for_test_at(
+            7,
+            EventKind::Connected {
+                endpoint: EndpointSpec::ua("opc.tcp://127.0.0.1:2"),
+                info: "background".to_string(),
+            },
+        );
+        assert!(
+            app.dialogs.connect.open,
+            "a background reconnect must not close an unrelated dialog"
+        );
+    });
+}
+
+#[test]
+fn u9_button_shows_connecting_spinner_and_blocks_a_second_attempt() {
+    with_settings_lock(|| {
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        let _ = u9_start_attempt(&mut app, "opc.tcp://127.0.0.1:1");
+        let mut h = harness(app);
+        h.run_steps(4);
+        assert!(h.query_by_label("Подключение…").is_some());
+        let before = h.state().sessions.len();
+        // Enter must not start another attempt while one is pending.
+        h.key_press(Key::Enter);
+        h.run_steps(3);
+        assert_eq!(h.state().sessions.len(), before);
+        assert!(h.state().dialogs.connect.open);
+    });
+}
+
+// ---- A2: settings problems are visible in the journal ----
+
+fn journal_text(app: &App) -> String {
+    app.journal
+        .entries()
+        .iter()
+        .map(|e| e.render(opcda_egui::i18n::Lang::Ru))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn a2_damaged_settings_file_is_backed_up_and_reported_in_the_journal() {
+    with_settings_lock(|| {
+        let dir = PathBuf::from(std::env::var_os("APPDATA").expect("APPDATA")).join("opcda-egui");
+        std::fs::create_dir_all(&dir).expect("settings dir");
+        std::fs::write(dir.join("settings.json"), "{ broken").expect("write damaged file");
+        let settings = Settings::load();
+        let ctx = egui::Context::default();
+        let app = App::new_test_with_settings(&ctx, settings);
+        let text = journal_text(&app);
+        assert!(text.contains("повреждён"), "journal: {text}");
+        assert!(text.contains("settings.json.bad-"), "journal: {text}");
+        let backups = std::fs::read_dir(&dir)
+            .expect("read dir")
+            .filter_map(Result::ok)
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .contains("settings.json.bad-")
+            })
+            .count();
+        assert_eq!(backups, 1);
+    });
+}
+
+#[test]
+fn a2_failed_settings_save_is_reported_in_the_journal() {
+    with_settings_lock(|| {
+        let dir = PathBuf::from(std::env::var_os("APPDATA").expect("APPDATA")).join("opcda-egui");
+        // A directory in place of settings.json makes the final rename fail.
+        std::fs::create_dir_all(dir.join("settings.json")).expect("squatting dir");
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        app.settings.save();
+        app.tick_for_test();
+        let text = journal_text(&app);
+        assert!(
+            text.contains("Не удалось сохранить настройки"),
+            "journal: {text}"
+        );
+    });
+}
+
+// ---- A3: a failed connectivity test makes the rows stale ----
+
+#[test]
+fn a3_failed_connectivity_test_marks_rows_stale_like_disconnected() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    seed_table(&mut app, &[("tag.a", "A", 1), ("tag.b", "B", 2)]);
+    assert!(
+        app.rows
+            .iter()
+            .all(|r| r.quality.kind == opcda_egui::bff::model::QualityKind::Good)
+    );
+    app.on_event_for_test_at(
+        1,
+        EventKind::Error {
+            operation: opcda_egui::bff::model::Operation::Test,
+            message: "link down".to_string(),
+        },
+    );
+    assert_eq!(app.sessions[0].state, SessionState::Disconnected);
+    let stale = opcda_egui::i18n::tr(opcda_egui::i18n::Lang::Ru, opcda_egui::i18n::Tr::StaleData);
+    for row in &app.rows {
+        assert_eq!(row.quality.kind, opcda_egui::bff::model::QualityKind::Bad);
+        assert_eq!(row.quality.text, stale);
+    }
 }

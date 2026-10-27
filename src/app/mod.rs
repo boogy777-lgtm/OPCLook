@@ -1,7 +1,7 @@
 use crate::bff::Gateway;
 use crate::bff::model::{
-    BrowseNode, Command, CommandKind, EndpointSpec, ItemKey, Protocol, Quality, QualityKind,
-    RequestId, SessionId, SubscriptionState, Value,
+    BrowseNode, Command, CommandKind, EndpointSpec, ItemKey, Operation, Protocol, Quality,
+    QualityKind, RequestId, SessionId, SubscriptionState, Value,
 };
 use crate::bff::net::NetworkBinding;
 use crate::constants::{
@@ -17,12 +17,13 @@ use crate::net::{
 };
 use crate::settings::{CachedAdapters, Options, Settings};
 use chrono::{DateTime, Utc};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 mod dialogs;
 mod events;
 mod present;
+mod row_index;
 mod runtime;
 mod search;
 mod sessions;
@@ -37,13 +38,13 @@ pub use dialogs::{
     AboutDialog, AddSignalDialog, ColumnsDialog, ConfirmAction, ConfirmDialog, ConnectDialog,
     Dialogs, MessageDialog, OptionsDialog, PendingWrites, WriteDialog,
 };
-pub use present::compose_server_name;
+pub use present::{CJK_FONT_ENV, compose_server_name, install_fonts};
 pub use state::{
     AddChildrenJob, BottomTab, CsvImportJob, CsvImportRow, ReconnectState, Row, SessionState,
     SessionView, TreeItem, WriteKind, WriteTypeChoice, write_type_choices,
 };
 
-use self::present::{install_fonts, is_loopback_host, operation_label};
+use self::present::{is_loopback_host, operation_label};
 
 pub struct App {
     pub gateway: Gateway,
@@ -93,10 +94,51 @@ pub struct App {
     /// only while their pair is present; the pair is removed on receipt. A
     /// session's entries are cleared whenever a new connect/disconnect lifecycle
     /// starts, so a reply from a superseded connection cannot mutate this one.
-    pending_requests: HashSet<(SessionId, RequestId)>,
-    /// Pending "Добавить по имени" BrowsePath resolution: (session, requested
-    /// name, display name). Consumed when `PathResolved` arrives.
-    pending_path_resolve: Option<(SessionId, String, String)>,
+    pending_requests: HashMap<(SessionId, RequestId), PendingRequest>,
+    /// Result of the CJK font probe done at startup (A1).
+    pub cjk_font: CjkFont,
+    /// Lookup index over `rows` (A4); see `row_index.rs`.
+    row_index: row_index::RowIndex,
+}
+
+/// Application context that travels with an outstanding request and comes back
+/// with its reply (the backend protocol is untouched: the app keeps this map
+/// itself, keyed by `request_id`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum PendingCtx {
+    None,
+    /// `Browse` of one specific tree item (an OPC UA NodeId may occur in several
+    /// places of the tree, so the reply must land under the item that was
+    /// expanded, not under the first node with that id).
+    TreeItem(u64),
+    /// `Discover` of one DA host: only that host's temporary route is released
+    /// when the request fails.
+    Host(String),
+    /// «Добавить по имени»: the name being resolved and the requested display
+    /// name, completed when `PathResolved` (or its error) arrives.
+    ResolvePath {
+        requested: String,
+        name: String,
+    },
+}
+
+/// One outstanding command.
+#[derive(Clone, Debug)]
+pub(super) struct PendingRequest {
+    pub operation: Operation,
+    pub sent: Instant,
+    pub ctx: PendingCtx,
+}
+
+/// Whether a font able to draw Chinese text was found at startup.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CjkFont {
+    /// Headless/test construction: fonts were not probed.
+    NotProbed,
+    /// Nothing usable on this machine.
+    Missing,
+    /// Path of the CJK fallback font that was installed.
+    Loaded(String),
 }
 
 struct DaRouteHold {
@@ -107,11 +149,23 @@ struct DaRouteHold {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        install_fonts(&cc.egui_ctx);
+        let cjk = install_fonts(&cc.egui_ctx);
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
         let mut app = Self::new_inner(Settings::load());
         app.journal.info_l(Tr::AppStarted, &[]);
         app.journal.info_l(Tr::OriginNote, &[]);
+        app.cjk_font = match cjk {
+            Some(path) => {
+                app.journal.info_l(Tr::CjkFontLoaded, &[&path]);
+                CjkFont::Loaded(path)
+            }
+            None => {
+                if app.lang() == Lang::Zh {
+                    app.journal.warn_l(Tr::CjkFontMissing, &[]);
+                }
+                CjkFont::Missing
+            }
+        };
         app
     }
 
@@ -144,6 +198,9 @@ impl App {
         self.settings.save();
         let msg = crate::i18n::fmt(lang, Tr::OptionsSaved, &[]);
         self.status = msg;
+        if lang == Lang::Zh && self.cjk_font == CjkFont::Missing {
+            self.journal.warn_l(Tr::CjkFontMissing, &[]);
+        }
     }
 
     fn new_inner(settings: Settings) -> Self {
@@ -183,17 +240,54 @@ impl App {
             next_key: 1,
             next_request: 1,
             next_scan: 1,
-            pending_requests: HashSet::new(),
-            pending_path_resolve: None,
+            pending_requests: HashMap::new(),
+            cjk_font: CjkFont::NotProbed,
+            row_index: row_index::RowIndex::default(),
         };
         app.dialogs.options.draft = app.settings.options.clone();
         app.init_network_from_cache();
+        app.drain_settings_notices();
         app
     }
 
     pub fn save_settings(&mut self) {
         self.settings.script = self.script_text.clone();
         self.settings.save();
+        self.drain_settings_notices();
+    }
+
+    /// Move the settings layer's load/save diagnostics into the journal, where
+    /// the user can see them (A2). Called at startup and on every tick.
+    pub(super) fn drain_settings_notices(&mut self) {
+        use crate::settings::SettingsNotice;
+        for notice in self.settings.take_notices() {
+            match notice {
+                SettingsNotice::ReadFailed { path, error } => {
+                    self.journal
+                        .error_l(Tr::SettingsReadFailed, &[&path, &error]);
+                }
+                SettingsNotice::ParseFailed {
+                    path,
+                    error,
+                    backup: Ok(backup),
+                } => {
+                    self.journal
+                        .error_l(Tr::SettingsParseFailed, &[&path, &error, &backup]);
+                }
+                SettingsNotice::ParseFailed {
+                    path,
+                    error,
+                    backup: Err(why),
+                } => {
+                    self.journal
+                        .error_l(Tr::SettingsParseNoBackup, &[&path, &error, &why]);
+                }
+                SettingsNotice::SaveFailed { path, error } => {
+                    self.journal
+                        .error_l(Tr::SettingsSaveFailed, &[&path, &error]);
+                }
+            }
+        }
     }
 
     /// Populate the network state from `settings.cached_adapters` without
@@ -457,6 +551,17 @@ impl App {
         protocol: Protocol,
         kind: CommandKind,
     ) -> u64 {
+        self.send_with(session, protocol, kind, PendingCtx::None)
+    }
+
+    /// Like [`App::send`], remembering `ctx` until the reply arrives.
+    pub(super) fn send_with(
+        &mut self,
+        session: SessionId,
+        protocol: Protocol,
+        kind: CommandKind,
+        ctx: PendingCtx,
+    ) -> u64 {
         let request_id = self.next_request;
         self.next_request += 1;
         let operation = kind.operation();
@@ -468,7 +573,14 @@ impl App {
             CommandKind::ScanUaNetwork { .. } | CommandKind::CancelUaScan { .. }
         );
         if request_id != 0 && !streaming {
-            self.pending_requests.insert((session, request_id));
+            self.pending_requests.insert(
+                (session, request_id),
+                PendingRequest {
+                    operation,
+                    sent: Instant::now(),
+                    ctx,
+                },
+            );
         }
         if let Err(message) = self.gateway.send(Command {
             request_id,
@@ -517,18 +629,42 @@ impl App {
         request_id
     }
 
+    /// Mark every row of `session` as stale ("нет данных от сервера"): Bad
+    /// quality with the localized stale text. Used whenever the link is lost
+    /// (`Disconnected`, a manual disconnect, a failed connectivity test).
+    pub(super) fn mark_session_rows_stale(&mut self, session: SessionId) {
+        let text = tr(self.lang(), Tr::StaleData).to_string();
+        for row in self.rows.iter_mut().filter(|r| r.session == session) {
+            row.quality = Quality {
+                code: 0,
+                kind: QualityKind::Bad,
+                text: text.clone(),
+            };
+        }
+    }
+
     /// Forget every outstanding request of `session`. Called when a new
     /// connect/disconnect lifecycle starts so stale replies from the previous
     /// link are rejected by `on_event`.
     pub(super) fn clear_pending_requests(&mut self, session: SessionId) {
-        self.pending_requests.retain(|(sid, _)| *sid != session);
+        self.pending_requests.retain(|(sid, _), _| *sid != session);
+        // A «Добавить по имени» waiting for this session can never be answered.
+        if self
+            .dialogs
+            .add_signal
+            .resolving
+            .is_some_and(|(sid, _)| sid == session)
+        {
+            self.dialogs.add_signal.resolving = None;
+            self.dialogs.add_signal.error = Some(tr(self.lang(), Tr::NoConnection).to_string());
+        }
     }
 
     /// Test-only: outstanding request ids of `session` (sorted, deterministic).
     pub fn pending_request_ids_for_test(&self, session: SessionId) -> Vec<RequestId> {
         let mut ids: Vec<RequestId> = self
             .pending_requests
-            .iter()
+            .keys()
             .filter_map(|(sid, rid)| (*sid == session).then_some(*rid))
             .collect();
         ids.sort_unstable();
@@ -606,7 +742,7 @@ impl App {
             .unwrap_or_default();
         let key = self.next_key;
         self.next_key += 1;
-        self.rows.push(Row {
+        self.push_row(Row {
             key,
             session,
             item_id: item_id.to_string(),
@@ -638,7 +774,7 @@ impl App {
         value: Value,
     ) -> ItemKey {
         let key = self.seed_row(session, item_id, name, value);
-        if let Some(row) = self.rows.iter_mut().find(|r| r.key == key) {
+        if let Some(row) = self.row_mut(key) {
             row.writable = true;
         }
         key
@@ -811,7 +947,9 @@ impl App {
         d.ua_password.clear();
         d.ua_security_policy = self.settings.ua_security_policy;
         d.ua_security_mode = self.settings.ua_security_mode;
-        d.ua_trust_server_cert = self.settings.ua_trust_server_cert;
+        // U13: trust is opt-in per connection; the legacy global flag is never
+        // re-applied (recent endpoints carry their own).
+        d.ua_trust_server_cert = crate::settings::default_trust_server_cert();
         d.ua_identity_index = 0;
         d.ua_session_timeout = self.settings.ua_session_timeout_ms;
         d.ua_network_searching = false;
@@ -834,6 +972,21 @@ impl App {
     pub fn close_connect_dialog(&mut self) {
         self.cancel_ua_subnet_scan();
         self.clear_pending_requests(0);
+        // D5: replies of an abandoned DA search are dropped now, so nothing
+        // would ever release their temporary discovery routes later.
+        self.release_da_discovery_routes();
+        // «Отмена» during a connect attempt aborts the wait: the half-open
+        // session is disconnected (reconnect stopped) and stays in the list,
+        // where it can be reconnected or removed.
+        if let Some(session) = self.dialogs.connect.connecting.take() {
+            let still_connecting = self
+                .sessions
+                .iter()
+                .any(|s| s.id == session && s.state == SessionState::Connecting);
+            if still_connecting {
+                self.disconnect_session(session);
+            }
+        }
         let d = &mut self.dialogs.connect;
         d.open = false;
         d.ua_searching = false;
