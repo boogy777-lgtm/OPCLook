@@ -114,6 +114,7 @@ impl TestServer {
                 ],
                 &folder,
             );
+            add_pump_structure(&mut space, ns);
         }
 
         // Wait until the listener accepts connections. The sample server
@@ -168,6 +169,95 @@ impl Drop for TestServer {
         let _ = &self.rt;
         let _ = std::fs::remove_dir_all(&self.dir);
     }
+}
+
+/// V3: a custom structure type `PumpType { Speed: Double, Running: Boolean,
+/// Name: String }` described the OPC UA 1.04 way (DataTypeDefinition +
+/// "Default Binary" encoding node), and a variable `Pump` holding one value.
+fn add_pump_structure(space: &mut opcua::server::address_space::AddressSpace, ns: u16) {
+    use opcua::nodes::{DataTypeBuilder, ObjectBuilder, ReferenceDirection};
+    use opcua::types::custom::{DataTypeTree, DynamicStructure, EncodingIds, ParentIds, TypeInfo};
+    use opcua::types::{
+        DataTypeDefinition, ExtensionObject, LocalizedText, ReferenceTypeId, StructureDefinition,
+        StructureField, StructureType,
+    };
+
+    let type_id = NodeId::new(ns, "PumpType");
+    let encoding_id = NodeId::new(ns, "PumpType_DefaultBinary");
+    let field = |name: &str, data_type: DataTypeId| StructureField {
+        name: name.into(),
+        description: LocalizedText::null(),
+        data_type: data_type.into(),
+        value_rank: -1,
+        array_dimensions: None,
+        max_string_length: 0,
+        is_optional: false,
+    };
+    let definition = StructureDefinition {
+        default_encoding_id: encoding_id.clone(),
+        base_data_type: DataTypeId::Structure.into(),
+        structure_type: StructureType::Structure,
+        fields: Some(vec![
+            field("Speed", DataTypeId::Double),
+            field("Running", DataTypeId::Boolean),
+            field("Name", DataTypeId::String),
+        ]),
+    };
+    DataTypeBuilder::new(&type_id, "PumpType", "PumpType")
+        .subtype_of(DataTypeId::Structure)
+        .data_type_definition(DataTypeDefinition::Structure(definition.clone()))
+        .insert(space);
+    ObjectBuilder::new(&encoding_id, "Default Binary", "Default Binary")
+        .reference(
+            type_id.clone(),
+            ReferenceTypeId::HasEncoding,
+            ReferenceDirection::Inverse,
+        )
+        .insert(space);
+
+    // The server encodes the value from the same description.
+    let mut parents = ParentIds::new();
+    parents.add_type(type_id.clone(), DataTypeId::Structure.into());
+    let info = TypeInfo::from_type_definition(
+        DataTypeDefinition::Structure(definition),
+        "PumpType".to_string(),
+        Some(EncodingIds {
+            binary_id: encoding_id,
+            json_id: NodeId::null(),
+            xml_id: NodeId::null(),
+        }),
+        false,
+        &type_id,
+        &parents,
+    )
+    .expect("PumpType description");
+    let mut tree = DataTypeTree::new(parents);
+    tree.add_type(type_id.clone(), info);
+    let tree = Arc::new(tree);
+    let type_def = tree
+        .get_struct_type(&type_id)
+        .cloned()
+        .expect("PumpType registered");
+    let value = DynamicStructure::new_struct(
+        type_def,
+        tree.clone(),
+        vec![
+            Variant::Double(12.5),
+            Variant::Boolean(true),
+            Variant::from("P-101"),
+        ],
+    )
+    .expect("PumpType value");
+    let rw = AccessLevel::CURRENT_READ;
+    let pump = VariableBuilder::new(&NodeId::new(ns, "Pump"), "Pump", "Pump")
+        .data_type(type_id)
+        .value(Variant::ExtensionObject(ExtensionObject::from_message(
+            value,
+        )))
+        .access_level(rw)
+        .user_access_level(rw)
+        .build();
+    space.add_variables(vec![pump], &ObjectId::ObjectsFolder.into());
 }
 
 /// The application side of the worker: sends commands, collects events.
@@ -1253,4 +1343,61 @@ fn u1_a_retry_right_after_a_failed_connect_never_meets_a_stale_connecting_slot()
             "attempt {attempt}: {message}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// V3: structures decode into named fields
+// ---------------------------------------------------------------------------
+
+#[test]
+fn v3_custom_structure_reads_as_named_fields() {
+    let server = TestServer::start(48700);
+    let mut app = Harness::new();
+    app.connect(1, Harness::endpoint(&server.url))
+        .expect("connect");
+    let results = app.add_items(1, &[(1, server.node("Pump"))]);
+    assert!(results.iter().all(|(_, r)| r.is_ok()), "{results:?}");
+    let type_name = results
+        .first()
+        .and_then(|(_, r)| r.as_ref().ok())
+        .and_then(|info| info.data_type.clone());
+    assert!(
+        type_name.is_some(),
+        "the Type column names the structure: {results:?}"
+    );
+    let expected = Value::Struct {
+        type_name: "PumpType".to_string(),
+        fields: vec![
+            ("Speed".to_string(), Value::F64(12.5)),
+            ("Running".to_string(), Value::Bool(true)),
+            ("Name".to_string(), Value::Str("P-101".to_string())),
+        ],
+    };
+    let got = app.value_of(1, PROMPT_LONG, |v| matches!(v, Value::Struct { .. }));
+    let got = got.unwrap_or_else(|| {
+        panic!(
+            "no structured value; events: {:?}",
+            app.seen.iter().map(|(e, _)| &e.kind).collect::<Vec<_>>()
+        )
+    });
+    match &got {
+        Value::Struct { fields, .. } => assert_eq!(
+            fields,
+            match &expected {
+                Value::Struct { fields, .. } => fields,
+                _ => unreachable!(),
+            }
+        ),
+        _ => unreachable!(),
+    }
+    let unresolved = app.wait(Duration::from_millis(500), |event| match &event.kind {
+        EventKind::Log {
+            message: BackendMsg::TypesUnresolved { .. },
+        } => Some(()),
+        _ => None,
+    });
+    assert!(
+        unresolved.is_none(),
+        "a known structure is not an unresolved type"
+    );
 }

@@ -399,6 +399,7 @@ pub fn default_vt(value: &Value) -> u16 {
         Value::QualifiedName { .. } => VT_BSTR.0,
         Value::LocalizedText { .. } => VT_BSTR.0,
         Value::Other(_) => VT_EMPTY.0,
+        Value::Struct { .. } => VT_EMPTY.0,
     }
 }
 

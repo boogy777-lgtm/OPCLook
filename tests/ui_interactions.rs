@@ -2301,6 +2301,120 @@ fn k3_ctrl_tab_switches_sessions_and_ctrl_n_connects() {
     assert!(h.state().dialogs.connect.open);
 }
 
+fn pump_value() -> Value {
+    Value::Struct {
+        type_name: "PumpType".into(),
+        fields: vec![
+            ("Speed".into(), Value::F64(12.5)),
+            ("Running".into(), Value::Bool(true)),
+            (
+                "Motor".into(),
+                Value::Struct {
+                    type_name: "MotorType".into(),
+                    fields: vec![("Current".into(), Value::F64(3.25))],
+                },
+            ),
+            (
+                "Alarms".into(),
+                Value::Array(vec![Value::Bool(false), Value::Bool(true)]),
+            ),
+        ],
+    }
+}
+
+/// V3: a structured value is a tree in the table: the row has an expander,
+/// a click shows the fields as lines under it, nested ones expand in turn.
+#[test]
+fn v3_structured_value_expands_into_field_lines() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let key = app.seed_row(1, "ns=2;s=Pump", "Pump", pump_value());
+    let mut h = harness(app);
+    h.run_steps(3);
+    assert!(
+        h.query_by_label_contains("Speed: 12.5").is_some(),
+        "summary"
+    );
+    assert!(h.query_by_label("Speed").is_none(), "collapsed at first");
+
+    let at = h.get_by_label(">").rect().center();
+    pointer_click(&h, at, PointerButton::Primary);
+    h.run_steps(3);
+    assert!(h.state().expanded_values.contains(&(key, vec![])));
+    assert!(h.query_by_label("Speed").is_some());
+    assert!(h.query_by_label("Running").is_some());
+    assert!(h.query_by_label("MotorType").is_some(), "nested type name");
+    assert!(
+        h.query_by_label("Current").is_none(),
+        "nested level still closed"
+    );
+
+    // Expand the nested structure (the first closed expander is Motor's).
+    let at = h
+        .get_all_by_label(">")
+        .next()
+        .expect("nested expander")
+        .rect()
+        .center();
+    pointer_click(&h, at, PointerButton::Primary);
+    h.run_steps(3);
+    assert!(h.query_by_label("Current").is_some());
+    assert!(h.query_by_label("3.25").is_some());
+}
+
+/// V3: keyboard: → opens the focused row's value, → again opens every
+/// level, ← closes it all.
+#[test]
+fn v3_arrow_keys_expand_and_collapse_a_structure() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_row(1, "ns=2;s=Pump", "Pump", pump_value());
+    let mut h = harness(app);
+    h.state_mut().select_only(0);
+    h.run_steps(2);
+
+    h.key_press(Key::ArrowRight);
+    h.run_steps(3);
+    assert!(h.query_by_label("Speed").is_some());
+    assert!(h.query_by_label("Current").is_none());
+
+    h.key_press(Key::ArrowRight);
+    h.run_steps(3);
+    assert!(h.query_by_label("Current").is_some());
+    assert!(h.query_by_label("[1]").is_some(), "array elements too");
+
+    h.key_press(Key::ArrowLeft);
+    h.run_steps(3);
+    assert!(h.query_by_label("Speed").is_none());
+    assert!(h.state().expanded_values.is_empty());
+}
+
+/// V3: field lines never take part in the selection: a click on one selects
+/// its row, and the visible-row keyboard still steps row by row.
+#[test]
+fn v3_field_lines_select_their_row() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let pump = app.seed_row(1, "ns=2;s=Pump", "Pump", pump_value());
+    let other = app.seed_row(1, "ns=2;s=Level", "Level", Value::F64(1.0));
+    app.toggle_value(pump, vec![]);
+    let mut h = harness(app);
+    h.run_steps(3);
+    pointer_click(&h, row_cell_pos(&h, "Running"), PointerButton::Primary);
+    h.run_steps(3);
+    assert_eq!(h.state().selected_rows.len(), 1);
+    assert!(h.state().selected_rows.contains(&pump));
+    h.key_press(Key::ArrowDown);
+    h.run_steps(3);
+    assert!(
+        h.state().selected_rows.contains(&other),
+        "next ROW, not next line"
+    );
+}
+
 /// A Disconnected event must NOT clear the rows or the tree; rows stay visible
 /// with their last values marked stale («устаревшие данные»).
 #[test]

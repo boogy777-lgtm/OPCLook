@@ -3164,6 +3164,21 @@ pub fn backend_text(lang: Lang, msg: &BackendMsg) -> String {
             "could not determine the type of {count} OPC UA nodes, writes use the automatic type",
             "无法确定 {count} 个 OPC UA 节点的类型，写入将使用自动类型"
         ),
+        M::StructTypesUnavailable { cause } => {
+            let cause = backend_text(lang, cause);
+            l!(
+                lang,
+                "типы структур сервера не загружены, структуры показаны текстом: {cause}",
+                "the server's structure types were not loaded, structures are shown as text: {cause}",
+                "未加载服务器结构类型，结构以文本显示：{cause}"
+            )
+        }
+        M::TimeoutStructTypes => l!(
+            lang,
+            "таймаут загрузки типов структур OPC UA",
+            "loading OPC UA structure types timed out",
+            "加载 OPC UA 结构类型超时"
+        ),
         M::SubscriptionNotCreated { cause } => {
             let cause = backend_text(lang, cause);
             l!(
@@ -3894,6 +3909,13 @@ mod tests {
                 },
                 vec!["§cause§"],
             ),
+            (
+                BackendMsg::StructTypesUnavailable {
+                    cause: Box::new(BackendMsg::raw("§cause§")),
+                },
+                vec!["§cause§"],
+            ),
+            (BackendMsg::TimeoutStructTypes, vec![]),
             (
                 BackendMsg::CreateSubscriptionFailed {
                     detail: "§detail§".to_string(),

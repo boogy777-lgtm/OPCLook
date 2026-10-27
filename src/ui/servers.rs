@@ -141,7 +141,7 @@ pub(super) fn session_tab_strip(app: &mut App, ui: &mut egui::Ui) {
 
 /// Short and full security text of an explicitly chosen UA endpoint
 /// (`None` for DA and for Auto/Auto).
-fn security_suffix(
+pub(super) fn security_suffix(
     endpoint: &crate::bff::model::EndpointSpec,
     lang: Lang,
 ) -> Option<(String, String)> {

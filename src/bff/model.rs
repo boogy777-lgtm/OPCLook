@@ -365,6 +365,12 @@ pub enum BackendMsg {
     SubscriptionNotCreated {
         cause: Box<BackendMsg>,
     },
+    /// V3: the server's structure types could not be loaded; structures stay
+    /// shown as text.
+    StructTypesUnavailable {
+        cause: Box<BackendMsg>,
+    },
+    TimeoutStructTypes,
     CreateSubscriptionFailed {
         detail: String,
     },
@@ -1052,8 +1058,20 @@ pub enum Value {
     DateTime(chrono::DateTime<chrono::Utc>),
     Array(Vec<Value>),
     NodeId(String),
-    QualifiedName { namespace_index: u16, name: String },
-    LocalizedText { locale: String, text: String },
+    QualifiedName {
+        namespace_index: u16,
+        name: String,
+    },
+    LocalizedText {
+        locale: String,
+        text: String,
+    },
+    /// V3: a decoded structure (OPC UA ExtensionObject whose type the server
+    /// described): its type name and the fields in declaration order.
+    Struct {
+        type_name: String,
+        fields: Vec<(String, Value)>,
+    },
     Other(String),
 }
 
@@ -1140,7 +1158,48 @@ impl fmt::Display for Value {
                     write!(f, "[{locale}] {text}")
                 }
             }
+            Self::Struct { fields, .. } => {
+                f.write_str("{")?;
+                for (i, (name, value)) in fields.iter().take(ARRAY_SHOWN).enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{name}: {value}")?;
+                }
+                if fields.len() > ARRAY_SHOWN {
+                    write!(f, ", …({})", fields.len())?;
+                }
+                f.write_str("}")
+            }
             Self::Other(v) => f.write_str(v),
+        }
+    }
+}
+
+impl Value {
+    /// V3: children of a structure (field name, value) or an array (`[i]`,
+    /// value), for the expandable table row. Empty for scalars.
+    pub fn children(&self) -> Vec<(String, &Value)> {
+        match self {
+            Self::Struct { fields, .. } => fields
+                .iter()
+                .map(|(name, value)| (name.clone(), value))
+                .collect(),
+            Self::Array(items) => items
+                .iter()
+                .enumerate()
+                .map(|(i, value)| (format!("[{i}]"), value))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Whether the value has children to expand (a non-empty structure or array).
+    pub fn is_expandable(&self) -> bool {
+        match self {
+            Self::Struct { fields, .. } => !fields.is_empty(),
+            Self::Array(items) => !items.is_empty(),
+            _ => false,
         }
     }
 }

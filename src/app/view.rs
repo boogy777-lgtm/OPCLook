@@ -128,3 +128,151 @@ impl App {
         }
     }
 }
+
+/// One line of the signal table (V3): a signal row, or a field / element of
+/// an expanded structured or array value under it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TableLine {
+    Row {
+        /// Position in the visible list (selection and keyboard use it).
+        index: usize,
+        /// Position in `rows`.
+        position: usize,
+    },
+    Field {
+        /// Visible index of the row this field belongs to.
+        index: usize,
+        key: ItemKey,
+        /// Field indices from the row value down to this field.
+        path: Vec<u32>,
+        /// 1 for a direct field of the row value.
+        depth: usize,
+        name: String,
+        value_text: String,
+        /// Structure type name of a nested structure, else empty.
+        type_text: String,
+        expandable: bool,
+        expanded: bool,
+    },
+}
+
+/// At most this many field lines are built per frame; a huge array never
+/// stalls the table.
+pub const MAX_FIELD_LINES: usize = 10_000;
+
+impl App {
+    /// The table's lines for the visible rows, with the expanded values
+    /// unfolded under their rows.
+    pub fn table_lines(&self, visible: &[usize]) -> Vec<TableLine> {
+        let mut lines = Vec::with_capacity(visible.len());
+        let mut budget = MAX_FIELD_LINES;
+        for (index, position) in visible.iter().enumerate() {
+            lines.push(TableLine::Row {
+                index,
+                position: *position,
+            });
+            let Some(row) = self.rows.get(*position) else {
+                continue;
+            };
+            if row.value.is_expandable() && self.expanded_values.contains(&(row.key, Vec::new())) {
+                self.push_fields(&mut lines, &mut budget, index, row.key, &row.value, &[], 1);
+            }
+        }
+        lines
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_fields(
+        &self,
+        lines: &mut Vec<TableLine>,
+        budget: &mut usize,
+        index: usize,
+        key: ItemKey,
+        value: &Value,
+        path: &[u32],
+        depth: usize,
+    ) {
+        for (child, (name, field)) in value.children().into_iter().enumerate() {
+            if *budget == 0 {
+                return;
+            }
+            *budget -= 1;
+            let mut child_path = path.to_vec();
+            child_path.push(u32::try_from(child).unwrap_or(u32::MAX));
+            let expandable = field.is_expandable();
+            let expanded = expandable && self.expanded_values.contains(&(key, child_path.clone()));
+            let type_text = match field {
+                Value::Struct { type_name, .. } => type_name.clone(),
+                _ => String::new(),
+            };
+            lines.push(TableLine::Field {
+                index,
+                key,
+                path: child_path.clone(),
+                depth,
+                name,
+                value_text: field.to_string(),
+                type_text,
+                expandable,
+                expanded,
+            });
+            if expanded {
+                self.push_fields(lines, budget, index, key, field, &child_path, depth + 1);
+            }
+        }
+    }
+
+    /// Expand / collapse one structured value node of a row.
+    pub fn toggle_value(&mut self, key: ItemKey, path: Vec<u32>) {
+        let entry = (key, path);
+        if !self.expanded_values.remove(&entry) {
+            self.expanded_values.insert(entry);
+        }
+    }
+
+    /// Keyboard → on the focused row: the first press opens the value, the
+    /// next one opens every nested level.
+    pub fn expand_focused_value(&mut self) {
+        let Some(key) = self.table_focus.and_then(|i| self.row_key(i)) else {
+            return;
+        };
+        let Some(value) = self
+            .rows
+            .iter()
+            .find(|r| r.key == key)
+            .map(|r| r.value.clone())
+        else {
+            return;
+        };
+        if !value.is_expandable() {
+            return;
+        }
+        if self.expanded_values.insert((key, Vec::new())) {
+            return;
+        }
+        let mut budget = MAX_FIELD_LINES;
+        let mut stack: Vec<(Vec<u32>, &Value)> = vec![(Vec::new(), &value)];
+        while let Some((path, node)) = stack.pop() {
+            for (child, (_, field)) in node.children().into_iter().enumerate() {
+                if budget == 0 {
+                    return;
+                }
+                budget -= 1;
+                if field.is_expandable() {
+                    let mut child_path = path.clone();
+                    child_path.push(u32::try_from(child).unwrap_or(u32::MAX));
+                    self.expanded_values.insert((key, child_path.clone()));
+                    stack.push((child_path, field));
+                }
+            }
+        }
+    }
+
+    /// Keyboard ← on the focused row: close its value with every level.
+    pub fn collapse_focused_value(&mut self) {
+        let Some(key) = self.table_focus.and_then(|i| self.row_key(i)) else {
+            return;
+        };
+        self.expanded_values.retain(|(k, _)| *k != key);
+    }
+}

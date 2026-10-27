@@ -1,5 +1,5 @@
 use super::session::UaSession;
-use super::values::{parse_node, ua_data_value, value_to_ua_variant};
+use super::values::{parse_node, ua_data_value_typed, value_to_ua_variant};
 use super::worker::timeout_drain;
 use crate::bff::model::{BackendMsg, BrowseNode, DataValue, ItemKey, NodeKind, WriteRequest};
 use crate::constants::{
@@ -400,7 +400,7 @@ pub(super) async fn read(session: &mut UaSession, keys: &[ItemKey]) -> Vec<(Item
             out.push((*key, DataValue::bad(BackendMsg::ServerReturnedNoValue)));
             continue;
         };
-        out.push((*key, ua_data_value(dv)));
+        out.push((*key, ua_data_value_typed(dv, session.types.as_deref())));
     }
     out
 }

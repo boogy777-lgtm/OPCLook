@@ -44,6 +44,7 @@ pub use state::{
     AddChildrenJob, BottomTab, CsvImportJob, CsvImportRow, ReconnectState, Row, SessionState,
     SessionView, TreeItem, WriteKind, WriteTypeChoice, write_type_choices,
 };
+pub use view::{MAX_FIELD_LINES, TableLine};
 
 use self::present::{is_loopback_host, operation_label};
 
