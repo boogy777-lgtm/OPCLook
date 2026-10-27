@@ -65,3 +65,6 @@ winres = "0.1"
 
 [dev-dependencies]
 egui_kittest = "0.37"
+# In-process OPC UA server for the live backend tests (src/bff/ua/live_tests.rs).
+async-opcua = { version = "0.19", features = ["client", "server"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }

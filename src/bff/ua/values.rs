@@ -1,25 +1,9 @@
-use crate::bff::model::{DataValue, ItemInfo, ItemKey, ItemSpec, Quality, Value};
+use crate::bff::model::{DataValue, Quality, Value};
 use opcua::types::{
     DataChangeFilter, DataChangeTrigger, DataValue as UaDataValue, DeadbandType, ExtensionObject,
     LocalizedText, NodeId, ObjectId, QualifiedName, StatusCode, UAString, Variant,
     VariantScalarTypeId, VariantTypeId,
 };
-
-pub(super) fn fallback_items(items: &[ItemSpec]) -> Vec<(ItemKey, ItemInfo)> {
-    items
-        .iter()
-        .map(|item| {
-            (
-                item.key,
-                ItemInfo {
-                    data_type: None,
-                    type_id: None,
-                    writable: true,
-                },
-            )
-        })
-        .collect()
-}
 
 /// Build the DataChangeFilter for an absolute deadband. `deadband <= 0` yields
 /// no filter (deliver on every change). async-opcua 0.19 exposes `DataChangeFilter`

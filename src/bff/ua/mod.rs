@@ -1,5 +1,7 @@
 mod discovery;
 mod io;
+#[cfg(test)]
+mod live_tests;
 mod scanner;
 mod security;
 mod session;

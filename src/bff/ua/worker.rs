@@ -387,9 +387,7 @@ async fn handle_command(
                     Event {
                         request_id,
                         session: session_id,
-                        kind: EventKind::AddItems {
-                            results: results.into_iter().map(|(k, i)| (k, Ok(i))).collect(),
-                        },
+                        kind: EventKind::AddItems { results },
                     },
                 );
                 if timed_out {
@@ -409,7 +407,16 @@ async fn handle_command(
         CommandKind::RemoveItems { keys } => {
             let timed_out = match sessions.get_mut(&session_id) {
                 Some(session) => {
-                    session.remove_items(tx, &keys).await;
+                    for message in session.remove_items(tx, &keys).await {
+                        send(
+                            tx,
+                            Event {
+                                request_id: 0,
+                                session: session_id,
+                                kind: EventKind::Log { message },
+                            },
+                        );
+                    }
                     session.timed_out
                 }
                 None => {

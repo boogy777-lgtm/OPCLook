@@ -1073,3 +1073,102 @@ fn x509_identity_requires_actual_advertised_certificate_token() {
     };
     assert!(err.contains("не поддерживает"), "unexpected error: {err}");
 }
+
+#[test]
+fn status_text_names_the_status_and_keeps_the_hex_code() {
+    use super::session::status_text;
+    let text = status_text(StatusCode::BadNodeIdUnknown);
+    assert!(text.starts_with("BadNodeIdUnknown"), "{text}");
+    assert!(text.contains("0x80340000"), "{text}");
+}
+
+#[test]
+fn only_filter_status_codes_count_as_filter_refusals() {
+    use super::session::is_filter_refusal;
+    for status in [
+        StatusCode::BadFilterNotAllowed,
+        StatusCode::BadMonitoredItemFilterInvalid,
+        StatusCode::BadMonitoredItemFilterUnsupported,
+    ] {
+        assert!(is_filter_refusal(status), "{status}");
+    }
+    for status in [
+        StatusCode::BadNodeIdUnknown,
+        StatusCode::BadAttributeIdInvalid,
+        StatusCode::BadTooManyMonitoredItems,
+        StatusCode::Good,
+    ] {
+        assert!(!is_filter_refusal(status), "{status}");
+    }
+}
+
+#[test]
+fn rejected_items_come_back_as_errors_in_request_order() {
+    use super::session::merge_add_results;
+    use crate::bff::model::{ItemInfo, ItemSpec};
+    use std::collections::HashMap;
+    let items = [
+        ItemSpec {
+            key: 7,
+            item_id: "ns=2;s=A".to_string(),
+        },
+        ItemSpec {
+            key: 3,
+            item_id: "ns=2;s=B".to_string(),
+        },
+        ItemSpec {
+            key: 9,
+            item_id: "ns=2;s=C".to_string(),
+        },
+    ];
+    let info = |writable| ItemInfo {
+        data_type: None,
+        type_id: None,
+        writable,
+    };
+    let infos = HashMap::from([(7, info(true)), (3, info(false)), (9, info(true))]);
+    let rejected = HashMap::from([(3, "BadNodeIdUnknown (0x80340000)".to_string())]);
+    let merged = merge_add_results(&items, infos, &rejected);
+    let keys: Vec<_> = merged.iter().map(|(k, _)| *k).collect();
+    assert_eq!(keys, [7, 3, 9]);
+    assert!(merged[0].1.is_ok());
+    assert_eq!(
+        merged[1].1.as_ref().unwrap_err(),
+        "BadNodeIdUnknown (0x80340000)"
+    );
+    assert!(merged[2].1.is_ok());
+}
+
+#[test]
+fn create_results_are_paired_with_their_items_and_bad_statuses_are_failures() {
+    use super::session::{ItemFailure, create_outcomes};
+    let results = [
+        (StatusCode::Good, 11),
+        (StatusCode::BadNodeIdUnknown, 0),
+        (StatusCode::BadFilterNotAllowed, 0),
+    ];
+    // Four items asked, three results answered: the fourth is a failure, not "ok".
+    let outcomes = create_outcomes(&[10, 20, 30, 40], &results);
+    assert_eq!(outcomes.len(), 4);
+    assert!(matches!(outcomes[0], (10, Ok(11))));
+    assert!(matches!(
+        &outcomes[1],
+        (20, Err(failure)) if failure.text().starts_with("BadNodeIdUnknown")
+    ));
+    assert!(matches!(
+        &outcomes[2],
+        (30, Err(failure)) if failure.is_filter_refusal()
+    ));
+    assert!(matches!(&outcomes[3], (40, Err(ItemFailure::Call(_)))));
+}
+
+#[test]
+fn missing_node_statuses_are_recognised() {
+    use super::session::is_missing_node;
+    assert!(is_missing_node(StatusCode::BadNodeIdUnknown));
+    assert!(is_missing_node(StatusCode::BadNodeIdInvalid));
+    assert!(is_missing_node(StatusCode::BadAttributeIdInvalid));
+    assert!(!is_missing_node(StatusCode::Good));
+    assert!(!is_missing_node(StatusCode::BadUserAccessDenied));
+    assert!(!is_missing_node(StatusCode::BadNotReadable));
+}
