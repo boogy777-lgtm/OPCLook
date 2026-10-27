@@ -34,7 +34,7 @@ fn ole_date_to_utc(days: f64) -> Option<DateTime<Utc>> {
     let whole = days.trunc() as i64;
     let frac = days.fract();
     let secs = (frac * 86_400.0).round() as i64;
-    let dt = base.checked_add_signed(chrono::Duration::days(whole))?;
+    let dt = base.checked_add_signed(chrono::Duration::try_days(whole)?)?;
     let dt = dt.checked_add_signed(chrono::Duration::seconds(secs))?;
     Some(Utc.from_utc_datetime(&dt))
 }
@@ -123,7 +123,7 @@ unsafe fn array_to_value(variant: &VARIANT, base: u16) -> Value {
     }
     let lb = unsafe { SafeArrayGetLBound(parray, 1) }.unwrap_or(0);
     let ub = unsafe { SafeArrayGetUBound(parray, 1) }.unwrap_or(-1);
-    let count = (ub - lb + 1).max(0) as usize;
+    let count = (i64::from(ub) - i64::from(lb) + 1).max(0) as usize;
     let mut data: *mut core::ffi::c_void = std::ptr::null_mut();
     if unsafe { SafeArrayAccessData(parray, &raw mut data) }.is_err() {
         return Value::Array(Vec::new());
@@ -215,15 +215,19 @@ unsafe fn write_scalar(
     match vt {
         0 => {}
         2 => {
-            let v = convert_int(value)?.clamp(i64::from(i16::MIN), i64::from(i16::MAX)) as i16;
+            let v = i16::try_from(convert_int(value)?).map_err(|_| da_range(value, "I2"))?;
             unsafe { (*inner).iVal = v };
         }
         3 => {
-            let v = convert_int(value)?.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+            let v = i32::try_from(convert_int(value)?).map_err(|_| da_range(value, "I4"))?;
             unsafe { (*inner).lVal = v };
         }
         4 => {
-            let v = convert_float(value)? as f32;
+            let source = convert_float(value)?;
+            if source.is_finite() && source.abs() > f64::from(f32::MAX) {
+                return Err(da_range(value, "R4"));
+            }
+            let v = source as f32;
             unsafe { (*inner).fltVal = v };
         }
         5 => {
@@ -232,6 +236,12 @@ unsafe fn write_scalar(
         }
         6 => {
             let v = (convert_float(value)? * 10_000.0).round();
+            if !v.is_finite()
+                || v < -9_223_372_036_854_775_808.0
+                || v >= 9_223_372_036_854_775_808.0
+            {
+                return Err(da_range(value, "CY"));
+            }
             unsafe { (*inner).cyVal.int64 = v as i64 };
         }
         7 => {
@@ -269,19 +279,80 @@ unsafe fn write_scalar(
                 (*inner).boolVal = VARIANT_BOOL(if b { -1 } else { 0 });
             }
         }
-        16 => unsafe { (*inner).bVal = convert_int(value)? as i8 as u8 },
-        17 => unsafe { (*inner).bVal = convert_uint(value)? as u8 },
-        18 => unsafe { (*inner).uiVal = convert_uint(value)? as u16 },
-        19 => unsafe { (*inner).ulVal = convert_uint(value)? as u32 },
+        16 => unsafe {
+            (*inner).bVal =
+                i8::try_from(convert_int(value)?).map_err(|_| da_range(value, "I1"))? as u8
+        },
+        17 => unsafe {
+            (*inner).bVal =
+                u8::try_from(convert_uint(value)?).map_err(|_| da_range(value, "UI1"))?
+        },
+        18 => unsafe {
+            (*inner).uiVal =
+                u16::try_from(convert_uint(value)?).map_err(|_| da_range(value, "UI2"))?
+        },
+        19 => unsafe {
+            (*inner).ulVal =
+                u32::try_from(convert_uint(value)?).map_err(|_| da_range(value, "UI4"))?
+        },
         20 => unsafe { std::ptr::write(inner.cast::<i64>(), convert_int(value)?) },
         21 => unsafe {
             std::ptr::write(inner.cast::<u64>(), convert_uint(value)?);
         },
-        22 => unsafe { (*inner).intVal = convert_int(value)? as i32 },
-        23 => unsafe { (*inner).uintVal = convert_uint(value)? as u32 },
+        22 => unsafe {
+            (*inner).intVal =
+                i32::try_from(convert_int(value)?).map_err(|_| da_range(value, "INT"))?
+        },
+        23 => unsafe {
+            (*inner).uintVal =
+                u32::try_from(convert_uint(value)?).map_err(|_| da_range(value, "UINT"))?
+        },
         other => return Err(BackendMsg::DaVtUnsupported { vt: other }),
     }
     Ok(())
+}
+
+/// Owns a newly created SAFEARRAY until ownership is transferred to a VARIANT.
+struct SafeArrayBuilder {
+    ptr: *mut windows::Win32::System::Com::SAFEARRAY,
+    locked: bool,
+    accessed: bool,
+}
+
+impl SafeArrayBuilder {
+    fn finish(mut self) -> *mut windows::Win32::System::Com::SAFEARRAY {
+        self.release_access();
+        let ptr = self.ptr;
+        self.ptr = std::ptr::null_mut();
+        ptr
+    }
+
+    fn release_access(&mut self) {
+        // SAFETY: flags describe successful calls on this live array and each
+        // successful access/lock is balanced once before destruction or transfer.
+        unsafe {
+            if self.accessed {
+                let _ = SafeArrayUnaccessData(self.ptr);
+                self.accessed = false;
+            }
+            if self.locked {
+                let _ = SafeArrayUnlock(self.ptr);
+                self.locked = false;
+            }
+        }
+    }
+}
+
+impl Drop for SafeArrayBuilder {
+    fn drop(&mut self) {
+        self.release_access();
+        if !self.ptr.is_null() {
+            // SAFETY: this guard owns the array and has balanced both locks.
+            unsafe {
+                let _ = SafeArrayDestroy(self.ptr);
+            }
+        }
+    }
 }
 
 /// Builds a `VT_x | VT_ARRAY` VARIANT holding a single-dimension SAFEARRAY.
@@ -306,15 +377,19 @@ fn build_array_variant(
         return Err(BackendMsg::DaArrayCreateFailed { vt: element_vt });
     }
 
+    let mut array = SafeArrayBuilder {
+        ptr: psa,
+        locked: false,
+        accessed: false,
+    };
     let element_size: usize = match element_vt {
         16 | 17 => 1,
-        2 | 18 => 2,
-        3 | 19 | 11 => 4,
-        4 | 5 | 6 | 7 | 20 | 21 => 8,
+        2 | 11 | 18 => 2,
+        3 | 4 | 19 | 22 | 23 => 4,
+        5 | 6 | 7 | 20 | 21 => 8,
         8 => std::mem::size_of::<windows_core::BSTR>(),
         12 => std::mem::size_of::<VARIANT>(),
         other => {
-            let _ = unsafe { SafeArrayDestroy(psa) };
             return Err(BackendMsg::DaArrayVtUnsupported { vt: other });
         }
     };
@@ -322,17 +397,14 @@ fn build_array_variant(
     // Lock the array and write each element in place.
     let locked = unsafe { SafeArrayLock(psa) }.is_ok();
     if !locked {
-        let _ = unsafe { SafeArrayDestroy(psa) };
         return Err(BackendMsg::DaArrayLockFailed { vt: element_vt });
     }
+    array.locked = true;
     let mut access: *mut core::ffi::c_void = std::ptr::null_mut();
     if unsafe { SafeArrayAccessData(psa, &raw mut access) }.is_err() {
-        unsafe {
-            let _ = SafeArrayUnlock(psa);
-            let _ = SafeArrayDestroy(psa);
-        }
         return Err(BackendMsg::DaArrayAccessFailed);
     }
+    array.accessed = true;
     let data = access as *mut u8;
 
     let mut build_result: Result<(), BackendMsg> = Ok(());
@@ -340,7 +412,13 @@ fn build_array_variant(
         match element_vt {
             12 => {
                 // VT_VARIANT array: build a nested VARIANT for each element.
-                let nested = variant_from_value(item, None)?;
+                let nested = match variant_from_value(item, None) {
+                    Ok(nested) => nested,
+                    Err(error) => {
+                        build_result = Err(error);
+                        break;
+                    }
+                };
                 let dst = unsafe { (data.cast::<VARIANT>()).add(i) };
                 unsafe { std::ptr::write(dst, nested) };
             }
@@ -365,15 +443,8 @@ fn build_array_variant(
         }
     }
 
-    unsafe {
-        let _ = SafeArrayUnaccessData(psa);
-        let _ = SafeArrayUnlock(psa);
-    }
-    if let Err(e) = build_result {
-        let _ = unsafe { SafeArrayDestroy(psa) };
-        return Err(e);
-    }
-
+    build_result?;
+    let psa = array.finish();
     let mut variant = VARIANT::default();
     set_vt(&mut variant, outer_vt);
     let inner = variant_inner(&mut variant);
@@ -403,12 +474,26 @@ pub fn default_vt(value: &Value) -> u16 {
     }
 }
 
+fn da_range(value: &Value, ty: &str) -> BackendMsg {
+    BackendMsg::WriteOutOfRange {
+        value: value.to_string(),
+        ty: ty.to_string(),
+    }
+}
+
 fn convert_int(value: &Value) -> Result<i64, BackendMsg> {
     match value {
         Value::Bool(b) => Ok(i64::from(*b)),
         Value::I64(v) => Ok(*v),
-        Value::U64(v) => Ok(*v as i64),
-        Value::F64(v) => Ok(*v as i64),
+        Value::U64(v) => i64::try_from(*v).map_err(|_| da_range(value, "I8")),
+        Value::F64(v)
+            if v.is_finite()
+                && v.fract() == 0.0
+                && *v >= -9_223_372_036_854_775_808.0
+                && *v < 9_223_372_036_854_775_808.0 =>
+        {
+            Ok(*v as i64)
+        }
         Value::Str(s) => s
             .trim()
             .parse::<i64>()
@@ -425,7 +510,14 @@ fn convert_uint(value: &Value) -> Result<u64, BackendMsg> {
             value: v.to_string(),
         }),
         Value::U64(v) => Ok(*v),
-        Value::F64(v) if v.is_finite() && *v >= 0.0 => Ok(*v as u64),
+        Value::F64(v)
+            if v.is_finite()
+                && v.fract() == 0.0
+                && *v >= 0.0
+                && *v < 18_446_744_073_709_551_616.0 =>
+        {
+            Ok(*v as u64)
+        }
         Value::Str(s) => s
             .trim()
             .parse::<u64>()
@@ -448,6 +540,40 @@ pub fn clear_variant(variant: &mut VARIANT) {
 mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn integer_writes_do_not_truncate_or_wrap() {
+        for (value, vt) in [
+            (Value::F64(3.7), 20),
+            (Value::I64(70000), 2),
+            (Value::I64(300), 16),
+            (Value::U64(u64::MAX), 20),
+        ] {
+            assert!(variant_from_value(&value, Some(vt)).is_err());
+        }
+    }
+
+    #[test]
+    fn hostile_ole_dates_do_not_panic() {
+        assert!(ole_date_to_utc(f64::MAX).is_none());
+        assert!(ole_date_to_utc(-f64::MAX).is_none());
+    }
+
+    #[test]
+    fn bool_and_float_arrays_roundtrip() {
+        for (vt, input) in [
+            (
+                11,
+                Value::Array(vec![Value::Bool(true), Value::Bool(false)]),
+            ),
+            (4, Value::Array(vec![Value::F64(1.5), Value::F64(2.5)])),
+        ] {
+            let mut variant = build_array_variant(&input, vt, vt | 0x2000).unwrap();
+            let output = unsafe { variant_to_value(&variant) };
+            assert_eq!(format!("{output:?}"), format!("{input:?}"));
+            clear_variant(&mut variant);
+        }
+    }
 
     /// Round-trips a value through a VARIANT of the given VT and asserts value equality.
     fn roundtrip(vt: u16, value: &Value) {

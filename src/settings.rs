@@ -1,8 +1,10 @@
 use crate::bff::model::{EndpointSpec, UaSecurityMode, UaSecurityPolicy};
 use crate::columns::{ColumnId, ColumnSet};
 use crate::constants::{
-    OPERATION_TIMEOUT_DEFAULT_SECS, SESSION_TIMEOUT_DEFAULT_MS, TEST_INTERVAL_DEFAULT_SECS,
-    UPDATE_INTERVAL_DEFAULT_SECS,
+    OPERATION_TIMEOUT_DEFAULT_SECS, OPERATION_TIMEOUT_MAX_SECS, OPERATION_TIMEOUT_MIN_SECS,
+    SESSION_TIMEOUT_DEFAULT_MS, TEST_INTERVAL_DEFAULT_SECS, TEST_INTERVAL_MAX_SECS,
+    TEST_INTERVAL_MIN_SECS, UPDATE_INTERVAL_DEFAULT_SECS, UPDATE_INTERVAL_MAX_SECS,
+    UPDATE_INTERVAL_MIN_SECS,
 };
 use crate::i18n::Lang;
 use crate::net::{AdapterId, AdapterSelection, CachedAdapter};
@@ -58,6 +60,26 @@ pub struct Options {
     /// this field existed load as `System`.
     #[serde(default)]
     pub theme: Theme,
+}
+
+impl Options {
+    pub fn clamped(mut self) -> Self {
+        self.update_interval_secs = self
+            .update_interval_secs
+            .clamp(UPDATE_INTERVAL_MIN_SECS, UPDATE_INTERVAL_MAX_SECS);
+        self.operation_timeout_secs = self
+            .operation_timeout_secs
+            .clamp(OPERATION_TIMEOUT_MIN_SECS, OPERATION_TIMEOUT_MAX_SECS);
+        self.test_interval_secs = self
+            .test_interval_secs
+            .clamp(TEST_INTERVAL_MIN_SECS, TEST_INTERVAL_MAX_SECS);
+        self.ua_deadband = if self.ua_deadband.is_finite() {
+            self.ua_deadband.clamp(0.0, 1_000_000.0)
+        } else {
+            0.0
+        };
+        self
+    }
 }
 
 impl Default for Options {
@@ -254,7 +276,10 @@ impl Settings {
             }
         };
         match serde_json::from_slice::<Settings>(&bytes) {
-            Ok(settings) => settings,
+            Ok(mut settings) => {
+                settings.options = settings.options.clamped();
+                settings
+            }
             Err(err) => {
                 let mut settings = Self::default();
                 let backup = backup_damaged_file(&path);
@@ -1469,6 +1494,29 @@ mod tests {
         value.as_object_mut().unwrap().remove("ua_lds_host");
         let old: Settings = serde_json::from_value(value).unwrap();
         assert_eq!(old.ua_lds_host, "");
+    }
+
+    #[test]
+    fn load_clamps_hostile_timing_options() {
+        let dir = std::env::temp_dir().join("opcda-egui-settings-extreme-interval");
+        let _ = std::fs::remove_dir_all(&dir);
+        with_appdata(&dir, || {
+            let mut settings = Settings::default();
+            settings.options.update_interval_secs = u64::MAX;
+            settings.options.test_interval_secs = u64::MAX;
+            settings.options.operation_timeout_secs = u64::MAX;
+            settings.save();
+            let loaded = Settings::load();
+            assert_eq!(
+                loaded.options.update_interval_secs,
+                UPDATE_INTERVAL_MAX_SECS
+            );
+            assert_eq!(loaded.options.test_interval_secs, TEST_INTERVAL_MAX_SECS);
+            assert_eq!(
+                loaded.options.operation_timeout_secs,
+                OPERATION_TIMEOUT_MAX_SECS
+            );
+        });
     }
 
     #[test]

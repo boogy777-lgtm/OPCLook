@@ -431,6 +431,12 @@ fn scalar_value_to_variant(
             }
             VariantScalarTypeId::Float => {
                 let f = to_f64(value, "Float")?;
+                if f.is_finite() && f.abs() > f64::from(f32::MAX) {
+                    return Err(BackendMsg::WriteOutOfRange {
+                        value: f.to_string(),
+                        ty: "Float".to_string(),
+                    });
+                }
                 Ok(Variant::Float(f as f32))
             }
             VariantScalarTypeId::Double => to_f64(value, "Double").map(Variant::Double),

@@ -1854,3 +1854,15 @@ fn p1_reconnect_clears_poll_only() {
     app.register_rows_for_test(1);
     assert!(app.rows.iter().all(|r| !r.poll_only));
 }
+
+#[test]
+fn remove_active_session_activates_nearest_right_neighbor() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    for id in 1..=4 {
+        app.seed_session(id, EndpointSpec::da("", &format!("Srv{id}")));
+    }
+    app.active_session = Some(2);
+    app.remove_session(2);
+    assert_eq!(app.active_session, Some(3));
+}

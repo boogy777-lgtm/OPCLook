@@ -4,10 +4,7 @@ use crate::bff::model::{
     QualityKind, RequestId, SessionId, SubscriptionState, Value,
 };
 use crate::bff::net::NetworkBinding;
-use crate::constants::{
-    OPERATION_TIMEOUT_MAX_SECS, OPERATION_TIMEOUT_MIN_SECS, TEST_INTERVAL_MAX_SECS,
-    TEST_INTERVAL_MIN_SECS, UPDATE_INTERVAL_MAX_SECS, UPDATE_INTERVAL_MIN_SECS,
-};
+
 use crate::da_route::{DaRouteError, DaRouteManager, PreparedRoutes};
 use crate::i18n::{Lang, Tr, tr};
 use crate::journal::Journal;
@@ -1113,18 +1110,7 @@ impl App {
 
 /// Clamp a draft `Options` into its valid, UI-backed ranges before persisting.
 fn clamp_options(draft: Options) -> Options {
-    let mut draft = draft;
-    draft.update_interval_secs = draft
-        .update_interval_secs
-        .clamp(UPDATE_INTERVAL_MIN_SECS, UPDATE_INTERVAL_MAX_SECS);
-    draft.operation_timeout_secs = draft
-        .operation_timeout_secs
-        .clamp(OPERATION_TIMEOUT_MIN_SECS, OPERATION_TIMEOUT_MAX_SECS);
-    draft.test_interval_secs = draft
-        .test_interval_secs
-        .clamp(TEST_INTERVAL_MIN_SECS, TEST_INTERVAL_MAX_SECS);
-    draft.ua_deadband = draft.ua_deadband.clamp(0.0, 1_000_000.0);
-    draft
+    draft.clamped()
 }
 
 impl eframe::App for App {

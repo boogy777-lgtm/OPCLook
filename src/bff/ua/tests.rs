@@ -1300,4 +1300,5 @@ fn integer_writes_reject_fractional_and_out_of_range_floats() {
         assert!(value_to_ua_variant(&Value::F64(value), Some(Vt::UInt64)).is_err());
     }
     assert!(value_to_ua_variant(&Value::U64(u64::MAX), Some(Vt::Int64)).is_err());
+    assert!(value_to_ua_variant(&Value::F64(f64::MAX), Some(Vt::Float)).is_err());
 }

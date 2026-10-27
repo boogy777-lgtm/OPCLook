@@ -292,17 +292,17 @@ impl App {
             self.table_focus = None;
             self.table_anchor = None;
         }
-        let closed_idx = self.sessions.iter().position(|s| s.id == session);
-        self.sessions.retain(|s| s.id != session);
-        self.release_da_routes_for_session(session);
         if self.active_session == Some(session) {
             self.active_session = None;
-            if let Some(idx) = closed_idx {
+            if let Some(idx) = self.sessions.iter().position(|s| s.id == session) {
                 self.activate_nearest_visible_around(idx);
-            } else {
-                self.active_session = self.sessions.iter().find(|s| s.visible).map(|s| s.id);
+                if self.active_session == Some(session) {
+                    self.active_session = None;
+                }
             }
         }
+        self.sessions.retain(|s| s.id != session);
+        self.release_da_routes_for_session(session);
         self.journal
             .info_l(Tr::DisconnectingFrom, &[&endpoint_name]);
     }
