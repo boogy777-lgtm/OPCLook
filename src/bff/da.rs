@@ -129,6 +129,22 @@ fn init_dcom_security() -> Result<(), String> {
     .map_err(|e| format!("{e}"))
 }
 
+/// Run [`init_dcom_security`] once per process. Only the call that actually
+/// performed the initialization returns its error; every later gateway (tests
+/// and the UI create several in one process) returns `None` instead of an
+/// `RPC_E_TOO_LATE` journal line of its own — CoInitializeSecurity is
+/// process-wide, so there is nothing more to report.
+fn init_dcom_security_once() -> Option<String> {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    let mut outcome = None;
+    ONCE.call_once(|| {
+        if let Err(error) = init_dcom_security() {
+            outcome = Some(error);
+        }
+    });
+    outcome
+}
+
 pub(crate) fn spawn(event_tx: Sender<Event>) -> super::WorkerHandle {
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
     let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
@@ -138,7 +154,7 @@ pub(crate) fn spawn(event_tx: Sender<Event>) -> super::WorkerHandle {
             // Keep the router thread in the MTA for as long as it runs, so the
             // process-wide COM security settings stay in force.
             let _com = ComGuard::new();
-            if let Err(e) = init_dcom_security() {
+            if let Some(e) = init_dcom_security_once() {
                 send(
                     &event_tx,
                     Event {
