@@ -27,8 +27,20 @@ jobs:
         run: cargo test --lib --target i686-pc-windows-msvc loopback_tcp_without_opc_ua_is_not_a_scan_result -- --nocapture
       # All integration tests (ui_interactions, no_hardcoded_ui_strings, i18n and
       # the rest). Network-dependent ones are `#[ignore]` and stay skipped.
+      # On failure, the failing tests and their panic output are also emitted as
+      # one error annotation, so they can be read from the checks API without
+      # downloading the full job log.
       - name: Run integration tests
-        run: cargo test --tests --target i686-pc-windows-msvc
+        shell: bash
+        run: |
+          set -o pipefail
+          if ! cargo test --tests --target i686-pc-windows-msvc 2>&1 | tee test-output.txt; then
+            tr -d '\r' < test-output.txt > test-output-clean.txt
+            msg=$( { grep -E "^test .* FAILED$" test-output-clean.txt; grep -E -A15 "^---- .* stdout ----$" test-output-clean.txt; } \
+              | head -200 | sed -e 's/%/%25/g' | awk 'BEGIN{ORS="%0A"} {print}')
+            echo "::error title=Integration tests failed::${msg}"
+            exit 1
+          fi
 
   # Same gate as the developer script: fmt, check --all-targets, lib and
   # integration tests on Linux (Windows-only tests are ignored there).
