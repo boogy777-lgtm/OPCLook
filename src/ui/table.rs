@@ -268,6 +268,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                 draw_field_line(
                                                     &mut row,
                                                     &columns,
+                                                    lang,
                                                     &field,
                                                     *index,
                                                     &mut actions,
@@ -302,8 +303,16 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                             let expanded = app
                                                                 .expanded_values
                                                                 .contains(&(key, Vec::new()));
-                                                            toggle_rect =
-                                                                Some(value_toggle(ui, expanded));
+                                                            toggle_rect = Some(value_toggle(
+                                                                ui,
+                                                                lang,
+                                                                egui::Id::NULL.with((
+                                                                    "value_toggle",
+                                                                    key,
+                                                                    Vec::<u32>::new(),
+                                                                )),
+                                                                expanded,
+                                                            ));
                                                         }
                                                         ui.label(&signal.display_name)
                                                             .on_hover_text(&signal.item_id);
@@ -561,18 +570,34 @@ struct FieldLine<'a> {
     expanded: bool,
 }
 
-/// The ">" / "v" expander of a structured value (same look as the tag tree).
-/// Returns its rect: the table row owns the pointer, so the caller turns a row
-/// click inside this rect into expand / collapse.
-fn value_toggle(ui: &mut egui::Ui, expanded: bool) -> egui::Rect {
-    let arrow = if expanded { "v" } else { ">" };
-    ui.add_sized(
-        [16.0, 16.0],
-        egui::Label::new(egui::RichText::new(arrow).strong())
-            .selectable(false)
-            .sense(egui::Sense::hover()),
-    )
-    .rect
+/// The expander of a structured value (same look as the tag tree): a painted
+/// triangle that turns smoothly between closed and open. Returns its rect: the
+/// table row owns the pointer, so the caller turns a row click inside this rect
+/// into expand / collapse. The accessible name says what a click does.
+fn value_toggle(
+    ui: &mut egui::Ui,
+    lang: crate::i18n::Lang,
+    id: egui::Id,
+    expanded: bool,
+) -> egui::Rect {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+    let name = tr(
+        lang,
+        if expanded {
+            Tr::TableValueCollapse
+        } else {
+            Tr::TableValueExpand
+        },
+    );
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
+    let openness = ui.ctx().animate_bool(id, expanded);
+    let color = if response.hovered() {
+        ui.visuals().strong_text_color()
+    } else {
+        ui.visuals().text_color()
+    };
+    super::paint::paint_expander(ui.painter(), rect, openness, color);
+    rect
 }
 
 /// V3: a field / element line under an expanded row: indented name with its
@@ -581,6 +606,7 @@ fn value_toggle(ui: &mut egui::Ui, expanded: bool) -> egui::Rect {
 fn draw_field_line(
     row: &mut egui_extras::TableRow<'_, '_>,
     columns: &[ColumnId],
+    lang: crate::i18n::Lang,
     field: &FieldLine<'_>,
     index: usize,
     actions: &mut Vec<TableAction>,
@@ -592,7 +618,12 @@ fn draw_field_line(
                 row.col(|ui| {
                     ui.add_space(field.depth as f32 * 16.0);
                     if field.expandable {
-                        toggle_rect = Some(value_toggle(ui, field.expanded));
+                        toggle_rect = Some(value_toggle(
+                            ui,
+                            lang,
+                            egui::Id::NULL.with(("value_toggle", field.key, field.path)),
+                            field.expanded,
+                        ));
                     } else {
                         ui.add_space(16.0 + ui.spacing().item_spacing.x);
                     }
