@@ -186,6 +186,9 @@ pub struct Row {
     pub timestamp: Option<DateTime<Utc>>,
     pub description: String,
     pub pending: bool,
+    /// UI4: when the shown value last CHANGED (not merely arrived again); the
+    /// table lights the value cell up for a moment after it.
+    pub changed_at: Option<Instant>,
 }
 
 impl Row {

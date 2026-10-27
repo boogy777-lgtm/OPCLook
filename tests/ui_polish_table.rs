@@ -339,3 +339,129 @@ fn ui5_field_lines_follow_the_same_alignment() {
     assert!(speed_left > label_left + 100.0);
     assert!((160.0..=175.0).contains(&(speed_right - label_left)));
 }
+
+fn changed_at(app: &App, key: ItemKey) -> Option<std::time::Instant> {
+    app.rows
+        .iter()
+        .find(|r| r.key == key)
+        .and_then(|r| r.changed_at)
+}
+
+/// UI4: a new value stamps `changed_at`; the same value arriving again does not.
+#[test]
+fn ui4_changed_value_is_stamped_and_the_same_value_is_not() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let key = app.seed_row(1, "ns=2;s=A", "Level", Value::F64(1.0));
+    assert!(changed_at(&app, key).is_none());
+
+    push_value(&mut app, key, Value::F64(1.0), QualityKind::Good);
+    assert!(changed_at(&app, key).is_none(), "same value: no flash");
+
+    push_value(&mut app, key, Value::F64(2.0), QualityKind::Good);
+    assert!(changed_at(&app, key).is_some(), "new value: flash");
+}
+
+/// UI4: the first value of a freshly added row (pending / waiting / empty) is
+/// not a change; the next different one is. NaN delivered again is not either.
+#[test]
+fn ui4_first_value_after_adding_a_row_is_not_highlighted() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let key = app.seed_row(1, "ns=2;s=A", "Level", Value::Empty);
+    // Still pending: the first value arrives.
+    app.rows[0].pending = true;
+    push_value(&mut app, key, Value::F64(5.0), QualityKind::Good);
+    assert!(changed_at(&app, key).is_none(), "pending → value: no flash");
+    // Registered but waiting for the first value (placeholder quality).
+    app.rows[0].value = Value::Empty;
+    app.rows[0].quality = Quality {
+        code: Quality::CODE_PLACEHOLDER_WAITING,
+        kind: QualityKind::Good,
+        text: "waiting".into(),
+    };
+    push_value(&mut app, key, Value::F64(6.0), QualityKind::Good);
+    assert!(changed_at(&app, key).is_none(), "waiting → value: no flash");
+
+    push_value(&mut app, key, Value::F64(7.0), QualityKind::Good);
+    assert!(changed_at(&app, key).is_some(), "later change: flash");
+
+    app.rows[0].changed_at = None;
+    push_value(&mut app, key, Value::F64(f64::NAN), QualityKind::Good);
+    app.rows[0].changed_at = None;
+    push_value(&mut app, key, Value::F64(f64::NAN), QualityKind::Good);
+    assert!(
+        changed_at(&app, key).is_none(),
+        "NaN again is the same value"
+    );
+}
+
+/// UI4: the glow fades out over ~1 s.
+#[test]
+fn ui4_flash_strength_fades_over_a_second() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let key = app.seed_row(1, "ns=2;s=A", "Level", Value::F64(1.0));
+    let now = std::time::Instant::now();
+    assert_eq!(app.rows[0].change_flash(now), 0.0, "never changed");
+    app.rows[0].changed_at = Some(now);
+    assert!(app.rows[0].change_flash(now) > 0.99);
+    let later = |ms: u64| now + std::time::Duration::from_millis(ms);
+    let (a, b) = (
+        app.rows[0].change_flash(later(250)),
+        app.rows[0].change_flash(later(600)),
+    );
+    assert!(a > b && b > 0.0 && a < 1.0, "monotonic fade: {a} > {b}");
+    assert_eq!(app.rows[0].change_flash(later(1000)), 0.0);
+    assert_eq!(app.rows[0].change_flash(later(5000)), 0.0);
+    let _ = key;
+}
+
+fn repaint_delay(h: &Harness<'_, App>) -> std::time::Duration {
+    h.output()
+        .viewport_output
+        .get(&egui::ViewportId::ROOT)
+        .map(|v| v.repaint_delay)
+        .expect("root viewport output")
+}
+
+/// UI4: a just-changed value is painted with an accent glow behind it and the
+/// table keeps requesting frames while it fades; afterwards both are gone.
+#[test]
+fn ui4_changed_value_cell_glows_and_requests_repaints_until_it_fades() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let key = app.seed_row(1, "ns=2;s=A", "Level", Value::F64(1.0));
+    let mut h = harness(app);
+    h.run_steps(3);
+    let calm = rect_fills(&flat_shapes(&h));
+
+    push_value(h.state_mut(), key, Value::F64(2.0), QualityKind::Good);
+    h.step();
+    let glow = rect_fills(&flat_shapes(&h));
+    let accent = h.ctx.global_style().visuals.selection.stroke.color;
+    let new_fills: Vec<_> = glow.iter().filter(|c| !calm.contains(c)).collect();
+    assert!(
+        new_fills
+            .iter()
+            .any(|c| c.a() > 0 && c.r() <= accent.r() && c.b() > c.r()),
+        "an accent-tinted rect appears: {new_fills:?}"
+    );
+    assert_eq!(
+        repaint_delay(&h),
+        std::time::Duration::ZERO,
+        "keeps repainting"
+    );
+
+    // Pretend the change happened two seconds ago: no glow, no repaint request.
+    h.state_mut().rows[0].changed_at =
+        std::time::Instant::now().checked_sub(std::time::Duration::from_secs(2));
+    h.step();
+    h.step();
+    assert_eq!(rect_fills(&flat_shapes(&h)), calm, "glow is gone");
+    assert_ne!(repaint_delay(&h), std::time::Duration::ZERO, "idle again");
+}

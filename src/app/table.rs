@@ -49,6 +49,7 @@ impl App {
                 timestamp: None,
                 description: String::new(),
                 pending: true,
+                changed_at: None,
             });
             specs.push(ItemSpec { key, item_id });
             added += 1;

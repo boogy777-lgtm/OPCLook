@@ -239,6 +239,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                     }
                                     body.rows(text_height, lines.len(), |mut row| {
                                         let show_colors = app.settings.options.show_colors;
+                                        let now = std::time::Instant::now();
                                         // `index` is the visible position (selection and
                                         // keyboard work on it); `position` is in `rows`.
                                         let (index, position) = match lines.get(row.index()) {
@@ -343,6 +344,10 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                         // UI2: the value is always neutral; the
                                                         // quality is told by the pill / dot.
                                                         let color = ui.visuals().text_color();
+                                                        paint_change_flash(
+                                                            ui,
+                                                            signal.change_flash(now),
+                                                        );
                                                         let numeric =
                                                             is_numeric_value(&signal.value);
                                                         value_text_cell(
@@ -562,6 +567,25 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
             }
         });
 }
+/// UI4: the accent-coloured glow behind a value that has just changed. `flash`
+/// runs from 1.0 (just changed) to 0.0; while it fades the table keeps asking
+/// for new frames, so the glow dies out smoothly even with no other input.
+fn paint_change_flash(ui: &egui::Ui, flash: f32) {
+    if flash <= 0.0 {
+        return;
+    }
+    let accent = ui.visuals().selection.stroke.color;
+    ui.painter().rect_filled(
+        ui.max_rect(),
+        2.0,
+        accent.gamma_multiply(CHANGE_FLASH_MAX_ALPHA * flash),
+    );
+    ui.ctx().request_repaint();
+}
+
+/// The glow's opacity right after a change.
+const CHANGE_FLASH_MAX_ALPHA: f32 = 0.4;
+
 /// UI5: a value in the «Value» column. A number is monospace and sticks to the
 /// right edge of the cell; strings, structure summaries, dates and the rest
 /// keep the left edge.
