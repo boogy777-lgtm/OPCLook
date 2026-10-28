@@ -72,8 +72,8 @@ pub(super) fn server_results(
                         *quick_connect = Some(ep);
                     } else if response.clicked() {
                         dialog.da_selected = Some(hit.clone());
-                        dialog.da_host = host.clone();
-                        dialog.da_manual = server.id.clone();
+                        dialog.da_host.clone_from(host);
+                        dialog.da_manual.clone_from(&server.id);
                     }
                 }
             } else if dialog.ua_search.host_searching() {

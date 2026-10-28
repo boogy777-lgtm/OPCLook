@@ -1,16 +1,19 @@
-# Current backend G/H checkpoint, 2026-10-28
+# Current refactoring matrix, 2026-10-28
 
-| Area | Implementation and evidence | Remaining |
+| Area | Implemented and checked | Remaining external or final checks |
 |---|---|---|
-| GUID / subnets | Stack-based GUID groups; inclusive host range and checked masks. Linux network tests 37 passed, including `/0` and IPv6 maximum; `06b081347d06623b084fdcf993de77f89dc6ff28` | Windows runtime inventory |
-| UA item handling | Parsed NodeId retained per item for polling and writes; keyed monitoring lookups preserve first duplicate. Live test covers valid and invalid IDs, repeated reads and write; `c830150b21ad437804ae673d159fcc431018ef64` | Hardware UA server |
-| UA request helpers | Session ownership/types, connection/activation/PKI, request/type loading, item management and subscriptions separated into modules. Shared event and timeout helpers extracted; chunked reads are owned by the session, removing the io/session cycle; no-connection Add/Remove labels and Read shape preserved, with direct and live regression tests; `981725c3bcb740934f90e3b03821cd6291d67bec` fixes the intermediate operation-label regression | Exact-head CI |
-| DA worker | One owner-tagged session per worker; router retains cross-session map and shared route classification. Linux router tests 18 passed; Windows backend all-targets typecheck passed; `bfda04fca34232692d1e39a42aa431848c301680` | Windows COM runtime, real DA and UAC |
-| Contract model | Domain modules retain `model::*` exports; locale sample count still reads the BackendMsg enum source. Linux contract 29, locale 11 and three compile-fail doctests passed; `7257dadbb7f0c20dc591f2a519061f32ef1d7988` | Exact-head CI |
-| Network structure | ID, adapter, cache, lease and Windows inventory modules preserve public exports and platform safety lint; Linux network tests 37 passed, Windows all-target typecheck passed; `e8992c806e0dcb26f8e656d5f5cace75d56d6363` | Real Windows inventory |
-| GUI and settings | F previously completed; G/H application coordination, UI decomposition, Settings structure and remaining clippy work are outside this backend checkpoint | Still open |
+| Correctness and ownership (B, D) | Typed boundaries, guards and targeted regression tests; details in historical records below | Windows COM/DA/UAC and hardware scenarios; exact-head CI |
+| Types and errors (A, C, E) | Domain IDs, enums, parsed boundary types and typed diagnostics; application consumes contract and Engine | Exact-head CI; native Windows runtime |
+| GUI performance (F) | Revision caches, bounded value traversal and virtual journal; measurements and baseline in `docs/reports/refactor-frame-baseline.md` | Final same-profile confirmation if needed; no GPU FPS claim |
+| Collections and backend structure (G/H) | HashSet selection filtering, session accessors, Engine-driven iteration, typed model modules, network modules, UA session modules and per-worker DA session; backend suite 218 passed at prior checkpoint | Windows inventory, COM runtime and hardware UA/DA |
+| GUI coordination (G/H) | Session/data/discovery/error handlers, shared link-loss cleanup, WriteBatch transitions, stale-push rejection and independent correlated requests; regression and interaction tests | Exact-head CI |
+| Settings (H) | Flattened ViewPrefs/UaPrefs/NetworkPrefs preserve legacy JSON; typed load/save notices, safe backup, localized exit failure and no false script-save success | Native exit dialog runtime on Windows |
+| UI structure and localization (H) | Named connection results/security, tree row, table cells and action components; network journal localized RU/EN/ZH. Five rendered scenes visually inspected in `docs/screenshots/after-h/`; F images preserved | Windows rendering/runtime |
+| Clippy | Selected GUI clone, derive, borrow and match simplifications applied; no blanket suppression; Rust 1.95-compatible atomic API retained | Additional style-only suggestions are not a zero-warning claim |
 
-Linux full backend suite passed 218/218, including live UA and B15 proxy tests; selected-package all-target check, combined GUI/CLI and standalone CLI builds, and CLI first-party dependency boundary check passed. Windows i686 workspace all-target typecheck passed with resource/manifest check-only flags. Exact-head CI, Windows runtime and hardware DA/UAC remain open. The sections below are historical checkpoint records, not current status.
+Latest focused validation: Linux GUI 219 library and 149 interaction tests passed (one Windows-only ignored); table suite 20 passed at the UI-module checkpoint; Windows i686 workspace all-target typecheck passed with cross-check-only flags. Final full Linux and Windows CI must run on the final head. Physical DA/UAC, Windows runtime and actual Windows display were not exercised here.
+
+The records below describe earlier checkpoints and are historical, not current open-work declarations.
 
 # F checkpoint, 2026-10-28
 

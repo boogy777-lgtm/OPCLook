@@ -27,7 +27,7 @@ impl App {
             let Some(key) = self.next_key else {
                 exhausted = true;
                 let message = tr(self.lang(), Tr::ItemIdsExhausted).to_string();
-                self.status = message.clone();
+                self.status.clone_from(&message);
                 self.journal.error(message);
                 break;
             };
@@ -329,7 +329,7 @@ impl App {
         if count > 0 {
             self.dialogs.write.open = false;
         }
-        let type_label = pending.type_label.clone();
+        let type_label = pending.type_label;
         if count > 0 {
             self.journal
                 .info_l(Tr::WriteRequested, &[&count.to_string(), &type_label]);

@@ -176,7 +176,7 @@ pub(super) fn columns_dialog(app: &mut App, ui: &mut egui::Ui) {
             }
             if let Some((dropped, gap_idx)) = drop_at {
                 if app.settings.move_column_to_insert(dropped, gap_idx) {
-                    order = app.settings.view.columns.order.clone();
+                    order.clone_from(&app.settings.view.columns.order);
                     changed = true;
                     moved = Some((dropped, gap_idx));
                     focus_col = Some(dropped);

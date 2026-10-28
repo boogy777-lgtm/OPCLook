@@ -173,7 +173,7 @@ impl App {
                 self.clear_pending_requests(session);
                 if let Some(view) = self.session_mut(session) {
                     view.state = SessionState::Connected;
-                    view.info = info.clone();
+                    view.info.clone_from(&info);
                     view.display_name = compose_server_name(&endpoint);
                     view.reconnect = ReconnectState::Idle;
                     view.root_loaded = false;
@@ -554,7 +554,7 @@ impl App {
                 }
                 self.dialogs.connect.ua_search = UaSearch::Idle;
                 self.dialogs.connect.invalidate_ua_results();
-                self.dialogs.connect.ua_search_results = servers.clone();
+                self.dialogs.connect.ua_search_results.clone_from(&servers);
                 refresh_ua_combos(&mut self.dialogs.connect);
                 self.journal
                     .info_l(Tr::ServersFoundUa, &[&servers.len().to_string()]);
@@ -696,7 +696,7 @@ impl App {
                         return;
                     }
                     self.dialogs.connect.da_pending = false;
-                    self.dialogs.connect.da_host = host.clone();
+                    self.dialogs.connect.da_host.clone_from(&host);
                     self.dialogs.connect.da_servers = servers
                         .into_iter()
                         .map(|server| super::dialogs::DaHit {

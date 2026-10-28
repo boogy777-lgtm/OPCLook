@@ -29,7 +29,7 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
     let lang = app.lang();
     // Opaque frame so the left panel paints its full allocated rect (no
     // transparent seam next to the central table while resizing).
-    let side_frame = egui::Frame::side_top_panel(&ui.style()).fill(ui.style().visuals.panel_fill);
+    let side_frame = egui::Frame::side_top_panel(ui.style()).fill(ui.style().visuals.panel_fill);
     egui::Panel::left("navigation")
         .resizable(true)
         .default_size(LEFT_PANEL_DEFAULT_WIDTH)
@@ -44,8 +44,7 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
             let can_connect = true;
             let (can_disconnect, can_reconnect) = match active_state {
                 None => (false, false),
-                Some(SessionState::Connecting) => (true, true),
-                Some(SessionState::Connected) => (true, true),
+                Some(SessionState::Connecting | SessionState::Connected) => (true, true),
                 Some(SessionState::Disconnected) => (false, true),
             };
             ui.horizontal(|ui| {

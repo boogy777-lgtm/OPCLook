@@ -370,11 +370,11 @@ impl Settings {
         self.recent_endpoints.truncate(12);
         match endpoint.protocol {
             crate::bff::model::Protocol::OpcDa => {
-                self.last_da_host = endpoint.host.clone();
-                self.last_da_server = endpoint.address.clone();
+                self.last_da_host.clone_from(&endpoint.host);
+                self.last_da_server.clone_from(&endpoint.address);
             }
             crate::bff::model::Protocol::OpcUa => {
-                self.last_ua_url = endpoint.address.clone();
+                self.last_ua_url.clone_from(&endpoint.address);
             }
         }
     }
@@ -461,7 +461,7 @@ impl Settings {
                 normalized.push(id);
             }
         }
-        self.view.columns.order = normalized.clone();
+        self.view.columns.order.clone_from(&normalized);
         self.view.column_order = Some(normalized);
     }
 

@@ -18,7 +18,7 @@ impl App {
         if let Err(error) = self.send_da_prepared(
             Owner::Discovery,
             CommandKind::Discover { host: host.clone() },
-            PendingCtx::Host(host.clone()),
+            PendingCtx::Host(host),
         ) {
             let message = error.localized(self.lang());
             let d = &mut self.dialogs.connect;
@@ -526,10 +526,12 @@ fn merge_ua_server(dialog: &mut ConnectDialog, server: crate::bff::model::UaServ
         Some(index) => {
             let existing = &mut dialog.ua_search_results[index];
             if existing.application_name.trim().is_empty() {
-                existing.application_name = server.application_name.clone();
+                existing
+                    .application_name
+                    .clone_from(&server.application_name);
             }
             if existing.application_uri.trim().is_empty() {
-                existing.application_uri = server.application_uri.clone();
+                existing.application_uri.clone_from(&server.application_uri);
             }
             for endpoint in server.endpoints {
                 if !existing

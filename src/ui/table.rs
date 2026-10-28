@@ -22,11 +22,10 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
     let lang = app.lang();
     // Paint the whole central area opaquely with the panel background so the
     // central region never shows a black seam while the left panel is resized.
-    let central_frame = egui::Frame::central_panel(&ui.style()).fill(ui.style().visuals.panel_fill);
+    let central_frame = egui::Frame::central_panel(ui.style()).fill(ui.style().visuals.panel_fill);
     let _panel = egui::CentralPanel::default()
         .frame(central_frame)
         .show(ui, |ui| {
-            let lang = lang;
             // Session tab strip lives at the top of the central tags panel, not in
             // a window-wide top panel. It belongs to the tags area, so it stays
             // reachable even when the left nav/tree is collapsed.
@@ -491,7 +490,6 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
             set_tags_rect_for_test(dropped_zone.response.rect);
 
             let actions = dropped_zone.inner;
-            let dropped = dropped;
 
             // Visual feedback while a tag tree payload hovers over the table.
             let hovering = dropped_zone

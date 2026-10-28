@@ -723,7 +723,7 @@ impl App {
             // every session routed to it is dead. Surface the failure instead of
             // silently dropping the command; do not arm reconnect (a reconnect
             // command could never reach the dead worker).
-            self.status = message.clone();
+            self.status.clone_from(message);
             let lang = self.lang();
             self.journal
                 .error_l(Tr::ErrorOp, &[&operation_label(lang, operation), &message]);

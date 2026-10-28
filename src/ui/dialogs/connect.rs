@@ -587,7 +587,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                     // Anonymous must not inherit credentials typed earlier.
                     if dialog.ua_identity == UaIdentity::UserName {
                         endpoint.user = dialog.ua_user.trim().to_string();
-                        endpoint.password = dialog.ua_password.clone();
+                        endpoint.password.clone_from(&dialog.ua_password);
                     } else if dialog.ua_identity == UaIdentity::Certificate {
                         endpoint.ua_use_certificate = true;
                     }

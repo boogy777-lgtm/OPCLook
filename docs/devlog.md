@@ -570,3 +570,8 @@ Separated event dispatch by domain, introduced WriteBatch transitions and sessio
 ### 2026-10-28 — UI decomposition and images
 
 Connection results/security controls, tree row rendering, table cell rendering and table action handling now have named components. Measured: Linux 219 GUI library, 149 interaction (one Windows-only ignored), 20 table tests and Windows i686 all-target typecheck passed. Five egui/wgpu Mesa scenes were rerendered and visually inspected in `docs/screenshots/after-h/`; the preexisting F images remain intact. Exact-head CI and Windows runtime remain open.
+
+
+### 2026-10-28 — selected Clippy fixes
+
+Applied selected clone reuse, redundant clone/borrow removal, derivable defaults and a matching-arm simplification. Measured: Linux GUI 219 library and 149 interaction tests (one Windows-only ignored) passed; Windows i686 all-target typecheck passed with cross-check flags. No zero-warning or Windows runtime claim.

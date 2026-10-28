@@ -73,7 +73,7 @@ impl App {
                 .is_err()
         {
             let message = tr(self.lang(), Tr::HintUaUrl).to_string();
-            self.status = message.clone();
+            self.status.clone_from(&message);
             self.journal.error(message.clone());
             if self.dialogs.connect.open {
                 self.dialogs.connect.error = Some(message);
@@ -102,7 +102,7 @@ impl App {
                         let mut updated = endpoint;
                         // Existing sessions keep their selected NIC until
                         // explicitly removed; reauthentication does not rebind.
-                        updated.ua_bind = view.endpoint().ua_bind.clone();
+                        updated.ua_bind.clone_from(&view.endpoint().ua_bind);
                         view.update_endpoint(updated);
                     }
                 }
@@ -125,7 +125,7 @@ impl App {
                 Tr::UaSessionLimitReached,
                 &[&crate::constants::MAX_UA_SESSIONS.to_string()],
             );
-            self.status = message.clone();
+            self.status.clone_from(&message);
             self.journal.error_l(
                 Tr::UaSessionLimitReached,
                 &[&crate::constants::MAX_UA_SESSIONS.to_string()],
@@ -141,7 +141,7 @@ impl App {
             match self.ua_binding_for_endpoint(&endpoint.address) {
                 Ok(binding) => endpoint.ua_bind = Some(binding),
                 Err(message) => {
-                    self.status = message.clone();
+                    self.status.clone_from(&message);
                     self.journal.error(message.clone());
                     if self.dialogs.connect.open {
                         self.dialogs.connect.error = Some(message);
@@ -152,7 +152,7 @@ impl App {
         }
         let Some(id) = self.next_session else {
             let message = tr(self.lang(), Tr::SessionIdsExhausted).to_string();
-            self.status = message.clone();
+            self.status.clone_from(&message);
             self.journal.error(message.clone());
             if self.dialogs.connect.open {
                 self.dialogs.connect.error = Some(message);
@@ -175,11 +175,11 @@ impl App {
                 self.send_da_prepared(id, CommandKind::Connect { endpoint }, PendingCtx::None)
             {
                 let message = error.localized(self.lang());
-                self.status = message.clone();
+                self.status.clone_from(&message);
                 self.journal.error(message.clone());
                 if let Some(view) = self.sessions.iter_mut().find(|view| view.id == id) {
                     view.state = SessionState::Disconnected;
-                    view.info = message.clone();
+                    view.info.clone_from(&message);
                 }
                 if self.dialogs.connect.open {
                     self.dialogs.connect.error = Some(message);
@@ -193,7 +193,7 @@ impl App {
             {
                 if let Some(view) = self.sessions.iter_mut().find(|view| view.id == id) {
                     view.state = SessionState::Disconnected;
-                    view.info = self.status.clone();
+                    view.info.clone_from(&self.status);
                 }
                 if self.dialogs.connect.open {
                     self.dialogs.connect.error = Some(self.status.clone());
@@ -291,7 +291,7 @@ impl App {
     pub fn disconnect_session(&mut self, session: SessionId) {
         if !self.engine.has_request_capacity() {
             let message = tr(self.lang(), Tr::RequestIdsExhausted).to_string();
-            self.status = message.clone();
+            self.status.clone_from(&message);
             self.journal.error(message);
             return;
         }
@@ -327,7 +327,7 @@ impl App {
     pub fn remove_session(&mut self, session: SessionId) {
         if !self.engine.has_request_capacity() {
             let message = tr(self.lang(), Tr::RequestIdsExhausted).to_string();
-            self.status = message.clone();
+            self.status.clone_from(&message);
             self.journal.error(message);
             return;
         }
@@ -444,7 +444,7 @@ impl App {
             self.engine.stop_reconnect(session);
             self.project_session(session);
             let message = tr(self.lang(), Tr::RequestIdsExhausted).to_string();
-            self.status = message.clone();
+            self.status.clone_from(&message);
             self.journal.error(message);
             return;
         }
@@ -465,9 +465,9 @@ impl App {
             self.engine.manual_disconnect(session);
             if let Some(view) = self.session_mut(session) {
                 view.state = SessionState::Disconnected;
-                view.info = message.clone();
+                view.info.clone_from(&message);
             }
-            self.status = message.clone();
+            self.status.clone_from(&message);
             self.journal.error(message);
             return;
         }
@@ -480,7 +480,7 @@ impl App {
                 self.engine.manual_disconnect(session);
                 if let Some(view) = self.session_mut(session) {
                     view.state = SessionState::Disconnected;
-                    view.info = message.clone();
+                    view.info.clone_from(&message);
                 }
                 self.journal.error(message);
             }
@@ -492,7 +492,7 @@ impl App {
                 self.engine.manual_disconnect(session);
                 if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
                     view.state = SessionState::Disconnected;
-                    view.info = self.status.clone();
+                    view.info.clone_from(&self.status);
                 }
                 return;
             }
@@ -520,7 +520,7 @@ impl App {
     pub fn reconnect_session(&mut self, session: SessionId) {
         if !self.engine.has_request_capacity() {
             let message = tr(self.lang(), Tr::RequestIdsExhausted).to_string();
-            self.status = message.clone();
+            self.status.clone_from(&message);
             self.journal.error(message);
             return;
         }
@@ -542,9 +542,9 @@ impl App {
             self.engine.manual_disconnect(session);
             if let Some(view) = self.session_mut(session) {
                 view.state = SessionState::Disconnected;
-                view.info = message.clone();
+                view.info.clone_from(&message);
             }
-            self.status = message.clone();
+            self.status.clone_from(&message);
             self.journal.error(message);
             return;
         }
@@ -557,7 +557,7 @@ impl App {
                 self.engine.manual_disconnect(session);
                 if let Some(view) = self.session_mut(session) {
                     view.state = SessionState::Disconnected;
-                    view.info = message.clone();
+                    view.info.clone_from(&message);
                 }
                 self.journal.error(message);
             }
@@ -569,7 +569,7 @@ impl App {
                 self.engine.manual_disconnect(session);
                 if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
                     view.state = SessionState::Disconnected;
-                    view.info = self.status.clone();
+                    view.info.clone_from(&self.status);
                 }
                 return;
             }

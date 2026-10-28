@@ -216,6 +216,7 @@ impl Default for ConnectDialog {
     }
 }
 
+#[derive(Default)]
 pub struct AddSignalDialog {
     pub open: bool,
     pub session: Option<SessionId>,
@@ -230,20 +231,7 @@ pub struct AddSignalDialog {
     pub resolving: Option<(SessionId, RequestId)>,
 }
 
-impl Default for AddSignalDialog {
-    fn default() -> Self {
-        Self {
-            open: false,
-            session: None,
-            item_id: String::new(),
-            display_name: String::new(),
-            error: None,
-            focus_pending: false,
-            resolving: None,
-        }
-    }
-}
-
+#[derive(Default)]
 pub struct WriteDialog {
     pub open: bool,
     pub keys: Vec<ItemKey>,
@@ -251,19 +239,6 @@ pub struct WriteDialog {
     pub type_index: usize,
     pub error: Option<String>,
     pub focus_pending: bool,
-}
-
-impl Default for WriteDialog {
-    fn default() -> Self {
-        Self {
-            open: false,
-            keys: Vec::new(),
-            text: String::new(),
-            type_index: 0,
-            error: None,
-            focus_pending: false,
-        }
-    }
 }
 
 pub struct ColumnsDialog {
