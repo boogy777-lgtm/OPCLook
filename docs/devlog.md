@@ -321,3 +321,8 @@ GUI reconnect 3/3, Windows workspace typecheck прошли; общий gate о�
 
 UA URL валидатор отклоняет запрещённые SDK символы host и знак порта;
 Linux parity/security test 1/1 и Windows backend typecheck прошли.
+
+Advertised::Known(Auto), если создан вручную, отвергается в resolver и UI;
+Linux regressions 1/1 + 1/1 и Windows workspace typecheck прошли. Компактная
+матрица C и последующая передача перечислены в refactoring-status. Зелёный
+Windows/Linux CI 557fca20 проверил D hotfix, но не последующие C/FILETIME.

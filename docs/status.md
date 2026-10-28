@@ -107,3 +107,5 @@ B/E/F/G/H, Windows runtime и финальный exact-head CI остаются 
 Backoff покрывает весь диапазон Duration; итоговые CI и другие этапы открыты.
 Проверка UA authority согласована с запрещёнными SDK host символами; итоговый
 CI и остальные этапы открыты.
+Матрица C и передача оставшихся A/B/E/F/G/H — в refactoring-status; зелёный
+CI 557fca20 относится к D hotfix, не к текущему head.

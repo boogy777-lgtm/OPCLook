@@ -97,10 +97,11 @@ pub(crate) fn classify_security(endpoint: &UaEndpointInfo) -> Option<UaSecurityO
     if policy.is_unspecified() && mode.is_unspecified() {
         return None;
     }
-    let parsed = policy
-        .known()
-        .zip(mode.known())
-        .filter(|(policy, mode)| validate_security_pair(*policy, *mode).is_ok());
+    let parsed = policy.known().zip(mode.known()).filter(|(policy, mode)| {
+        *policy != UaSecurityPolicy::Auto
+            && *mode != UaSecurityMode::Auto
+            && validate_security_pair(*policy, *mode).is_ok()
+    });
     Some(match parsed {
         Some((policy, mode)) => UaSecurityOption::Supported { policy, mode },
         None => {
@@ -373,6 +374,17 @@ mod tests {
             ep("opc.tcp://[::1]/A?x=", NONE, "None"),
         ]);
         assert_eq!(nodes.len(), 3);
+    }
+
+    #[test]
+    fn auto_is_not_a_server_advertised_security_choice() {
+        let mut endpoint = ep("opc.tcp://host", "None", "None");
+        endpoint.security_policy =
+            crate::bff::model::AdvertisedPolicy::Known(UaSecurityPolicy::Auto);
+        assert!(matches!(
+            classify_security(&endpoint),
+            Some(UaSecurityOption::Unsupported { .. })
+        ));
     }
 
     #[test]

@@ -1074,6 +1074,9 @@ fn unknown_or_missing_advertised_security_is_never_coerced_to_none() {
         matches!(&foreign_none.security_policy, crate::bff::model::AdvertisedPolicy::Unknown(value) if value == "https://example.invalid/policy#None")
     );
     assert!(resolve_security(SECURITY_POLICY_AUTO, SECURITY_MODE_AUTO, &[foreign_none]).is_err());
+    let mut impossible = ep("opc.tcp://host", "None", "None");
+    impossible.security_policy = crate::bff::model::AdvertisedPolicy::Known(UaSecurityPolicy::Auto);
+    assert!(resolve_security(SECURITY_POLICY_AUTO, SECURITY_MODE_AUTO, &[impossible]).is_err());
     let missing = ep("opc.tcp://host", "", "");
     assert!(resolve_security(SECURITY_POLICY_AUTO, SECURITY_MODE_AUTO, &[missing]).is_err());
     assert_eq!(

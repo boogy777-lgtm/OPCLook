@@ -34,10 +34,12 @@ impl AdvertisedEndpoint {
     /// Normalize an advertised endpoint. Unknown policy/mode values return
     /// `None` so they are reported, not silently coerced.
     fn parse(endpoint: &UaEndpointInfo) -> Option<Self> {
-        Some(Self {
-            policy: endpoint.security_policy.known()?,
-            mode: endpoint.security_mode.known()?,
-        })
+        let policy = endpoint.security_policy.known()?;
+        let mode = endpoint.security_mode.known()?;
+        if policy == UaSecurityPolicy::Auto || mode == UaSecurityMode::Auto {
+            return None;
+        }
+        Some(Self { policy, mode })
     }
 
     fn resolve(self) -> Result<(String, MessageSecurityMode), String> {

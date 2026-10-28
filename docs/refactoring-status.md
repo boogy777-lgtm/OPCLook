@@ -368,3 +368,29 @@ engine all-targets typecheck без resource skip и fmt прошли. Фина�
 порту до журналирования. Linux сравнение с реальным SDK и проверка отсутствия
 secret в ошибке 1/1, contract URL 1/1, Windows backend `--tests` typecheck без
 resource skip и fmt прошли. Остальные непройденные этапы и финальный CI открыты.
+
+## Передача этапа C (2026-10-28)
+
+| Пункт | Состояние | Проверка и ограничения |
+|---|---|---|
+| Порядок колонок | `Option<Vec<ColumnId>>`, legacy quoted/plain на входе, dedup/fill и прежний plain JSON | Linux settings 46/46 и UI interaction ранее прошли; итоговый CI нового head ещё нужен |
+| Язык / сеть settings | `Lang`, `AdapterId`, `IpAddr`; старые строки, unknown language fallback, stale GUID и формат сохранены | Linux settings и network UI ранее прошли; реальный Windows inventory отдельно не проверен |
+| Advertised security | `Unspecified/Known/Unknown`, SDK mode mapping напрямую; неизвестные значения и чужой `#None` не понижаются, scanner сохраняет варианты одного URL | Linux UA 62/62, GUI security 10/10 и live CLI 2/2 ранее прошли. Публичный `Known(Auto)` ещё можно создать вручную, но resolver/UI отклоняют его: регрессии ниже; дальнейшее исключение такого состояния относится к B |
+| Defaults / clamp | `#[serde(default)]` и clamp при загрузке, значения известных полей сохраняются | Linux legacy-file regression прошёл; повреждённые security значения по-прежнему диагностируются |
+| UA URL | `UaUrl` проверяется на входе; discovery/scanner хранят типизированные URL и IP identity, сравнивают host без учёта регистра и path/query с учётом регистра; userinfo не попадает в диагностику | Linux discovery, scanner, session identity и live CLI ранее прошли; IPv6 zone URL не поддерживает используемый SDK. Сохраняемые старые endpoint strings разбираются при connect для совместимости |
+| Время | Runtime reconnect/request floors — `Duration`, bounded checked backoff, compile-time UA lifetime и route refresh инварианты; settings/wire числа сохранены | Engine 18/18 и GUI reconnect 3/3 ранее прошли; WinAPI ожидание проверенно преобразует миллисекунды |
+| Связанные A | RowQuality, Views root, VarType и NonZero interface/scope выполнены в отдельных checkpoints | Windows runtime этих изменений требует финального CI; SessionId/RequestId/ItemKey/ScanId, Origin/Owner и checked allocators передаются следующему этапу |
+
+Ручной `Advertised::Known(Auto)` отклоняется в resolver и UI; Linux backend
+регрессия 1/1, UI регрессия 1/1, Windows i686 workspace all-targets typecheck
+с test-only флагами прошли. CI run 40679654282 (remote `557fca20`) зелёный на
+Linux/Windows и подтвердил D heap-corruption hotfix, но не содержит последующие
+изменения C и FILETIME и не является финальным exact-head CI.
+
+Передача: роли/корреляция/checked allocators (A), недопустимые комбинации и
+состояния (B), типизированные ошибки с сохранением grace-дренирования того же
+future (E), измеренный 10k frame/allocation baseline и производительность
+(F/G), модули/Clippy и итоговая консолидация документации (H) остаются открыты.
+Также обязательны точный финальный Linux/Windows CI, реальный DA/UAC/маршруты и
+визуальная проверка ранее указанного диалога. Старые результаты не переносятся
+на новый head; работоспособность реального оборудования не заявляется.
