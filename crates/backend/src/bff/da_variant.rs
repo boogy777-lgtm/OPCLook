@@ -823,6 +823,7 @@ mod tests {
 
     #[test]
     fn byref_and_mismatched_array_storage_are_not_dereferenced() {
+        eprintln!("stage: byref start");
         let mut scalar = VARIANT::default();
         set_vt(&mut scalar, 0x4000 | 3);
         let mut integer = 7i32;
@@ -831,6 +832,7 @@ mod tests {
         // SAFETY: the BYREF VARIANT refers to the live integer above.
         let converted = unsafe { variant_to_value(&scalar) };
         assert!(matches!(converted, Value::Other(_)));
+        eprintln!("stage: byref complete; create array");
 
         // SAFETY: create a byte array and transfer it into a mismatched VARIANT.
         let array = unsafe { SafeArrayCreateVector(VARENUM(17), 0, 1) };
@@ -839,21 +841,73 @@ mod tests {
         set_vt(&mut variant, 0x2000 | 8);
         // SAFETY: the array pointer is owned by variant until it is cleared.
         unsafe { (*variant_inner(&mut variant)).parray = array };
+        eprintln!("stage: mismatched conversion start");
         // SAFETY: the pointer is valid; its one-byte element must be rejected
         // before interpreting it as a BSTR pointer.
         let value = unsafe { variant_to_value(&variant) };
+        eprintln!("stage: mismatched conversion complete");
         assert_eq!(value, Value::Other("Invalid array element size".into()));
         set_vt(&mut variant, 0x2000 | 72);
+        eprintln!("stage: unsupported conversion start");
         // SAFETY: the same live array is deliberately labelled with an unsupported tag.
         let unsupported = unsafe { variant_to_value(&variant) };
+        eprintln!("stage: unsupported conversion complete");
         assert_eq!(
             unsupported,
             Value::Other("Unsupported array element type: 72".into())
         );
         // Destroy directly because the deliberately mismatched tag is not a valid
         // ownership description for VariantClear.
+        eprintln!("stage: destroy start");
         // SAFETY: this test owns the live array and did not transfer it elsewhere.
         unsafe { SafeArrayDestroy(array).unwrap() };
+        eprintln!("stage: destroy complete");
+    }
+
+    #[test]
+    fn isolated_byref_variant_is_rejected() {
+        let mut scalar = VARIANT::default();
+        let mut integer = 7i32;
+        set_vt(&mut scalar, 0x4000 | 3);
+        // SAFETY: plVal points to the live integer for this test.
+        unsafe { (*variant_inner(&mut scalar)).plVal = &raw mut integer };
+        // SAFETY: the BYREF value refers to that live integer.
+        let converted = unsafe { variant_to_value(&scalar) };
+        assert!(matches!(converted, Value::Other(_)));
+    }
+
+    fn isolated_byte_array_with_tag(tag: u16) -> Value {
+        // SAFETY: this test owns the newly created byte SAFEARRAY.
+        let array = unsafe { SafeArrayCreateVector(VARENUM(17), 0, 1) };
+        assert!(!array.is_null());
+        let mut variant = VARIANT::default();
+        set_vt(&mut variant, 0x2000 | tag);
+        // SAFETY: variant temporarily points to this live owned array.
+        unsafe { (*variant_inner(&mut variant)).parray = array };
+        eprintln!("stage: isolated tag {tag} conversion start");
+        // SAFETY: the array allocation is live; conversion checks its layout.
+        let output = unsafe { variant_to_value(&variant) };
+        eprintln!("stage: isolated tag {tag} conversion complete; destroy start");
+        // SAFETY: the raw VARIANT has no Drop; this is the sole destruction.
+        unsafe { SafeArrayDestroy(array).unwrap() };
+        eprintln!("stage: isolated tag {tag} destroy complete");
+        output
+    }
+
+    #[test]
+    fn isolated_mismatched_array_storage_is_rejected() {
+        assert_eq!(
+            isolated_byte_array_with_tag(8),
+            Value::Other("Invalid array element size".into())
+        );
+    }
+
+    #[test]
+    fn isolated_unknown_array_type_is_rejected() {
+        assert_eq!(
+            isolated_byte_array_with_tag(72),
+            Value::Other("Unsupported array element type: 72".into())
+        );
     }
 
     #[test]
