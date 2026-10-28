@@ -1,0 +1,7 @@
+# PR draft: Share an Engine between GUI and headless CLI
+
+The GUI previously combined session coordination, protocol access and presentation, making headless use and isolation difficult. This change introduces a shared Engine for the GUI and CLI, separates the contract, backend and locale, moves DA route preparation off the UI thread, and implements the A–H refactoring and B1–B20 fixes in the [status matrix](../refactoring-status.md).
+
+The Engine owns request correlation, session scheduling and route leases. The GUI uses explicitly exported metadata and domain event handlers; the CLI supports typed JSON browse, read, write and watch. Windows helper IPC and route preparation have bounded waits, cancellation and typed failures. Settings preserve their flat serialized keys. Frame caches and journal virtualization reduce measured CPU time and requested bytes; the 100-update scene increases allocation count slightly. See the [measurement report](refactor-frame-baseline.md) for revisions, harness, conditions and results.
+
+Validation includes local Linux GUI, backend, Engine, contract, locale and CLI tests; live sample UA, CLI subprocess and B15 proxy tests; image review of five scenes before and after changes; and Windows i686 workspace all-targets typecheck with test-only resource/manifest skips. The exact-head CI is pending. Native Windows CI includes unit tests, but physical DA, UAC, helper pipe and real routes require an external Windows setup. Unsolicited events do not encode connection epochs after reconnection.

@@ -575,3 +575,8 @@ Connection results/security controls, tree row rendering, table cell rendering a
 ### 2026-10-28 — selected Clippy fixes
 
 Applied selected clone reuse, redundant clone/borrow removal, derivable defaults and a matching-arm simplification. Measured: Linux GUI 219 library and 149 interaction tests (one Windows-only ignored) passed; Windows i686 all-target typecheck passed with cross-check flags. No zero-warning or Windows runtime claim.
+
+
+### 2026-10-28 — итог реализации A–H
+
+План A–H и исправления B1–B20 реализованы; актуальные решения, локальные проверки и внешние ограничения сведены в [матрицу](refactoring-status.md). Предыдущие записи фиксируют состояние на момент соответствующих проверок. Снимки до F, после F и после H сохранены; условия и измерения приведены в [отчёте](reports/refactor-frame-baseline.md). Exact-head CI и физический Windows DA/UAC/маршруты требуют отдельного подтверждения.

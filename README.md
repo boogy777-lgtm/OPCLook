@@ -5,7 +5,7 @@
   <p>
     <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
     <a href="https://github.com/boogy777-lgtm/OPCLook"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-OPCLook-181717?logo=github"></a>
-    <img alt="Rust 1.93+" src="https://img.shields.io/badge/Rust-1.93%2B-000000?logo=rust&amp;logoColor=white">
+    <img alt="Rust 1.95+" src="https://img.shields.io/badge/Rust-1.95%2B-000000?logo=rust&amp;logoColor=white">
     <img alt="Windows x86" src="https://img.shields.io/badge/platform-Windows%20x86-0078D4?logo=windows">
     <img alt="OPC DA 2.0" src="https://img.shields.io/badge/OPC%20DA-2.0-1E3A5F">
     <img alt="OPC UA client" src="https://img.shields.io/badge/OPC%20UA-client-0B7285">
@@ -18,7 +18,7 @@
 <p align="center"><sub>Главное окно: серверы, таблица сигналов и журнал сетевого выбора.</sub></p>
 
 > Проект в разработке. Репозиторий называется **OPCLook**, Cargo-пакет и
-> исполняемый файл — `opcda-egui`. Архитектура и ограничения описаны ниже и в
+> основные исполняемые файлы — `opcda-egui` и `opclook-cli`. Архитектура и ограничения описаны ниже и в
 > [`docs/`](docs/).
 
 OPCLook — нативный клиент OPC для Windows, переписанный с EleSy OPC Test Client
@@ -26,7 +26,7 @@ OPCLook — нативный клиент OPC для Windows, переписан
 через протокол-нейтральный BFF (backend-for-frontend).
 
 Приложение не является web-приложением или Electron: внешний рантайм не нужен.
-Основной бинарь — `opcda-egui.exe`; для DA route steering рядом поставляется
+Приложения — `opcda-egui.exe` и headless `opclook-cli.exe`; для DA route steering рядом поставляется
 `opcda-nethelper.exe`, который запускается по UAC только при необходимости.
 
 ## Содержание
@@ -73,11 +73,15 @@ OPCLook — нативный клиент OPC для Windows, переписан
 ```mermaid
 flowchart TD
     GUI["GUI"] --> Engine["Общий движок"]
-    GUI --> Backend["Backend и платформа"]
+    GUI --> Contract["Контракт"]
+    GUI --> Locale["Локализация"]
     CLI["CLI"] --> Engine
-    Engine --> Backend
-    Engine --> Contract["Команды и события"]
+    CLI --> Contract
+    CLI --> Locale
+    Engine --> Backend["Backend и платформа"]
+    Engine --> Contract
     Backend --> Contract
+    Locale --> Contract
 ```
 
 `crates/contract` содержит типы команд, событий, значений и сетевых привязок;
@@ -87,18 +91,14 @@ flowchart TD
 `crates/cli` — за командную строку. GUI получает типизированные сведения
 платформы, но выполнение команд и сессий направляет через движок.
 
-Этот перенос находится в работе. Подготовка DA-маршрутов и обмен с helper пока
-синхронны и не имеют ограниченного ожидания; дальнейший этап выносит их из UI.
-Windows runtime/UAC и живой DA-сервер ещё не проверены.
+Подготовка DA-маршрутов выполняется ограниченным асинхронным сервисом с отменой и дедлайном; helper IPC также ограничен. Подробности и границы проверок — в [описании слоёв](docs/layers-headless-design.md). Физический DA, UAC и реальные маршруты требуют внешнего стенда.
 
 ## Быстрый старт
 
-Сборка **только 32-битная** (`i686-pc-windows-msvc`) — это обязательное
-требование. OPC DA — 32-битная COM-технология: `OPCEnum.exe` и большинство
-легаси-серверов зарегистрированы только в 32-битной ветке реестра
-(`Wow6432Node`), и 64-битный процесс не сможет их инстанцировать. OPC UA не
-зависит от разрядности, но сборка клиента целиком на `i686` сохраняет
-совместимость с легаси.
+Поддерживаемая целевая платформа Windows release — **32-битная**
+`i686-pc-windows-msvc`, выбранная для совместимости с легаси-серверами OPC DA.
+На Linux CLI для OPC UA и проверки проекта собираются с явно указанной целью
+`x86_64-unknown-linux-gnu`.
 
 Целевая платформа зафиксирована в `.cargo/config.toml`, поэтому достаточно:
 
@@ -107,8 +107,8 @@ cargo build --release --target i686-pc-windows-msvc
 cargo build --release -p opcda-nethelper --target i686-pc-windows-msvc
 ```
 
-Бинари: `target\i686-pc-windows-msvc\release\opcda-egui.exe` и
-`opcda-nethelper.exe` (рядом с приложением).
+Бинари: `target\i686-pc-windows-msvc\release\opcda-egui.exe`,
+`opclook-cli.exe` и `opcda-nethelper.exe` (helper рядом с приложением).
 
 Упаковка двух клиентов и helper (32-битные exe):
 
@@ -144,9 +144,7 @@ cargo run -p opclook-cli --target x86_64-unknown-linux-gnu -- --ua opc.tcp://127
 `--help` описывает DA (`--da HOST PROGID`), UA security и bind, учётные данные
 через переменные окружения и тайм-аут. Результаты — JSON/JSONL; 64-битные
 целые и нечисловые float кодируются строками, качество и время передаются
-отдельно. CLI DA использует системную маршрутизацию. Живая проверка CLI ещё
-предстоит; ранее опубликованные цифры для прежней среды не относятся к этому
-состоянию.
+отдельно. CLI DA использует системную маршрутизацию. `watch` по умолчанию использует подписку UA, `--poll` включает периодические чтения; работа заканчивается по `--count` или Ctrl+C. Секреты берутся из переменных окружения и редактируются в диагностике. Закрытый stdout завершает вывод без ошибки BrokenPipe. Live subprocess тесты на Linux проверяют CLI против sample UA; физический DA остаётся внешней проверкой.
 
 ## Документация
 
@@ -154,6 +152,9 @@ cargo run -p opclook-cli --target x86_64-unknown-linux-gnu -- --ua opc.tcp://127
 
 | Документ | Содержание |
 |---|---|
+| [Текущий статус](docs/status.md) | Результат, проверки и ограничения |
+| [Рефакторинг](docs/refactoring-status.md) | Матрица A–H и B1–B20 |
+| [Слои и CLI](docs/layers-headless-design.md) | Границы, маршруты и headless-клиент |
 | [Сетевые настройки](docs/network-settings-ontology.md) | Онтология, кэш адаптеров, stale GUID/IP, сценарии UI и состояние реализации |
 | [Привязка к сети](docs/network-binding.md) | Выбор адаптера, UA binding, DA route steering, helper, UAC и ручная проверка |
 | [План сетевой привязки](docs/network-binding-plan.md) | Исходный план и решения по сетевой модели |
@@ -193,7 +194,7 @@ DA-хост/сервер, последний UA-URL, до 12 недавних с
 
 ## Тесты
 
-- **Автономные модульные тесты** — `cargo test`: модель BFF, настройки,
+- **Автономные модульные тесты** — модель контракта и backend, настройки,
   столбцы, журнал, сетевые состояния.
 - **UI-тесты** — `egui_kittest`: взаимодействие с вкладками, меню, таблицей и
   диалогами; часть тестов использует реальное перечисление адаптеров Windows.
@@ -202,12 +203,12 @@ DA-хост/сервер, последний UA-URL, до 12 недавних с
   `opc.tcp://127.0.0.1:4840`).
 
 ```sh
-cargo test
-cargo test --test ua_smoke -- --ignored --nocapture
+cargo test --target x86_64-unknown-linux-gnu -p opclook-contract
+cargo test --target i686-pc-windows-msvc
+cargo test --target i686-pc-windows-msvc --test ua_smoke -- --ignored --nocapture
 ```
 
-Актуальные результаты и статус живых проверок — в
-[`docs/test-matrix.md`](docs/test-matrix.md).
+Linux-команды требуют установленную цель `x86_64-unknown-linux-gnu`: в конфигурации проекта по умолчанию выбран Windows i686. Актуальные результаты и границы проверок — в [текущем статусе](docs/refactoring-status.md); [test matrix](docs/test-matrix.md) содержит исторические сценарии.
 
 ### Живая проверка OPC UA
 
