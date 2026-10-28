@@ -6,7 +6,7 @@
 //! variant must appear in each dictionary (RU/EN/ZH). A unit test walks
 //! `Tr::ALL` to assert every variant yields non-empty text in all languages.
 
-use crate::bff::model::{BackendMsg, UaProtection};
+use opclook_contract::model::{BackendMsg, UaProtection};
 use serde::{Deserialize, Serialize};
 
 /// The three supported UI languages. Russian is the default.
@@ -78,6 +78,7 @@ pub enum Tr {
     DiagnosticTraceHint,
     DiagnosticTraceCheck,
     NoReplyFromServer,
+    RequestIdsExhausted,
     CsvServerAmbiguous,
     CsvServerEmpty,
     CjkFontMissing,
@@ -780,6 +781,7 @@ fn ru(key: Tr) -> &'static str {
         }
         DiagnosticTraceCheck => "Диагностика: писать запросы и ответы в журнал",
         NoReplyFromServer => "Нет ответа от сервера за {0} с",
+        RequestIdsExhausted => "Исчерпаны идентификаторы запросов",
         CsvServerAmbiguous => {
             "Строка CSV пропущена: имени сервера «{0}» соответствует несколько подключений, укажите точное имя"
         }
@@ -1379,6 +1381,7 @@ fn en(key: Tr) -> &'static str {
         }
         DiagnosticTraceCheck => "Diagnostics: log requests and replies",
         NoReplyFromServer => "No reply from the server within {0} s",
+        RequestIdsExhausted => "Request identifiers exhausted",
         CsvServerAmbiguous => {
             "CSV row skipped: server name \"{0}\" matches several connections, give the exact name"
         }
@@ -1968,6 +1971,7 @@ fn zh(key: Tr) -> &'static str {
         }
         DiagnosticTraceCheck => "诊断：将请求和响应写入日志",
         NoReplyFromServer => "服务器 {0} 秒内无响应",
+        RequestIdsExhausted => "请求标识符已耗尽",
         CsvServerAmbiguous => "已跳过 CSV 行：服务器名“{0}”匹配多个连接，请指定准确名称",
         CsvServerEmpty => "已跳过 CSV 行：信号“{0}”未指定服务器",
         CjkFontMissing => "未找到可显示中文的字体（msyh.ttc、simsun.ttc）：界面文字可能显示为方块",
@@ -3591,7 +3595,7 @@ pub fn backend_text(lang: Lang, msg: &BackendMsg) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bff::model::DaServerStatus;
+    use opclook_contract::model::DaServerStatus;
 
     #[test]
     fn lang_serde_roundtrips() {
@@ -4315,8 +4319,6 @@ mod tests {
                 let ru = backend_text(Lang::Ru, &msg);
                 assert!(has_cyrillic(&ru), "RU text of {msg:?} is not Russian: {ru}");
             }
-            // Display is the English wording.
-            assert_eq!(msg.to_string(), backend_text(Lang::En, &msg));
         }
     }
 
@@ -4324,7 +4326,7 @@ mod tests {
     fn backend_samples_cover_every_variant() {
         // The enum body is counted from the source so that a variant added
         // without a sample (and so without the checks above) fails here.
-        let source = include_str!("bff/model.rs");
+        let source = include_str!("../../contract/src/model.rs");
         let start = source
             .find("pub enum BackendMsg {")
             .expect("BackendMsg is defined in model.rs");

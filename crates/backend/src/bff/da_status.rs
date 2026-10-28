@@ -91,11 +91,11 @@ mod tests {
             (STATE_TEST, "TEST"),
             (STATE_COMM_FAULT, "COMM_FAULT"),
         ] {
-            let err = check_server_state(state).unwrap_err().to_string();
+            let err = backend_text(Lang::En, &check_server_state(state).unwrap_err());
             assert!(err.contains(name), "{err}");
             assert_eq!(server_state_name(state), Some(name));
         }
-        let err = check_server_state(42).unwrap_err().to_string();
+        let err = backend_text(Lang::En, &check_server_state(42).unwrap_err());
         assert!(err.contains("42"), "{err}");
         assert_eq!(server_state_name(0), None);
         assert_eq!(server_state_name(-1), None);

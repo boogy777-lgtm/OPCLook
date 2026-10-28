@@ -2,15 +2,48 @@
 name = "opcda-egui"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.93"
+autobins = false
+rust-version = "1.95"
 description = "Native Rust/egui rewrite of EleSy OPC Test Client 2.1 (OPC DA 2.0)"
 license = "MIT"
 repository = "https://github.com/boogy777-lgtm/OPCLook"
 
+[[bin]]
+name = "opcda-egui"
+path = "src/main.rs"
+
+[[bin]]
+name = "probe_da"
+path = "src/bin/probe_da.rs"
+required-features = ["diagnostics"]
+
+[[bin]]
+name = "probe_da2"
+path = "src/bin/probe_da2.rs"
+required-features = ["diagnostics"]
+
+[[bin]]
+name = "probe_ua"
+path = "src/bin/probe_ua.rs"
+required-features = ["diagnostics"]
+
+[[bin]]
+name = "probe_ua2"
+path = "src/bin/probe_ua2.rs"
+required-features = ["diagnostics"]
+
 [workspace]
-members = ["nethelper"]
+default-members = [".", "crates/cli"]
+members = ["nethelper", "crates/backend", "crates/contract", "crates/locale", "crates/engine", "crates/cli"]
+
+[features]
+diagnostics = []
+test-support = ["opclook-engine/test-support"]
 
 [dependencies]
+opclook-engine = { path = "crates/engine" }
+opclook-backend = { path = "crates/backend" }
+opclook-locale = { path = "crates/locale" }
 eframe = { version = "0.37", default-features = false, features = ["glow", "clipboard", "default_fonts"] }
 egui = { version = "0.37", default-features = false, features = ["default_fonts"] }
 egui_extras = { version = "0.37", default-features = false }
@@ -65,6 +98,7 @@ panic = "abort"
 winres = "0.1"
 
 [dev-dependencies]
+opcda-egui = { path = ".", features = ["test-support"] }
 egui_kittest = "0.37"
 # In-process OPC UA server for the live backend tests (src/bff/ua/live_tests.rs).
 async-opcua = { version = "0.19", features = ["client", "server"] }

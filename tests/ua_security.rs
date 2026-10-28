@@ -107,7 +107,7 @@ fn server_search_enumerates_endpoints() {
             let endpoints_ok = servers.iter().all(|s| !s.endpoints.is_empty());
             assert!(endpoints_ok, "discovered server(s) expose no endpoints");
         }
-        EventKind::Error { message, .. } => panic!("discovery failed: {message}"),
+        EventKind::Error { message, .. } => panic!("discovery failed: {message:?}"),
         other => panic!("unexpected event: {other:?}"),
     }
 }
@@ -128,13 +128,13 @@ fn server_connect_explicit_none_policy() {
     match connected.kind {
         EventKind::Connected { endpoint, info } => {
             assert_eq!(endpoint.ua_session_timeout, Some(90_000));
-            let info = info.to_string();
+            let info = opcda_egui::i18n::backend_text(opcda_egui::i18n::Lang::En, &info);
             assert!(
                 info.contains("None"),
                 "session info should include the resolved policy: {info}"
             );
         }
-        EventKind::Error { message, .. } => panic!("connect failed: {message}"),
+        EventKind::Error { message, .. } => panic!("connect failed: {message:?}"),
         other => panic!("unexpected event: {other:?}"),
     }
     disconnect(&gateway, session);
@@ -150,13 +150,13 @@ fn server_connect_auto_resolves_security() {
     let connected = connect_endpoint(&gateway, session, EndpointSpec::ua(test_url()));
     match connected.kind {
         EventKind::Connected { info, .. } => {
-            let info = info.to_string();
+            let info = opcda_egui::i18n::backend_text(opcda_egui::i18n::Lang::En, &info);
             assert!(
                 info.contains('[') && info.contains('/'),
                 "session info should describe policy/mode: {info}"
             );
         }
-        EventKind::Error { message, .. } => panic!("connect failed: {message}"),
+        EventKind::Error { message, .. } => panic!("connect failed: {message:?}"),
         other => panic!("unexpected event: {other:?}"),
     }
     disconnect(&gateway, session);

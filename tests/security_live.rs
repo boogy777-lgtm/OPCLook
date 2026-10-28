@@ -89,13 +89,13 @@ fn live_auto_security_still_connects() {
     let event = connect_endpoint(&gateway, session, endpoint);
     match event.kind {
         EventKind::Connected { info, .. } => {
-            let info = info.to_string();
+            let info = opcda_egui::i18n::backend_text(opcda_egui::i18n::Lang::En, &info);
             assert!(
                 info.contains("None") || info.contains("Basic256"),
                 "info should name the resolved policy: {info}"
             );
         }
-        EventKind::Error { message, .. } => panic!("auto connect failed: {message}"),
+        EventKind::Error { message, .. } => panic!("auto connect failed: {message:?}"),
         other => panic!("unexpected event: {other:?}"),
     }
     disconnect(&gateway, session);
@@ -118,21 +118,21 @@ fn live_explicit_unadvertised_security_is_an_error() {
         EventKind::Error { message, .. } => {
             let opcda_egui::bff::model::BackendMsg::SecurityResolveFailed { detail } = &message
             else {
-                panic!("expected the security-resolution error, got: {message}");
+                panic!("expected the security-resolution error, got: {message:?}");
             };
             assert!(
                 detail.contains("not offered"),
-                "expected a clear 'not offered' detail, got: {message}"
+                "expected a clear 'not offered' detail, got: {message:?}"
             );
             assert!(
                 detail.contains("advertised:"),
-                "error must list the advertised endpoints, got: {message}"
+                "error must list the advertised endpoints, got: {message:?}"
             );
         }
         EventKind::Connected { info, .. } => {
             panic!(
                 "server actually advertises Basic256Sha256/SignAndEncrypt; \
-                 this test targets a None-only CODESYS endpoint (connected: {info})"
+                 this test targets a None-only CODESYS endpoint (connected: {info:?})"
             );
         }
         other => panic!("unexpected event: {other:?}"),

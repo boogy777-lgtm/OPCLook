@@ -2548,10 +2548,11 @@ fn read_tick_is_suppressed_while_root_loading() {
     let mut app = App::new_test(&ctx);
     app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
     app.seed_row(1, "ns=1;s=a", "SigA", Value::I64(1));
+    // A real outstanding browse is the protocol-level gate for polling.
+    app.browse(1, String::new());
     {
         let view = app.sessions.iter_mut().find(|s| s.id == 1).unwrap();
-        // Force a due read but stall on a root browse.
-        view.root_loading = true;
+        // Force a due read while the browse remains in flight.
         view.last_poll = std::time::Instant::now()
             .checked_sub(std::time::Duration::from_secs(60))
             .unwrap_or(std::time::Instant::now());
@@ -2760,10 +2761,10 @@ fn reconnect_attempts_cap_stops_the_loop_and_shows_exhausted() {
     app.settings.options.auto_reconnect = true;
     app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
     app.activate_session(1);
-    // 20 attempts already made, server still down.
+    // The twentieth automatic Connect is in flight; its failure exhausts the cap.
     {
         let view = app.sessions.iter_mut().find(|s| s.id == 1).unwrap();
-        view.state = SessionState::Disconnected;
+        view.state = SessionState::Connecting;
         view.reconnect = ReconnectState::Waiting {
             at: std::time::Instant::now(),
             attempt: 20,
@@ -2771,8 +2772,9 @@ fn reconnect_attempts_cap_stops_the_loop_and_shows_exhausted() {
     }
     app.on_event_for_test_at(
         1,
-        EventKind::Disconnected {
-            reason: opcda_egui::bff::model::BackendMsg::raw("опять"),
+        EventKind::Error {
+            operation: opcda_egui::bff::model::Operation::Connect,
+            message: opcda_egui::bff::model::BackendMsg::raw("опять"),
         },
     );
     // Re-scheduling must refuse: the state becomes Exhausted, no new timer.
@@ -4431,7 +4433,7 @@ fn on_exit_shuts_down_the_gateway() {
         );
 
         let error = app
-            .gateway
+            .gateway_for_test()
             .send(Command {
                 request_id: 1,
                 session: 1,

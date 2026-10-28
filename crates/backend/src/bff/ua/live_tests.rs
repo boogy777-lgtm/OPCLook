@@ -399,11 +399,11 @@ impl Harness {
             Some(Event {
                 kind: EventKind::Connected { info, .. },
                 ..
-            }) => Ok(info.to_string()),
+            }) => Ok(crate::i18n::backend_text(crate::i18n::Lang::En, &info)),
             Some(Event {
                 kind: EventKind::Error { message, .. },
                 ..
-            }) => Err(message.to_string()),
+            }) => Err(crate::i18n::backend_text(crate::i18n::Lang::En, &message)),
             other => Err(format!("unexpected connect reply: {other:?}")),
         }
     }
@@ -495,7 +495,7 @@ fn u2_unknown_node_is_reported_as_error_and_valid_node_delivers_values() {
         .and_then(|(_, r)| r.as_ref().err())
         .expect("unknown node must be an Err");
     assert!(
-        bad.to_string().contains("BadNodeIdUnknown"),
+        crate::i18n::backend_text(crate::i18n::Lang::En, bad).contains("BadNodeIdUnknown"),
         "message must carry the server status, got {bad:?}"
     );
 
@@ -1253,8 +1253,10 @@ fn u15_host_search_on_loopback_finds_the_server_without_lds_noise() {
         other => panic!("unexpected search reply: {other:?}"),
     }
     let noise = app.wait(Duration::from_millis(300), |event| match &event.kind {
-        EventKind::Log { message } if message.to_string().contains("LDS") => {
-            Some(message.to_string())
+        EventKind::Log { message }
+            if crate::i18n::backend_text(crate::i18n::Lang::En, &message).contains("LDS") =>
+        {
+            Some(crate::i18n::backend_text(crate::i18n::Lang::En, &message))
         }
         _ => None,
     });
@@ -1283,7 +1285,9 @@ fn a9_network_search_reports_its_problems_as_journal_lines() {
     ));
     let mut lines = Vec::new();
     while let Some(message) = app.wait(Duration::from_millis(200), |event| match &event.kind {
-        EventKind::Log { message } if event.request_id == 0 => Some(message.to_string()),
+        EventKind::Log { message } if event.request_id == 0 => {
+            Some(crate::i18n::backend_text(crate::i18n::Lang::En, &message))
+        }
         _ => None,
     }) {
         lines.push(message);
@@ -1332,7 +1336,9 @@ fn u15_the_named_lds_host_is_the_one_that_is_asked() {
     ));
     let mut lines = Vec::new();
     while let Some(line) = app.wait(Duration::from_millis(200), |event| match &event.kind {
-        EventKind::Log { message } if event.request_id == 0 => Some(message.to_string()),
+        EventKind::Log { message } if event.request_id == 0 => {
+            Some(crate::i18n::backend_text(crate::i18n::Lang::En, &message))
+        }
         _ => None,
     }) {
         lines.push(line);
@@ -1368,8 +1374,11 @@ fn u15_the_named_lds_host_is_the_one_that_is_asked() {
         })
     ));
     let noise = app.wait(Duration::from_millis(300), |event| match &event.kind {
-        EventKind::Log { message } if message.to_string().contains(&server.port.to_string()) => {
-            Some(message.to_string())
+        EventKind::Log { message }
+            if crate::i18n::backend_text(crate::i18n::Lang::En, &message)
+                .contains(&server.port.to_string()) =>
+        {
+            Some(crate::i18n::backend_text(crate::i18n::Lang::En, &message))
         }
         _ => None,
     });

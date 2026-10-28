@@ -84,8 +84,8 @@ impl App {
             },
             ctx,
         );
-        self.pending_requests
-            .contains_key(&(session, request_id))
+        self.engine
+            .has_pending(session, request_id)
             .then_some(request_id)
     }
 
@@ -482,7 +482,7 @@ impl App {
                     name,
                 },
             );
-            if self.pending_requests.contains_key(&(session, request_id)) {
+            if self.engine.has_pending(session, request_id) {
                 self.dialogs.add_signal.resolving = Some((session, request_id));
             } else {
                 // The command never left (dead worker): the journal has the

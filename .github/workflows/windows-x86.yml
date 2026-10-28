@@ -17,12 +17,21 @@ jobs:
           components: rustfmt
       - name: Format
         run: cargo fmt --all -- --check
+      - name: Build both app binaries and check layer boundaries
+        shell: bash
+        run: |
+          cargo build --target i686-pc-windows-msvc -p opcda-egui -p opclook-cli
+          cargo build --target i686-pc-windows-msvc -p opclook-cli
+          python scripts/check-cli-boundary.py i686-pc-windows-msvc
+      - name: Shared crate and CLI tests
+        shell: bash
+        run: scripts/ci-test.sh "Shared crate or CLI tests failed" -p opclook-engine -p opclook-backend -p opclook-contract -p opclook-locale -p opclook-cli --target i686-pc-windows-msvc -- --skip loopback_tcp_without_opc_ua_is_not_a_scan_result
       # OPC UA network probing is environment/timing-sensitive in hosted CI.
       # Keep it visible as a separate, non-blocking diagnostic rather than
       # allowing it to obscure deterministic UI/model regression failures.
       - name: Build and run library tests
         shell: bash
-        run: scripts/ci-test.sh "Library tests failed" --lib --target i686-pc-windows-msvc -- --skip loopback_tcp_without_opc_ua_is_not_a_scan_result
+        run: scripts/ci-test.sh "Library tests failed" -p opcda-egui --lib --target i686-pc-windows-msvc -- --skip loopback_tcp_without_opc_ua_is_not_a_scan_result
       - name: Net helper unit tests (no privileged operations)
         env:
           OPCLOOK_HELPER_TEST_NO_MANIFEST: "1"
@@ -31,7 +40,7 @@ jobs:
         run: cargo build -p opcda-nethelper --target i686-pc-windows-msvc
       - name: OPC UA loopback probe (diagnostic)
         continue-on-error: true
-        run: cargo test --lib --target i686-pc-windows-msvc loopback_tcp_without_opc_ua_is_not_a_scan_result -- --nocapture
+        run: cargo test -p opclook-backend --lib --target i686-pc-windows-msvc loopback_tcp_without_opc_ua_is_not_a_scan_result -- --nocapture
       # All integration tests (ui_interactions, no_hardcoded_ui_strings, i18n and
       # the rest). Network-dependent ones are `#[ignore]` and stay skipped.
       # On failure, compiler errors, failing tests and their panic output are
@@ -39,7 +48,7 @@ jobs:
       # checks API without downloading the full job log.
       - name: Run integration tests
         shell: bash
-        run: scripts/ci-test.sh "Integration tests failed" --tests --target i686-pc-windows-msvc
+        run: scripts/ci-test.sh "Integration tests failed" -p opcda-egui --tests --target i686-pc-windows-msvc
 
   # Same gate as the developer script: fmt, check --all-targets, lib and
   # integration tests on Linux (Windows-only tests are ignored there).

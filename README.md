@@ -71,42 +71,25 @@ OPCLook — нативный клиент OPC для Windows, переписан
 ## Архитектура
 
 ```mermaid
-flowchart LR
-    UI["egui UI<br/>src/ui"] -->|Command| GW["Gateway<br/>src/bff"]
-    GW -->|COM / DCOM| DA["OPC DA adapter"]
-    GW -->|opc.tcp| UA["OPC UA adapter"]
-    DA --> DAS[("OPC DA server")]
-    UA --> UAS[("OPC UA server")]
-    NET["Network selection<br/>src/net.rs"] -.->|adapter / IP binding| UA
-    NET -.->|DA route steering| HELPER["opcda-nethelper<br/>UAC"]
+flowchart TD
+    GUI["GUI"] --> Engine["Общий движок"]
+    GUI --> Backend["Backend и платформа"]
+    CLI["CLI"] --> Engine
+    Engine --> Backend
+    Engine --> Contract["Команды и события"]
+    Backend --> Contract
 ```
 
-Протокол-нейтральный шлюз (`crate::bff::Gateway`) изолирует UI от конкретного
-протокола. UI и хост скриптов обмениваются только `Command` и `Event`
-(`src/bff/model.rs`); каждый сеанс маршрутизируется ровно на один адаптер.
-Каждый адаптер владеет всеми своими ресурсами (COM/async) на собственном
-рабочем потоке.
+`crates/contract` содержит типы команд, событий, значений и сетевых привязок;
+`crates/backend` — независимые рабочие потоки OPC DA и UA и транспорт;
+`crates/engine` — сессии, запросы и периодические операции. `crates/locale`
+отвечает за локализацию, `src/app` и `src/ui` — за представление, а
+`crates/cli` — за командную строку. GUI получает типизированные сведения
+платформы, но выполнение команд и сессий направляет через движок.
 
-| Модуль | Назначение |
-|---|---|
-| `src/bff/model.rs` | `Command`/`Event`, `EndpointSpec`, `Quality`, `Value`, `ItemInfo`, `BrowseNode` |
-| `src/bff/mod.rs` | `Gateway`: каналы `Command` в адаптеры, очередь `Event` назад в UI |
-| `src/bff/da.rs` | COM OPC DA: подключение, обзор, add/remove, sync read, write, тест |
-| `src/bff/da_variant.rs` | Конвертация COM `VARIANT`/`FILETIME`/`DATE` в нейтральные значения |
-| `src/bff/ua/` | `async-opcua` 0.19: worker, discovery, session, scanner, browse/read/write/test |
-| `src/bff/mdns.rs` | Нативное mDNS/DNS-SD-обнаружение OPC UA |
-| `src/bff/net.rs` | Привязка UA-сокетов к выбранному адаптеру |
-| `src/net.rs` | Модель адаптеров, подсетей и состояние сетевого выбора |
-| `src/da_route.rs` | DA route planning, refcount, named-pipe клиент helper |
-| `src/app/` | Состояние UI, сеансы, строки таблицы, диалоги, обработка событий |
-| `src/ui/` | Меню, панели, дерево, таблица, диалоги |
-| `nethelper/` | `opcda-nethelper.exe`: привилегированный helper host-маршрутов |
-| `src/opc/bindings/` | Обвязки COM OPC DA, сгенерированные `windows-bindgen` |
-
-Аудит ответственности модулей и план разбиения больших файлов:
-[`docs/audit-responsibility.md`](docs/audit-responsibility.md). Аудит UI/UX:
-[`docs/audit-ui-ux.md`](docs/audit-ui-ux.md). Правила сети и UAC:
-[`docs/network-binding.md`](docs/network-binding.md).
+Этот перенос находится в работе. Подготовка DA-маршрутов и обмен с helper пока
+синхронны и не имеют ограниченного ожидания; дальнейший этап выносит их из UI.
+Windows runtime/UAC и живой DA-сервер ещё не проверены.
 
 ## Быстрый старт
 
@@ -120,21 +103,21 @@ flowchart LR
 Целевая платформа зафиксирована в `.cargo/config.toml`, поэтому достаточно:
 
 ```sh
-cargo build --release --bin opcda-egui --target i686-pc-windows-msvc
-cargo build --release --bin opcda-nethelper --target i686-pc-windows-msvc
+cargo build --release --target i686-pc-windows-msvc
+cargo build --release -p opcda-nethelper --target i686-pc-windows-msvc
 ```
 
 Бинари: `target\i686-pc-windows-msvc\release\opcda-egui.exe` и
 `opcda-nethelper.exe` (рядом с приложением).
 
-Упаковка обоих 32-битных exe:
+Упаковка двух клиентов и helper (32-битные exe):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 ```
 
 Скрипт проверяет PE machine `0x014C`, копирует `opcda-egui.exe`,
-`opcda-nethelper.exe`, manifest helper, README, LICENSE и `docs/images` в
+`opclook-cli.exe`, `opcda-nethelper.exe`, manifest helper, README, LICENSE и `docs/images` в
 `target\i686-pc-windows-msvc\release\package\`.
 
 Запуск:
@@ -147,6 +130,23 @@ target\i686-pc-windows-msvc\release\opcda-egui.exe
 (см. `rust-version` в `Cargo.toml`). Для корректного отображения кириллицы
 загружаются системные шрифты `segoeui.ttf` и `consola.ttf` с фолбэком.
 Локализация интерфейса: русский, English, 中文.
+
+## Headless CLI
+
+```sh
+cargo run -p opclook-cli --target x86_64-unknown-linux-gnu -- --help
+cargo run -p opclook-cli --target x86_64-unknown-linux-gnu -- --ua opc.tcp://127.0.0.1:4840 --policy None --mode None browse i=85
+cargo run -p opclook-cli --target x86_64-unknown-linux-gnu -- --ua opc.tcp://127.0.0.1:4840 read 'ns=2;s=Level'
+cargo run -p opclook-cli --target x86_64-unknown-linux-gnu -- --ua opc.tcp://127.0.0.1:4840 write 'ns=2;s=Level' f64 42.5
+cargo run -p opclook-cli --target x86_64-unknown-linux-gnu -- --ua opc.tcp://127.0.0.1:4840 --poll --count 3 watch 'ns=2;s=Level'
+```
+
+`--help` описывает DA (`--da HOST PROGID`), UA security и bind, учётные данные
+через переменные окружения и тайм-аут. Результаты — JSON/JSONL; 64-битные
+целые и нечисловые float кодируются строками, качество и время передаются
+отдельно. CLI DA использует системную маршрутизацию. Живая проверка CLI ещё
+предстоит; ранее опубликованные цифры для прежней среды не относятся к этому
+состоянию.
 
 ## Документация
 
@@ -247,29 +247,13 @@ cargo test --test ua_smoke -- --ignored --nocapture
 
 ## Структура проекта
 
-```text
-.
-├── .cargo/config.toml      # обязательная 32-битная цель
-├── Cargo.toml / Cargo.lock
-├── LICENSE                 # MIT
-├── README.md
-├── assets/                 # иконка и её генератор
-├── docs/                   # архитектура, сеть, аудиты, тест-матрица
-│   └── images/             # логотип и скриншот для README
-├── nethelper/              # opcda-nethelper.exe
-├── scripts/                # упаковка релиза
-├── src/
-│   ├── app/                # состояние UI, сессии, диалоги
-│   ├── bff/                # Gateway, DA, UA, mDNS, сеть
-│   ├── opc/bindings/       # COM OPC DA bindings
-│   ├── ui/                 # меню, панели, дерево, таблица
-│   ├── bin/                # probe_*.rs — диагностические пробы
-│   ├── net.rs              # модель адаптеров и выбор сети
-│   ├── da_route.rs         # DA route planning/refcount/helper-клиент
-│   ├── settings.rs
-│   └── main.rs / lib.rs
-└── tests/                  # интеграционные и UI-тесты
-```
+- `crates/contract`, `crates/backend`, `crates/engine`, `crates/locale` —
+  контракт, транспорт, общий движок и локализация.
+- `crates/cli` — исполняемый headless-клиент.
+- `src/app`, `src/ui`, `src/da_route.rs` — GUI и управление DA-маршрутами.
+- `src/bin` — диагностические пробы, включаемые через `--features diagnostics`.
+- `nethelper` — привилегированный Windows helper.
+- `scripts`, `tests`, `docs` — сборка, проверки и документация.
 
 ## Лицензия
 

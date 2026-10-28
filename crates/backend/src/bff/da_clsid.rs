@@ -155,9 +155,10 @@ mod tests {
             local: Some(Err(BackendMsg::raw("not registered"))),
             ..FakeLookup::default()
         };
-        let err = resolve_clsid("plc-1", "S", &mut lookup)
-            .unwrap_err()
-            .to_string();
+        let err = crate::i18n::backend_text(
+            crate::i18n::Lang::En,
+            &resolve_clsid("plc-1", "S", &mut lookup).unwrap_err(),
+        );
         assert!(err.contains("RPC unavailable"), "{err}");
         assert!(err.contains("not registered"), "{err}");
         assert!(err.contains("plc-1"), "{err}");

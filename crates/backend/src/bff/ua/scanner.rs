@@ -1,5 +1,5 @@
 use super::discovery::build_discovery_client;
-use crate::bff::model::{Event, EventKind, UaEndpointInfo, UaServerInfo};
+use crate::bff::model::{BackendMsg, Event, EventKind, UaEndpointInfo, UaServerInfo};
 use crate::bff::net::{BoundConnectorBuilder, NetworkBinding, endpoint_url_for, tcp_probe};
 use crate::constants::{
     DEFAULT_UA_PORT, SCAN_ADDRESS_TIMEOUT, SCAN_CONFIRM_THRESHOLD, SCAN_PARALLELISM,
@@ -204,7 +204,10 @@ pub(super) async fn run_scan_job(
                 scan_id,
                 false,
                 0,
-                Some(format!("{SCAN_SUBNET_TOO_LARGE}:{}", subnet.usable_count())),
+                Some(BackendMsg::raw(format!(
+                    "{SCAN_SUBNET_TOO_LARGE}:{}",
+                    subnet.usable_count()
+                ))),
             );
             return;
         }
@@ -217,7 +220,7 @@ pub(super) async fn run_scan_job(
     let client = match build_discovery_client() {
         Ok(client) => Arc::new(client),
         Err(message) => {
-            send_scan_finished(tx, scan_id, false, 0, Some(message.to_string()));
+            send_scan_finished(tx, scan_id, false, 0, Some(message));
             return;
         }
     };
@@ -430,7 +433,7 @@ fn send_scan_finished(
     scan_id: u64,
     cancelled: bool,
     found: usize,
-    error: Option<String>,
+    error: Option<BackendMsg>,
 ) {
     send_scan_event(
         tx,

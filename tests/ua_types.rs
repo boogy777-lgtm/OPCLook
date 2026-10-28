@@ -274,7 +274,7 @@ fn ua_browse_views_lists_views_and_browsing_in_them_does_not_error() {
             EventKind::Views { children } => children,
             EventKind::Error { message, .. } => {
                 // CODESYS may not expose any Views; that is graceful.
-                println!("BrowseViews unsupported/empty: {message}");
+                println!("BrowseViews unsupported/empty: {message:?}");
                 return;
             }
             other => panic!("unexpected event: {other:?}"),
@@ -348,7 +348,7 @@ fn ua_resolve_browse_path_resolves_objects() {
                 );
             }
             EventKind::Error { message, .. } => {
-                println!("0:Objects resolve failed (server may not support it): {message}");
+                println!("0:Objects resolve failed (server may not support it): {message:?}");
             }
             other => panic!("unexpected event: {other:?}"),
         }

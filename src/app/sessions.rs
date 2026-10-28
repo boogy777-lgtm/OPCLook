@@ -1,10 +1,12 @@
 use super::*;
 use crate::bff::model::{CommandKind, EndpointSpec, Protocol, SessionId};
-use crate::constants::{
-    RECONNECT_BASE_DELAY_SECS, RECONNECT_MAX_ATTEMPTS, RECONNECT_MAX_DELAY_SECS,
-};
+use crate::constants::RECONNECT_MAX_ATTEMPTS;
+#[cfg(test)]
+use crate::constants::{RECONNECT_BASE_DELAY_SECS, RECONNECT_MAX_DELAY_SECS};
 use crate::i18n::{Tr, fmt, tr};
-use std::time::{Duration, Instant};
+#[cfg(test)]
+use std::time::Duration;
+use std::time::Instant;
 
 impl App {
     /// Unique identity used for endpoint deduplication. Two sessions are the
@@ -249,6 +251,7 @@ impl App {
             };
             (view.protocol(), view.endpoint.display_name())
         };
+        self.engine.manual_disconnect(session);
         self.send(session, protocol, CommandKind::Disconnect);
         if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
             view.state = SessionState::Disconnected;
@@ -302,6 +305,7 @@ impl App {
             }
         }
         self.sessions.retain(|s| s.id != session);
+        self.engine.remove_session(session);
         self.release_da_routes_for_session(session);
         self.journal
             .info_l(Tr::DisconnectingFrom, &[&endpoint_name]);
@@ -382,6 +386,7 @@ impl App {
                 Ok(prepared) => self.hold_da_route(session, &endpoint.host, prepared),
                 Err(error) => {
                     let message = error.localized(self.lang());
+                    self.engine.manual_disconnect(session);
                     if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
                         view.state = SessionState::Disconnected;
                         view.info = message.clone();
@@ -429,6 +434,7 @@ impl App {
     }
 
     pub fn reconnect_session(&mut self, session: SessionId) {
+        self.engine.resume_reconnect(session);
         let Some(endpoint) = self
             .sessions
             .iter()
@@ -442,6 +448,7 @@ impl App {
                 Ok(prepared) => self.hold_da_route(session, &endpoint.host, prepared),
                 Err(error) => {
                     let message = error.localized(self.lang());
+                    self.engine.manual_disconnect(session);
                     if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
                         view.state = SessionState::Disconnected;
                         view.info = message.clone();
@@ -470,6 +477,7 @@ impl App {
 
     /// Stop the automatic reconnect loop for a session (manual reconnect is still allowed).
     pub fn stop_reconnect(&mut self, session: SessionId) {
+        self.engine.stop_reconnect(session);
         if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
             view.reconnect = ReconnectState::Stopped;
             self.journal.info_l(Tr::AutoReconnectStoppedByUser, &[]);
@@ -479,6 +487,7 @@ impl App {
     /// Re-arm automatic reconnect after a manual "Возобновить попытки": reset
     /// the state to Idle and, for a disconnected session, schedule attempt 1.
     pub fn resume_reconnect(&mut self, session: SessionId) {
+        self.engine.resume_reconnect(session);
         let auto = self.settings.options.auto_reconnect;
         let disconnected = {
             let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) else {
@@ -533,6 +542,32 @@ impl App {
         }
     }
 
+    pub(super) fn log_reconnect(&mut self, session: SessionId) {
+        let Some(view) = self.sessions.iter().find(|view| view.id == session) else {
+            return;
+        };
+        match view.reconnect {
+            ReconnectState::Waiting { at, attempt } => self.journal.info_l(
+                Tr::ConnLostReconnect,
+                &[
+                    &attempt.to_string(),
+                    &RECONNECT_MAX_ATTEMPTS.to_string(),
+                    &at.saturating_duration_since(Instant::now())
+                        .as_secs()
+                        .to_string(),
+                ],
+            ),
+            ReconnectState::Exhausted => self.journal.warn_l(
+                Tr::AttemptsExhaustedFor,
+                &[
+                    &RECONNECT_MAX_ATTEMPTS.to_string(),
+                    &view.endpoint.display_name(),
+                ],
+            ),
+            _ => {}
+        }
+    }
+
     pub(super) fn schedule_reconnect(&mut self, session: SessionId) {
         if !self.settings.options.auto_reconnect {
             return;
@@ -541,26 +576,23 @@ impl App {
         let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) else {
             return;
         };
-        let base = match view.reconnect {
-            // Manual stop / exhausted require an explicit resume or reconnect.
-            ReconnectState::Stopped | ReconnectState::Exhausted => return,
-            ReconnectState::Waiting { attempt, .. } => attempt,
-            ReconnectState::Idle => 0,
+        self.engine
+            .set_auto_reconnect(self.settings.options.auto_reconnect);
+        let (attempt, delay) = match self.engine.schedule_reconnect(session, Instant::now()) {
+            opclook_engine::ReconnectScheduled::Unchanged => return,
+            opclook_engine::ReconnectScheduled::Exhausted => {
+                self.journal.warn_l(
+                    Tr::AttemptsExhaustedFor,
+                    &[&cap.to_string(), &view.endpoint.display_name()],
+                );
+                view.reconnect = ReconnectState::Exhausted;
+                return;
+            }
+            opclook_engine::ReconnectScheduled::Waiting { attempt, delay } => (attempt, delay),
         };
-        if base >= cap {
-            view.reconnect = ReconnectState::Exhausted;
-            self.journal.warn_l(
-                Tr::AttemptsExhaustedFor,
-                &[&cap.to_string(), &view.endpoint.display_name()],
-            );
-            return;
+        if let Some(runtime) = self.engine.session(session) {
+            view.reconnect = runtime.reconnect;
         }
-        let attempt = base + 1;
-        let delay = reconnect_delay(attempt);
-        view.reconnect = ReconnectState::Waiting {
-            at: Instant::now() + delay,
-            attempt,
-        };
         self.journal.info_l(
             Tr::ConnLostReconnect,
             &[
@@ -575,13 +607,9 @@ impl App {
 /// Exponential reconnect backoff: 1s, 2s, 4s, 8s, ... for attempt 1, 2, 3, 4,
 /// capped at `RECONNECT_MAX_DELAY_SECS`. Overflow-safe for absurd attempt
 /// numbers.
+#[cfg(test)]
 pub(super) fn reconnect_delay(attempt: u32) -> Duration {
-    let shift = attempt.saturating_sub(1);
-    let secs = RECONNECT_BASE_DELAY_SECS
-        .checked_shl(shift)
-        .unwrap_or(u64::MAX)
-        .min(RECONNECT_MAX_DELAY_SECS);
-    Duration::from_secs(secs)
+    opclook_engine::reconnect_delay(attempt, RECONNECT_BASE_DELAY_SECS, RECONNECT_MAX_DELAY_SECS)
 }
 
 #[cfg(test)]

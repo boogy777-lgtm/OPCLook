@@ -2,9 +2,11 @@ use super::present::{compose_server_name, localize_scan_error, operation_label};
 use super::search::{merge_ua_scan_servers, merge_ua_servers, refresh_ua_combos};
 use super::tree::{insert_children, replace_roots, set_children};
 use super::*;
+#[cfg(feature = "test-support")]
+use crate::bff::model::RequestId;
 use crate::bff::model::{
     BrowseNode, Event, EventKind, ItemInfo, ItemKey, NodeKind, Operation, Protocol, Quality,
-    QualityKind, RequestId, SessionId, SubscriptionState,
+    QualityKind, SessionId, SubscriptionState,
 };
 use crate::i18n::{Tr, backend_text, fmt, tr};
 use chrono::Utc;
@@ -12,13 +14,15 @@ use std::time::{Duration, Instant};
 
 impl App {
     pub(super) fn poll_events(&mut self) {
-        while let Some(event) = self.gateway.try_recv() {
+        while let Some(event) = self.engine.try_recv() {
             self.on_event(event);
         }
     }
 
     /// Test-only hook to feed an event directly into the app state.
+    #[cfg(feature = "test-support")]
     pub fn on_event_for_test(&mut self, kind: EventKind) {
+        self.sync_fixture_sessions();
         self.on_event(Event {
             request_id: 0,
             session: 0,
@@ -27,7 +31,9 @@ impl App {
     }
 
     /// Test-only hook to feed an event for a specific session into the app state.
+    #[cfg(feature = "test-support")]
     pub fn on_event_for_test_at(&mut self, session: SessionId, kind: EventKind) {
+        self.sync_fixture_sessions();
         self.on_event(Event {
             request_id: 0,
             session,
@@ -37,12 +43,14 @@ impl App {
 
     /// Test-only hook to feed an event with an explicit request id (used to
     /// exercise stale-reply rejection and request-id correlation).
+    #[cfg(feature = "test-support")]
     pub fn on_event_for_test_with_request(
         &mut self,
         session: SessionId,
         request_id: RequestId,
         kind: EventKind,
     ) {
+        self.sync_fixture_sessions();
         self.on_event(Event {
             request_id,
             session,
@@ -52,7 +60,9 @@ impl App {
 
     /// Test-only hook to run the per-frame update loop (browse/read/reconnect
     /// scheduling) without touching the UI.
+    #[cfg(feature = "test-support")]
     pub fn tick_for_test(&mut self) {
+        self.sync_fixture_sessions();
         self.tick();
     }
 
@@ -72,35 +82,36 @@ impl App {
         // only while its command is still outstanding. Superseded/session-old
         // replies are dropped before they can touch any state. `0` is reserved
         // for unsolicited pushes and worker runtime errors.
-        let mut ctx = PendingCtx::None;
-        if event.request_id != 0 {
-            match self.pending_requests.remove(&(session, event.request_id)) {
-                Some(pending) => {
-                    if self.settings.options.diagnostic_trace {
-                        let latency = pending.sent.elapsed().as_millis();
-                        self.journal.info_l(
-                            Tr::TraceReply,
-                            &[
-                                &event.request_id.to_string(),
-                                &operation_label(self.lang(), pending.operation),
-                                &session.to_string(),
-                                &latency.to_string(),
-                            ],
-                        );
-                    }
-                    ctx = pending.ctx;
+        self.engine
+            .set_auto_reconnect(self.settings.options.auto_reconnect);
+        let ctx = match self.engine.accept(&event) {
+            Ok(Some(pending)) => {
+                if self.settings.options.diagnostic_trace {
+                    let latency = pending.sent.elapsed().as_millis();
+                    self.journal.info_l(
+                        Tr::TraceReply,
+                        &[
+                            &event.request_id.to_string(),
+                            &operation_label(self.lang(), pending.operation),
+                            &session.to_string(),
+                            &latency.to_string(),
+                        ],
+                    );
                 }
-                None => {
-                    if self.settings.options.diagnostic_trace {
-                        self.journal.info_l(
-                            Tr::TraceDropped,
-                            &[&event.request_id.to_string(), &session.to_string()],
-                        );
-                    }
-                    return;
-                }
+                pending.ctx
             }
-        }
+            Ok(None) => PendingCtx::None,
+            Err(()) => {
+                if self.settings.options.diagnostic_trace {
+                    self.journal.info_l(
+                        Tr::TraceDropped,
+                        &[&event.request_id.to_string(), &session.to_string()],
+                    );
+                }
+                return;
+            }
+        };
+        self.project_session(session);
         let request_id = event.request_id;
         let lang = self.lang();
         match event.kind {
@@ -204,7 +215,7 @@ impl App {
                 d.ua_scan_confirm = None;
                 merge_ua_scan_servers(d);
                 if let Some(error) = error {
-                    d.ua_scan_error = Some(localize_scan_error(lang, &error));
+                    d.ua_scan_error = Some(localize_scan_error(lang, &backend_text(lang, &error)));
                 } else if cancelled {
                     d.ua_scan_error = None;
                     self.journal
@@ -549,7 +560,7 @@ impl App {
                     // is unreachable.
                     self.mark_session_rows_stale(session);
                     self.journal.info_l(Tr::ConnectedInfo, &[&name, &reason]);
-                    self.schedule_reconnect(session);
+                    self.log_reconnect(session);
                 }
             }
             EventKind::Log { message } => {
@@ -573,11 +584,8 @@ impl App {
                             // remove the half-open tab).
                             self.dialogs.connect.connecting = None;
                             self.dialogs.connect.error = Some(message.clone());
-                            if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
-                                view.reconnect = ReconnectState::Stopped;
-                            }
                         }
-                        self.schedule_reconnect(session);
+                        self.log_reconnect(session);
                     }
                     Operation::Browse => {
                         if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
@@ -601,7 +609,7 @@ impl App {
                         // A3: the link is declared dead, so the last Good values
                         // must not stay on screen as if they were live.
                         self.mark_session_rows_stale(session);
-                        self.schedule_reconnect(session);
+                        self.log_reconnect(session);
                     }
                     Operation::SearchServers => {
                         if self.dialogs.connect.open {

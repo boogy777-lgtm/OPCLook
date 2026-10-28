@@ -172,7 +172,7 @@ fn da_write_roundtrip() {
                     info.writable
                 ),
                 Err(e) => {
-                    println!("SKIP: could not add DA item {item_id}: {e}");
+                    println!("SKIP: could not add DA item {item_id}: {e:?}");
                     return;
                 }
             },

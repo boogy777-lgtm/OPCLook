@@ -234,7 +234,7 @@ fn run_search(gateway: &Gateway, session: u64, index: u32) {
                 "search {index}: no servers found on 127.0.0.1"
             );
         }
-        EventKind::Error { message, .. } => panic!("search {index}: failed: {message}"),
+        EventKind::Error { message, .. } => panic!("search {index}: failed: {message:?}"),
         other => panic!("search {index}: unexpected event: {other:?}"),
     }
 }

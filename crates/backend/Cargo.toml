@@ -1,0 +1,34 @@
+[package]
+name = "opclook-backend"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+
+[dependencies]
+opclook-contract = { path = "../contract" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+chrono = "0.4"
+async-opcua = { version = "0.19", features = ["client"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "net", "io-util"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61.3", features = [
+    "Win32_Foundation", "Win32_Security", "Win32_Security_Cryptography", "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage", "Win32_System_Ole", "Win32_System_Variant",
+    "Win32_System_Registry", "Win32_System_LibraryLoader", "Win32_System_Threading",
+    "Win32_System_Pipes", "Win32_System_IO", "Win32_Storage_FileSystem",
+    "Win32_Security_Authorization", "Win32_NetworkManagement_Dns",
+    "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging",
+] }
+windows-core = "0.61"
+
+[dev-dependencies]
+opclook-locale = { path = "../locale" }
+async-opcua = { version = "0.19", features = ["client", "server"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+log = "0.4"

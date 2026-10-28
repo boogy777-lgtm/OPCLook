@@ -13,7 +13,9 @@
 //! requests.
 
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
+#[cfg(test)]
+use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -30,96 +32,7 @@ use tokio::io::{ReadHalf, WriteHalf};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio_util::codec::FramedRead;
 
-/// Immutable adapter binding snapshot.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NetworkBinding {
-    /// Local source address. Its family selects which resolved remote
-    /// addresses this binding may use.
-    pub local_ip: IpAddr,
-    /// IPv4 interface index (`IfIndex`).
-    pub ipv4_if_index: Option<u32>,
-    /// IPv6 interface index (`Ipv6IfIndex`). Never the IPv4 index.
-    pub ipv6_if_index: Option<u32>,
-    /// Scope id used for IPv6 link-local addresses.
-    pub scope_id: Option<u32>,
-}
-
-impl NetworkBinding {
-    pub fn new(
-        local_ip: IpAddr,
-        ipv4_if_index: Option<u32>,
-        ipv6_if_index: Option<u32>,
-        scope_id: Option<u32>,
-    ) -> Self {
-        Self {
-            local_ip,
-            ipv4_if_index: ipv4_if_index.filter(|index| *index != 0),
-            ipv6_if_index: ipv6_if_index.filter(|index| *index != 0),
-            scope_id,
-        }
-    }
-
-    /// Loopback binding for loopback IPv4 traffic; no interface option.
-    pub fn loopback() -> Self {
-        Self::loopback_for(IpAddr::V4(Ipv4Addr::LOCALHOST))
-    }
-
-    /// Loopback binding matching the destination family; no interface option.
-    pub fn loopback_for(remote: IpAddr) -> Self {
-        let local_ip = if remote.is_ipv6() {
-            IpAddr::V6(Ipv6Addr::LOCALHOST)
-        } else {
-            IpAddr::V4(Ipv4Addr::LOCALHOST)
-        };
-        Self::new(local_ip, None, None, None)
-    }
-
-    pub fn is_loopback(&self) -> bool {
-        self.local_ip.is_loopback()
-    }
-
-    /// Interface index to apply for a remote address family.
-    pub fn interface_index_for(&self, remote: IpAddr) -> Option<u32> {
-        match remote {
-            IpAddr::V4(_) => self.ipv4_if_index,
-            IpAddr::V6(_) => self.ipv6_if_index,
-        }
-    }
-
-    /// Local ephemeral-port socket address for a same-family remote.
-    pub fn local_socket_addr(&self, remote: IpAddr) -> Option<SocketAddr> {
-        match (self.local_ip, remote) {
-            (IpAddr::V4(local), IpAddr::V4(_)) => Some(SocketAddr::new(IpAddr::V4(local), 0)),
-            (IpAddr::V6(local), IpAddr::V6(_)) => {
-                let scope = if local.is_unicast_link_local() {
-                    self.scope_id.unwrap_or(0)
-                } else {
-                    0
-                };
-                Some(SocketAddr::V6(SocketAddrV6::new(local, 0, 0, scope)))
-            }
-            _ => None,
-        }
-    }
-
-    /// Fill in the scope id for a link-local destination when the resolver did
-    /// not provide one.
-    fn prepare_remote(&self, remote: SocketAddr) -> SocketAddr {
-        match remote {
-            SocketAddr::V6(mut v6) => {
-                if v6.ip().is_unicast_link_local() && v6.scope_id() == 0 {
-                    if let Some(scope) = self.scope_id {
-                        v6.set_scope_id(scope);
-                    } else if let Some(index) = self.ipv6_if_index {
-                        v6.set_scope_id(index);
-                    }
-                }
-                SocketAddr::V6(v6)
-            }
-            SocketAddr::V4(_) => remote,
-        }
-    }
-}
+pub use opclook_contract::net::NetworkBinding;
 
 /// URL builder that brackets IPv6 literals (`opc.tcp://[::1]:4840`).
 pub(crate) fn endpoint_url_for(ip: IpAddr, port: u16) -> String {

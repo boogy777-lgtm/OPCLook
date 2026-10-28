@@ -1,10 +1,11 @@
-use crate::bff::Gateway;
 use crate::bff::model::{
-    BrowseNode, Command, CommandKind, EndpointSpec, ItemKey, Operation, Protocol, Quality,
-    QualityKind, RequestId, SessionId, SubscriptionState, Value,
+    BrowseNode, CommandKind, ItemKey, Operation, Protocol, Quality, QualityKind, SessionId,
+    SubscriptionState, Value,
 };
 use crate::bff::net::NetworkBinding;
 
+#[cfg(feature = "test-support")]
+use crate::bff::model::{EndpointSpec, RequestId};
 use crate::da_route::{DaRouteError, DaRouteManager, PreparedRoutes};
 use crate::i18n::{Lang, Tr, tr};
 use crate::journal::Journal;
@@ -14,7 +15,10 @@ use crate::net::{
 };
 use crate::settings::{CachedAdapters, Options, Settings};
 use chrono::{DateTime, Utc};
-use std::collections::{HashMap, HashSet};
+#[cfg(test)]
+use opclook_engine::PendingRequest as EnginePendingRequest;
+use opclook_engine::{DispatchError, Engine};
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 mod dialogs;
@@ -46,7 +50,7 @@ pub use view::{CHANGE_FLASH, MAX_FIELD_LINES, TableLine, is_numeric_value};
 use self::present::{is_loopback_host, operation_label};
 
 pub struct App {
-    pub gateway: Gateway,
+    engine: Engine<PendingCtx>,
     pub settings: Settings,
     /// Lazily populated adapter inventory + current network lease.
     pub network: NetworkState,
@@ -92,14 +96,12 @@ pub struct App {
     pub add_children: Option<AddChildrenJob>,
     next_session: SessionId,
     next_key: ItemKey,
-    next_request: u64,
     /// Monotonic id for streaming subnet scans (independent of request ids).
     next_scan: u64,
     /// Outstanding `(session, request_id)` pairs. Non-zero events are accepted
     /// only while their pair is present; the pair is removed on receipt. A
     /// session's entries are cleared whenever a new connect/disconnect lifecycle
     /// starts, so a reply from a superseded connection cannot mutate this one.
-    pending_requests: HashMap<(SessionId, RequestId), PendingRequest>,
     /// Result of the CJK font probe done at startup (A1).
     pub cjk_font: CjkFont,
     /// Lookup index over `rows` (A4); see `row_index.rs`.
@@ -133,14 +135,8 @@ pub(super) enum PendingCtx {
     AddKeys(Vec<ItemKey>),
 }
 
-/// One outstanding command.
-#[derive(Clone, Debug)]
-pub(super) struct PendingRequest {
-    pub operation: Operation,
-    /// When the command was handed to the worker (K1: expiry, K2: latency).
-    pub sent: Instant,
-    pub ctx: PendingCtx,
-}
+#[cfg(test)]
+type PendingRequest = EnginePendingRequest<PendingCtx>;
 
 /// Whether a font able to draw Chinese text was found at startup.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -225,7 +221,7 @@ impl App {
         let script_text = settings.script.clone();
         let lang = settings.lang();
         let mut app = Self {
-            gateway: Gateway::new(),
+            engine: Engine::default(),
             settings,
             network: NetworkState::default(),
             da_routes: DaRouteManager::new(),
@@ -258,9 +254,7 @@ impl App {
             add_children: None,
             next_session: 1,
             next_key: 1,
-            next_request: 1,
             next_scan: 1,
-            pending_requests: HashMap::new(),
             cjk_font: CjkFont::NotProbed,
             row_index: row_index::RowIndex::default(),
         };
@@ -559,6 +553,8 @@ impl App {
     }
 
     pub fn update(&mut self, ui: &mut egui::Ui) {
+        self.engine
+            .set_auto_reconnect(self.settings.options.auto_reconnect);
         self.poll_events();
         self.tick();
         self.sync_table_view();
@@ -583,9 +579,31 @@ impl App {
         kind: CommandKind,
         ctx: PendingCtx,
     ) -> u64 {
-        let request_id = self.next_request;
-        self.next_request += 1;
         let operation = kind.operation();
+        let dispatch = self.engine.send(session, protocol, kind, ctx);
+        let (request_id, failure) = match dispatch {
+            Ok(id) => (id, None),
+            Err(DispatchError::Exhausted) => {
+                self.journal.error_l(Tr::RequestIdsExhausted, &[]);
+                return 0;
+            }
+            Err(DispatchError::SessionLimit) => {
+                self.journal.error_l(
+                    Tr::UaSessionLimitReached,
+                    &[&crate::constants::MAX_UA_SESSIONS.to_string()],
+                );
+                self.status = crate::i18n::fmt(
+                    self.lang(),
+                    Tr::UaSessionLimitReached,
+                    &[&crate::constants::MAX_UA_SESSIONS.to_string()],
+                );
+                return 0;
+            }
+            Err(DispatchError::Closed {
+                request_id,
+                message,
+            }) => (request_id, Some(message)),
+        };
         if self.settings.options.diagnostic_trace {
             self.journal.info_l(
                 Tr::TraceSent,
@@ -596,30 +614,7 @@ impl App {
                 ],
             );
         }
-        // Scan commands report progress/termination through their own
-        // `scan_id`-correlated streaming events (request_id 0), so they must not
-        // reserve a request-id pending slot that no reply will ever consume.
-        let streaming = matches!(
-            &kind,
-            CommandKind::ScanUaNetwork { .. } | CommandKind::CancelUaScan { .. }
-        );
-        if request_id != 0 && !streaming {
-            self.pending_requests.insert(
-                (session, request_id),
-                PendingRequest {
-                    operation,
-                    sent: Instant::now(),
-                    ctx,
-                },
-            );
-        }
-        if let Err(message) = self.gateway.send(Command {
-            request_id,
-            session,
-            protocol,
-            kind,
-        }) {
-            self.pending_requests.remove(&(session, request_id));
+        if let Some(message) = failure {
             // A closed command channel means the protocol worker is gone, so
             // every session routed to it is dead. Surface the failure instead of
             // silently dropping the command; do not arm reconnect (a reconnect
@@ -678,14 +673,12 @@ impl App {
     /// connect/disconnect lifecycle starts so stale replies from the previous
     /// link are rejected by `on_event`.
     pub(super) fn clear_pending_requests(&mut self, session: SessionId) {
-        let mut lost_writes = 0usize;
-        self.pending_requests.retain(|(sid, _), pending| {
-            let keep = *sid != session;
-            if !keep && pending.operation == Operation::Write {
-                lost_writes += 1;
-            }
-            keep
-        });
+        let lost_writes = self
+            .engine
+            .invalidate_session_requests(session)
+            .into_iter()
+            .filter(|operation| *operation == Operation::Write)
+            .count();
         // A11: writes whose reply can no longer arrive count as failed, or the
         // batch counters would never reach zero.
         if lost_writes > 0 {
@@ -706,32 +699,58 @@ impl App {
         }
     }
 
-    /// Test-only: pretend every outstanding request of `session` was sent
-    /// `secs` seconds ago (K1 expiry without sleeping).
-    pub fn age_pending_requests_for_test(&mut self, session: SessionId, secs: u64) {
-        for ((sid, _), pending) in self.pending_requests.iter_mut() {
-            if *sid == session {
-                if let Some(earlier) = pending.sent.checked_sub(Duration::from_secs(secs)) {
-                    pending.sent = earlier;
-                }
-            }
-        }
+    #[cfg(feature = "test-support")]
+    pub fn gateway_for_test(&self) -> &crate::bff::Gateway {
+        self.engine.gateway_for_test()
     }
-
-    /// Test-only: outstanding request ids of `session` (sorted, deterministic).
+    #[cfg(feature = "test-support")]
+    pub fn age_pending_requests_for_test(&mut self, session: SessionId, secs: u64) {
+        self.engine
+            .age_requests_for_test(session, Duration::from_secs(secs));
+    }
+    #[cfg(feature = "test-support")]
     pub fn pending_request_ids_for_test(&self, session: SessionId) -> Vec<RequestId> {
-        let mut ids: Vec<RequestId> = self
-            .pending_requests
-            .keys()
-            .filter_map(|(sid, rid)| (*sid == session).then_some(*rid))
-            .collect();
-        ids.sort_unstable();
-        ids
+        self.engine.pending_ids_for_test(session)
     }
 }
 
 impl App {
+    fn project_session(&mut self, id: SessionId) {
+        let Some(runtime) = self.engine.session(id) else {
+            return;
+        };
+        if let Some(view) = self.sessions.iter_mut().find(|view| view.id == id) {
+            view.state = runtime.state;
+            view.reconnect = runtime.reconnect;
+            view.subscription = runtime.subscription;
+            view.read_in_flight = runtime.read_in_flight;
+            view.last_poll = runtime.last_poll;
+            view.last_test = runtime.last_test;
+        }
+    }
+    #[cfg(feature = "test-support")]
+    fn sync_fixture_sessions(&mut self) {
+        for view in &self.sessions {
+            let mut runtime =
+                opclook_engine::SessionRuntime::new(view.endpoint.clone(), Instant::now());
+            runtime.state = view.state;
+            runtime.reconnect = view.reconnect;
+            runtime.subscription = view.subscription;
+            runtime.read_in_flight = view.read_in_flight;
+            runtime.last_poll = view.last_poll;
+            runtime.last_test = view.last_test;
+            runtime.items = self
+                .rows
+                .iter()
+                .filter(|row| row.session == view.id)
+                .map(|row| (row.key, row.poll_only))
+                .collect();
+            self.engine.seed_session_for_test(view.id, runtime);
+        }
+    }
+
     /// Test-only seeding: append a connected session view.
+    #[cfg(feature = "test-support")]
     pub fn seed_session(&mut self, id: SessionId, endpoint: EndpointSpec) {
         self.sessions.push(SessionView {
             id,
@@ -755,6 +774,7 @@ impl App {
         });
         self.active_session = Some(id);
         self.selected_tree = None;
+        self.sync_fixture_sessions();
     }
 
     /// Test-only seeding: append a tree node and return its id.
@@ -1128,6 +1148,6 @@ impl eframe::App for App {
         for (session, protocol) in sessions {
             self.send(session, protocol, CommandKind::Disconnect);
         }
-        self.gateway.shutdown();
+        self.engine.shutdown();
     }
 }

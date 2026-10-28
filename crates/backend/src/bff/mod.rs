@@ -17,7 +17,7 @@ pub mod da_clsid;
 pub mod da_router;
 pub mod da_status;
 pub mod mdns;
-pub mod model;
+pub use opclook_contract::model;
 pub mod net;
 pub mod ua;
 pub mod vt;

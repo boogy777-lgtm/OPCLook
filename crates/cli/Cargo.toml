@@ -1,0 +1,17 @@
+[package]
+name = "opclook-cli"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+
+[dependencies]
+opclook-engine = { path = "../engine" }
+opclook-contract = { path = "../contract" }
+opclook-locale = { path = "../locale" }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "signal"] }
+
+[dev-dependencies]
+async-opcua = { version = "0.19", features = ["server"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }

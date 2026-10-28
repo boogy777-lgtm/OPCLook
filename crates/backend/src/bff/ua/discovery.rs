@@ -860,7 +860,7 @@ mod tests {
         );
         assert_eq!(search.notes.len(), 1);
         assert!(
-            search.notes[0].to_string().contains(IP),
+            crate::i18n::backend_text(crate::i18n::Lang::En, &search.notes[0]).contains(IP),
             "{:?}",
             search.notes
         );

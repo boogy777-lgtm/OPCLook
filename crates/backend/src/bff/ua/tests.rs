@@ -840,7 +840,10 @@ fn over_large_subnet_is_rejected_with_the_error_token() {
             assert_eq!(*scan_id, 9);
             assert!(!cancelled);
             assert_eq!(*found, 0);
-            let error = error.as_deref().expect("error token");
+            let error = error
+                .as_ref()
+                .map(|msg| backend_text(Lang::En, msg))
+                .expect("error token");
             assert!(
                 error.starts_with(SCAN_SUBNET_TOO_LARGE),
                 "unexpected error: {error}"
@@ -1159,7 +1162,7 @@ fn create_results_are_paired_with_their_items_and_bad_statuses_are_failures() {
     assert!(matches!(outcomes[0], (10, Ok(11))));
     assert!(matches!(
         &outcomes[1],
-        (20, Err(failure)) if failure.text().to_string().starts_with("BadNodeIdUnknown")
+        (20, Err(failure)) if backend_text(Lang::En, &failure.text()).starts_with("BadNodeIdUnknown")
     ));
     assert!(matches!(
         &outcomes[2],

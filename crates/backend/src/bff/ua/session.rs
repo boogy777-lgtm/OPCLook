@@ -1502,7 +1502,8 @@ mod build_client_tests {
                         .product_uri("urn:opcda-egui")
                         .create_sample_keypair(true)
                         .pki_dir(dir.clone());
-                    build_client(builder).map_err(|e| e.to_string())?;
+                    build_client(builder)
+                        .map_err(|e| crate::i18n::backend_text(crate::i18n::Lang::En, &e))?;
                     let store = CertificateStore::new(&dir);
                     store.read_own_cert()?;
                     CertificateStore::read_pkey(&store.own_private_key_path())?;

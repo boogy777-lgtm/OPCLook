@@ -923,8 +923,9 @@ fn hold_discovery(app: &mut App, host: &str) {
 }
 
 fn pend_discover(app: &mut App, request_id: RequestId, host: &str) {
-    app.pending_requests.insert(
-        (0, request_id),
+    app.engine.insert_pending_for_test(
+        0,
+        request_id,
         PendingRequest {
             operation: Operation::Discover,
             sent: Instant::now(),

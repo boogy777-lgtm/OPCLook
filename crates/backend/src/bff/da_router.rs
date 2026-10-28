@@ -824,7 +824,7 @@ mod tests {
         while let Ok(event) = rx.recv_timeout(Duration::from_millis(500)) {
             seen.insert(event.request_id);
             if let EventKind::Log { message } = &event.kind {
-                assert!(!message.to_string().is_empty());
+                assert!(!crate::i18n::backend_text(crate::i18n::Lang::En, &message).is_empty());
             }
         }
         // request 0 = the crash log line, 2 = the queued Test answered.

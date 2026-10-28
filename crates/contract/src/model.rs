@@ -106,15 +106,12 @@ pub struct DaServerStatus {
 /// A message of the backend (DA/UA workers, discovery, mDNS) for the user.
 ///
 /// The backend never writes display text: it sends one of these variants and
-/// the application renders it in the interface language with
-/// [`crate::i18n::backend_text`] (an exhaustive `match`, so a variant cannot
-/// miss a translation). Technical details that come from a library, the OS or
+/// the application renders it in the interface language. Technical details that come from a library, the OS or
 /// the server (a `StatusCode`, an `HRESULT`, an `io::Error`) travel as `String`
 /// substitutions and are shown as they are. [`BackendMsg::Raw`] is text that is
 /// already final (for example, the application's own localized wording).
 ///
-/// `Display` renders the English wording; it is meant for tests, logs and the
-/// probe binaries, never for the interface.
+/// Rendering is the responsibility of the frontend.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BackendMsg {
     // ---- pass-through / composition ----
@@ -540,12 +537,6 @@ impl BackendMsg {
     }
 }
 
-impl fmt::Display for BackendMsg {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&crate::i18n::backend_text(crate::i18n::Lang::En, self))
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Protocol {
     #[default]
@@ -865,7 +856,7 @@ pub struct EndpointSpec {
     /// reuse this snapshot instead of the current adapter map. Never persisted
     /// and always `None` for DA.
     #[serde(skip)]
-    pub ua_bind: Option<crate::bff::net::NetworkBinding>,
+    pub ua_bind: Option<crate::net::NetworkBinding>,
     /// The name advertised by the server itself, captured when the user selects
     /// a discovered server. UA: the application name (e.g. "Prosys OPC UA
     /// Simulation Server"); DA: the description + ProgID. `None` when a server
@@ -1220,16 +1211,18 @@ pub struct DataValue {
 }
 
 impl DataValue {
-    /// A Bad value that carries the backend's reason. `quality.text` holds the
-    /// English wording; the application replaces it with the interface language
-    /// from `reason` when the value arrives.
+    /// A Bad value carrying a typed reason. Frontends render it in their chosen
+    /// language; raw messages are also retained as quality text.
     pub fn bad(reason: BackendMsg) -> Self {
         Self {
             value: Value::Empty,
             quality: Quality {
                 code: 0,
                 kind: QualityKind::Bad,
-                text: reason.to_string(),
+                text: match &reason {
+                    BackendMsg::Raw(text) => text.clone(),
+                    _ => String::new(),
+                },
             },
             timestamp: None,
             reason: Some(reason),
@@ -1289,7 +1282,7 @@ pub struct LdsTarget {
     pub host: String,
     pub port: u16,
     /// Binding for the request to this host (loopback for a local host).
-    pub bind: crate::bff::net::NetworkBinding,
+    pub bind: crate::net::NetworkBinding,
 }
 
 impl LdsTarget {
@@ -1314,21 +1307,21 @@ pub enum CommandKind {
         port: u16,
         /// Transport binding for this search. `None` keeps the unbound
         /// `DirectConnectionSource` behavior.
-        bind: Option<crate::bff::net::NetworkBinding>,
+        bind: Option<crate::net::NetworkBinding>,
     },
     /// Discover OPC UA servers advertized via `FindServersOnNetwork` (mDNS/LDS).
     /// Without `lds` the machine's standard discovery endpoints are asked; with
     /// it, that host's LDS is asked instead. Without `bind` and with `lds`
     /// only the LDS is asked (mDNS needs an adapter).
     SearchUaNetwork {
-        bind: Option<crate::bff::net::NetworkBinding>,
+        bind: Option<crate::net::NetworkBinding>,
         lds: Option<LdsTarget>,
     },
     /// Streaming N+1 subnet scan: loopback first, then the local address and the
     /// subnet hosts. Results arrive as `UaScan*` events with `request_id: 0`.
     ScanUaNetwork {
         scan_id: u64,
-        bind: crate::bff::net::NetworkBinding,
+        bind: crate::net::NetworkBinding,
         subnet: Option<crate::net::SubnetSpec>,
         local_ip: std::net::IpAddr,
     },
@@ -1468,7 +1461,7 @@ pub enum EventKind {
         scan_id: u64,
         cancelled: bool,
         found: usize,
-        error: Option<String>,
+        error: Option<BackendMsg>,
     },
     UaEndpointsFound {
         url: String,
@@ -1579,7 +1572,7 @@ mod tests {
         assert_eq!(
             CommandKind::ScanUaNetwork {
                 scan_id: 1,
-                bind: crate::bff::net::NetworkBinding::loopback(),
+                bind: crate::net::NetworkBinding::loopback(),
                 subnet: None,
                 local_ip: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
             }
@@ -1613,7 +1606,7 @@ mod tests {
     #[test]
     fn endpoint_ua_binding_is_runtime_only_and_not_persisted() {
         let mut ep = EndpointSpec::ua("opc.tcp://192.168.1.50:4840");
-        ep.ua_bind = Some(crate::bff::net::NetworkBinding::new(
+        ep.ua_bind = Some(crate::net::NetworkBinding::new(
             "192.168.1.20".parse().unwrap(),
             Some(7),
             Some(9),

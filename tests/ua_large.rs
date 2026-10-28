@@ -127,7 +127,7 @@ fn browse(gateway: &Gateway, session: u64, node_id: &str) -> Vec<BrowseNode> {
     match event.kind {
         EventKind::Browse { children, .. } => children,
         EventKind::Error { message, .. } => {
-            panic!("browse failed for {node_id}: {message}")
+            panic!("browse failed for {node_id}: {message:?}")
         }
         other => panic!("browse {node_id}: unexpected event {other:?}"),
     }
@@ -242,7 +242,7 @@ fn add_items(gateway: &Gateway, session: u64, items: &[ItemSpec]) {
                 assert!(result.is_ok(), "add item key {key} failed: {result:?}");
             }
         }
-        EventKind::Error { message, .. } => panic!("add items failed: {message}"),
+        EventKind::Error { message, .. } => panic!("add items failed: {message:?}"),
         other => panic!("add items: unexpected event {other:?}"),
     }
 }
@@ -266,7 +266,7 @@ fn read_all(gateway: &Gateway, session: u64, keys: &[u32]) -> (Vec<(u32, DataVal
     let elapsed = started.elapsed();
     match event.kind {
         EventKind::Values { values } => (values, elapsed),
-        EventKind::Error { message, .. } => panic!("read failed: {message}"),
+        EventKind::Error { message, .. } => panic!("read failed: {message:?}"),
         other => panic!("read: unexpected event {other:?}"),
     }
 }

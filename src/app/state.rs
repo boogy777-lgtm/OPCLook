@@ -8,36 +8,7 @@ use chrono::{DateTime, Local, Utc};
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SessionState {
-    Connecting,
-    Connected,
-    Disconnected,
-}
-
-/// Automatic-reconnect state machine (one enum instead of five booleans).
-///
-/// `Waiting` carries both the scheduled instant and the 1-based attempt
-/// number. It stays `Waiting` while the resulting `Connect` is in flight (the
-/// session state is `Connecting` then) so the counter keeps showing the attempt
-/// that is being made; a failure schedules the next `Waiting`, a success moves
-/// to `Idle`. The attempt cap is the shared `RECONNECT_MAX_ATTEMPTS` constant.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ReconnectState {
-    Idle,
-    Waiting { at: Instant, attempt: u32 },
-    Stopped,
-    Exhausted,
-}
-
-impl ReconnectState {
-    pub fn attempt(self) -> u32 {
-        match self {
-            ReconnectState::Waiting { attempt, .. } => attempt,
-            _ => 0,
-        }
-    }
-}
+pub use opclook_engine::{ReconnectState, SessionState};
 
 /// Which of the bottom panels is currently displayed as a tab. Only meaningful
 /// when both `show_script` and `show_log` are enabled; otherwise the single
