@@ -69,7 +69,7 @@ struct DaSession {
     browse: Option<IOPCBrowseServerAddressSpace>,
     item_mgt: IOPCItemMgt,
     sync: IOPCSyncIO,
-    group_handle: u32,
+    group: ServerGroup,
     items: HashMap<ItemKey, ItemSlot>,
     info: BackendMsg,
 }
@@ -479,16 +479,17 @@ impl Drop for ServerStatus {
     }
 }
 
-/// Owns a newly registered group until the session takes responsibility for it.
-struct PendingServerGroup<'a> {
-    server: &'a IOPCServer,
+/// Owns a registered server group until explicit shutdown or session drop.
+struct ServerGroup {
+    server: IOPCServer,
     handle: u32,
     armed: bool,
 }
 
-impl Drop for PendingServerGroup<'_> {
-    fn drop(&mut self) {
+impl ServerGroup {
+    fn remove(&mut self) {
         if self.armed {
+            self.armed = false;
             // SAFETY: AddGroup succeeded and this guard still owns its handle.
             unsafe {
                 let _ = self.server.RemoveGroup(self.handle, true);
@@ -497,9 +498,15 @@ impl Drop for PendingServerGroup<'_> {
     }
 }
 
+impl Drop for ServerGroup {
+    fn drop(&mut self) {
+        self.remove();
+    }
+}
+
 fn create_group(
     server: &IOPCServer,
-) -> Result<(PendingServerGroup<'_>, u32, IOPCItemMgt, IOPCSyncIO), BackendMsg> {
+) -> Result<(ServerGroup, u32, IOPCItemMgt, IOPCSyncIO), BackendMsg> {
     let mut group_handle: u32 = 0;
     let mut revised: u32 = 0;
     let mut group_unknown: Option<IUnknown> = None;
@@ -524,8 +531,8 @@ fn create_group(
                 detail: e.to_string(),
             })?;
     }
-    let pending_group = PendingServerGroup {
-        server,
+    let pending_group = ServerGroup {
+        server: server.clone(),
         handle: group_handle,
         armed: true,
     };
@@ -553,8 +560,8 @@ impl DaSession {
         })?;
         let browse: Option<IOPCBrowseServerAddressSpace> = unknown.cast().ok();
 
-        let (mut pending_group, revised, item_mgt, sync) = create_group(&server)?;
-        let group_handle = pending_group.handle;
+        let (group, revised, item_mgt, sync) = create_group(&server)?;
+        let group_handle = group.handle;
 
         let mut status_info = None;
         // SAFETY: the live server transfers the GetStatus result to the caller.
@@ -595,15 +602,13 @@ impl DaSession {
                 .as_ref(),
         );
 
-        pending_group.armed = false;
-        drop(pending_group);
         Ok(Self {
             endpoint,
             server,
             browse,
             item_mgt,
             sync,
-            group_handle,
+            group,
             items: HashMap::new(),
             info,
         })
@@ -956,11 +961,8 @@ impl DaSession {
         message
     }
 
-    fn shutdown(&self) -> BackendMsg {
-        // SAFETY: this session owns the successfully registered group handle.
-        unsafe {
-            let _ = self.server.RemoveGroup(self.group_handle, true);
-        }
+    fn shutdown(mut self) -> BackendMsg {
+        self.group.remove();
         BackendMsg::ConnectionClosed
     }
 }
@@ -1319,6 +1321,24 @@ mod ownership_tests {
             create_group(&server),
             Err(BackendMsg::DaNoItemMgt { .. })
         ));
+        assert_eq!(removes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn server_group_shutdown_and_drop_remove_once() {
+        let removes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server: IOPCServer = MockServer {
+            removes: removes.clone(),
+        }
+        .into();
+        {
+            let mut group = ServerGroup {
+                server,
+                handle: 42,
+                armed: true,
+            };
+            group.remove();
+        }
         assert_eq!(removes.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
