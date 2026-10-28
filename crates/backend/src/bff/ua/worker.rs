@@ -65,11 +65,12 @@ pub(super) fn spawn(event_tx: Sender<Event>) -> crate::bff::WorkerHandle {
                         },
                     });
                     let _ = done_tx.send(());
-                    return;
+                    return crate::bff::ShutdownOutcome::Joined;
                 }
             };
             runtime.block_on(run_host(cmd_rx, event_tx));
             let _ = done_tx.send(());
+            crate::bff::ShutdownOutcome::Joined
         });
     match spawned {
         Ok(join) => crate::bff::WorkerHandle::new(cmd_tx, join, done_rx),
@@ -1220,22 +1221,22 @@ pub(super) fn reply_no_connection(tx: &Sender<Event>, command: Command) {
     }
 }
 
-/// Runs a service request with `budget`. If the budget expires, keeps polling
-/// the SAME request future for one `GRACEFUL_CLOSE_TIMEOUT` instead of dropping
-/// it, so a response that is already in flight is drained before the caller
-/// closes the session. Returns the value if the future completed at any point
-/// plus whether the caller's budget expired.
+/// Poll the same request during the grace period after its budget expires.
+/// Even a late completion is a timeout: callers must close the session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct RequestTimeout;
+
 pub(super) async fn timeout_drain<T>(
     future: impl Future<Output = T>,
     budget: Duration,
-) -> (Option<T>, bool) {
+) -> Result<T, RequestTimeout> {
     tokio::pin!(future);
     match tokio::time::timeout(budget, &mut future).await {
-        Ok(value) => (Some(value), false),
-        Err(_) => match tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, &mut future).await {
-            Ok(value) => (Some(value), true),
-            Err(_) => (None, true),
-        },
+        Ok(value) => Ok(value),
+        Err(_) => {
+            let _ = tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, &mut future).await;
+            Err(RequestTimeout)
+        }
     }
 }
 
@@ -1243,6 +1244,33 @@ pub(super) async fn timeout_drain<T>(
 mod initial_load_regression {
     use super::*;
     use crate::bff::model::Protocol;
+
+    #[test]
+    fn timeout_drains_same_future_and_discards_late_result() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let completed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let flag = completed.clone();
+            let result = timeout_drain(
+                async move {
+                    tokio::time::sleep(Duration::from_millis(30)).await;
+                    flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                    42
+                },
+                Duration::from_millis(5),
+            )
+            .await;
+            assert_eq!(result, Err(RequestTimeout));
+            assert!(completed.load(std::sync::atomic::Ordering::SeqCst));
+            assert_eq!(
+                timeout_drain(async { 7 }, Duration::from_secs(1)).await,
+                Ok(7)
+            );
+        });
+    }
 
     #[test]
     fn rejects_commands_with_mismatched_owner() {

@@ -225,7 +225,9 @@ fn send(
         .map_err(|error| match error {
             DispatchError::Exhausted => "request identifiers exhausted".into(),
             DispatchError::SessionLimit => "UA session limit reached".into(),
-            DispatchError::Closed { message, .. } => message,
+            DispatchError::Closed { cause, .. } => {
+                opclook_locale::send_error_text(Lang::En, cause).into()
+            }
         })
 }
 fn interrupt_receiver() -> Result<Receiver<Result<(), String>>, String> {
@@ -459,6 +461,29 @@ fn parse_write(kind: &str, value: &str) -> Result<Value, String> {
 fn run(options: &Options) -> Result<(), String> {
     let stop = interrupt_receiver()?;
     let mut engine = Engine::<()>::default();
+    let result = run_with_engine(options, &stop, &mut engine);
+    let shutdown = engine.shutdown();
+    let errors: Vec<String> = [("DA", shutdown.da), ("UA", shutdown.ua)]
+        .into_iter()
+        .filter_map(|(protocol, outcome)| {
+            opclook_locale::shutdown_error_text(Lang::En, protocol, outcome)
+        })
+        .collect();
+    if errors.is_empty() {
+        result
+    } else {
+        let shutdown_error = errors.join("; ");
+        match result {
+            Ok(()) => Err(shutdown_error),
+            Err(error) => Err(format!("{error}; {shutdown_error}")),
+        }
+    }
+}
+fn run_with_engine(
+    options: &Options,
+    stop: &Receiver<Result<(), String>>,
+    mut engine: &mut Engine<()>,
+) -> Result<(), String> {
     let protocol = options.endpoint.protocol;
     let command = options
         .command
@@ -481,7 +506,7 @@ fn run(options: &Options) -> Result<(), String> {
             endpoint: options.endpoint.clone(),
         },
     )?;
-    match response(&mut engine, id, options.timeout, &stop, &options.endpoint)? {
+    match response(&mut engine, id, options.timeout, stop, &options.endpoint)? {
         EventKind::Connected { .. } => {}
         _ => return Err("unexpected connect response".into()),
     }
@@ -499,7 +524,7 @@ fn run(options: &Options) -> Result<(), String> {
                 view_id: None,
             },
         )?;
-        return match response(&mut engine, id, options.timeout, &stop, &options.endpoint)? {
+        return match response(&mut engine, id, options.timeout, stop, &options.endpoint)? {
             EventKind::Browse { node_id, children } => {
                 let nodes:Vec<Json>=children.iter().map(|n|json!({"node_id":n.node_id,"name":n.name,"kind":match n.kind { opclook_contract::model::NodeKind::Branch => "branch",opclook_contract::model::NodeKind::Item => "item" },"has_children":n.has_children})).collect();
                 output(&json!({"node_id":node_id,"children":nodes}))
@@ -528,7 +553,7 @@ fn run(options: &Options) -> Result<(), String> {
             }],
         },
     )?;
-    match response(&mut engine, id, options.timeout, &stop, &options.endpoint)? {
+    match response(&mut engine, id, options.timeout, stop, &options.endpoint)? {
         EventKind::AddItems { results } => {
             for (_, result) in results {
                 if let Err(error) = result {
@@ -554,7 +579,7 @@ fn run(options: &Options) -> Result<(), String> {
                 },
             },
         )?;
-        return match response(&mut engine, id, options.timeout, &stop, &options.endpoint)? {
+        return match response(&mut engine, id, options.timeout, stop, &options.endpoint)? {
             EventKind::Wrote { result: Ok(()), .. } => {
                 output(&json!({"node_id":node,"written":true}))
             }
@@ -572,7 +597,7 @@ fn run(options: &Options) -> Result<(), String> {
                 keys: vec![ItemKey::FIRST],
             },
         )?;
-        return match response(&mut engine, id, options.timeout, &stop, &options.endpoint)? {
+        return match response(&mut engine, id, options.timeout, stop, &options.endpoint)? {
             EventKind::Values { values } => {
                 let data = values
                     .into_iter()
@@ -609,7 +634,7 @@ fn run(options: &Options) -> Result<(), String> {
                 _ => {}
             }
         }
-        if stopped(&stop)? {
+        if stopped(stop)? {
             break;
         }
         if engine.has_expired_operation(

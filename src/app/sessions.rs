@@ -474,7 +474,8 @@ impl App {
         view.read_in_flight = false;
         let protocol = endpoint.protocol;
         // Old replies belong to the previous link and must not mutate this one.
-        if let Err(message) = self.engine.disconnect_untracked(session, protocol) {
+        if let Err(cause) = self.engine.disconnect_untracked(session, protocol) {
+            let message = opclook_locale::send_error_text(self.lang(), cause).to_string();
             self.engine.manual_disconnect(session);
             if let Some(view) = self.sessions.iter_mut().find(|view| view.id == session) {
                 view.state = SessionState::Disconnected;
@@ -555,7 +556,8 @@ impl App {
         view.reconnect = ReconnectState::Idle;
         view.read_in_flight = false;
         let protocol = endpoint.protocol;
-        if let Err(message) = self.engine.disconnect_untracked(session, protocol) {
+        if let Err(cause) = self.engine.disconnect_untracked(session, protocol) {
+            let message = opclook_locale::send_error_text(self.lang(), cause).to_string();
             self.engine.manual_disconnect(session);
             if let Some(view) = self.sessions.iter_mut().find(|view| view.id == session) {
                 view.state = SessionState::Disconnected;

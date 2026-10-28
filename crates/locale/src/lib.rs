@@ -94,6 +94,10 @@ translation_keys! {
     DiagnosticTraceHint,
     DiagnosticTraceCheck,
     NoReplyFromServer,
+    WorkerPanicked,
+    WorkerTimedOut,
+    GatewayClosed,
+    WorkerClosed,
     RequestIdsExhausted,
     ScanIdsExhausted,
     SessionIdsExhausted,
@@ -783,6 +787,10 @@ fn ru(key: Tr) -> &'static str {
         }
         DiagnosticTraceCheck => "Диагностика: писать запросы и ответы в журнал",
         NoReplyFromServer => "Нет ответа от сервера за {0} с",
+        WorkerPanicked => "Рабочий поток {0} завершился с паникой",
+        WorkerTimedOut => "Истекло время завершения рабочего потока {0}",
+        GatewayClosed => "Шлюз остановлен",
+        WorkerClosed => "Канал рабочего потока закрыт",
         RequestIdsExhausted => "Исчерпаны идентификаторы запросов",
         ScanIdsExhausted => "Исчерпаны идентификаторы сканирования",
         SessionIdsExhausted => "Исчерпаны идентификаторы сессий",
@@ -1387,6 +1395,10 @@ fn en(key: Tr) -> &'static str {
         }
         DiagnosticTraceCheck => "Diagnostics: log requests and replies",
         NoReplyFromServer => "No reply from the server within {0} s",
+        WorkerPanicked => "The {0} worker panicked",
+        WorkerTimedOut => "The {0} worker did not shut down in time",
+        GatewayClosed => "Gateway is shut down",
+        WorkerClosed => "Worker command channel is closed",
         RequestIdsExhausted => "Request identifiers exhausted",
         ScanIdsExhausted => "Scan identifiers exhausted",
         SessionIdsExhausted => "Session identifiers exhausted",
@@ -1981,6 +1993,10 @@ fn zh(key: Tr) -> &'static str {
         }
         DiagnosticTraceCheck => "诊断：将请求和响应写入日志",
         NoReplyFromServer => "服务器 {0} 秒内无响应",
+        WorkerPanicked => "{0} 工作线程异常终止",
+        WorkerTimedOut => "{0} 工作线程未能及时关闭",
+        GatewayClosed => "网关已关闭",
+        WorkerClosed => "工作线程命令通道已关闭",
         RequestIdsExhausted => "请求标识符已耗尽",
         ScanIdsExhausted => "扫描标识符已耗尽",
         SessionIdsExhausted => "会话标识符已耗尽",
@@ -2580,14 +2596,56 @@ pub fn da_route_error(lang: Lang, error: &opclook_contract::da_route::DaRouteErr
     fmt(lang, Tr::DaRouteError, &[&detail])
 }
 
-/// Renders a backend message in `lang`. Exhaustive: every variant carries all
-/// three wordings, so a new variant cannot ship without a translation.
+/// Render abnormal worker shutdown for the requested interface language.
+pub fn shutdown_error_text(
+    lang: Lang,
+    protocol: &str,
+    outcome: opclook_contract::model::ShutdownOutcome,
+) -> Option<String> {
+    use opclook_contract::model::ShutdownOutcome;
+    let key = match outcome {
+        ShutdownOutcome::Joined => return None,
+        ShutdownOutcome::Panicked => Tr::WorkerPanicked,
+        ShutdownOutcome::TimedOut => Tr::WorkerTimedOut,
+    };
+    Some(fmt(lang, key, &[&protocol]))
+}
+
+pub fn send_error_text(lang: Lang, error: opclook_contract::model::SendError) -> &'static str {
+    use opclook_contract::model::SendError;
+    tr(
+        lang,
+        match error {
+            SendError::GatewayClosed => Tr::GatewayClosed,
+            SendError::WorkerClosed => Tr::WorkerClosed,
+        },
+    )
+}
+
+/// Render every backend message in the interface language.
 pub fn backend_text(lang: Lang, msg: &BackendMsg) -> String {
     use BackendMsg as M;
     match msg {
         // ---- pass-through / composition ----
         M::InvalidItemHandle => tr(lang, Tr::InvalidItemHandle).to_string(),
         M::Raw(text) => text.clone(),
+        M::SendFailed(error) => send_error_text(lang, *error).to_string(),
+        M::UaServiceError { service, detail } => {
+            use opclook_contract::model::UaService;
+            let label = match service {
+                UaService::Browse => l!(lang, "обзор", "browse", "浏览"),
+                UaService::BrowseNext => l!(lang, "продолжение обзора", "browse next", "继续浏览"),
+                UaService::BrowseViews => {
+                    l!(lang, "обзор представлений", "browse views", "浏览视图")
+                }
+                UaService::TranslatePath => {
+                    l!(lang, "разрешение пути", "translate path", "解析路径")
+                }
+                UaService::Read => l!(lang, "чтение", "read", "读取"),
+                UaService::Write => l!(lang, "запись", "write", "写入"),
+            };
+            format!("{label}: {detail}")
+        }
         M::DaRoute(error) => da_route_error(lang, error),
         M::RequestTimeout { seconds } => fmt(lang, Tr::NoReplyFromServer, &[seconds]),
         M::Context { context, cause } => {
@@ -3671,6 +3729,17 @@ mod tests {
     fn backend_samples() -> Vec<(BackendMsg, Vec<&'static str>)> {
         vec![
             (BackendMsg::Raw("§v§".to_string()), vec!["§v§"]),
+            (
+                BackendMsg::SendFailed(opclook_contract::model::SendError::WorkerClosed),
+                vec![],
+            ),
+            (
+                BackendMsg::UaServiceError {
+                    service: opclook_contract::model::UaService::Browse,
+                    detail: "§v§".into(),
+                },
+                vec!["§v§"],
+            ),
             (BackendMsg::RequestTimeout { seconds: 17 }, vec!["17"]),
             (
                 BackendMsg::DaRoute(opclook_contract::da_route::DaRouteError::NoAdapter),
@@ -4381,6 +4450,34 @@ mod tests {
                 let ru = backend_text(Lang::Ru, &msg);
                 assert!(has_cyrillic(&ru), "RU text of {msg:?} is not Russian: {ru}");
             }
+        }
+    }
+
+    #[test]
+    fn ua_service_errors_localize_every_operation_and_keep_detail() {
+        use opclook_contract::model::UaService;
+        for service in [
+            UaService::Browse,
+            UaService::BrowseNext,
+            UaService::BrowseViews,
+            UaService::TranslatePath,
+            UaService::Read,
+            UaService::Write,
+        ] {
+            let message = BackendMsg::UaServiceError {
+                service,
+                detail: "detail-marker".into(),
+            };
+            let ru = backend_text(Lang::Ru, &message);
+            let en = backend_text(Lang::En, &message);
+            let zh = backend_text(Lang::Zh, &message);
+            assert!(
+                ru.contains("detail-marker")
+                    && en.contains("detail-marker")
+                    && zh.contains("detail-marker")
+            );
+            assert_ne!(ru, en);
+            assert_ne!(zh, en);
         }
     }
 

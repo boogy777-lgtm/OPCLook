@@ -5,8 +5,8 @@ use opclook_backend::net::AdapterInfo;
 use opclook_backend::route_service::{RouteService, RouteTicket};
 use opclook_contract::da_route::{DaRouteError, DaRouteStatus};
 use opclook_contract::model::{
-    BackendMsg, Command, CommandKind, EndpointSpec, Event, EventKind, ItemKey, Operation, Origin,
-    Owner, Protocol, RequestId, SessionId, SubscriptionState,
+    BackendMsg, Command, CommandKind, EndpointSpec, Event, EventKind, GatewayShutdown, ItemKey,
+    Operation, Origin, Owner, Protocol, RequestId, SendError, SessionId, SubscriptionState,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
@@ -144,7 +144,7 @@ pub enum DispatchError {
     SessionLimit,
     Closed {
         request_id: RequestId,
-        message: String,
+        cause: SendError,
     },
 }
 pub struct RouteOptions {
@@ -312,9 +312,7 @@ impl<C> Engine<C> {
                             origin: Origin::Reply(deferred.request_id),
                             kind: EventKind::Error {
                                 operation,
-                                message: BackendMsg::DaRoute(DaRouteError::HelperUnavailable(
-                                    message,
-                                )),
+                                message: BackendMsg::SendFailed(message),
                             },
                         }),
                     }
@@ -418,11 +416,11 @@ impl<C> Engine<C> {
                 .iter()
                 .any(|item| item.owner == Owner::Session(session))
     }
-    fn dispatch(&self, command: Command) -> Result<(), String> {
+    fn dispatch(&self, command: Command) -> Result<(), SendError> {
         #[cfg(feature = "test-support")]
         if let Some(left) = self.test_dispatch_limit.get() {
             if left == 0 {
-                return Err("test worker closed".into());
+                return Err(SendError::WorkerClosed);
             }
             self.test_dispatch_limit.set(Some(left - 1));
             self.test_dispatched.borrow_mut().push(command);
@@ -439,7 +437,7 @@ impl<C> Engine<C> {
         &mut self,
         session: SessionId,
         protocol: Protocol,
-    ) -> Result<(), String> {
+    ) -> Result<(), SendError> {
         self.dispatch(Command {
             request_id: None,
             owner: Owner::Session(session),
@@ -523,7 +521,7 @@ impl<C> Engine<C> {
                 },
             );
         }
-        if let Err(message) = self.dispatch(Command {
+        if let Err(cause) = self.dispatch(Command {
             request_id: Some(id),
             owner,
             protocol,
@@ -542,7 +540,7 @@ impl<C> Engine<C> {
             }
             return Err(DispatchError::Closed {
                 request_id: id,
-                message,
+                cause,
             });
         }
         if let (Some(endpoint), Some(session)) = (endpoint, session) {
@@ -978,7 +976,7 @@ impl<C> Engine<C> {
         }
         Some(event)
     }
-    pub fn shutdown(&mut self) {
+    pub fn shutdown(&mut self) -> GatewayShutdown {
         self.deferred_routes.clear();
         self.session_routes.clear();
         self.discovery_routes.clear();
@@ -987,7 +985,7 @@ impl<C> Engine<C> {
         self.pending_adds.clear();
         self.timeout_queued.clear();
         self.route_service = None;
-        self.gateway.shutdown();
+        self.gateway.shutdown()
     }
     #[cfg(feature = "test-support")]
     pub fn seed_da_route_for_test(
@@ -1827,7 +1825,10 @@ mod tests {
                 CommandKind::Connect { endpoint },
                 ()
             ),
-            Err(DispatchError::Closed { .. })
+            Err(DispatchError::Closed {
+                cause: SendError::GatewayClosed,
+                ..
+            })
         ));
     }
     #[test]

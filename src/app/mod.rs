@@ -605,10 +605,10 @@ impl App {
                 );
                 return None;
             }
-            Err(DispatchError::Closed {
+            Err(DispatchError::Closed { request_id, cause }) => (
                 request_id,
-                message,
-            }) => (request_id, Some(message)),
+                Some(opclook_locale::send_error_text(self.lang(), cause).to_string()),
+            ),
         };
         if self.settings.options.diagnostic_trace {
             self.journal.info_l(
@@ -1094,6 +1094,26 @@ impl eframe::App for App {
         for (session, protocol) in sessions {
             let _ = self.engine.disconnect_untracked(session, protocol);
         }
-        self.engine.shutdown();
+        let outcome = self.engine.shutdown();
+        let errors = shutdown_messages(self.lang(), outcome);
+        if !errors.is_empty() {
+            rfd::MessageDialog::new()
+                .set_title("OPCLook")
+                .set_description(errors.join("\n"))
+                .set_level(rfd::MessageLevel::Error)
+                .show();
+        }
     }
+}
+
+fn shutdown_messages(
+    lang: opclook_locale::Lang,
+    outcome: opclook_contract::model::GatewayShutdown,
+) -> Vec<String> {
+    [("DA", outcome.da), ("UA", outcome.ua)]
+        .into_iter()
+        .filter_map(|(protocol, result)| {
+            opclook_locale::shutdown_error_text(lang, protocol, result)
+        })
+        .collect()
 }

@@ -2659,6 +2659,7 @@ dependencies = [
  "log",
  "opcda-egui",
  "opclook-backend",
+ "opclook-contract",
  "opclook-engine",
  "opclook-locale",
  "rfd",

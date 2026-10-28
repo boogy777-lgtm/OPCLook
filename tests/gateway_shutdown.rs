@@ -1,9 +1,9 @@
-﻿//! Gateway lifecycle invariants: a closed command channel is reported instead
+//! Gateway lifecycle invariants: a closed command channel is reported instead
 //! of silently dropping commands, and shutdown joins the workers within a bound.
 
 mod support;
 
-use opcda_egui::bff::{Command, CommandKind, Gateway, Protocol};
+use opcda_egui::bff::{Command, CommandKind, Gateway, Protocol, SendError};
 use std::time::{Duration, Instant};
 use support::dfb::Dfb;
 
@@ -21,11 +21,8 @@ fn send_after_shutdown_returns_error() {
     let mut gateway = Gateway::new();
     Dfb::shutdown(&mut gateway);
 
-    let error = gateway.input(test_command()).unwrap_err();
-    assert!(
-        error.contains("shut down"),
-        "expected a shutdown error, got: {error}"
-    );
+    assert_eq!(gateway.send(test_command()), Err(SendError::GatewayClosed));
+    assert!(gateway.input(test_command()).is_err());
     assert!(
         gateway.output(Duration::from_millis(10)).is_none(),
         "a shut-down block must not emit protocol output"

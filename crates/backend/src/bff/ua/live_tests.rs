@@ -974,8 +974,9 @@ fn u1_shutdown_closes_live_sessions_and_pending_connects_promptly() {
     std::thread::sleep(Duration::from_millis(300));
 
     let started = Instant::now();
-    assert!(
+    assert_eq!(
         app.worker.shutdown(Duration::from_secs(10)),
+        crate::bff::ShutdownOutcome::Joined,
         "worker must finish within the shutdown budget"
     );
     assert!(

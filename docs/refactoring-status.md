@@ -532,3 +532,37 @@ exact-head CI не проверены. Структурные пункты те�
 
 Измерено на Linux: GUI unit 208/208, headless UI interactions 148/148
 (1 ignored). `cargo fmt --all -- --check` прошёл.
+
+
+## Подэтап E core (2026-10-28)
+
+`SendError` сохраняет причину закрытия через Gateway и Engine; GUI и CLI
+локализуют её, в том числе отказ отложенного DA dispatch. UA service errors
+несут операцию и исходные детали, переводы покрывают RU/EN/ZH. Парсер LDS
+различает некорректный host и необходимость адаптера. Таймаут UA продолжает
+ожидать тот же future в течение grace; поздний ответ остаётся таймаутом и
+ведёт к закрытию сессии.
+
+Закрываются оба command-канала до ожидания; join возможен только после
+`is_finished`, включая ранний done и его отключение. `ShutdownOutcome`
+различает Joined/Panicked/TimedOut; DA router сохраняет ошибки дочерних join,
+GUI показывает локализованный диалог при нештатном завершении, CLI сообщает
+об ошибке. Linux all-targets и Windows i686 workspace all-targets прошли
+проверку типов; Windows resources и helper manifest отключены только для
+typecheck. Windows diagnostics bins также прошли typecheck. Это не выполнение
+Windows и не проверка физического DA/UAC. B15 live proxy, CSV-диагностика,
+F/G/H и финальный exact-head CI остаются открыты.
+
+Измерено на Linux: backend library 212/212 (включая live UA), engine 22/22,
+locale 11/11; диагностические binaries прошли typecheck на Linux и Windows.
+Отдельные shutdown-регрессии 4/4. Эти результаты не заменяют финальный CI.
+
+Дополнительно измерено: GUI unit 209/209, gateway 2/2, UI interactions
+148/148 (1 Windows-only ignored), DA discovery cleanup panic regression 1/1.
+
+Release использует стандартный `panic = "unwind"`: при `abort` ни join, ни
+catch_unwind не могли бы сообщить о панике. Это может увеличить размер
+бинарника; размер не измерен.
+Измерено: CLI unit 6/6 и live 2/2 на Linux; Windows i686 contract release
+`--print cfg` подтвердил `panic="unwind"`. Полный release binary не собран,
+размер не измерен.

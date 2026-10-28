@@ -189,13 +189,13 @@ impl App {
     /// field is empty. An unusable text or a missing adapter (for a non-local
     /// host) leaves a localized error in the dialog and returns `Err`. The
     /// text is remembered in the settings.
-    fn lds_target_from_dialog(&mut self) -> Result<Option<LdsTarget>, ()> {
+    fn lds_target_from_dialog(&mut self) -> Result<Option<LdsTarget>, LdsInputError> {
         let text = self.dialogs.connect.ua_lds_host.trim().to_string();
         let parsed = match parse_lds_host(&text) {
             Ok(parsed) => parsed,
-            Err(()) => {
+            Err(_) => {
                 self.dialogs.connect.error = Some(tr(self.lang(), Tr::LdsHostInvalid).to_string());
-                return Err(());
+                return Err(LdsInputError::InvalidHost);
             }
         };
         let Some((host, port)) = parsed else {
@@ -205,7 +205,7 @@ impl App {
         let Some(bind) = self.search_binding(&host) else {
             self.dialogs.connect.error =
                 Some(tr(self.lang(), Tr::SelectAdapterRequired).to_string());
-            return Err(());
+            return Err(LdsInputError::AdapterRequired);
         };
         self.settings.set_ua_lds_host(&text);
         Ok(Some(LdsTarget { host, port, bind }))
@@ -623,7 +623,13 @@ pub(super) fn refresh_ua_combos(dialog: &mut ConnectDialog) {
 /// Parse the LDS host field: empty -> `Ok(None)`; otherwise `host[:port]` (an
 /// IPv6 literal in brackets, an optional `opc.tcp://` prefix and trailing `/`
 /// are tolerated). The port defaults to 4840.
-pub(crate) fn parse_lds_host(text: &str) -> Result<Option<(String, u16)>, ()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LdsInputError {
+    InvalidHost,
+    AdapterRequired,
+}
+
+pub(crate) fn parse_lds_host(text: &str) -> Result<Option<(String, u16)>, LdsInputError> {
     let rest = text.trim();
     if rest.is_empty() {
         return Ok(None);
@@ -640,14 +646,14 @@ pub(crate) fn parse_lds_host(text: &str) -> Result<Option<(String, u16)>, ()> {
     };
     let url = candidate
         .parse::<crate::bff::model::UaUrl>()
-        .map_err(|_| ())?;
+        .map_err(|_| LdsInputError::InvalidHost)?;
     if !url.is_authority_only()
         || !url
             .host()
             .chars()
             .all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | ':'))
     {
-        return Err(());
+        return Err(LdsInputError::InvalidHost);
     }
     Ok(Some((url.host().to_owned(), url.port())))
 }

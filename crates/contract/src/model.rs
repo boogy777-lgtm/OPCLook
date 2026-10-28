@@ -263,6 +263,38 @@ pub struct DaServerStatus {
     pub vendor: String,
 }
 
+/// Failure to deliver a command to a backend worker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SendError {
+    #[error("gateway is shut down")]
+    GatewayClosed,
+    #[error("worker command channel is closed")]
+    WorkerClosed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShutdownOutcome {
+    Joined,
+    Panicked,
+    TimedOut,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GatewayShutdown {
+    pub da: ShutdownOutcome,
+    pub ua: ShutdownOutcome,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UaService {
+    Browse,
+    BrowseNext,
+    BrowseViews,
+    TranslatePath,
+    Read,
+    Write,
+}
+
 /// A message of the backend (DA/UA workers, discovery, mDNS) for the user.
 ///
 /// The backend never writes display text: it sends one of these variants and
@@ -277,6 +309,11 @@ pub enum BackendMsg {
     InvalidItemHandle,
     // ---- pass-through / composition ----
     Raw(String),
+    SendFailed(SendError),
+    UaServiceError {
+        service: UaService,
+        detail: String,
+    },
     DaRoute(crate::da_route::DaRouteError),
     RequestTimeout {
         seconds: u64,

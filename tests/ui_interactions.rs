@@ -4646,7 +4646,7 @@ fn on_exit_shuts_down_the_gateway() {
                 kind: CommandKind::Test,
             })
             .unwrap_err();
-        assert!(error.contains("shut down"), "unexpected error: {error}");
+        assert_eq!(error, opcda_egui::bff::SendError::GatewayClosed);
     });
 }
 

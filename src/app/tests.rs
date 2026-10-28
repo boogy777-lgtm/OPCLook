@@ -1927,7 +1927,11 @@ fn u15_lds_host_text_is_parsed_with_the_default_port() {
         "ho/st",
         ":4840",
     ] {
-        assert_eq!(parse_lds_host(bad), Err(()), "{bad:?}");
+        assert_eq!(
+            parse_lds_host(bad),
+            Err(super::search::LdsInputError::InvalidHost),
+            "{bad:?}"
+        );
     }
 }
 
@@ -2528,4 +2532,33 @@ fn session_kind_tracks_endpoint_and_preserves_ua_selection_on_metadata_update() 
     assert_eq!(ua.ua_view_id, None);
     assert_eq!(ua.ua_browse_filter, crate::bff::model::NodeClassFilter::All);
     assert_eq!(ua.subscription, SubscriptionState::Inactive);
+}
+
+#[test]
+fn abnormal_shutdown_messages_are_localized_and_normal_shutdown_is_silent() {
+    use opclook_contract::model::{GatewayShutdown, ShutdownOutcome};
+    use opclook_locale::Lang;
+    let normal = GatewayShutdown {
+        da: ShutdownOutcome::Joined,
+        ua: ShutdownOutcome::Joined,
+    };
+    assert!(super::shutdown_messages(Lang::En, normal).is_empty());
+    let failed = GatewayShutdown {
+        da: ShutdownOutcome::Panicked,
+        ua: ShutdownOutcome::TimedOut,
+    };
+    for lang in Lang::ALL {
+        let messages = super::shutdown_messages(lang, failed);
+        assert_eq!(messages.len(), 2);
+        assert!(messages[0].contains("DA"));
+        assert!(messages[1].contains("UA"));
+    }
+    assert_ne!(
+        super::shutdown_messages(Lang::Ru, failed),
+        super::shutdown_messages(Lang::En, failed)
+    );
+    assert_ne!(
+        super::shutdown_messages(Lang::Zh, failed),
+        super::shutdown_messages(Lang::En, failed)
+    );
 }

@@ -241,14 +241,12 @@ impl UaSession {
                 .await?;
             Ok::<_, opcua::types::Error>((session, tree))
         };
-        let (result, timed_out) = timeout_drain(work, STRUCT_TYPES_TIMEOUT).await;
-        let Some(result) = result else {
-            // The build never finished, even after the drain: a request may
-            // still be in flight, so the session is closed like any timeout.
+        let result = timeout_drain(work, STRUCT_TYPES_TIMEOUT).await;
+        let Ok(result) = result else {
+            // A late response is still a timeout; never reuse the session.
             self.timed_out = true;
             return Err(BackendMsg::TimeoutStructTypes);
         };
-        let _ = timed_out;
         let (session, tree) = result.map_err(|e| BackendMsg::raw(e.to_string()))?;
         let tree = Arc::new(tree);
         session.add_type_loader(Arc::new(DynamicTypeLoader::new(tree.clone())));
@@ -515,7 +513,7 @@ impl UaSession {
                     },
                 });
             });
-        let (created, timed_out) = timeout_drain(
+        let created = timeout_drain(
             self.session.create_subscription(
                 interval,
                 UA_SUBSCRIPTION_LIFETIME_COUNT,
@@ -528,11 +526,8 @@ impl UaSession {
             IO_TIMEOUT,
         )
         .await;
-        if timed_out {
+        let Ok(created) = created else {
             self.timed_out = true;
-            return Err(BackendMsg::TimeoutCreateSubscription);
-        }
-        let Some(created) = created else {
             return Err(BackendMsg::TimeoutCreateSubscription);
         };
         let sub_id = created.map_err(|e| BackendMsg::CreateSubscriptionFailed {
@@ -571,7 +566,7 @@ impl UaSession {
         if interval_ms != self.applied_interval_ms {
             let mut all_applied = true;
             for sub_id in self.subscriptions.clone() {
-                let (modified, timed_out) = timeout_drain(
+                let modified = timeout_drain(
                     self.session.modify_subscription(
                         sub_id,
                         Duration::from_millis(interval_ms),
@@ -583,7 +578,7 @@ impl UaSession {
                     IO_TIMEOUT,
                 )
                 .await;
-                if timed_out {
+                if modified.is_err() {
                     self.timed_out = true;
                     problems.push(BackendMsg::SubscriptionProblem {
                         cause: Box::new(BackendMsg::TimeoutPublishingInterval),
@@ -591,8 +586,8 @@ impl UaSession {
                     return problems;
                 }
                 match modified {
-                    Some(Ok(())) => {}
-                    Some(Err(e)) => {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
                         all_applied = false;
                         problems.push(BackendMsg::SubscriptionProblem {
                             cause: Box::new(BackendMsg::ChangeIntervalFailed {
@@ -600,7 +595,7 @@ impl UaSession {
                             }),
                         });
                     }
-                    None => all_applied = false,
+                    Err(_) => all_applied = false,
                 }
             }
             if all_applied {
@@ -649,7 +644,7 @@ impl UaSession {
                         },
                     })
                     .collect();
-                let (modified, timed_out) = timeout_drain(
+                let modified = timeout_drain(
                     self.session.modify_monitored_items(
                         sub_id,
                         TimestampsToReturn::Both,
@@ -658,7 +653,7 @@ impl UaSession {
                     IO_TIMEOUT,
                 )
                 .await;
-                if timed_out {
+                if modified.is_err() {
                     self.timed_out = true;
                     problems.push(BackendMsg::SubscriptionProblem {
                         cause: Box::new(BackendMsg::TimeoutDeadband),
@@ -666,7 +661,7 @@ impl UaSession {
                     return problems;
                 }
                 match modified {
-                    Some(Ok(results)) => {
+                    Ok(Ok(results)) => {
                         for (index, (key, id)) in chunk.iter().enumerate() {
                             let status = results.get(index).map(|r| r.status_code);
                             match status {
@@ -685,7 +680,7 @@ impl UaSession {
                             let _ = id;
                         }
                     }
-                    Some(Err(e)) => {
+                    Ok(Err(e)) => {
                         problems.push(BackendMsg::SubscriptionProblem {
                             cause: Box::new(BackendMsg::ChangeDeadbandFailed {
                                 detail: e.to_string(),
@@ -693,7 +688,7 @@ impl UaSession {
                         });
                         return problems;
                     }
-                    None => return problems,
+                    Err(_) => return problems,
                 }
             }
             if failed > 0 {
@@ -749,7 +744,7 @@ impl UaSession {
             };
             let requests: Vec<MonitoredItemCreateRequest> =
                 chunk.iter().map(|(_, request)| request.clone()).collect();
-            let (created, timed_out) = timeout_drain(
+            let created = timeout_drain(
                 self.session.create_monitored_items(
                     subscription_id,
                     TimestampsToReturn::Both,
@@ -758,12 +753,12 @@ impl UaSession {
                 IO_TIMEOUT,
             )
             .await;
-            let failure = if timed_out {
+            let failure = if created.is_err() {
                 self.timed_out = true;
                 Some(BackendMsg::TimeoutMonitoredItems)
             } else {
                 match created {
-                    Some(Ok(results)) => {
+                    Ok(Ok(results)) => {
                         let keys: Vec<ItemKey> = chunk.iter().map(|(key, _)| *key).collect();
                         let statuses: Vec<(StatusCode, u32)> = results
                             .iter()
@@ -773,20 +768,20 @@ impl UaSession {
                         start += size;
                         None
                     }
-                    Some(Err(e)) if is_too_many_operations(e.status()) && size > 1 => {
+                    Ok(Err(e)) if is_too_many_operations(e.status()) && size > 1 => {
                         self.monitor_chunk = (size / 2).max(1);
                         continue;
                     }
-                    Some(Err(e)) if is_too_many_monitored(e.status()) => {
+                    Ok(Err(e)) if is_too_many_monitored(e.status()) => {
                         for (key, _) in round.iter().skip(start) {
                             out.push((*key, Err(ItemFailure::Status(e.status()))));
                         }
                         break;
                     }
-                    Some(Err(e)) => Some(BackendMsg::MonitorFailed {
+                    Ok(Err(e)) => Some(BackendMsg::MonitorFailed {
                         detail: e.to_string(),
                     }),
-                    None => Some(BackendMsg::TimeoutMonitoredItems),
+                    Err(_) => Some(BackendMsg::TimeoutMonitoredItems),
                 }
             };
             if let Some(reason) = failure {
@@ -975,18 +970,18 @@ impl UaSession {
         }
         'subs: for (sub_id, ids) in by_sub {
             for chunk in ids.chunks(READ_MAX_ITEMS_PER_CALL.max(1)) {
-                let (delete_result, timed_out) = timeout_drain(
+                let delete_result = timeout_drain(
                     self.session.delete_monitored_items(sub_id, chunk),
                     IO_TIMEOUT,
                 )
                 .await;
-                if timed_out {
+                if delete_result.is_err() {
                     self.timed_out = true;
                     poisoned = true;
                     break 'subs;
                 }
                 match delete_result {
-                    Some(Ok(statuses)) => {
+                    Ok(Ok(statuses)) => {
                         let bad = statuses
                             .iter()
                             .filter(|s| {
@@ -1001,7 +996,7 @@ impl UaSession {
                             });
                         }
                     }
-                    Some(Err(e)) => {
+                    Ok(Err(e)) => {
                         problems.push(BackendMsg::SubscriptionProblem {
                             cause: Box::new(BackendMsg::DeleteFailed {
                                 detail: e.to_string(),
@@ -1009,7 +1004,7 @@ impl UaSession {
                         });
                         break 'subs;
                     }
-                    None => break 'subs,
+                    Err(_) => break 'subs,
                 }
             }
         }
@@ -1041,9 +1036,8 @@ impl UaSession {
             if self.timed_out {
                 break;
             }
-            let (_, timed_out) =
-                timeout_drain(self.session.delete_subscription(sub_id), IO_TIMEOUT).await;
-            if timed_out {
+            let result = timeout_drain(self.session.delete_subscription(sub_id), IO_TIMEOUT).await;
+            if result.is_err() {
                 self.timed_out = true;
             }
         }

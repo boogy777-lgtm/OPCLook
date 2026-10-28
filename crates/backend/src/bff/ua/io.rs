@@ -54,20 +54,21 @@ pub(super) async fn browse(
         result_mask: BrowseResultMaskFlags::all().bits(),
     };
 
-    let (browse_result, timed_out) = timeout_drain(
+    let browse_result = timeout_drain(
         session
             .session
             .browse(&[description], BROWSE_MAX_REFERENCES_PER_NODE, view),
         IO_TIMEOUT,
     )
     .await;
-    if timed_out {
+    let Ok(browse_result) = browse_result else {
         session.timed_out = true;
         return Err(BackendMsg::TimeoutBrowse);
-    }
-    let mut results = browse_result
-        .expect("request future completes unless it timed out")
-        .map_err(|e| BackendMsg::raw(format!("browse: {e}")))?;
+    };
+    let mut results = browse_result.map_err(|e| BackendMsg::UaServiceError {
+        service: crate::bff::model::UaService::Browse,
+        detail: e.to_string(),
+    })?;
 
     let mut nodes = Vec::new();
     let mut seen = HashSet::new();
@@ -127,23 +128,24 @@ pub(super) async fn browse(
             .collect();
         if points.is_empty() || nodes.len() >= MAX_BROWSE_NODES {
             if !points.is_empty() {
-                let (_, release_timed_out) =
+                let release =
                     timeout_drain(session.session.browse_next(true, &points), IO_TIMEOUT).await;
-                if release_timed_out {
+                if release.is_err() {
                     session.timed_out = true;
                 }
             }
             break;
         }
-        let (next_result, next_timed_out) =
+        let next_result =
             timeout_drain(session.session.browse_next(false, &points), IO_TIMEOUT).await;
-        if next_timed_out {
+        let Ok(next_result) = next_result else {
             session.timed_out = true;
             return Err(BackendMsg::TimeoutBrowseNext);
-        }
-        results = next_result
-            .expect("request future completes unless it timed out")
-            .map_err(|e| BackendMsg::raw(format!("browse_next: {e}")))?;
+        };
+        results = next_result.map_err(|e| BackendMsg::UaServiceError {
+            service: crate::bff::model::UaService::BrowseNext,
+            detail: e.to_string(),
+        })?;
     }
 
     Ok(nodes)
@@ -161,20 +163,21 @@ pub(super) async fn browse_views(session: &mut UaSession) -> Result<Vec<BrowseNo
         node_class_mask: 0,
         result_mask: BrowseResultMaskFlags::all().bits(),
     };
-    let (views_result, timed_out) = timeout_drain(
+    let views_result = timeout_drain(
         session
             .session
             .browse(&[description], BROWSE_MAX_REFERENCES_PER_NODE, None),
         IO_TIMEOUT,
     )
     .await;
-    if timed_out {
+    let Ok(views_result) = views_result else {
         session.timed_out = true;
         return Err(BackendMsg::TimeoutViews);
-    }
-    let results = views_result
-        .expect("request future completes unless it timed out")
-        .map_err(|e| BackendMsg::raw(format!("browse views: {e}")))?;
+    };
+    let results = views_result.map_err(|e| BackendMsg::UaServiceError {
+        service: crate::bff::model::UaService::BrowseViews,
+        detail: e.to_string(),
+    })?;
 
     let mut nodes = Vec::new();
     let mut seen = HashSet::new();
@@ -241,20 +244,21 @@ pub(super) async fn resolve_browse_path(
             elements: Some(elements),
         },
     };
-    let (path_result, timed_out) = timeout_drain(
+    let path_result = timeout_drain(
         session
             .session
             .translate_browse_paths_to_node_ids(&[browse_path]),
         IO_TIMEOUT,
     )
     .await;
-    if timed_out {
+    let Ok(path_result) = path_result else {
         session.timed_out = true;
         return Err(BackendMsg::TimeoutResolvePath);
-    }
-    let results = path_result
-        .expect("request future completes unless it timed out")
-        .map_err(|e| BackendMsg::raw(format!("translate browse path: {e}")))?;
+    };
+    let results = path_result.map_err(|e| BackendMsg::UaServiceError {
+        service: crate::bff::model::UaService::TranslatePath,
+        detail: e.to_string(),
+    })?;
 
     let mut targets = Vec::new();
     for result in &results {
@@ -332,15 +336,20 @@ pub(super) async fn read_values_chunked(
 ) -> Result<Vec<UaDataValue>, BackendMsg> {
     let mut values = Vec::with_capacity(requests.len());
     for chunk in requests.chunks(READ_MAX_ITEMS_PER_CALL.max(1)) {
-        let (chunk_result, timed_out) =
+        let chunk_result =
             timeout_drain(session.session.read(chunk, timestamps, max_age), IO_TIMEOUT).await;
-        if timed_out {
+        let Ok(chunk_result) = chunk_result else {
             session.timed_out = true;
             return Err(BackendMsg::TimeoutRead);
-        }
-        match chunk_result.expect("request future completes unless it timed out") {
+        };
+        match chunk_result {
             Ok(mut chunk_values) => values.append(&mut chunk_values),
-            Err(e) => return Err(BackendMsg::Raw(e.to_string())),
+            Err(e) => {
+                return Err(BackendMsg::UaServiceError {
+                    service: crate::bff::model::UaService::Read,
+                    detail: e.to_string(),
+                });
+            }
         }
     }
     Ok(values)
@@ -434,15 +443,15 @@ pub(super) async fn write(
         index_range: NumericRange::None,
         value,
     };
-    let (write_result, timed_out) =
-        timeout_drain(session.session.write(&[write]), IO_TIMEOUT).await;
-    if timed_out {
+    let write_result = timeout_drain(session.session.write(&[write]), IO_TIMEOUT).await;
+    let Ok(write_result) = write_result else {
         session.timed_out = true;
         return Err(BackendMsg::TimeoutWrite);
-    }
-    let result = write_result
-        .expect("request future completes unless it timed out")
-        .map_err(|e| BackendMsg::raw(format!("write: {e}")))?;
+    };
+    let result = write_result.map_err(|e| BackendMsg::UaServiceError {
+        service: crate::bff::model::UaService::Write,
+        detail: e.to_string(),
+    })?;
     match result.first() {
         Some(status) if status.is_bad() => Err(BackendMsg::WriteRejected {
             status: format!("{} (0x{:08X})", status.to_string(), status.bits()),

@@ -18,6 +18,7 @@ pub(crate) fn spawn(event_tx: Sender<Event>) -> super::WorkerHandle {
                 reply(command, &event_tx);
             }
             let _ = done_tx.send(());
+            super::ShutdownOutcome::Joined
         });
     match join {
         Ok(join) => super::WorkerHandle::new(cmd_tx, join, done_rx),

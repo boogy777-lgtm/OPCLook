@@ -449,3 +449,25 @@ Windows i686 GUI all-targets прошёл только typecheck с test-only п
 
 Измерено на Linux: GUI unit 208/208, headless UI interactions 148/148
 (1 ignored). `cargo fmt --all -- --check` прошёл.
+
+
+### 2026-10-28 — E core: typed errors and bounded shutdown
+
+Ошибки send и UA-сервисов типизированы и локализованы; LDS возвращает
+причину отказа. Поздний UA-ответ дренируется тем же future и остаётся
+таймаутом. Shutdown закрывает оба канала до ожидания, не join-ит живой
+thread после done, передаёт Joined/Panicked/TimedOut в UI и CLI. DA router
+сохраняет панику дочернего join как typed outcome, без повторной паники.
+Linux all-targets, Windows i686 workspace all-targets и Windows diagnostics
+bins прошли typecheck; Windows resource/manifest флаги только для проверки.
+Windows runtime, DA/UAC, live B15 proxy, CSV и exact-head CI остаются открыты.
+
+Измерено: Linux backend 212/212, engine 22/22, locale 11/11; отдельные
+shutdown-регрессии 4/4. Диагностические binaries прошли Linux и Windows
+typecheck; реальное выполнение Windows не проверено.
+GUI unit 209/209, gateway 2/2, UI interactions 148/148 (1 Windows-only
+ignored), отдельная регрессия DA discovery cleanup panic 1/1.
+Release profile перешёл с `panic = "abort"` на стандартный unwind, чтобы
+паники worker могли быть обнаружены; размер бинарника может вырасти (не измерен).
+CLI unit 6/6 и live 2/2 прошли на Linux; Windows i686 contract release cfg
+подтвердил `panic="unwind"`. Полная release-сборка и её размер не проверены.

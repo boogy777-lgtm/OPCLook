@@ -1,8 +1,15 @@
 # Статус
 
+**2026-10-28, E core:** отправка команд, ошибки UA-сервисов, разбор LDS и
+завершение воркеров типизированы. Командные каналы закрываются до ожидания;
+ошибки завершения показываются в GUI/CLI. Linux all-targets и Windows i686
+workspace all-targets typecheck прошли; Windows проверка использовала test-only
+пропуск ресурсов и manifest и не является runtime-проверкой. B15 live proxy,
+CSV-диагностика, F/G/H, реальный DA/UAC и финальный exact-head CI открыты.
+Подробные проверки — в `docs/refactoring-status.md` и `docs/devlog.md`.
+
 **Windows CI:** исправление владения VARIANT прошло полный Windows CI на
-предыдущем head `7f`; для `5217` Linux прошёл, Windows COM/shared/lib/helper
-прошли, integration выполнялся на момент этой записи. Текущий head требует
+предыдущем head `7f`; для `5217` завершились Linux и Windows CI. Текущий head требует
 отдельного полного exact-head CI перед слиянием.
 
 **2026-10-28, продолжение этапа D:** COM/WinAPI ownership и safety lint

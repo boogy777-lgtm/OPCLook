@@ -161,6 +161,12 @@ struct SessionHandle {
     join: JoinHandle<()>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct RouterShutdown {
+    pub detached: usize,
+    pub panicked: bool,
+}
+
 /// Router state: the registry of live sessions and the helper threads.
 pub struct Router<H: DaHost> {
     host: Arc<H>,
@@ -170,6 +176,7 @@ pub struct Router<H: DaHost> {
     /// down) or ended on their own; joined at shutdown.
     retired: Vec<JoinHandle<()>>,
     discoveries: Vec<JoinHandle<()>>,
+    panicked: bool,
 }
 
 impl<H: DaHost> Router<H> {
@@ -180,6 +187,7 @@ impl<H: DaHost> Router<H> {
             sessions: HashMap::new(),
             retired: Vec::new(),
             discoveries: Vec::new(),
+            panicked: false,
         }
     }
 
@@ -205,8 +213,20 @@ impl<H: DaHost> Router<H> {
                 self.retired.push(handle.join);
             }
         }
-        reap_finished(&mut self.retired);
-        reap_finished(&mut self.discoveries);
+        for message in [
+            reap_finished(&mut self.retired).then_some(BackendMsg::DaSessionThreadCrashed),
+            reap_finished(&mut self.discoveries).then_some(BackendMsg::DaDiscoveryCrashed),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            self.send(Event {
+                origin: crate::bff::model::Origin::Unsolicited,
+                owner: Owner::Discovery,
+                kind: EventKind::Log { message },
+            });
+            self.panicked = true;
+        }
     }
 
     /// Route one command. Never blocks on a session or on COM.
@@ -379,8 +399,8 @@ impl<H: DaHost> Router<H> {
 
     /// Gateway shutdown: close every session channel (each session thread then
     /// removes its group) and wait for the threads until `budget` runs out.
-    /// Returns how many threads were still running and were left detached.
-    pub fn shutdown(mut self, budget: Duration) -> usize {
+    /// Reports detached threads and whether any child panicked.
+    pub fn shutdown(mut self, budget: Duration) -> RouterShutdown {
         let mut handles: Vec<JoinHandle<()>> = Vec::new();
         for (_, handle) in self.sessions.drain() {
             drop(handle.tx);
@@ -388,27 +408,31 @@ impl<H: DaHost> Router<H> {
         }
         handles.append(&mut self.retired);
         handles.append(&mut self.discoveries);
-        join_until(handles, Instant::now() + budget)
+        let detached = join_until(handles, Instant::now() + budget, &mut self.panicked);
+        RouterShutdown {
+            detached,
+            panicked: self.panicked,
+        }
     }
 }
 
-fn reap_finished(handles: &mut Vec<JoinHandle<()>>) {
+fn reap_finished(handles: &mut Vec<JoinHandle<()>>) -> bool {
     let mut keep = Vec::with_capacity(handles.len());
+    let mut panicked = false;
     for handle in handles.drain(..) {
         if handle.is_finished() {
-            let _ = handle.join();
+            panicked |= handle.join().is_err();
         } else {
             keep.push(handle);
         }
     }
     *handles = keep;
+    panicked
 }
 
-/// Join the threads that finish before `deadline`; the rest are detached.
-/// Returns the number of detached threads.
-pub fn join_until(mut handles: Vec<JoinHandle<()>>, deadline: Instant) -> usize {
+fn join_until(mut handles: Vec<JoinHandle<()>>, deadline: Instant, panicked: &mut bool) -> usize {
     loop {
-        reap_finished(&mut handles);
+        *panicked |= reap_finished(&mut handles);
         if handles.is_empty() {
             return 0;
         }
@@ -426,12 +450,19 @@ pub fn run_router<H: DaHost>(
     mut commands: UnboundedReceiver<Command>,
     events: Sender<Event>,
     join_budget: Duration,
-) {
+) -> super::ShutdownOutcome {
     let mut router = Router::new(host, events);
     while let Some(command) = commands.blocking_recv() {
         router.dispatch(command);
     }
-    router.shutdown(join_budget);
+    let report = router.shutdown(join_budget);
+    if report.panicked {
+        super::ShutdownOutcome::Panicked
+    } else if report.detached > 0 {
+        super::ShutdownOutcome::TimedOut
+    } else {
+        super::ShutdownOutcome::Joined
+    }
 }
 
 #[cfg(test)]
@@ -884,7 +915,13 @@ mod tests {
             assert!(matches!(next(&rx).kind, EventKind::Connected { .. }));
         }
         let detached = router.shutdown(WAIT);
-        assert_eq!(detached, 0);
+        assert_eq!(
+            detached,
+            RouterShutdown {
+                detached: 0,
+                panicked: false
+            }
+        );
         assert_eq!(host.torn_down(), vec![sid(1), sid(2), sid(3)]);
     }
 
@@ -895,9 +932,58 @@ mod tests {
         router.dispatch(connect(1, sid(1), "block"));
         let started = Instant::now();
         let detached = router.shutdown(Duration::from_millis(150));
-        assert_eq!(detached, 1);
+        assert_eq!(
+            detached,
+            RouterShutdown {
+                detached: 1,
+                panicked: false
+            }
+        );
         assert!(started.elapsed() < Duration::from_secs(3));
         release.send(()).unwrap();
+    }
+
+    #[test]
+    fn reaped_discovery_panic_is_reported_and_retained_for_shutdown() {
+        let (host, _release, _d) = MockHost::new();
+        let (mut router, rx) = router_with(host);
+        let thread = std::thread::spawn(|| panic!("discovery cleanup failed"));
+        let deadline = Instant::now() + WAIT;
+        while !thread.is_finished() {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        router.discoveries.push(thread);
+        router.reap();
+        assert!(matches!(
+            next(&rx).kind,
+            EventKind::Log {
+                message: BackendMsg::DaDiscoveryCrashed
+            }
+        ));
+        assert_eq!(
+            router.shutdown(WAIT),
+            RouterShutdown {
+                detached: 0,
+                panicked: true
+            }
+        );
+    }
+
+    #[test]
+    fn router_propagates_child_panic_after_join() {
+        let (host, _release, _d) = MockHost::new();
+        let (mut router, _rx) = router_with(host);
+        router
+            .retired
+            .push(std::thread::spawn(|| panic!("cleanup failed")));
+        assert_eq!(
+            router.shutdown(WAIT),
+            RouterShutdown {
+                detached: 0,
+                panicked: true
+            }
+        );
     }
 
     #[test]

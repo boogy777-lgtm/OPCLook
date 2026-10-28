@@ -170,8 +170,9 @@ pub(crate) fn spawn(event_tx: Sender<Event>) -> super::WorkerHandle {
                     },
                 );
             }
-            run_router(Arc::new(WinDaHost), cmd_rx, event_tx, SESSION_JOIN_BUDGET);
+            let outcome = run_router(Arc::new(WinDaHost), cmd_rx, event_tx, SESSION_JOIN_BUDGET);
             let _ = done_tx.send(());
+            outcome
         });
     match join {
         Ok(join) => super::WorkerHandle::new(cmd_tx, join, done_rx),
