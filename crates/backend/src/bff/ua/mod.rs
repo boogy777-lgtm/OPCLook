@@ -1,3 +1,4 @@
+mod common;
 mod discovery;
 mod io;
 #[cfg(test)]

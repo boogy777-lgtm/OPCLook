@@ -17,17 +17,16 @@
 //! session and closes it gracefully, and closing the command channel closes every
 //! session on the wire.
 
+use super::common::{reply_no_connection, send, send_error, send_notes};
 use super::discovery::{search_network_servers, search_servers};
 use super::io::{browse, browse_views, read, resolve_browse_path, test, write};
 use super::scanner::{ScanRegistry, abort_all_scans, cancel_scan, start_scan_task};
 use super::session::{UaSession, connect};
 use crate::bff::model::{
-    BackendMsg, Command, CommandKind, DataValue, EndpointSpec, Event, EventKind, Operation, Owner,
-    SessionId,
+    BackendMsg, Command, CommandKind, EndpointSpec, Event, EventKind, Operation, Owner, SessionId,
 };
-use crate::constants::{GRACEFUL_CLOSE_TIMEOUT, UA_HOST_RUNTIME_THREADS, UA_SESSION_BACKLOG_LIMIT};
+use crate::constants::{UA_HOST_RUNTIME_THREADS, UA_SESSION_BACKLOG_LIMIT};
 use std::collections::{HashMap, VecDeque};
-use std::future::Future;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -1140,108 +1139,9 @@ impl Actor {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Shared helpers
-// ---------------------------------------------------------------------------
-
-pub(super) fn send(tx: &Sender<Event>, event: Event) {
-    let _ = tx.send(event);
-}
-
-/// Diagnostics of a search or scan as journal lines. They are unsolicited
-/// (without a request ID), so they never take the place of the request's own reply.
-fn send_notes(tx: &Sender<Event>, owner: Owner, notes: Vec<BackendMsg>) {
-    for message in notes {
-        send(
-            tx,
-            Event {
-                origin: crate::bff::model::Origin::Unsolicited,
-                owner,
-                kind: EventKind::Log { message },
-            },
-        );
-    }
-}
-
-fn send_error(
-    tx: &Sender<Event>,
-    request_id: Option<crate::bff::model::RequestId>,
-    owner: impl Into<Owner>,
-    operation: Operation,
-    message: BackendMsg,
-) {
-    send(
-        tx,
-        Event {
-            origin: request_id.into(),
-            owner: owner.into(),
-            kind: EventKind::Error { operation, message },
-        },
-    );
-}
-
-/// Answers a command addressed to a session that is not (or no longer)
-/// connected. Exactly one reply per command; `Disconnect` has nothing to close
-/// and stays silent.
-pub(super) fn reply_no_connection(tx: &Sender<Event>, command: Command) {
-    let Command {
-        request_id,
-        owner,
-        kind,
-        ..
-    } = command;
-    let error = |operation: Operation| {
-        send_error(tx, request_id, owner, operation, BackendMsg::NoConnection);
-    };
-    match kind {
-        CommandKind::Browse { .. } => error(Operation::Browse),
-        CommandKind::BrowseViews => error(Operation::BrowseViews),
-        CommandKind::ResolveBrowsePath { .. } => error(Operation::ResolveBrowsePath),
-        CommandKind::ConfigureUaSubscription { .. } => error(Operation::Subscription),
-        CommandKind::AddItems { .. } => error(Operation::Add),
-        CommandKind::RemoveItems { .. } => error(Operation::Remove),
-        CommandKind::Write { .. } => error(Operation::Write),
-        CommandKind::Test => error(Operation::Test),
-        CommandKind::Read { keys } => send(
-            tx,
-            Event {
-                origin: request_id.into(),
-                owner,
-                kind: EventKind::Values {
-                    values: keys
-                        .into_iter()
-                        .map(|key| (key, DataValue::bad(BackendMsg::NoConnection)))
-                        .collect(),
-                },
-            },
-        ),
-        CommandKind::Disconnect => {}
-        CommandKind::Connect { .. } => error(Operation::Connect),
-        other => error(other.operation()),
-    }
-}
-
-/// Poll the same request during the grace period after its budget expires.
-/// Even a late completion is a timeout: callers must close the session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct RequestTimeout;
-
-pub(super) async fn timeout_drain<T>(
-    future: impl Future<Output = T>,
-    budget: Duration,
-) -> Result<T, RequestTimeout> {
-    tokio::pin!(future);
-    match tokio::time::timeout(budget, &mut future).await {
-        Ok(value) => Ok(value),
-        Err(_) => {
-            let _ = tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, &mut future).await;
-            Err(RequestTimeout)
-        }
-    }
-}
-
 #[cfg(test)]
 mod initial_load_regression {
+    use super::super::common::{RequestTimeout, timeout_drain};
     use super::*;
     use crate::bff::model::Protocol;
 

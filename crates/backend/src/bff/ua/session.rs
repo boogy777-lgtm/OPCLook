@@ -1,3 +1,4 @@
+use super::common::{send, timeout_drain};
 use super::discovery::build_discovery_client;
 use super::io::read_values_chunked;
 use super::security::{
@@ -8,7 +9,6 @@ use super::values::{
     data_change_filter, parse_node, ua_access_current_write, ua_data_value_typed, ua_type_name,
     ua_variant_scalar,
 };
-use super::worker::{send, timeout_drain};
 use crate::bff::model::{
     BackendMsg, EndpointSpec, Event, EventKind, ItemInfo, ItemKey, ItemSpec, SessionId,
     SubscriptionState, UaEndpointInfo, UaSecurityPolicy,
@@ -41,7 +41,7 @@ use tokio_util::sync::CancellationToken;
 pub(super) struct UaSession {
     pub(super) session: Arc<Session>,
     pub(super) event_loop: JoinHandle<StatusCode>,
-    pub(super) items: HashMap<ItemKey, String>,
+    pub(super) items: HashMap<ItemKey, NodeId>,
     /// UA built-in variant scalar type of each subscribed node, resolved from
     /// the node's DataType attribute when the attribute could be read.
     pub(super) node_types: HashMap<ItemKey, VariantScalarTypeId>,
@@ -319,7 +319,7 @@ impl UaSession {
                 index_range: NumericRange::None,
                 data_encoding: QualifiedName::null(),
             });
-            self.items.insert(item.key, item.item_id.clone());
+            self.items.insert(item.key, node.clone());
             plan.push((item.key, node));
         }
 
@@ -868,8 +868,14 @@ impl UaSession {
             .collect();
         let mut overflow: Vec<(ItemKey, NodeId)> = Vec::new();
         let mut retry: Vec<(ItemKey, NodeId)> = Vec::new();
+        // Preserve the first occurrence for duplicate keys, as the former
+        // linear lookup did, while resolving each result in constant time.
+        let mut node_by_key = HashMap::with_capacity(nodes.len());
+        for (key, node) in nodes {
+            node_by_key.entry(*key).or_insert(node);
+        }
         for (key, result) in self.create_round(subscription_id, &round, tx).await {
-            let node = nodes.iter().find(|(k, _)| *k == key).map(|(_, n)| n);
+            let node = node_by_key.get(&key).copied();
             match result {
                 Ok(id) => {
                     self.monitored.insert(key, (subscription_id, id));
@@ -897,6 +903,10 @@ impl UaSession {
                 .iter()
                 .map(|(key, node)| (*key, self.monitor_request(*key, node, false)))
                 .collect();
+            let mut retry_by_key = HashMap::with_capacity(retry.len());
+            for (key, node) in &retry {
+                retry_by_key.entry(*key).or_insert(node);
+            }
             for (key, result) in self.create_round(subscription_id, &round, tx).await {
                 match result {
                     Ok(id) => {
@@ -904,8 +914,8 @@ impl UaSession {
                         self.unfiltered.insert(key);
                     }
                     Err(ItemFailure::Status(status)) if is_too_many_monitored(status) => {
-                        if let Some((_, node)) = retry.iter().find(|(k, _)| *k == key) {
-                            overflow.push((key, node.clone()));
+                        if let Some(node) = retry_by_key.get(&key) {
+                            overflow.push((key, (*node).clone()));
                         }
                     }
                     Err(failure) => outcome.rejected.push((key, failure.text())),

@@ -532,6 +532,68 @@ fn u2_malformed_node_id_is_an_error_not_a_silent_ok() {
 }
 
 #[test]
+fn added_node_is_reused_for_reads_and_writes() {
+    let server = TestServer::start(48698);
+    let mut app = Harness::new();
+    let session = SessionId::FIRST;
+    let key = ItemKey::FIRST;
+    app.connect(session, Harness::endpoint(&server.url))
+        .expect("connect");
+    let results = app.add_items(
+        session,
+        &[
+            (key, format!("  {}  ", server.node("Level"))),
+            (ItemKey::new(2).unwrap(), "invalid".into()),
+        ],
+    );
+    assert!(matches!(&results[0].1, Ok(_)), "{results:?}");
+    assert!(
+        matches!(&results[1].1, Err(BackendMsg::InvalidNodeId { .. })),
+        "{results:?}"
+    );
+    for value in [7.5, 9.5] {
+        server.set("Level", Variant::Double(value));
+        let id = app.send(
+            session.into(),
+            CommandKind::Read {
+                keys: vec![key, ItemKey::new(2).unwrap()],
+            },
+        );
+        let reply = app.reply(id, Duration::from_secs(10)).expect("read");
+        let EventKind::Values { values } = reply.kind else {
+            panic!("unexpected read reply")
+        };
+        assert_eq!(values[0].1.value, Value::F64(value));
+        assert!(matches!(
+            values[1].1.reason,
+            Some(BackendMsg::NodeNotSubscribed)
+        ));
+    }
+    let id = app.send(
+        session.into(),
+        CommandKind::Write {
+            request: crate::bff::model::WriteRequest {
+                key,
+                value: Value::F64(12.5),
+                type_hint: None,
+            },
+        },
+    );
+    let reply = app.reply(id, Duration::from_secs(10)).expect("write");
+    assert!(
+        matches!(reply.kind, EventKind::Wrote { result: Ok(()), .. }),
+        "{reply:?}"
+    );
+    let id = app.send(session.into(), CommandKind::Read { keys: vec![key] });
+    let reply = app
+        .reply(id, Duration::from_secs(10))
+        .expect("read after write");
+    assert!(
+        matches!(reply.kind, EventKind::Values { values } if values[0].1.value == Value::F64(12.5))
+    );
+}
+
+#[test]
 fn u2_no_monitored_item_means_no_active_subscription() {
     use crate::bff::model::SubscriptionState;
     let server = TestServer::start(48603);

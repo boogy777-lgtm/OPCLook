@@ -1,6 +1,6 @@
+use super::common::timeout_drain;
 use super::session::UaSession;
 use super::values::{parse_node, ua_data_value_typed, value_to_ua_variant};
-use super::worker::timeout_drain;
 use crate::bff::model::{
     BackendMsg, BrowseNode, DataValue, ItemKey, NodeClassFilter, NodeKind, WriteRequest,
 };
@@ -359,15 +359,12 @@ pub(super) async fn read(session: &mut UaSession, keys: &[ItemKey]) -> Vec<(Item
     let mut requests = Vec::new();
     let mut index_of: HashMap<ItemKey, usize> = HashMap::new();
     for key in keys {
-        let Some(node_text) = session.items.get(key) else {
-            continue;
-        };
-        let Some(node_id) = parse_node(node_text) else {
+        let Some(node_id) = session.items.get(key) else {
             continue;
         };
         index_of.insert(*key, requests.len());
         requests.push(ReadValueId {
-            node_id,
+            node_id: node_id.clone(),
             attribute_id: AttributeId::Value as u32,
             index_range: NumericRange::None,
             data_encoding: QualifiedName::null(),
@@ -420,13 +417,11 @@ pub(super) async fn write(
     session: &mut UaSession,
     request: WriteRequest,
 ) -> Result<(), BackendMsg> {
-    let node_text = session
+    let node_id = session
         .items
         .get(&request.key)
-        .ok_or(BackendMsg::NodeNotSubscribed)?;
-    let node_id = parse_node(node_text).ok_or_else(|| BackendMsg::InvalidNodeId {
-        value: node_text.to_string(),
-    })?;
+        .ok_or(BackendMsg::NodeNotSubscribed)?
+        .clone();
     let data_type = session.node_types.get(&request.key).copied();
     let variant = value_to_ua_variant(&request.value, data_type)?;
     let value = UaDataValue {
