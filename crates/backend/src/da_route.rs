@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Classify the existing route state.
@@ -130,11 +131,12 @@ pub struct RouteKey {
     pub adapter: AdapterId,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct LeaseEntry {
     plan: RoutePlan,
     count: usize,
     owned: bool,
+    identity: Arc<()>,
 }
 
 /// Pure refcount table keyed by `(IP, adapter)`.
@@ -154,7 +156,7 @@ impl RouteLeases {
         self.entries.get(key).map(|entry| entry.plan)
     }
 
-    fn acquire(&mut self, plan: RoutePlan, adapter: AdapterId, owned: bool) {
+    fn acquire(&mut self, plan: RoutePlan, adapter: AdapterId, owned: bool) -> Arc<()> {
         let key = RouteKey {
             target: plan.target,
             adapter,
@@ -163,19 +165,24 @@ impl RouteLeases {
             plan,
             count: 0,
             owned,
+            identity: Arc::new(()),
         });
         entry.count += 1;
         if owned {
             entry.owned = true;
             entry.plan = plan;
         }
+        Arc::clone(&entry.identity)
     }
 
     /// Drop one reference. Returns `Some((plan, owned))` only when the last
     /// reference is gone, so the caller knows whether the helper route must be
     /// removed.
-    fn release(&mut self, key: &RouteKey) -> Option<(RoutePlan, bool)> {
+    fn release(&mut self, key: &RouteKey, identity: &Arc<()>) -> Option<(RoutePlan, bool)> {
         let entry = self.entries.get_mut(key)?;
+        if !Arc::ptr_eq(&entry.identity, identity) {
+            return None;
+        }
         entry.count = entry.count.saturating_sub(1);
         if entry.count > 0 {
             return None;
@@ -193,10 +200,10 @@ impl RouteLeases {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct PreparedRoutes {
     pub targets: Vec<IpAddr>,
-    keys: Vec<RouteKey>,
+    keys: Vec<(RouteKey, Arc<()>)>,
 }
 
 impl PreparedRoutes {
@@ -469,9 +476,9 @@ impl DaRouteManager {
                 let Some(plan) = self.leases.plan(&key) else {
                     continue;
                 };
-                self.leases.acquire(plan, adapter.id, false);
+                let identity = self.leases.acquire(plan, adapter.id, false);
                 prepared.targets.push(target);
-                prepared.keys.push(key);
+                prepared.keys.push((key, identity));
                 continue;
             }
             if let Err(error) = validate_target(target) {
@@ -484,9 +491,9 @@ impl DaRouteManager {
             match route_decision(adapter.luid, best, host_route) {
                 RouteDecision::Reuse => {
                     let plan = reuse_plan(target, adapter);
-                    self.leases.acquire(plan, adapter.id, false);
+                    let identity = self.leases.acquire(plan, adapter.id, false);
                     prepared.targets.push(target);
-                    prepared.keys.push(key);
+                    prepared.keys.push((key, identity));
                 }
                 RouteDecision::Conflict => {
                     self.release_prepared(&mut prepared);
@@ -533,9 +540,9 @@ impl DaRouteManager {
                         self.last_error = Some(error.clone());
                         return Err(error);
                     }
-                    self.leases.acquire(plan, adapter.id, true);
+                    let identity = self.leases.acquire(plan, adapter.id, true);
                     prepared.targets.push(target);
-                    prepared.keys.push(key);
+                    prepared.keys.push((key, identity));
                 }
             }
         }
@@ -584,8 +591,8 @@ impl DaRouteManager {
     }
 
     fn release_prepared(&mut self, prepared: &mut PreparedRoutes) {
-        for key in prepared.keys.drain(..) {
-            if let Some((plan, owned)) = self.leases.release(&key) {
+        for (key, identity) in prepared.keys.drain(..) {
+            if let Some((plan, owned)) = self.leases.release(&key, &identity) {
                 if owned {
                     if self
                         .helper
@@ -1092,6 +1099,31 @@ mod tests {
             1
         );
     }
+    #[test]
+    fn old_lease_cannot_release_reacquired_route_after_helper_loss() {
+        let mut manager = super::DaRouteManager::new();
+        let adapter = super::AdapterId::UNSPECIFIED;
+        let plan = super::RoutePlan {
+            target: "10.0.0.1".parse().unwrap(),
+            prefix: 32,
+            interface_luid: 1,
+            next_hop: "0.0.0.0".parse().unwrap(),
+            via_gateway: false,
+        };
+        let key = super::RouteKey {
+            target: plan.target,
+            adapter,
+        };
+        let old = manager.leases.acquire(plan, adapter, true);
+        let prepared = super::PreparedRoutes {
+            targets: vec![plan.target],
+            keys: vec![(key, old)],
+        };
+        manager.invalidate_helper();
+        let _new = manager.leases.acquire(plan, adapter, true);
+        manager.release(prepared);
+        assert_eq!(manager.leases.count(&key), 1);
+    }
     #[cfg(windows)]
     #[test]
     fn pipe_server_process_is_verified_before_use() {
@@ -1288,11 +1320,11 @@ mod tests {
             adapter: AdapterId::parse("11111111-1111-1111-1111-111111111111").unwrap(),
         };
         let mut leases = RouteLeases::default();
-        leases.acquire(plan, key.adapter, true);
-        leases.acquire(plan, key.adapter, false);
+        let first = leases.acquire(plan, key.adapter, true);
+        let second = leases.acquire(plan, key.adapter, false);
         assert_eq!(leases.count(&key), 2);
-        assert!(leases.release(&key).is_none());
-        let released = leases.release(&key).expect("last reference");
+        assert!(leases.release(&key, &first).is_none());
+        let released = leases.release(&key, &second).expect("last reference");
         assert!(released.1, "route was helper-owned");
         assert_eq!(leases.count(&key), 0);
     }
