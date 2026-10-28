@@ -320,11 +320,27 @@ unsafe fn write_scalar(
     Ok(())
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, Default)]
+struct ArrayDestroyObservation {
+    calls: usize,
+    unlocked: bool,
+    first_is_bstr: bool,
+    destroyed: bool,
+}
+
+#[cfg(test)]
+thread_local! {
+    static ARRAY_DESTROY_OBSERVATION: std::cell::Cell<Option<ArrayDestroyObservation>> = const { std::cell::Cell::new(None) };
+}
+
 /// Owns a newly created SAFEARRAY until ownership is transferred to a VARIANT.
 struct SafeArrayBuilder {
     ptr: *mut windows::Win32::System::Com::SAFEARRAY,
     locked: bool,
     accessed: bool,
+    #[cfg(test)]
+    element_vt: u16,
 }
 
 impl SafeArrayBuilder {
@@ -355,11 +371,53 @@ impl Drop for SafeArrayBuilder {
     fn drop(&mut self) {
         self.release_access();
         if !self.ptr.is_null() {
+            #[cfg(test)]
+            let observed = if self.element_vt == 12 {
+                observe_variant_array_before_destroy(self.ptr)
+            } else {
+                None
+            };
             // SAFETY: this guard owns the array and has balanced both locks.
-            unsafe {
-                let _ = SafeArrayDestroy(self.ptr);
+            let destroyed = unsafe { SafeArrayDestroy(self.ptr) };
+            #[cfg(test)]
+            if let Some((unlocked, first_is_bstr)) = observed {
+                ARRAY_DESTROY_OBSERVATION.with(|slot| {
+                    if let Some(mut observation) = slot.get() {
+                        observation.calls += 1;
+                        observation.unlocked = unlocked;
+                        observation.first_is_bstr = first_is_bstr;
+                        observation.destroyed = destroyed.is_ok();
+                        slot.set(Some(observation));
+                    }
+                });
             }
+            #[cfg(not(test))]
+            let _ = destroyed;
         }
+    }
+}
+
+#[cfg(test)]
+fn observe_variant_array_before_destroy(
+    ptr: *mut windows::Win32::System::Com::SAFEARRAY,
+) -> Option<(bool, bool)> {
+    if !ARRAY_DESTROY_OBSERVATION.with(|slot| slot.get().is_some()) {
+        return None;
+    }
+    // SAFETY: the live owned array was created as a one-dimensional VARIANT
+    // vector; reading its descriptor and first slot is valid until destruction.
+    unsafe {
+        let unlocked = (*ptr).cLocks == 0;
+        let mut data = std::ptr::null_mut();
+        let mut first_is_bstr = false;
+        if (*ptr).rgsabound[0].cElements > 0 && SafeArrayAccessData(ptr, &raw mut data).is_ok() {
+            if !data.is_null() {
+                let first = &*data.cast::<VARIANT>();
+                first_is_bstr = first.Anonymous.Anonymous.vt.0 == VT_BSTR.0;
+            }
+            let _ = SafeArrayUnaccessData(ptr);
+        }
+        Some((unlocked, first_is_bstr))
     }
 }
 
@@ -389,6 +447,8 @@ fn build_array_variant(
         ptr: psa,
         locked: false,
         accessed: false,
+        #[cfg(test)]
+        element_vt,
     };
     let element_size: usize = match element_vt {
         16 | 17 => 1,
@@ -589,7 +649,13 @@ mod tests {
             Value::Str("allocated first".into()),
             Value::Array(vec![Value::I64(1), Value::Str("not an integer".into())]),
         ]);
+        ARRAY_DESTROY_OBSERVATION.with(|slot| slot.set(Some(ArrayDestroyObservation::default())));
         assert!(build_array_variant(&value, 12, 12 | 0x2000).is_err());
+        let observation = ARRAY_DESTROY_OBSERVATION.with(|slot| slot.take()).unwrap();
+        assert_eq!(observation.calls, 1);
+        assert!(observation.unlocked);
+        assert!(observation.first_is_bstr);
+        assert!(observation.destroyed);
     }
 
     #[test]
