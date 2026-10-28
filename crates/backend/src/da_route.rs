@@ -676,7 +676,7 @@ impl Drop for DaRouteManager {
     }
 }
 
-fn resolve_targets(host: &str) -> Result<Vec<IpAddr>, DaRouteError> {
+pub(crate) fn resolve_targets(host: &str) -> Result<Vec<IpAddr>, DaRouteError> {
     let host = host.trim();
     if host.is_empty() {
         return Ok(Vec::new());
