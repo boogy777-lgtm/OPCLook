@@ -117,6 +117,9 @@ pub enum BackendMsg {
     // ---- pass-through / composition ----
     Raw(String),
     DaRoute(crate::da_route::DaRouteError),
+    RequestTimeout {
+        seconds: u64,
+    },
     Context {
         context: String,
         cause: Box<BackendMsg>,

@@ -114,7 +114,20 @@ impl App {
         self.project_session(session);
         let request_id = event.request_id;
         let lang = self.lang();
-        match event.kind {
+        let kind = match (event.kind, &ctx) {
+            (
+                EventKind::Error {
+                    operation: Operation::Write,
+                    message,
+                },
+                PendingCtx::WriteKey(key),
+            ) => EventKind::Wrote {
+                key: *key,
+                result: Err(message),
+            },
+            (kind, _) => kind,
+        };
+        match kind {
             EventKind::UaServersFound {
                 servers,
                 host: _,

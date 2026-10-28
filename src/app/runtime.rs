@@ -1,7 +1,6 @@
 use super::*;
-use crate::bff::model::{BackendMsg, Event, EventKind, Operation};
-use crate::bff::model::{CommandKind, Protocol, SessionId};
-use crate::i18n::{Tr, fmt};
+use crate::bff::model::{CommandKind, Operation, Protocol, SessionId};
+use crate::i18n::Tr;
 use std::time::{Duration, Instant};
 
 impl App {
@@ -26,58 +25,24 @@ impl App {
             },
         );
     }
-    /// K1: a command whose reply never came must not leave its spinner and
-    /// "in flight" flags set forever. Every outstanding request older than its
-    /// limit is completed with a localized "no response" error through the
-    /// ordinary error path (so every operation resets its own UI state); late
-    /// replies are then dropped as unknown. Operations that the backend does not
-    /// always answer (`Disconnect` of an absent session, a successful
-    /// `ConfigureUaSubscription`) just expire silently.
+    /// Ask Engine to expire requests; ordinary correlated events update the UI.
     pub(super) fn expire_pending_requests(&mut self, now: Instant) {
-        let configured = self.settings.options.operation_timeout_secs;
-        let expired = self.engine.expired_requests(now, configured);
-        let lang = self.lang();
-        for (session, request_id, operation, ctx, secs) in expired {
-            let message = BackendMsg::raw(fmt(lang, Tr::NoReplyFromServer, &[&secs.to_string()]));
-            let kind = match (operation, ctx) {
-                (
-                    Operation::Disconnect
-                    | Operation::Subscription
-                    | Operation::UaRuntime
-                    | Operation::Add
-                    | Operation::Remove,
-                    _,
-                ) => {
-                    self.engine.discard_pending(session, request_id);
-                    continue;
-                }
-                (Operation::Write, PendingCtx::WriteKey(key)) => EventKind::Wrote {
-                    key,
-                    result: Err(message),
-                },
-                (operation, _) => EventKind::Error { operation, message },
-            };
-            self.on_event(Event {
-                request_id,
-                session,
-                kind,
-            });
-            if operation == Operation::Connect {
-                // The worker may still finish this Connect after we gave up.
-                // Tell it to drop the session so no orphan stays connected on
-                // the server; its reply belongs to an abandoned attempt and is
-                // not awaited (the session is already shown as disconnected).
-                if let Some(protocol) = self
-                    .sessions
-                    .iter()
-                    .find(|view| view.id == session)
-                    .map(|view| view.protocol())
-                {
-                    let disconnect = self.send(session, protocol, CommandKind::Disconnect);
-                    self.engine.discard_pending(session, disconnect);
-                }
+        let disconnects = self
+            .engine
+            .expire_requests(now, self.settings.options.operation_timeout_secs);
+        if self.settings.options.diagnostic_trace {
+            for session in disconnects {
+                self.journal.info_l(
+                    Tr::TraceSent,
+                    &[
+                        &"0",
+                        &operation_label(self.lang(), Operation::Disconnect),
+                        &session.to_string(),
+                    ],
+                );
             }
         }
+        self.poll_events();
     }
 
     pub(super) fn tick(&mut self) {

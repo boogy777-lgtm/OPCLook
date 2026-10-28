@@ -197,3 +197,6 @@ Engine 11, locale 9 и тест реального кадра App::update про
 Измерено на Linux: 2 live subprocess-теста CLI прошли против sample UA;
 проверены browse/read/write/read, три принудительных poll, push после 3 секунд
 покоя при timeout 1 секунда, Ctrl+C, отсутствие секретов в ошибке и BrokenPipe.
+
+Таймауты GUI-запросов формирует Engine через типизированные события; поздние
+ответы отбрасываются. Измерено: Engine 12, GUI lib 186 и locale 9 прошли.

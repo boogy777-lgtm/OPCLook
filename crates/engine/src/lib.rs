@@ -8,7 +8,7 @@ use opclook_contract::model::{
     BackendMsg, Command, CommandKind, EndpointSpec, Event, EventKind, ItemKey, Operation, Protocol,
     SessionId, SubscriptionState,
 };
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
@@ -159,6 +159,7 @@ pub struct Engine<C> {
     discovery_routes: HashMap<u64, RouteTicket>,
     route_events: VecDeque<Event>,
     invalidated: HashMap<SessionId, Vec<Operation>>,
+    timeout_queued: HashSet<(SessionId, u64)>,
 }
 impl<C> Default for Engine<C> {
     fn default() -> Self {
@@ -174,6 +175,7 @@ impl<C> Default for Engine<C> {
             discovery_routes: HashMap::new(),
             route_events: VecDeque::new(),
             invalidated: HashMap::new(),
+            timeout_queued: HashSet::new(),
         }
     }
 }
@@ -416,6 +418,7 @@ impl<C> Engine<C> {
         };
         if matches!(&kind, CommandKind::Connect { .. } | CommandKind::Disconnect) {
             self.cancel_da_routes(session);
+            self.timeout_queued.retain(|(id, _)| *id != session);
             self.requests.retain(|(id, _), _| *id != session);
         }
         let id = self.next.ok_or(DispatchError::Exhausted)?;
@@ -490,6 +493,8 @@ impl<C> Engine<C> {
             )
         };
         if event.request_id != 0 {
+            self.timeout_queued
+                .remove(&(event.session, event.request_id));
             self.deferred_routes.retain(|item| {
                 !(item.session == event.session && item.request_id == event.request_id)
             });
@@ -653,6 +658,7 @@ impl<C> Engine<C> {
         self.requests.contains_key(&(session, request))
     }
     pub fn discard_pending(&mut self, session: SessionId, request: u64) {
+        self.timeout_queued.remove(&(session, request));
         self.deferred_routes
             .retain(|item| !(item.session == session && item.request_id == request));
         self.discovery_routes.remove(&request);
@@ -660,6 +666,7 @@ impl<C> Engine<C> {
     }
     pub fn invalidate_session_requests(&mut self, session: SessionId) -> Vec<Operation> {
         self.deferred_routes.retain(|item| item.session != session);
+        self.timeout_queued.retain(|(sid, _)| *sid != session);
         if session == 0 {
             self.discovery_routes.clear();
         }
@@ -675,6 +682,58 @@ impl<C> Engine<C> {
                 .filter_map(|key| self.requests.remove(&key).map(|p| p.operation)),
         );
         operations
+    }
+    /// Queue one correlated timeout event per expired request. The engine
+    /// cancels unstarted preparation and tells a late Connect to disconnect.
+    pub fn expire_requests(&mut self, now: Instant, configured: u64) -> Vec<SessionId> {
+        let mut disconnects = Vec::new();
+        let expired: Vec<_> = self
+            .requests
+            .iter()
+            .filter_map(|(&(sid, id), pending)| {
+                let limit = request_timeout(pending.operation, configured);
+                (now.saturating_duration_since(pending.sent) > limit
+                    && !self.timeout_queued.contains(&(sid, id)))
+                .then_some((sid, id, pending.operation, limit.as_secs()))
+            })
+            .collect();
+        for (session, request_id, operation, seconds) in expired {
+            if matches!(
+                operation,
+                Operation::Disconnect
+                    | Operation::Subscription
+                    | Operation::UaRuntime
+                    | Operation::Add
+                    | Operation::Remove
+            ) {
+                self.discard_pending(session, request_id);
+                continue;
+            }
+            self.deferred_routes
+                .retain(|item| !(item.session == session && item.request_id == request_id));
+            if operation == Operation::Connect {
+                self.session_routes.remove(&session);
+                if let Some(view) = self.sessions.get(&session) {
+                    disconnects.push(session);
+                    let _ = self.gateway.send(Command {
+                        request_id: 0,
+                        session,
+                        protocol: view.endpoint.protocol,
+                        kind: CommandKind::Disconnect,
+                    });
+                }
+            }
+            self.timeout_queued.insert((session, request_id));
+            self.route_events.push_back(Event {
+                session,
+                request_id,
+                kind: EventKind::Error {
+                    operation,
+                    message: BackendMsg::RequestTimeout { seconds },
+                },
+            });
+        }
+        disconnects
     }
     pub fn expired_requests(
         &self,
@@ -767,6 +826,7 @@ impl<C> Engine<C> {
         self.discovery_routes.clear();
         self.route_events.clear();
         self.invalidated.clear();
+        self.timeout_queued.clear();
         self.route_service = None;
         self.gateway.shutdown();
     }
@@ -1018,6 +1078,45 @@ mod tests {
         assert_eq!(
             engine.invalidate_session_requests(1),
             vec![Operation::Write]
+        );
+    }
+    #[test]
+    fn timeout_is_one_correlated_event_and_late_reply_is_dropped() {
+        let mut engine = Engine::<()>::default();
+        let mut view =
+            SessionRuntime::new(EndpointSpec::ua("opc.tcp://127.0.0.1:4840"), Instant::now());
+        view.state = SessionState::Connected;
+        view.read_in_flight = true;
+        engine.sessions.insert(1, view);
+        engine.requests.insert(
+            (1, 19),
+            PendingRequest {
+                operation: Operation::Read,
+                sent: Instant::now() - Duration::from_secs(100),
+                ctx: (),
+            },
+        );
+        engine.expire_requests(Instant::now(), 1);
+        engine.expire_requests(Instant::now(), 1);
+        assert_eq!(engine.route_events.len(), 1);
+        let timeout = engine.route_events.pop_front().unwrap();
+        assert!(matches!(
+            timeout.kind,
+            EventKind::Error {
+                operation: Operation::Read,
+                message: BackendMsg::RequestTimeout { .. }
+            }
+        ));
+        engine.accept(&timeout).unwrap();
+        assert!(!engine.session(1).unwrap().read_in_flight);
+        assert!(
+            engine
+                .accept(&Event {
+                    session: 1,
+                    request_id: 19,
+                    kind: EventKind::Values { values: vec![] }
+                })
+                .is_err()
         );
     }
     #[test]

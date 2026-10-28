@@ -2572,6 +2572,7 @@ pub fn backend_text(lang: Lang, msg: &BackendMsg) -> String {
         // ---- pass-through / composition ----
         M::Raw(text) => text.clone(),
         M::DaRoute(error) => da_route_error(lang, error),
+        M::RequestTimeout { seconds } => fmt(lang, Tr::NoReplyFromServer, &[seconds]),
         M::Context { context, cause } => {
             format!("{context}: {}", backend_text(lang, cause))
         }
@@ -3636,6 +3637,7 @@ mod tests {
     fn backend_samples() -> Vec<(BackendMsg, Vec<&'static str>)> {
         vec![
             (BackendMsg::Raw("§v§".to_string()), vec!["§v§"]),
+            (BackendMsg::RequestTimeout { seconds: 17 }, vec!["17"]),
             (
                 BackendMsg::DaRoute(opclook_contract::da_route::DaRouteError::NoAdapter),
                 vec![],
