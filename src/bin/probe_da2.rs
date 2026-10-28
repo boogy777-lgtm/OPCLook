@@ -1,16 +1,17 @@
-use opcda_egui::bff::Gateway;
+mod probe_support;
 use opcda_egui::bff::model::{
     Command, CommandKind, DataValue, EndpointSpec, Event, EventKind, ItemKey, ItemSpec, NodeKind,
     Protocol, ServerEntry,
 };
+use probe_support::Probe;
 use std::time::{Duration, Instant};
 
 fn main() {
-    let gateway = Gateway::new();
+    let probe = Probe::new();
     let mut request = 1u64;
     let session = 7u64;
 
-    gateway
+    probe
         .send(Command {
             request_id: request,
             session: 0,
@@ -19,10 +20,10 @@ fn main() {
                 host: String::new(),
             },
         })
-        .expect("gateway send");
+        .expect("probe send");
     request += 1;
 
-    let Some(servers) = wait(&gateway, Duration::from_secs(20), |event| {
+    let Some(servers) = wait(&probe, Duration::from_secs(20), |event| {
         matches!(
             event.kind,
             EventKind::Servers { .. } | EventKind::Error { .. }
@@ -41,7 +42,7 @@ fn main() {
     };
     println!("Using server {id}");
 
-    gateway
+    probe
         .send(Command {
             request_id: request,
             session,
@@ -50,10 +51,10 @@ fn main() {
                 endpoint: EndpointSpec::da(String::new(), id.clone()),
             },
         })
-        .expect("gateway send");
+        .expect("probe send");
     request += 1;
 
-    let Some(connected) = wait(&gateway, Duration::from_secs(20), |event| {
+    let Some(connected) = wait(&probe, Duration::from_secs(20), |event| {
         matches!(
             event.kind,
             EventKind::Connected { .. } | EventKind::Error { .. }
@@ -67,7 +68,7 @@ fn main() {
         return;
     }
 
-    gateway
+    probe
         .send(Command {
             request_id: request,
             session,
@@ -78,10 +79,10 @@ fn main() {
                 view_id: None,
             },
         })
-        .expect("gateway send");
+        .expect("probe send");
     request += 1;
 
-    let Some(root) = wait(&gateway, Duration::from_secs(20), |event| {
+    let Some(root) = wait(&probe, Duration::from_secs(20), |event| {
         matches!(
             event.kind,
             EventKind::Browse { .. } | EventKind::Error { .. }
@@ -110,7 +111,7 @@ fn main() {
 
     if item.is_none() {
         if let Some(branch) = branch {
-            gateway
+            probe
                 .send(Command {
                     request_id: request,
                     session,
@@ -121,9 +122,9 @@ fn main() {
                         view_id: None,
                     },
                 })
-                .expect("gateway send");
+                .expect("probe send");
             request += 1;
-            if let Some(event) = wait(&gateway, Duration::from_secs(20), |event| {
+            if let Some(event) = wait(&probe, Duration::from_secs(20), |event| {
                 matches!(
                     event.kind,
                     EventKind::Browse { .. } | EventKind::Error { .. }
@@ -145,11 +146,11 @@ fn main() {
 
     let Some((item_id, _name)) = item else {
         println!("no leaf found");
-        disconnect(&gateway, session, request);
+        disconnect(&probe, session, request);
         return;
     };
 
-    gateway
+    probe
         .send(Command {
             request_id: request,
             session,
@@ -161,9 +162,9 @@ fn main() {
                 }],
             },
         })
-        .expect("gateway send");
+        .expect("probe send");
     request += 1;
-    if let Some(event) = wait(&gateway, Duration::from_secs(20), |event| {
+    if let Some(event) = wait(&probe, Duration::from_secs(20), |event| {
         matches!(
             event.kind,
             EventKind::AddItems { .. } | EventKind::Error { .. }
@@ -172,7 +173,7 @@ fn main() {
         println!("AddItems: {:?}", event.kind);
     }
 
-    gateway
+    probe
         .send(Command {
             request_id: request,
             session,
@@ -181,9 +182,9 @@ fn main() {
                 keys: vec![1 as ItemKey],
             },
         })
-        .expect("gateway send");
+        .expect("probe send");
     request += 1;
-    if let Some(event) = wait(&gateway, Duration::from_secs(20), |event| {
+    if let Some(event) = wait(&probe, Duration::from_secs(20), |event| {
         matches!(
             event.kind,
             EventKind::Values { .. } | EventKind::Error { .. }
@@ -210,20 +211,20 @@ fn main() {
         }
     }
 
-    disconnect(&gateway, session, request);
+    disconnect(&probe, session, request);
     std::thread::sleep(Duration::from_millis(500));
 }
 
-fn disconnect(gateway: &Gateway, session: u64, request: u64) {
-    gateway
+fn disconnect(probe: &Probe, session: u64, request: u64) {
+    probe
         .send(Command {
             request_id: request,
             session,
             protocol: Protocol::OpcDa,
             kind: CommandKind::Disconnect,
         })
-        .expect("gateway send");
-    let _ = wait(gateway, Duration::from_secs(5), |event| {
+        .expect("probe send");
+    let _ = wait(probe, Duration::from_secs(5), |event| {
         matches!(
             event.kind,
             EventKind::Disconnected { .. } | EventKind::Error { .. }
@@ -231,10 +232,10 @@ fn disconnect(gateway: &Gateway, session: u64, request: u64) {
     });
 }
 
-fn wait(gateway: &Gateway, timeout: Duration, predicate: impl Fn(&Event) -> bool) -> Option<Event> {
+fn wait(probe: &Probe, timeout: Duration, predicate: impl Fn(&Event) -> bool) -> Option<Event> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        while let Some(event) = gateway.try_recv() {
+        while let Some(event) = probe.try_recv() {
             println!("EVENT: {:?}", event.kind);
             if predicate(&event) {
                 return Some(event);

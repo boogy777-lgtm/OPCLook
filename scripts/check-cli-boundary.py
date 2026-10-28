@@ -34,10 +34,16 @@ for name, permitted in allowed.items():
     if dependencies - permitted:
         raise SystemExit(f"forbidden dependencies for {name}: {sorted(dependencies - permitted)}")
 root = pathlib.Path(__file__).resolve().parent.parent
-patterns = [re.compile(r"\bGateway\s*::\s*(new|default)\s*\("), re.compile(r"\b(?:ua|da)::spawn\s*\("), re.compile(r"\b(?:gateway|worker)\s*\.\s*(send|try_recv)\s*\(")]
+patterns = [
+    re.compile(r"\bGateway\s*::\s*(new|default)\s*\("),
+    re.compile(r"\b(?:ua|da)::spawn\s*\("),
+    re.compile(r"\b(?:gateway|worker)\s*\.\s*(send|try_recv)\s*\("),
+    re.compile(r"\b(?:DaRouteManager|RouteService|ResolverPool)\b"),
+    re.compile(r"\.\s*(?:prepare_host|prepare_resolved)\s*\("),
+]
 scanned = []
 violations = []
-for directory in (root / "src/app", root / "src/ui"):
+for directory in (root / "src",):
     for path in directory.rglob("*.rs"):
         if path.name == "tests.rs":
             continue

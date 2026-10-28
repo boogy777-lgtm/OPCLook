@@ -1,10 +1,11 @@
-use opcda_egui::bff::Gateway;
+mod probe_support;
 use opcda_egui::bff::model::{Command, CommandKind, Protocol};
+use probe_support::Probe;
 use std::time::{Duration, Instant};
 
 fn main() {
-    let gateway = Gateway::new();
-    gateway
+    let probe = Probe::new();
+    probe
         .send(Command {
             request_id: 1,
             session: 0,
@@ -13,11 +14,11 @@ fn main() {
                 host: String::new(),
             },
         })
-        .expect("gateway send");
+        .expect("probe send");
 
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {
-        if let Some(event) = gateway.try_recv() {
+        if let Some(event) = probe.try_recv() {
             println!("{event:?}");
             match event.kind {
                 opcda_egui::bff::model::EventKind::Servers { .. }

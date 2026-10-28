@@ -1,7 +1,8 @@
-use opcda_egui::bff::Gateway;
+mod probe_support;
 use opcda_egui::bff::model::{
     Command, CommandKind, EndpointSpec, Event, EventKind, ItemSpec, Protocol,
 };
+use probe_support::Probe;
 use std::time::{Duration, Instant};
 
 fn main() {
@@ -9,9 +10,9 @@ fn main() {
         .nth(1)
         .unwrap_or_else(|| "opc.tcp://milo.digitalpetri.com:62541/milo".to_string());
     let session = 1u64;
-    let gateway = Gateway::new();
+    let probe = Probe::new();
     let mut request = 1u64;
-    gateway
+    probe
         .send(Command {
             request_id: request,
             session,
@@ -20,10 +21,10 @@ fn main() {
                 endpoint: EndpointSpec::ua(url),
             },
         })
-        .expect("gateway send");
+        .expect("probe send");
     request += 1;
 
-    if wait(&gateway, Duration::from_secs(40), |e| {
+    if wait(&probe, Duration::from_secs(40), |e| {
         matches!(
             e.kind,
             EventKind::Connected { .. } | EventKind::Error { .. }
@@ -36,7 +37,7 @@ fn main() {
         return;
     }
 
-    gateway
+    probe
         .send(Command {
             request_id: request,
             session,
@@ -54,40 +55,40 @@ fn main() {
                 ],
             },
         })
-        .expect("gateway send");
+        .expect("probe send");
     request += 1;
-    let _ = wait(&gateway, Duration::from_secs(20), |e| {
+    let _ = wait(&probe, Duration::from_secs(20), |e| {
         matches!(e.kind, EventKind::AddItems { .. } | EventKind::Error { .. })
     });
 
-    gateway
+    probe
         .send(Command {
             request_id: request,
             session,
             protocol: Protocol::OpcUa,
             kind: CommandKind::Read { keys: vec![1, 2] },
         })
-        .expect("gateway send");
+        .expect("probe send");
     request += 1;
-    let _ = wait(&gateway, Duration::from_secs(20), |e| {
+    let _ = wait(&probe, Duration::from_secs(20), |e| {
         matches!(e.kind, EventKind::Values { .. } | EventKind::Error { .. })
     });
 
-    gateway
+    probe
         .send(Command {
             request_id: request,
             session,
             protocol: Protocol::OpcUa,
             kind: CommandKind::Disconnect,
         })
-        .expect("gateway send");
-    let _ = wait(&gateway, Duration::from_secs(5), |_| false);
+        .expect("probe send");
+    let _ = wait(&probe, Duration::from_secs(5), |_| false);
 }
 
-fn wait(gateway: &Gateway, timeout: Duration, predicate: impl Fn(&Event) -> bool) -> Option<Event> {
+fn wait(probe: &Probe, timeout: Duration, predicate: impl Fn(&Event) -> bool) -> Option<Event> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        while let Some(event) = gateway.try_recv() {
+        while let Some(event) = probe.try_recv() {
             println!("EVENT: {:?}", event.kind);
             if predicate(&event) {
                 return Some(event);

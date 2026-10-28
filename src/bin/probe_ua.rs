@@ -1,7 +1,8 @@
-use opcda_egui::bff::Gateway;
+mod probe_support;
 use opcda_egui::bff::model::{
     Command, CommandKind, EndpointSpec, EventKind, ItemKey, ItemSpec, Protocol, WriteRequest,
 };
+use probe_support::Probe;
 use std::time::{Duration, Instant};
 
 fn main() {
@@ -9,8 +10,8 @@ fn main() {
         .nth(1)
         .unwrap_or_else(|| "opc.tcp://milo.digitalpetri.com:62541/milo".to_string());
     let session = 1;
-    let gateway = Gateway::new();
-    gateway
+    let probe = Probe::new();
+    probe
         .send(Command {
             request_id: 1,
             session,
@@ -19,19 +20,19 @@ fn main() {
                 endpoint: EndpointSpec::ua(url.clone()),
             },
         })
-        .expect("gateway send");
+        .expect("probe send");
 
     let mut request = 2;
     let mut connected = false;
     let deadline = Instant::now() + Duration::from_secs(40);
     let mut next_step = Instant::now();
     while Instant::now() < deadline {
-        while let Some(event) = gateway.try_recv() {
+        while let Some(event) = probe.try_recv() {
             println!("EVENT: {event:?}");
             match event.kind {
                 EventKind::Connected { .. } => {
                     connected = true;
-                    gateway
+                    probe
                         .send(Command {
                             request_id: request,
                             session,
@@ -42,9 +43,9 @@ fn main() {
                                 view_id: None,
                             },
                         })
-                        .expect("gateway send");
+                        .expect("probe send");
                     request += 1;
-                    gateway
+                    probe
                         .send(Command {
                             request_id: request,
                             session,
@@ -56,7 +57,7 @@ fn main() {
                                 }],
                             },
                         })
-                        .expect("gateway send");
+                        .expect("probe send");
                     request += 1;
                     next_step = Instant::now() + Duration::from_secs(5);
                 }
@@ -72,7 +73,7 @@ fn main() {
             }
         }
         if connected && Instant::now() >= next_step {
-            gateway
+            probe
                 .send(Command {
                     request_id: request,
                     session,
@@ -81,9 +82,9 @@ fn main() {
                         keys: vec![1 as ItemKey],
                     },
                 })
-                .expect("gateway send");
+                .expect("probe send");
             request += 1;
-            gateway
+            probe
                 .send(Command {
                     request_id: request,
                     session,
@@ -96,17 +97,17 @@ fn main() {
                         },
                     },
                 })
-                .expect("gateway send");
+                .expect("probe send");
             request += 1;
             std::thread::sleep(Duration::from_secs(3));
-            gateway
+            probe
                 .send(Command {
                     request_id: request,
                     session,
                     protocol: Protocol::OpcUa,
                     kind: CommandKind::Disconnect,
                 })
-                .expect("gateway send");
+                .expect("probe send");
             std::thread::sleep(Duration::from_secs(1));
             return;
         }
