@@ -286,3 +286,16 @@ host/loopback 3/3 на Linux; fmt, Windows i686 backend/CLI all-targets typechec
 после zero-length object rustc; этот workaround не меняет repository. Windows
 runtime не запускался; проверка прежнего exact head выявила heap corruption,
 которая требует отдельного исправления до final CI.
+
+
+Windows CI run 40678175913 изолировал heap corruption в тесте смешанных
+BYREF/неверных layout; остальные изолированные COM/VARIANT тесты прошли.
+Причина: `windows` 0.61 реализует `Drop` для `VARIANT` в extension-модуле,
+вызывая `VariantClear`. Тестовый невалидный VARIANT и ручной Destroy двойным
+образом уничтожали массив; заимствованный временный VARIANT при чтении BSTR
+массива также мог освобождать строку владельца. Не владеющие представления
+переведены в `ManuallyDrop`, владеющий guard уничтожает массив один раз;
+`OwnedVariant` полагается на штатный Drop. Добавлен тест трёх повторных чтений
+BSTR и уничтожения массива. Измерено локально: fmt и Windows i686 backend
+`--tests` Clippy typecheck прошли; Windows runtime после исправления и
+финальный exact-head CI ещё не прошли.

@@ -95,14 +95,8 @@ impl<T> Drop for ComArray<T> {
 /// Owns one initialized VARIANT, including any nested COM resources.
 pub(super) struct OwnedVariant(pub(super) windows::Win32::System::Variant::VARIANT);
 
-impl Drop for OwnedVariant {
-    fn drop(&mut self) {
-        // SAFETY: the guard uniquely owns a valid initialized VARIANT.
-        unsafe {
-            let _ = windows::Win32::System::Variant::VariantClear(&mut self.0);
-        }
-    }
-}
+// VARIANT's windows-rs Drop already calls VariantClear; the wrapper must not
+// clear it independently a second time.
 
 #[cfg(test)]
 mod tests {

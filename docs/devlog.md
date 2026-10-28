@@ -278,3 +278,8 @@ typecheck; реальный COM runtime остаётся открытым.
 query и fragment при сравнении; оставшиеся пути обнаружения и объединения ещё
 не переведены. SDK не принимает scoped IPv6 URL; это не заявленная новая
 поддержка. Полный gate и Windows runtime остаются открытыми.
+
+Windows CI изолировал heap corruption в тесте некорректного layout: Drop
+`VARIANT` в extension windows-rs ранее не был учтён. Исправлены двойное
+уничтожение в тесте и владение BSTR при повторном чтении SAFEARRAY; тест
+повторного чтения добавлен. Windows runtime исправления ещё ожидает CI.

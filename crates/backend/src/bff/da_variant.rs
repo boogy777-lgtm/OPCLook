@@ -207,14 +207,20 @@ unsafe fn array_to_value(variant: &VARIANT, base: u16, depth: usize) -> Value {
     } else {
         let len = count;
         for i in 0..len {
-            let mut tmp = VARIANT::default();
+            // This temporary borrows the array element: VARIANT's native Drop
+            // would otherwise VariantClear a BSTR still owned by the SAFEARRAY.
+            let mut tmp = std::mem::ManuallyDrop::new(VARIANT::default());
             // SAFETY: i is within the accessed array; the copy is capped to
             // the temporary VARIANT union's storage, with matching element type.
             unsafe {
                 set_vt(&mut tmp, base);
                 let src = (data as *const u8).add(i * elem_size);
                 let dst = variant_inner(&mut tmp).cast::<u8>();
-                std::ptr::copy_nonoverlapping(src, dst, elem_size.min(16));
+                std::ptr::copy_nonoverlapping(
+                    src,
+                    dst,
+                    elem_size.min(std::mem::size_of::<VARIANT_0_0_0>()),
+                );
             }
             // SAFETY: tmp borrows the copied scalar matching base until conversion returns.
             out.push(unsafe { scalar_to_value(&tmp, base) });
@@ -823,7 +829,6 @@ mod tests {
 
     #[test]
     fn byref_and_mismatched_array_storage_are_not_dereferenced() {
-        eprintln!("stage: byref start");
         let mut scalar = VARIANT::default();
         set_vt(&mut scalar, 0x4000 | 3);
         let mut integer = 7i32;
@@ -832,36 +837,58 @@ mod tests {
         // SAFETY: the BYREF VARIANT refers to the live integer above.
         let converted = unsafe { variant_to_value(&scalar) };
         assert!(matches!(converted, Value::Other(_)));
-        eprintln!("stage: byref complete; create array");
 
         // SAFETY: create a byte array and transfer it into a mismatched VARIANT.
         let array = unsafe { SafeArrayCreateVector(VARENUM(17), 0, 1) };
         assert!(!array.is_null());
-        let mut variant = VARIANT::default();
+        let owner = SafeArrayBuilder {
+            ptr: array,
+            locked: false,
+            accessed: false,
+            element_vt: 17,
+        };
+        let mut variant = std::mem::ManuallyDrop::new(VARIANT::default());
         set_vt(&mut variant, 0x2000 | 8);
-        // SAFETY: the array pointer is owned by variant until it is cleared.
+        // SAFETY: the borrowed array remains live while owner is in scope.
         unsafe { (*variant_inner(&mut variant)).parray = array };
-        eprintln!("stage: mismatched conversion start");
         // SAFETY: the pointer is valid; its one-byte element must be rejected
         // before interpreting it as a BSTR pointer.
         let value = unsafe { variant_to_value(&variant) };
-        eprintln!("stage: mismatched conversion complete");
         assert_eq!(value, Value::Other("Invalid array element size".into()));
         set_vt(&mut variant, 0x2000 | 72);
-        eprintln!("stage: unsupported conversion start");
         // SAFETY: the same live array is deliberately labelled with an unsupported tag.
         let unsupported = unsafe { variant_to_value(&variant) };
-        eprintln!("stage: unsupported conversion complete");
         assert_eq!(
             unsupported,
             Value::Other("Unsupported array element type: 72".into())
         );
-        // Destroy directly because the deliberately mismatched tag is not a valid
-        // ownership description for VariantClear.
-        eprintln!("stage: destroy start");
-        // SAFETY: this test owns the live array and did not transfer it elsewhere.
-        unsafe { SafeArrayDestroy(array).unwrap() };
-        eprintln!("stage: destroy complete");
+        // The non-owning VARIANT view must not clear the array; owner destroys it.
+        drop(owner);
+    }
+
+    #[test]
+    fn bstr_array_can_be_read_repeatedly_before_destroy() {
+        let input = Value::Array(vec![
+            Value::Str("first".into()),
+            Value::Str("второй".into()),
+        ]);
+        let variant = build_array_variant(&input, 8, 0x2000 | 8).unwrap();
+        for _ in 0..3 {
+            // SAFETY: the array remains owned by the live VARIANT throughout each read.
+            let output = unsafe { variant_to_value(&variant) };
+            assert_eq!(output, input);
+            // Exercise allocations of the same lengths while the array remains
+            // live; freeing borrowed strings would let these overwrite them.
+            let churn: Vec<BSTR> = (0..128)
+                .map(|i| BSTR::from(if i % 2 == 0 { "xxxxx" } else { "yyyyyy" }))
+                .collect();
+            // SAFETY: the original VARIANT still owns its live array and strings.
+            let output = unsafe { variant_to_value(&variant) };
+            assert_eq!(output, input);
+            drop(churn);
+        }
+        // VARIANT's native Drop destroys the array and its BSTRs exactly once.
+        drop(variant);
     }
 
     #[test]
@@ -880,17 +907,20 @@ mod tests {
         // SAFETY: this test owns the newly created byte SAFEARRAY.
         let array = unsafe { SafeArrayCreateVector(VARENUM(17), 0, 1) };
         assert!(!array.is_null());
-        let mut variant = VARIANT::default();
+        let owner = SafeArrayBuilder {
+            ptr: array,
+            locked: false,
+            accessed: false,
+            element_vt: 17,
+        };
+        let mut variant = std::mem::ManuallyDrop::new(VARIANT::default());
         set_vt(&mut variant, 0x2000 | tag);
         // SAFETY: variant temporarily points to this live owned array.
         unsafe { (*variant_inner(&mut variant)).parray = array };
-        eprintln!("stage: isolated tag {tag} conversion start");
         // SAFETY: the array allocation is live; conversion checks its layout.
         let output = unsafe { variant_to_value(&variant) };
-        eprintln!("stage: isolated tag {tag} conversion complete; destroy start");
-        // SAFETY: the raw VARIANT has no Drop; this is the sole destruction.
-        unsafe { SafeArrayDestroy(array).unwrap() };
-        eprintln!("stage: isolated tag {tag} destroy complete");
+        // The VARIANT view is non-owning; this guard performs the sole destruction.
+        drop(owner);
         output
     }
 
