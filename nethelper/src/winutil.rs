@@ -45,19 +45,34 @@ impl Drop for LocalAllocation {
 }
 
 /// Balances successful impersonation even if the following work unwinds.
-pub(super) struct Impersonation(std::marker::PhantomData<std::rc::Rc<()>>);
+pub(super) struct Impersonation {
+    active: bool,
+    thread_bound: std::marker::PhantomData<std::rc::Rc<()>>,
+}
 impl Impersonation {
     /// # Safety
     /// The current thread must already be impersonating and own that state.
     pub(super) unsafe fn from_current_thread() -> Self {
-        Self(std::marker::PhantomData)
+        Self {
+            active: true,
+            thread_bound: std::marker::PhantomData,
+        }
+    }
+
+    pub(super) fn finish(mut self) -> windows::core::Result<()> {
+        // SAFETY: the active guard is bound to the impersonating thread.
+        unsafe { RevertToSelf() }?;
+        self.active = false;
+        Ok(())
     }
 }
 impl Drop for Impersonation {
     fn drop(&mut self) {
-        // SAFETY: the guard is created only after successful impersonation on this thread.
-        unsafe {
-            let _ = RevertToSelf();
+        if self.active {
+            // SAFETY: this guard remains on the impersonating thread until it reverts.
+            unsafe {
+                let _ = RevertToSelf();
+            }
         }
     }
 }
@@ -68,6 +83,31 @@ mod tests {
     use windows::Win32::Foundation::GetHandleInformation;
     use windows::Win32::System::Threading::CreateEventW;
     use windows::core::PCWSTR;
+
+    #[test]
+    fn explicit_finish_reverts_thread_impersonation() {
+        use windows::Win32::Foundation::ERROR_NO_TOKEN;
+        use windows::Win32::Security::{ImpersonateSelf, SecurityImpersonation, TOKEN_QUERY};
+        use windows::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
+        std::thread::spawn(|| {
+            // SAFETY: impersonate the test process on this dedicated thread.
+            unsafe { ImpersonateSelf(SecurityImpersonation) }.unwrap();
+            // SAFETY: this thread just successfully began impersonating.
+            let guard = unsafe { Impersonation::from_current_thread() };
+            guard.finish().unwrap();
+            let mut token = HANDLE::default();
+            // SAFETY: query the current thread with a valid output pointer.
+            let error =
+                unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, true, &mut token) }
+                    .unwrap_err();
+            assert_eq!(
+                error.code(),
+                windows::core::HRESULT::from_win32(ERROR_NO_TOKEN.0)
+            );
+        })
+        .join()
+        .unwrap();
+    }
 
     #[test]
     fn handle_closes_on_early_return() {

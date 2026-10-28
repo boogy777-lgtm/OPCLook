@@ -347,12 +347,15 @@ fn create_pipe(pipe: &str, user_sid: &str) -> Result<(HANDLE, LocalAllocation), 
 fn wait_for_client(file: &std::fs::File) -> Result<(), String> {
     let (tx, rx) = std::sync::mpsc::channel();
     let pipe = file.try_clone().map_err(|e| format!("clone pipe: {e}"))?;
-    std::thread::spawn(move || {
-        let handle = HANDLE(pipe.as_raw_handle());
-        // SAFETY: the thread owns the cloned pipe handle until the call returns.
-        let result = unsafe { ConnectNamedPipe(handle, None) };
-        let _ = tx.send(result);
-    });
+    std::thread::Builder::new()
+        .name("pipe-connect".into())
+        .spawn(move || {
+            let handle = HANDLE(pipe.as_raw_handle());
+            // SAFETY: the thread owns the cloned pipe handle until the call returns.
+            let result = unsafe { ConnectNamedPipe(handle, None) };
+            let _ = tx.send(result);
+        })
+        .map_err(|e| format!("start pipe connector: {e}"))?;
     match rx.recv_timeout(PIPE_CONNECT_TIMEOUT) {
         Ok(Ok(())) => Ok(()),
         Ok(Err(error)) => pipe_connect_result(error),
@@ -381,14 +384,18 @@ fn client_sid(handle: HANDLE) -> Result<String, String> {
     unsafe { ImpersonateNamedPipeClient(handle) }
         .map_err(|e| format!("ImpersonateNamedPipeClient: {e}"))?;
     // SAFETY: ImpersonateNamedPipeClient just succeeded on this thread.
-    let _impersonation = unsafe { Impersonation::from_current_thread() };
+    let impersonation = unsafe { Impersonation::from_current_thread() };
     let mut token = HANDLE::default();
     // SAFETY: the output pointer is valid and the current thread is impersonating.
     unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, true, &mut token) }
         .map_err(|e| format!("OpenThreadToken: {e}"))?;
     // SAFETY: OpenThreadToken returned an owned handle.
     let token = unsafe { OwnedHandle::from_raw(token) };
-    token_sid(token.raw())
+    let result = token_sid(token.raw());
+    impersonation
+        .finish()
+        .map_err(|e| format!("RevertToSelf: {e}"))?;
+    result
 }
 
 fn current_process_sid() -> Result<String, String> {
