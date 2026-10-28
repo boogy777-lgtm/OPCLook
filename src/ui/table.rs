@@ -554,7 +554,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                             _ => continue,
                         };
                         if app.settings.move_column_to_insert(column, before) {
-                            app.settings.save();
+                            app.persist_settings();
                             let title = tr(app.lang(), column.title_tr());
                             app.status = if dir == ColumnDir::Left {
                                 fmt(app.lang(), Tr::ColumnMovedLeft, &[&title])
@@ -565,7 +565,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                     }
                     TableAction::DropColumn(column, before) => {
                         if app.settings.move_visible_column_to_insert(column, before) {
-                            app.settings.save();
+                            app.persist_settings();
                             let title = tr(app.lang(), column.title_tr());
                             app.status = fmt(app.lang(), Tr::MovedFormat, &[&title]);
                         }

@@ -801,7 +801,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                     app.settings.ua_session_timeout_ms = endpoint
                         .ua_session_timeout
                         .unwrap_or_else(crate::settings::default_session_timeout);
-                    app.settings.save();
+                    app.persist_settings();
                 }
                 // U9: the dialog closes on `Connected`, shows `Error` inline.
                 app.connect_from_dialog(endpoint);
@@ -826,7 +826,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                 app.settings.ua_session_timeout_ms = endpoint
                     .ua_session_timeout
                     .unwrap_or_else(crate::settings::default_session_timeout);
-                app.settings.save();
+                app.persist_settings();
             }
             app.connect_from_dialog(endpoint);
         }

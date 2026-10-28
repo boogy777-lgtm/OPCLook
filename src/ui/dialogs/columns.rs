@@ -224,7 +224,7 @@ pub(super) fn columns_dialog(app: &mut App, ui: &mut egui::Ui) {
         // directly from our local `order` so the moved row reorders immediately
         // and the table behind the dialog re-renders with it.
         app.settings.persist_column_order(&order);
-        app.settings.save();
+        app.persist_settings();
     }
     if close {
         app.dialogs.columns.open = false;

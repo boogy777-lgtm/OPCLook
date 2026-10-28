@@ -2271,6 +2271,45 @@ fn closed_worker_marks_link_lost_and_finishes_pending_write() {
 }
 
 #[test]
+fn late_unsolicited_data_cannot_revive_a_lost_or_connecting_link() {
+    let (_ctx, mut app) = tree_app();
+    let session = SessionId::new(1).unwrap();
+    let key = app.seed_row(session, "tag", "tag", Value::I64(1));
+    app.disconnect_session(session);
+    for state in [SessionState::Disconnected, SessionState::Connecting] {
+        app.sessions[0].state = state;
+        app.on_event_for_test_at(
+            session,
+            EventKind::Values {
+                values: vec![(
+                    key,
+                    crate::bff::model::DataValue {
+                        value: Value::I64(99),
+                        quality: crate::bff::model::Quality::from_da(0xc0),
+                        timestamp: None,
+                        reason: None,
+                    },
+                )],
+            },
+        );
+        app.on_event_for_test_at(
+            session,
+            EventKind::SubscriptionState {
+                state: SubscriptionState::Active,
+            },
+        );
+        app.on_event_for_test_at(session, EventKind::PollOnly { keys: vec![key] });
+        assert_eq!(app.rows[0].value, Value::I64(1));
+        assert_eq!(app.rows[0].quality.kind(), QualityKind::Bad);
+        assert!(!app.rows[0].poll_only);
+        assert_eq!(
+            app.sessions[0].ua().unwrap().subscription,
+            SubscriptionState::Inactive
+        );
+    }
+}
+
+#[test]
 fn exhausted_request_does_not_leave_browse_add_or_search_waiting() {
     let (_ctx, mut app) = tree_app();
     app.engine.exhaust_requests_for_test();
@@ -2578,6 +2617,34 @@ fn session_kind_tracks_endpoint_and_preserves_ua_selection_on_metadata_update() 
     assert_eq!(ua.ua_view_id, None);
     assert_eq!(ua.ua_browse_filter, crate::bff::model::NodeClassFilter::All);
     assert_eq!(ua.subscription, SubscriptionState::Inactive);
+}
+
+#[test]
+fn exit_messages_include_localized_save_failure_and_shutdown_failure() {
+    use opclook_contract::model::{GatewayShutdown, ShutdownOutcome};
+    let (_ctx, mut app) = tree_app();
+    app.settings.save_blocked = true;
+    let save_error = app.save_settings();
+    assert!(save_error.is_some());
+    let normal = GatewayShutdown {
+        da: ShutdownOutcome::Joined,
+        ua: ShutdownOutcome::Joined,
+    };
+    assert!(super::exit_messages(None, Lang::En, normal).is_empty());
+    let failed = GatewayShutdown {
+        da: ShutdownOutcome::Panicked,
+        ua: ShutdownOutcome::Joined,
+    };
+    let messages = super::exit_messages(save_error, app.lang(), failed);
+    assert_eq!(messages.len(), 2);
+    assert!(
+        messages[0].contains(
+            tr(app.lang(), Tr::SettingsSaveFailed)
+                .split("{0}")
+                .next()
+                .unwrap()
+        )
+    );
 }
 
 #[test]

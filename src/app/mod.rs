@@ -186,9 +186,12 @@ impl App {
 
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let cjk = install_fonts(&cc.egui_ctx);
-        let settings = Settings::load();
-        crate::ui::apply_style(&cc.egui_ctx, settings.options.theme);
-        let mut app = Self::new_inner(settings);
+        let loaded = Settings::load();
+        crate::ui::apply_style(&cc.egui_ctx, loaded.settings.options.theme);
+        let mut app = Self::new_inner(loaded.settings);
+        for notice in loaded.notices {
+            app.report_settings_notice(notice);
+        }
         app.journal.info_l(Tr::AppStarted, &[]);
         app.journal.info_l(Tr::OriginNote, &[]);
         app.cjk_font = match cjk {
@@ -228,6 +231,15 @@ impl App {
         app
     }
 
+    #[cfg(feature = "test-support")]
+    pub fn new_test_with_loaded(ctx: &egui::Context, loaded: crate::settings::Loaded) -> Self {
+        let mut app = Self::new_test_with_settings(ctx, loaded.settings);
+        for notice in loaded.notices {
+            app.report_settings_notice(notice);
+        }
+        app
+    }
+
     /// Current UI language (backed by settings, so it survives restarts).
     pub fn lang(&self) -> Lang {
         self.settings.lang()
@@ -239,7 +251,7 @@ impl App {
             return;
         }
         self.settings.set_lang(lang);
-        self.settings.save();
+        self.persist_settings();
         let msg = crate::i18n::fmt(lang, Tr::OptionsSaved, &[]);
         self.status = msg;
         if lang == Lang::Zh && self.cjk_font == CjkFont::Missing {
@@ -291,48 +303,51 @@ impl App {
         };
         app.dialogs.options.draft = app.settings.options.clone();
         app.init_network_from_cache();
-        app.drain_settings_notices();
         app
     }
 
-    pub fn save_settings(&mut self) {
-        self.settings.script = self.script_text.clone();
-        self.settings.save();
-        self.drain_settings_notices();
+    pub fn save_settings(&mut self) -> Option<String> {
+        self.settings.script.clone_from(&self.script_text);
+        self.persist_settings()
     }
 
-    /// Move the settings layer's load/save diagnostics into the journal, where
-    /// the user can see them (A2). Called at startup and on every tick.
-    pub(super) fn drain_settings_notices(&mut self) {
+    /// Save and report errors immediately, including errors from UI actions.
+    pub fn persist_settings(&mut self) -> Option<String> {
+        self.settings
+            .save()
+            .err()
+            .map(|notice| self.report_settings_notice(notice))
+    }
+
+    pub(super) fn report_settings_notice(
+        &mut self,
+        notice: crate::settings::SettingsNotice,
+    ) -> String {
         use crate::settings::SettingsNotice;
-        for notice in self.settings.take_notices() {
-            match notice {
-                SettingsNotice::ReadFailed { path, error } => {
-                    self.journal
-                        .error_l(Tr::SettingsReadFailed, &[&path, &error]);
-                }
-                SettingsNotice::ParseFailed {
-                    path,
-                    error,
-                    backup: Ok(backup),
-                } => {
-                    self.journal
-                        .error_l(Tr::SettingsParseFailed, &[&path, &error, &backup]);
-                }
-                SettingsNotice::ParseFailed {
-                    path,
-                    error,
-                    backup: Err(why),
-                } => {
-                    self.journal
-                        .error_l(Tr::SettingsParseNoBackup, &[&path, &error, &why]);
-                }
-                SettingsNotice::SaveFailed { path, error } => {
-                    self.journal
-                        .error_l(Tr::SettingsSaveFailed, &[&path, &error]);
-                }
+        let (key, args): (Tr, Vec<String>) = match notice {
+            SettingsNotice::ReadFailed { path, error } => {
+                (Tr::SettingsReadFailed, vec![path, error])
             }
-        }
+            SettingsNotice::ParseFailed {
+                path,
+                error,
+                backup: Ok(backup),
+            } => (Tr::SettingsParseFailed, vec![path, error, backup]),
+            SettingsNotice::ParseFailed {
+                path,
+                error,
+                backup: Err(why),
+            } => (Tr::SettingsParseNoBackup, vec![path, error, why]),
+            SettingsNotice::SaveFailed { path, error } => {
+                (Tr::SettingsSaveFailed, vec![path, error])
+            }
+        };
+        let refs: Vec<&dyn std::fmt::Display> = args
+            .iter()
+            .map(|arg| arg as &dyn std::fmt::Display)
+            .collect();
+        self.journal.error_l(key, &refs);
+        crate::i18n::fmt(self.lang(), key, &refs)
     }
 
     /// Populate the network state from `settings.cached_adapters` without
@@ -358,7 +373,7 @@ impl App {
         }
         let changed = self.sync_network_from_settings();
         if changed {
-            self.settings.save();
+            self.persist_settings();
         }
     }
 
@@ -405,7 +420,7 @@ impl App {
             .set_adapters(cached.iter().map(CachedAdapter::to_info).collect());
         self.settings.cached_adapters = CachedAdapters::from_vec(cached);
         let _ = self.sync_network_from_settings();
-        self.settings.save();
+        self.persist_settings();
         self.journal.info(format!(
             "network refresh: done, {} usable adapter(s)",
             self.network.adapters.len()
@@ -547,8 +562,12 @@ impl App {
         local_ip: Option<std::net::IpAddr>,
     ) {
         if selection.is_none() {
-            self.settings
+            let result = self
+                .settings
                 .save_network_selection(AdapterSelection::None, None);
+            if let Err(notice) = result {
+                self.report_settings_notice(notice);
+            }
             self.network.resolve(AdapterSelection::None, None);
             self.journal.info("network selection: cleared");
             return;
@@ -559,8 +578,12 @@ impl App {
         let resolution = reconcile_selection(&self.network.adapters, &selection, preferred_ip);
         match resolution.state {
             SelectionState::Selected => {
-                self.settings
+                let result = self
+                    .settings
                     .save_network_selection(resolution.selection.clone(), resolution.local_ip);
+                if let Err(notice) = result {
+                    self.report_settings_notice(notice);
+                }
                 self.network
                     .resolve(resolution.selection.clone(), resolution.local_ip);
                 self.journal.info(format!(
@@ -1073,7 +1096,7 @@ impl App {
     pub fn apply_options(&mut self) {
         let draft = clamp_options(self.dialogs.options.draft.clone());
         self.settings.options = draft;
-        self.settings.save();
+        self.persist_settings();
         self.dialogs.options.open = false;
         // Reconfigure UA push subscriptions so a newly created subscription
         // honors the updated interval / deadband. Only already-connected
@@ -1105,7 +1128,7 @@ impl App {
 
     pub fn save_script(&mut self) {
         self.settings.script = self.script_text.clone();
-        self.settings.save();
+        self.persist_settings();
         self.journal.info_l(Tr::ScriptSaved, &[]);
     }
 
@@ -1125,7 +1148,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.save_settings();
+        let save_error = self.save_settings();
         let sessions: Vec<(SessionId, Protocol)> = self
             .sessions
             .iter()
@@ -1135,7 +1158,7 @@ impl eframe::App for App {
             let _ = self.engine.disconnect_untracked(session, protocol);
         }
         let outcome = self.engine.shutdown();
-        let errors = shutdown_messages(self.lang(), outcome);
+        let errors = exit_messages(save_error, self.lang(), outcome);
         if !errors.is_empty() {
             rfd::MessageDialog::new()
                 .set_title("OPCLook")
@@ -1144,6 +1167,17 @@ impl eframe::App for App {
                 .show();
         }
     }
+}
+
+fn exit_messages(
+    save_error: Option<String>,
+    lang: opclook_locale::Lang,
+    outcome: opclook_contract::model::GatewayShutdown,
+) -> Vec<String> {
+    save_error
+        .into_iter()
+        .chain(shutdown_messages(lang, outcome))
+        .collect()
 }
 
 fn shutdown_messages(

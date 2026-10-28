@@ -161,7 +161,7 @@ impl App {
         };
         self.next_session = id.successor();
         self.settings.remember(&endpoint);
-        self.settings.save();
+        self.persist_settings();
         self.journal.info_l(
             Tr::ConnectingTo,
             &[&endpoint.display_name(), &endpoint.protocol.to_string()],

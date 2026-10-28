@@ -545,3 +545,8 @@ Windows runtime и ресурсы cross-check не исполнял. Native whol
 ### 2026-10-28 — GUI link-loss cleanup
 
 The coordinator clears stale values, loading indicators, subscription projection and outstanding requests through one path on link loss; the engine owns reconnect policy. A rejected worker dispatch regression covers partial writes and UI state. Measured: Linux GUI library 214 passed; Windows i686 workspace all-target typecheck passed (cross-check flags, no Windows runtime). GUI/Settings structural work and exact-head CI remain open.
+
+
+### 2026-10-28 — settings diagnostics and late data
+
+Load returns settings with notices, saves return typed failures, and the application reports errors immediately; on exit the existing native dialog includes save failures with shutdown errors. Unsolicited values, subscription and poll-only updates from an old link are ignored until connected. Regression tests cover both changes. Measured: Linux GUI 216 library, 149 interaction (one Windows-only ignored), 14 theme and one isolation test passed; Windows i686 all-target typecheck passed with cross-check flags. Settings grouping and other GUI structure remain open.

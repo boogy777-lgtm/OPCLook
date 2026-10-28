@@ -141,10 +141,7 @@ impl<'de> Deserialize<'de> for CachedAdapters {
     }
 }
 
-/// Something the settings layer wants the user to see. `Settings` has no
-/// journal of its own, so load/save problems are queued here and the app moves
-/// them into the journal (`App::drain_settings_notices`). Nothing is lost
-/// silently: `eprintln!` is invisible in the release (windows-subsystem) build.
+/// A load or save problem to be reported by the application.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SettingsNotice {
     /// The file exists but could not be read.
@@ -210,9 +207,6 @@ pub struct Settings {
     /// in an old settings file means an empty list until the user refreshes.
     #[serde(default)]
     pub cached_adapters: CachedAdapters,
-    /// Pending load/save diagnostics (never persisted).
-    #[serde(skip)]
-    pub notices: std::sync::Arc<std::sync::Mutex<Vec<SettingsNotice>>>,
     /// Set when a damaged settings file could not be backed up: saving would
     /// destroy the only copy, so `save()` refuses until the app restarts.
     #[serde(skip)]
@@ -291,10 +285,15 @@ impl Default for Settings {
             preferred_adapter: None,
             selected_local_ip: None,
             cached_adapters: CachedAdapters::default(),
-            notices: Default::default(),
             save_blocked: false,
         }
     }
+}
+
+#[derive(Default)]
+pub struct Loaded {
+    pub settings: Settings,
+    pub notices: Vec<SettingsNotice>,
 }
 
 impl Settings {
@@ -302,91 +301,69 @@ impl Settings {
     /// problem (unreadable, malformed, unknown enum value) never resets the
     /// settings silently: the damaged file is copied to
     /// `settings.json.bad-<time>` before defaults are used, and a
-    /// [`SettingsNotice`] is queued for the journal.
-    pub fn load() -> Self {
+    /// [`SettingsNotice`] is returned for the application to report.
+    pub fn load() -> Loaded {
         let path = settings_path();
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Self::default(),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Loaded::default(),
             Err(err) => {
-                let mut settings = Self::default();
-                // Unreadable file: do not overwrite what we could not read.
-                settings.save_blocked = true;
-                settings.push_notice(SettingsNotice::ReadFailed {
-                    path: path.display().to_string(),
-                    error: err.to_string(),
-                });
-                return settings;
+                let settings = Self {
+                    save_blocked: true,
+                    ..Self::default()
+                };
+                return Loaded {
+                    settings,
+                    notices: vec![SettingsNotice::ReadFailed {
+                        path: path.display().to_string(),
+                        error: err.to_string(),
+                    }],
+                };
             }
         };
         match serde_json::from_slice::<Settings>(&bytes) {
             Ok(mut settings) => {
                 settings.options = settings.options.clamped();
-                settings
+                Loaded {
+                    settings,
+                    notices: Vec::new(),
+                }
             }
             Err(err) => {
-                let mut settings = Self::default();
                 let backup = backup_damaged_file(&path);
-                if backup.is_err() {
-                    settings.save_blocked = true;
+                let settings = Self {
+                    save_blocked: backup.is_err(),
+                    ..Self::default()
+                };
+                Loaded {
+                    settings,
+                    notices: vec![SettingsNotice::ParseFailed {
+                        path: path.display().to_string(),
+                        error: err.to_string(),
+                        backup,
+                    }],
                 }
-                settings.push_notice(SettingsNotice::ParseFailed {
-                    path: path.display().to_string(),
-                    error: err.to_string(),
-                    backup,
-                });
-                settings
             }
         }
     }
 
-    /// Queue a diagnostic for the journal.
-    pub fn push_notice(&self, notice: SettingsNotice) {
-        self.notices
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(notice);
-    }
-
-    /// Take every queued diagnostic (oldest first).
-    pub fn take_notices(&self) -> Vec<SettingsNotice> {
-        std::mem::take(
-            &mut *self
-                .notices
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        )
-    }
-
-    /// Persist the settings atomically (temporary file in the same directory,
-    /// then rename), so a crash or a full disk never leaves a half-written
-    /// `settings.json`. Failures are queued as [`SettingsNotice::SaveFailed`].
-    pub fn save(&self) {
+    /// Persist atomically, returning a diagnostic to the application on failure.
+    pub fn save(&self) -> Result<(), SettingsNotice> {
         let path = settings_path();
         let shown = path.display().to_string();
         if self.save_blocked {
-            self.push_notice(SettingsNotice::SaveFailed {
-                path: shown,
-                error: "the existing settings file is damaged or unreadable and could not be backed up; it is not overwritten".to_string(),
-            });
-            return;
+            return Err(SettingsNotice::SaveFailed { path: shown,
+                error: "the existing settings file is damaged or unreadable and could not be backed up; it is not overwritten".to_string() });
         }
-        let text = match serde_json::to_string_pretty(self) {
-            Ok(text) => text,
-            Err(err) => {
-                self.push_notice(SettingsNotice::SaveFailed {
-                    path: shown,
-                    error: err.to_string(),
-                });
-                return;
-            }
-        };
-        if let Err(err) = write_atomic(&path, text.as_bytes()) {
-            self.push_notice(SettingsNotice::SaveFailed {
-                path: shown,
+        let text =
+            serde_json::to_string_pretty(self).map_err(|err| SettingsNotice::SaveFailed {
+                path: shown.clone(),
                 error: err.to_string(),
-            });
-        }
+            })?;
+        write_atomic(&path, text.as_bytes()).map_err(|err| SettingsNotice::SaveFailed {
+            path: shown,
+            error: err.to_string(),
+        })
     }
 
     pub fn remember(&mut self, endpoint: &EndpointSpec) {
@@ -414,12 +391,13 @@ impl Settings {
     }
 
     /// Remember the LDS host of the connect dialog; saves only on a change.
-    pub fn set_ua_lds_host(&mut self, text: &str) {
+    pub fn set_ua_lds_host(&mut self, text: &str) -> Result<(), SettingsNotice> {
         let text = text.trim();
         if self.ua_lds_host != text {
             self.ua_lds_host = text.to_string();
-            self.save();
+            self.save()?;
         }
+        Ok(())
     }
 
     /// Set the UI language and normalize its stored code.
@@ -520,10 +498,10 @@ impl Settings {
         &mut self,
         selection: AdapterSelection,
         local_ip: Option<IpAddr>,
-    ) {
+    ) -> Result<(), SettingsNotice> {
         self.set_adapter_selection(selection);
         self.set_selected_local_ip(local_ip);
-        self.save();
+        self.save()
     }
 }
 
@@ -1313,7 +1291,7 @@ mod tests {
         let dir = std::env::temp_dir().join("opcda-egui-settings-no-adapter-cache");
         let _ = std::fs::remove_dir_all(&dir);
         with_appdata(&dir, || {
-            let s = Settings::load();
+            let s = Settings::load().settings;
             assert!(s.cached_adapters.adapters.is_empty());
             assert_eq!(s.adapter_selection(), AdapterSelection::None);
         });
@@ -1422,7 +1400,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         with_appdata(&dir, || {
             assert_eq!(settings_path().file_name().unwrap(), "settings.json");
-            let s = Settings::load();
+            let s = Settings::load().settings;
             // Falls back wholesale to Default.
             assert_eq!(
                 serde_json::to_string(&s.options).unwrap(),
@@ -1443,9 +1421,10 @@ mod tests {
             let id = AdapterId::parse("aabbccdd-1122-3344-5566-77889900aabb").unwrap();
             let ip: IpAddr = "192.168.1.21".parse().unwrap();
             let mut s = Settings::default();
-            s.save_network_selection(AdapterSelection::Adapter(id), Some(ip));
+            s.save_network_selection(AdapterSelection::Adapter(id), Some(ip))
+                .unwrap();
 
-            let loaded = Settings::load();
+            let loaded = Settings::load().settings;
             assert_eq!(loaded.adapter_selection(), AdapterSelection::Adapter(id));
             assert_eq!(loaded.selected_local_ip(), Some(ip));
         });
@@ -1457,10 +1436,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         with_appdata(&dir, || {
             let mut s = Settings::default();
-            s.set_ua_lds_host("  lds.plant:4850 ");
-            assert_eq!(Settings::load().ua_lds_host, "lds.plant:4850");
-            s.set_ua_lds_host("");
-            assert_eq!(Settings::load().ua_lds_host, "");
+            s.set_ua_lds_host("  lds.plant:4850 ").unwrap();
+            assert_eq!(Settings::load().settings.ua_lds_host, "lds.plant:4850");
+            s.set_ua_lds_host("").unwrap();
+            assert_eq!(Settings::load().settings.ua_lds_host, "");
         });
         let mut value = serde_json::to_value(Settings::default()).unwrap();
         value.as_object_mut().unwrap().remove("ua_lds_host");
@@ -1476,7 +1455,9 @@ mod tests {
             let path = settings_path();
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, r#"{"last_da_host":"legacy-host","options":{"update_interval_secs":18446744073709551615}}"#).unwrap();
-            let loaded = Settings::load();
+            let loaded_result = Settings::load();
+            assert!(loaded_result.notices.is_empty());
+            let loaded = loaded_result.settings;
             assert_eq!(loaded.last_da_host, "legacy-host");
             assert_eq!(
                 loaded.options.update_interval_secs,
@@ -1487,7 +1468,6 @@ mod tests {
                 Options::default().auto_reconnect
             );
             assert_eq!(loaded.last_ua_url, Settings::default().last_ua_url);
-            assert!(loaded.take_notices().is_empty());
         });
     }
 
@@ -1500,8 +1480,8 @@ mod tests {
             settings.options.update_interval_secs = u64::MAX;
             settings.options.test_interval_secs = u64::MAX;
             settings.options.operation_timeout_secs = u64::MAX;
-            settings.save();
-            let loaded = Settings::load();
+            settings.save().unwrap();
+            let loaded = Settings::load().settings;
             assert_eq!(
                 loaded.options.update_interval_secs,
                 UPDATE_INTERVAL_MAX_SECS
@@ -1525,10 +1505,10 @@ mod tests {
             s.last_da_host = "box".to_string();
             s.remember(&EndpointSpec::da("box", "Matrikon.OPC.Simulation"));
             s.set_lang(crate::i18n::Lang::En);
-            s.save();
+            s.save().unwrap();
             assert!(settings_path().exists());
 
-            let loaded = Settings::load();
+            let loaded = Settings::load().settings;
             assert_eq!(loaded.options.update_interval_secs, 3);
             assert!(loaded.options.show_log);
             assert_eq!(loaded.last_da_host, "box");
@@ -1553,9 +1533,10 @@ mod tests {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, "{ not json").unwrap();
 
-            let loaded = Settings::load();
+            let loaded_result = Settings::load();
+            let loaded = loaded_result.settings;
             assert_eq!(loaded.options.update_interval_secs, 1, "defaults are used");
-            let notices = loaded.take_notices();
+            let notices = loaded_result.notices;
             assert_eq!(notices.len(), 1, "{notices:?}");
             let SettingsNotice::ParseFailed { backup, .. } = &notices[0] else {
                 panic!("expected ParseFailed, got {notices:?}");
@@ -1565,8 +1546,8 @@ mod tests {
             assert_eq!(std::fs::read_to_string(backup).unwrap(), "{ not json");
             // The damaged original is still there until the next save.
             assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ not json");
-            loaded.save();
-            assert!(Settings::load().take_notices().is_empty());
+            loaded.save().unwrap();
+            assert!(Settings::load().notices.is_empty());
             assert_eq!(std::fs::read_to_string(backup).unwrap(), "{ not json");
         });
     }
@@ -1581,8 +1562,7 @@ mod tests {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
 
-            let loaded = Settings::load();
-            let notices = loaded.take_notices();
+            let notices = Settings::load().notices;
             assert!(
                 matches!(&notices[..], [SettingsNotice::ParseFailed { error, backup: Ok(_), .. }] if error.contains("Quantum9000")),
                 "{notices:?}"
@@ -1596,17 +1576,17 @@ mod tests {
         with_appdata(&dir, || {
             let mut s = Settings::default();
             s.last_da_host = "first".to_string();
-            s.save();
+            s.save().unwrap();
             s.last_da_host = "second".to_string();
-            s.save();
+            s.save().unwrap();
             let tmp = {
                 let mut t = settings_path().into_os_string();
                 t.push(".tmp");
                 PathBuf::from(t)
             };
             assert!(!tmp.exists(), "temporary file must be renamed away");
-            assert_eq!(Settings::load().last_da_host, "second");
-            assert!(s.take_notices().is_empty());
+            assert_eq!(Settings::load().settings.last_da_host, "second");
+            assert!(s.save().is_ok());
         });
     }
 
@@ -1617,8 +1597,7 @@ mod tests {
             // A directory squatting on the target makes the final rename fail.
             std::fs::create_dir_all(settings_path()).unwrap();
             let s = Settings::default();
-            s.save();
-            let notices = s.take_notices();
+            let notices = vec![s.save().unwrap_err()];
             assert!(
                 matches!(&notices[..], [SettingsNotice::SaveFailed { .. }]),
                 "{notices:?}"
@@ -1635,15 +1614,15 @@ mod tests {
         with_appdata(&dir, || {
             // Reading a directory fails with a non-NotFound error.
             std::fs::create_dir_all(settings_path()).unwrap();
-            let loaded = Settings::load();
+            let loaded_result = Settings::load();
+            let loaded = loaded_result.settings;
             assert!(loaded.save_blocked);
-            let notices = loaded.take_notices();
+            let notices = loaded_result.notices;
             assert!(
                 matches!(&notices[..], [SettingsNotice::ReadFailed { .. }]),
                 "{notices:?}"
             );
-            loaded.save();
-            let notices = loaded.take_notices();
+            let notices = vec![loaded.save().unwrap_err()];
             assert!(
                 matches!(&notices[..], [SettingsNotice::SaveFailed { .. }]),
                 "a blocked save must say so: {notices:?}"

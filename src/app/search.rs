@@ -201,7 +201,9 @@ impl App {
             }
         };
         let Some((host, port)) = parsed else {
-            self.settings.set_ua_lds_host("");
+            if let Err(notice) = self.settings.set_ua_lds_host("") {
+                self.report_settings_notice(notice);
+            }
             return Ok(None);
         };
         let Some(bind) = self.search_binding(&host) else {
@@ -209,7 +211,9 @@ impl App {
                 Some(tr(self.lang(), Tr::SelectAdapterRequired).to_string());
             return Err(LdsInputError::AdapterRequired);
         };
-        self.settings.set_ua_lds_host(&text);
+        if let Err(notice) = self.settings.set_ua_lds_host(&text) {
+            self.report_settings_notice(notice);
+        }
         Ok(Some(LdsTarget { host, port, bind }))
     }
 

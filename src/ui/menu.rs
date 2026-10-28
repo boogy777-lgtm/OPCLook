@@ -171,7 +171,7 @@ pub(super) fn menu(app: &mut App, ui: &mut egui::Ui) {
                     )
                     .clicked()
                 {
-                    app.settings.save();
+                    app.persist_settings();
                 }
                 if ui
                     .checkbox(
@@ -180,7 +180,7 @@ pub(super) fn menu(app: &mut App, ui: &mut egui::Ui) {
                     )
                     .clicked()
                 {
-                    app.settings.save();
+                    app.persist_settings();
                 }
             });
 
@@ -192,7 +192,7 @@ pub(super) fn menu(app: &mut App, ui: &mut egui::Ui) {
                     )
                     .clicked()
                 {
-                    app.settings.save();
+                    app.persist_settings();
                 }
                 ui.separator();
                 if ui.button(tr(lang, Tr::Clear)).clicked() {

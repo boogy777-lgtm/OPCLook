@@ -34,7 +34,6 @@ impl App {
     }
 
     pub(super) fn tick(&mut self) {
-        self.drain_settings_notices();
         let now = Instant::now();
         self.expire_pending_requests(now);
         let options = &self.settings.options;

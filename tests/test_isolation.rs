@@ -41,7 +41,7 @@ fn headless_tests_use_private_settings_and_pki() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.settings.set_lang(Lang::En);
-    app.settings.save();
+    app.settings.save().unwrap();
     app.open_connect_dialog();
     app.search_ua_all();
     let pki = opcda_egui::bff::ua::pki_dir_public();
@@ -78,9 +78,9 @@ fn headless_tests_use_private_settings_and_pki() {
                 let mut app = App::new_test(&ctx);
                 for _ in 0..20 {
                     app.settings.set_lang(lang);
-                    app.settings.save();
+                    app.settings.save().unwrap();
                     std::thread::sleep(Duration::from_millis(5));
-                    assert_eq!(Settings::load().lang(), lang, "worker {n}");
+                    assert_eq!(Settings::load().settings.lang(), lang, "worker {n}");
                 }
             })
         })

@@ -760,7 +760,7 @@ fn column_reorder_persists_in_settings() {
         let mut order = resolved;
         order.swap(idx, idx - 1); // Value moves one position left
         app.settings.persist_column_order(&order);
-        app.settings.save();
+        app.settings.save().unwrap();
 
         // Persisted for save/load via BOTH the legacy columns.order and the new
         // column_order snapshot.
@@ -1322,7 +1322,7 @@ fn u15_connect_dialog_has_an_lds_host_field_used_by_the_lds_search() {
         assert!(state.dialogs.connect.error.is_none());
         assert_eq!(state.settings.ua_lds_host, "127.0.0.1:48690");
         assert_eq!(
-            opcda_egui::settings::Settings::load().ua_lds_host,
+            opcda_egui::settings::Settings::load().settings.ua_lds_host,
             "127.0.0.1:48690",
             "the field is persisted"
         );
@@ -3555,14 +3555,14 @@ fn language_switch_persists_in_settings() {
         // over the Russian default — here it equals it).
         app.set_lang(Lang::Ru);
         assert_eq!(app.lang(), Lang::Ru);
-        let reloaded = opcda_egui::settings::Settings::load();
+        let reloaded = opcda_egui::settings::Settings::load().settings;
         assert_eq!(reloaded.lang(), Lang::Ru);
 
         // And switching to Chinese persists through Settings::save() to
         // settings.json; a persisted non-default language is never overridden.
         app.set_lang(Lang::Zh);
         assert_eq!(app.lang(), Lang::Zh);
-        let reloaded2 = opcda_egui::settings::Settings::load();
+        let reloaded2 = opcda_egui::settings::Settings::load().settings;
         assert_eq!(reloaded2.lang(), Lang::Zh);
     });
 }
@@ -4820,9 +4820,9 @@ fn a2_damaged_settings_file_is_backed_up_and_reported_in_the_journal() {
         let dir = opcda_egui::settings::app_dir();
         std::fs::create_dir_all(&dir).expect("settings dir");
         std::fs::write(dir.join("settings.json"), "{ broken").expect("write damaged file");
-        let settings = Settings::load();
+        let loaded = Settings::load();
         let ctx = egui::Context::default();
-        let app = App::new_test_with_settings(&ctx, settings);
+        let app = App::new_test_with_loaded(&ctx, loaded);
         let text = journal_text(&app);
         assert!(text.contains("повреждён"), "journal: {text}");
         assert!(text.contains("settings.json.bad-"), "journal: {text}");
@@ -4847,8 +4847,7 @@ fn a2_failed_settings_save_is_reported_in_the_journal() {
         std::fs::create_dir_all(dir.join("settings.json")).expect("squatting dir");
         let ctx = egui::Context::default();
         let mut app = App::new_test(&ctx);
-        app.settings.save();
-        app.tick_for_test();
+        app.persist_settings();
         let text = journal_text(&app);
         assert!(
             text.contains("Не удалось сохранить настройки"),

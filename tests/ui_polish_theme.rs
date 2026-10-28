@@ -169,8 +169,8 @@ fn ui9_theme_setting_roundtrips_through_the_settings_file() {
         for theme in [Theme::Light, Theme::Dark, Theme::System] {
             let mut s = Settings::default();
             s.options.theme = theme;
-            s.save();
-            assert_eq!(Settings::load().options.theme, theme);
+            s.save().unwrap();
+            assert_eq!(Settings::load().settings.options.theme, theme);
         }
     }
     let _ = std::fs::remove_dir_all(&dir);

@@ -675,6 +675,22 @@ impl<C> Engine<C> {
         let Owner::Session(session) = event.owner else {
             return Ok(pending);
         };
+        // Pushes queued by a previous link must not revive stale data while
+        // disconnected or while a new connection is still being established.
+        if event.origin == Origin::Unsolicited
+            && matches!(
+                event.kind,
+                EventKind::Values { .. }
+                    | EventKind::SubscriptionState { .. }
+                    | EventKind::PollOnly { .. }
+            )
+            && !self
+                .sessions
+                .get(&session)
+                .is_some_and(|view| view.state == SessionState::Connected)
+        {
+            return Err(());
+        }
         let failed_connect = matches!(
             &event.kind,
             EventKind::Error {
