@@ -105,6 +105,13 @@ mod tests {
     fn bounded_workers_reject_excess_and_cancel_late_results() {
         let started = Arc::new(AtomicUsize::new(0));
         let gate = Arc::new(AtomicBool::new(false));
+        struct OpenGate(Arc<AtomicBool>);
+        impl Drop for OpenGate {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        let _open_gate = OpenGate(Arc::clone(&gate));
         let resolver = {
             let started = Arc::clone(&started);
             let gate = Arc::clone(&gate);
@@ -133,9 +140,18 @@ mod tests {
         drop(queued);
         gate.store(true, Ordering::SeqCst);
         let wait = Instant::now() + Duration::from_secs(1);
-        while second.poll().is_none() && Instant::now() < wait {
+        let result = loop {
+            if let Some(result) = second.poll() {
+                break Some(result);
+            }
+            if Instant::now() >= wait {
+                break None;
+            }
             std::thread::yield_now();
-        }
+        };
+        assert!(
+            matches!(result, Some(Ok(addresses)) if addresses == vec!["127.0.0.1".parse::<IpAddr>().unwrap()])
+        );
         assert_eq!(started.load(Ordering::SeqCst), 2);
     }
 }

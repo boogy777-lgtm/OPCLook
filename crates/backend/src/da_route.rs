@@ -455,6 +455,16 @@ impl DaRouteManager {
         local_addresses: &[IpAddr],
     ) -> Result<PreparedRoutes, DaRouteError> {
         let targets = resolve_targets(host)?;
+        self.prepare_resolved(targets, adapter, local_addresses, || false)
+    }
+
+    pub(crate) fn prepare_resolved(
+        &mut self,
+        targets: Vec<IpAddr>,
+        adapter: Option<&AdapterInfo>,
+        local_addresses: &[IpAddr],
+        cancelled: impl Fn() -> bool,
+    ) -> Result<PreparedRoutes, DaRouteError> {
         let remote: Vec<IpAddr> = targets
             .into_iter()
             .filter(|ip| !ip.is_loopback() && !local_addresses.iter().any(|local| local == ip))
@@ -465,6 +475,12 @@ impl DaRouteManager {
         let adapter = adapter.ok_or(DaRouteError::NoAdapter)?;
         let mut prepared = PreparedRoutes::default();
         for target in remote {
+            if cancelled() {
+                self.release_prepared(&mut prepared);
+                return Err(DaRouteError::Resolve(
+                    "route preparation cancelled or timed out".into(),
+                ));
+            }
             if prepared.targets.contains(&target) {
                 continue;
             }
@@ -527,7 +543,7 @@ impl DaRouteManager {
                         self.last_error = Some(error.clone());
                         return Err(error);
                     }
-                    if best_route_luid(target) != Some(adapter.luid) {
+                    if cancelled() || best_route_luid(target) != Some(adapter.luid) {
                         if self
                             .helper
                             .as_mut()
@@ -583,6 +599,15 @@ impl DaRouteManager {
         self.helper = None;
         self.leases.entries.retain(|_, entry| !entry.owned);
         self.status = DaRouteStatus::HelperUnavailable;
+    }
+
+    pub(crate) fn lease_is_valid(&self, prepared: &PreparedRoutes) -> bool {
+        prepared.keys.iter().all(|(key, identity)| {
+            self.leases
+                .entries
+                .get(key)
+                .is_some_and(|entry| Arc::ptr_eq(&entry.identity, identity))
+        })
     }
 
     pub fn release(&mut self, prepared: PreparedRoutes) {

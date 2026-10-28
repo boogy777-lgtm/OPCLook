@@ -8,3 +8,5 @@ pub use opclook_locale as i18n;
 
 pub mod da_route;
 pub mod route_resolver;
+
+pub mod route_service;
