@@ -1,3 +1,7 @@
+# F checkpoint, 2026-10-28
+
+F GUI hot paths implemented at `efb14a1180d19601f7c71d6a893b9bbe84aae9d7`: revision-based row, expanded-line, tree and UA-result caches; lazy row text; bounded array traversal; deque-backed virtual journal; borrowed quality/type text, lazy hover/drag and About certificate lookup. Row storage is private with controlled structural invalidation; same-length replacement is covered. Isolated Linux CPU and allocation measurements and five before/after images are in `docs/reports/refactor-frame-baseline.md`. Linux GUI 213 unit, 149 interaction (one Windows-only ignored), 19 table and navigation tests passed; a further metadata test passed separately. Windows i686 workspace all-target typecheck passed with cross-check-only resource and manifest flags. This does not establish Windows runtime, physical DA/UAC, or exact-head CI. Remaining backend G and structural H/Settings work remains open.
+
 # Статус ревью Rust
 
 Исходный отчёт: `refactoring-plan.md`, база d85c744. Статусы ниже отражают

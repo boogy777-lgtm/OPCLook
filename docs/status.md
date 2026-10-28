@@ -1,6 +1,8 @@
 # Статус
 
-**2026-10-28, текущее состояние:** B и E реализованы, включая B15 live
+**2026-10-28, F:** GUI caches, bounded array expansion and virtualized journal implemented; measured before/after and five images reviewed. Remaining G/H, Windows runtime, physical DA/UAC and exact-head CI remain open. Details: `docs/refactoring-status.md` and `docs/reports/refactor-frame-baseline.md`.
+
+**2026-10-28, предыдущее состояние:** B и E реализованы, включая B15 live
 proxy и CSV diagnostics; пять headless PNG просмотрены. F baseline измерен: 10k статично 2918.9 мкс медиана / 4472.3 мкс p95,
 100 Values + кадр 3312.2 / 6089.1 мкс; отдельно журнал 5000 записей
 75120.0 / 101021.1 мкс (CPU wall, не GPU FPS). F оптимизация,

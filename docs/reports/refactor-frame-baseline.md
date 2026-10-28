@@ -80,12 +80,41 @@ cargo test --offline --config scripts/perf-codegen.toml \
   -- --ignored --nocapture --test-threads=1
 ```
 
-Reviewed images: `docs/screenshots/main-10k-ru.png`,
-`da-helper-error-ru.png`, `ua-security-zh.png`, `network-ru.png`, and
-`confirmation-ru.png`. Russian and Chinese labels are legible and no missing
+Baseline images, preserved before the F changes: `docs/screenshots/baseline-f/main-10k-ru.png`,
+`docs/screenshots/baseline-f/da-helper-error-ru.png`, `docs/screenshots/baseline-f/ua-security-zh.png`,
+`docs/screenshots/baseline-f/network-ru.png`, and `docs/screenshots/baseline-f/confirmation-ru.png`. Russian and Chinese labels are legible and no missing
 glyph boxes were seen. The main table's far-right columns extend beyond the
 1200-point viewport. DA uses a seeded discovery entry and a typed,
 localized HelperUnavailable error containing `IPC timeout`; the test asserts
 the detail appears in accessibility output. This is a visual fixture, not a
 real Windows helper, UAC, network adapter, or DA server runtime test. The
 screenshots feature is opt-in and does not add wgpu to the normal CLI graph.
+
+## After F changes
+
+Measured on the same host, target, command and fixture scenario above, with
+application code at `efb14a1180d19601f7c71d6a893b9bbe84aae9d7` and
+`tests/perf_frames.rs` SHA-256 `b82cfb71b54c27d1cd7a017d4312d274c071363bdb1cd6bf6a0bbd92fc0d6997`.
+The fixture changed only to use the controlled row accessor/mutator; it still
+seeds and synchronizes once before 20 warmup frames, constructs events outside
+the region and measures event handling and App::update inside it. The test
+passed including visible value and timestamp assertions. This isolated rerun
+was made after the other checks finished.
+
+| Scene | Median µs | p95 µs | Median allocs | p95 allocs | Median reallocs | p95 reallocs | Median bytes | p95 bytes |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 10k static | 2206.8 | 3250.9 | 4417 | 4417 | 315 | 315 | 1,257,611 | 1,257,611 |
+| 10k + batch of 100 Values | 2462.6 | 3745.6 | 4566 | 4594 | 376 | 389 | 1,279,366 | 1,286,819 |
+| 5k journal, no rows | 494.5 | 1528.4 | 1102 | 1102 | 76 | 76 | 311,303 | 311,303 |
+
+The 100-update scene requested 4,566 allocations at the median versus 4,530
+before (+36, about 0.8%); its CPU median and allocated bytes nevertheless
+decreased. Lazy row caches retain formatted strings and clone them for visible
+cells, contributing to this tradeoff.
+
+These are CPU wall times and allocation requests/bytes, not live memory or
+display/GPU FPS. Individual runs are subject to host scheduling noise. The five
+post-change images at `docs/screenshots/` were rendered with the same Mesa
+command and viewed: CJK remains legible, and the seeded helper error retains
+its full IPC timeout detail. Journal rows are virtualized, with the complete
+message available on hover and in exports.

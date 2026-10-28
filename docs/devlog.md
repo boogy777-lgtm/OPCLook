@@ -1,3 +1,7 @@
+## 2026-10-28 — F GUI hot paths
+
+Implemented bounded and cached table/tree rendering, lazy visible-row formatting, virtual journal with full hover/export details, bounded array children, and revision-based row index invalidation including equal-length replacement. Linux optimized headless median CPU wall: static 10k 2206.8 µs, 100 value updates + frame 2462.6 µs, 5000 journal entries 494.5 µs; baseline and p95, allocations, fixture hash and commands are in `docs/reports/refactor-frame-baseline.md`. The figures are measurements of this instrumented host, not GPU FPS or resident memory. Five before/after scenes reviewed, including CJK and helper IPC error. Windows i686 typecheck passed with cross-check flags; Windows runtime, physical DA/UAC and exact-head CI remain open. Remaining backend G and structural H/Settings work remain open.
+
 # Дев-лог
 
 ## 2026-10-27 — аудит и дерево серверов UA
