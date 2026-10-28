@@ -1,4 +1,5 @@
 #![windows_subsystem = "windows"]
+#![deny(clippy::undocumented_unsafe_blocks)]
 
 mod winutil;
 use winutil::{Impersonation, LocalAllocation, OwnedHandle};
@@ -147,9 +148,9 @@ fn run(pipe: &str, parent: u32, audit: &Audit) -> Result<(), String> {
     let user_sid = own_sid.to_string();
     let (handle, security) = create_pipe(pipe, &user_sid)?;
     let _security = security;
-    wait_for_client(handle)?;
-
+    // SAFETY: CreateNamedPipeW transferred this unique handle to the File.
     let file = unsafe { std::fs::File::from_raw_handle(handle.0 as _) };
+    wait_for_client(&file)?;
     let mut reader = BufReader::new(file);
     let mut writer = reader
         .get_ref()
@@ -279,6 +280,7 @@ fn run(pipe: &str, parent: u32, audit: &Audit) -> Result<(), String> {
             &format!("target={} luid={}", route.target, route.interface_luid),
         );
     }
+    // SAFETY: the File still owns this connected server pipe handle.
     unsafe {
         let _ = DisconnectNamedPipe(pipe_handle);
     }
@@ -302,6 +304,7 @@ fn create_pipe(pipe: &str, user_sid: &str) -> Result<(HANDLE, LocalAllocation), 
     let sddl = format!("D:(A;;GA;;;{user_sid})");
     let sddl_w = wide(&sddl);
     let mut descriptor = PSECURITY_DESCRIPTOR::default();
+    // SAFETY: SDDL is terminated and descriptor is a valid output pointer.
     unsafe {
         ConvertStringSecurityDescriptorToSecurityDescriptorW(
             PCWSTR(sddl_w.as_ptr()),
@@ -320,6 +323,7 @@ fn create_pipe(pipe: &str, user_sid: &str) -> Result<(HANDLE, LocalAllocation), 
     };
     let name = format!(r"\\.\pipe\{pipe}");
     let name_w = wide(&name);
+    // SAFETY: name and attributes, including the descriptor, remain live through the call.
     let handle = unsafe {
         CreateNamedPipeW(
             PCWSTR(name_w.as_ptr()),
@@ -333,17 +337,19 @@ fn create_pipe(pipe: &str, user_sid: &str) -> Result<(HANDLE, LocalAllocation), 
         )
     };
     if handle.is_invalid() {
+        // SAFETY: read the calling thread's error immediately after CreateNamedPipeW.
         let error = unsafe { GetLastError() };
         return Err(format!("CreateNamedPipeW failed with {}", error.0));
     }
     Ok((handle, descriptor))
 }
 
-fn wait_for_client(handle: HANDLE) -> Result<(), String> {
+fn wait_for_client(file: &std::fs::File) -> Result<(), String> {
     let (tx, rx) = std::sync::mpsc::channel();
-    let raw = handle.0 as usize;
+    let pipe = file.try_clone().map_err(|e| format!("clone pipe: {e}"))?;
     std::thread::spawn(move || {
-        let handle = HANDLE(raw as _);
+        let handle = HANDLE(pipe.as_raw_handle());
+        // SAFETY: the thread owns the cloned pipe handle until the call returns.
         let result = unsafe { ConnectNamedPipe(handle, None) };
         let _ = tx.send(result);
     });
@@ -364,12 +370,14 @@ fn pipe_connect_result(error: windows::core::Error) -> Result<(), String> {
 
 fn client_process_id(handle: HANDLE) -> Result<u32, String> {
     let mut pid = 0u32;
+    // SAFETY: handle is the live server pipe and pid is writable.
     unsafe { GetNamedPipeClientProcessId(handle, &mut pid) }
         .map_err(|e| format!("GetNamedPipeClientProcessId: {e}"))?;
     Ok(pid)
 }
 
 fn client_sid(handle: HANDLE) -> Result<String, String> {
+    // SAFETY: handle is a connected server pipe held by the caller.
     unsafe { ImpersonateNamedPipeClient(handle) }
         .map_err(|e| format!("ImpersonateNamedPipeClient: {e}"))?;
     // SAFETY: ImpersonateNamedPipeClient just succeeded on this thread.
@@ -385,6 +393,7 @@ fn client_sid(handle: HANDLE) -> Result<String, String> {
 
 fn current_process_sid() -> Result<String, String> {
     let mut token = HANDLE::default();
+    // SAFETY: the current-process pseudo-handle is valid and token is writable.
     unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }
         .map_err(|e| format!("OpenProcessToken: {e}"))?;
     // SAFETY: OpenProcessToken returned an owned handle.
@@ -399,6 +408,7 @@ fn aligned_token_buffer(needed: u32) -> Vec<usize> {
 
 fn token_sid(token: HANDLE) -> Result<String, String> {
     let mut needed = 0u32;
+    // SAFETY: the token is live and the null-buffer query obtains the required size.
     unsafe {
         let _ = GetTokenInformation(token, TokenUser, None, 0, &mut needed);
     }
@@ -407,6 +417,7 @@ fn token_sid(token: HANDLE) -> Result<String, String> {
     }
     // TOKEN_USER contains pointers; the storage must satisfy its alignment.
     let mut buffer = aligned_token_buffer(needed);
+    // SAFETY: the aligned buffer has at least needed bytes and token is live.
     unsafe {
         GetTokenInformation(
             token,
@@ -417,12 +428,14 @@ fn token_sid(token: HANDLE) -> Result<String, String> {
         )
     }
     .map_err(|e| format!("GetTokenInformation(TokenUser): {e}"))?;
+    // SAFETY: successful TokenUser query initialized TOKEN_USER in aligned storage.
     let user = unsafe { &*(buffer.as_ptr() as *const TOKEN_USER) };
     sid_to_string(user.User.Sid)
 }
 
 fn sid_to_string(sid: PSID) -> Result<String, String> {
     let mut text = PWSTR::null();
+    // SAFETY: sid belongs to the live token buffer and text is writable.
     unsafe { ConvertSidToStringSidW(sid, &mut text) }
         .map_err(|e| format!("ConvertSidToStringSidW: {e}"))?;
     // SAFETY: conversion transferred its LocalAlloc-compatible string.
@@ -437,6 +450,7 @@ fn sid_to_string(sid: PSID) -> Result<String, String> {
 fn add_route(message: &PipeMessage) -> Result<RouteSpec, String> {
     let route = validate_route(message)?;
     let row = route_row(&route)?;
+    // SAFETY: row is fully initialized and borrowed for the call.
     let result = unsafe { CreateIpForwardEntry2(&row) };
     if result == ERROR_SUCCESS {
         Ok(route)
@@ -474,6 +488,7 @@ fn refresh_route(
         return Err("route is not owned by this helper".to_string());
     }
     let row = route_row(&route)?;
+    // SAFETY: row is fully initialized and borrowed for the call.
     let result = unsafe { SetIpForwardEntry2(&row) };
     if result == ERROR_SUCCESS {
         Ok(())
@@ -484,6 +499,7 @@ fn refresh_route(
 
 fn delete_created(route: RouteSpec) -> Result<(), String> {
     let row = route_row(&route)?;
+    // SAFETY: row is fully initialized and borrowed for the call.
     let result = unsafe { DeleteIpForwardEntry2(&row) };
     if result == ERROR_SUCCESS {
         Ok(())
@@ -550,6 +566,7 @@ fn route_row(route: &RouteSpec) -> Result<MIB_IPFORWARD_ROW2, String> {
         Value: route.interface_luid,
     };
     let mut index = 0u32;
+    // SAFETY: luid is initialized and index is a valid output pointer.
     let result = unsafe { ConvertInterfaceLuidToIndex(&luid, &mut index) };
     if result != ERROR_SUCCESS {
         return Err(format!(
@@ -558,6 +575,7 @@ fn route_row(route: &RouteSpec) -> Result<MIB_IPFORWARD_ROW2, String> {
         ));
     }
     let mut row = MIB_IPFORWARD_ROW2::default();
+    // SAFETY: row is writable and has the expected Windows structure type.
     unsafe { InitializeIpForwardEntry(&mut row) };
     row.InterfaceLuid = luid;
     row.InterfaceIndex = index;
