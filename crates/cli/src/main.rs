@@ -17,6 +17,7 @@ const HELP: &str = "opclook-cli — headless OPC DA/UA client\n\nUsage: opclook-
 const MAX_ARG: usize = 4096;
 const MAX_JSON_BUDGET: usize = 1_000_000;
 const MAX_DEPTH: usize = 32;
+const OUTPUT_CLOSED: &str = "stdout closed";
 struct Options {
     endpoint: EndpointSpec,
     timeout: Duration,
@@ -395,10 +396,37 @@ fn data_json(data: &DataValue, endpoint: &EndpointSpec) -> Result<Json, String> 
         json!({"value":encode(&data.value,0,&mut MAX_JSON_BUDGET.clone())?,"quality":{"code":data.quality.code,"kind":quality,"text":data.quality.text},"timestamp":data.timestamp.map(|v| v.to_rfc3339()),"reason":data.reason.as_ref().map(|reason| message(reason,endpoint))}),
     )
 }
-fn output(value: &Json) -> Result<(), String> {
-    let text = serde_json::to_string(value).map_err(|e| e.to_string())?;
-    writeln!(io::stdout().lock(), "{text}").map_err(|e| e.to_string())
+// Serialize into a bounded buffer before writing, so oversized output never emits a
+// partial JSON record and escaped strings count against the actual byte limit.
+struct LimitedOutput(Vec<u8>);
+impl Write for LimitedOutput {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.len() > MAX_JSON_BUDGET.saturating_sub(self.0.len()) {
+            return Err(io::Error::other("JSON output limit exceeded"));
+        }
+        self.0.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
+fn output_to(value: &Json, mut writer: impl Write) -> Result<(), String> {
+    let mut bytes = LimitedOutput(Vec::new());
+    serde_json::to_writer(&mut bytes, value).map_err(|e| e.to_string())?;
+    bytes.0.push(b'\n');
+    writer.write_all(&bytes.0).map_err(|e| {
+        if e.kind() == io::ErrorKind::BrokenPipe {
+            OUTPUT_CLOSED.to_string()
+        } else {
+            e.to_string()
+        }
+    })
+}
+fn output(value: &Json) -> Result<(), String> {
+    output_to(value, io::stdout().lock())
+}
+
 fn parse_write(kind: &str, value: &str) -> Result<Value, String> {
     match kind {
         "bool" => value
@@ -618,13 +646,18 @@ fn run(options: &Options) -> Result<(), String> {
 fn main() {
     match parse(std::env::args().skip(1).collect()) {
         Ok(None) => {
-            if let Err(error) = write!(io::stdout().lock(), "{HELP}") {
+            if let Err(error) = write!(io::stdout().lock(), "{HELP}")
+                && error.kind() != io::ErrorKind::BrokenPipe
+            {
                 eprintln!("{error}");
                 std::process::exit(1);
             }
         }
         Ok(Some(options)) => {
             if let Err(error) = run(&options) {
+                if error == OUTPUT_CLOSED {
+                    return;
+                }
                 eprintln!("{}", redact(error, &options.endpoint));
                 std::process::exit(1);
             }
@@ -638,6 +671,26 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn output_limit_counts_json_escapes_and_never_writes_partial_record() {
+        let mut bytes = Vec::new();
+        let value = json!("\n".repeat(MAX_JSON_BUDGET / 2));
+        assert!(output_to(&value, &mut bytes).is_err());
+        assert!(bytes.is_empty());
+    }
+    #[test]
+    fn closed_stdout_is_distinguished_from_other_io_errors() {
+        struct Closed;
+        impl Write for Closed {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::from(io::ErrorKind::BrokenPipe))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        assert_eq!(output_to(&json!({}), Closed).unwrap_err(), OUTPUT_CLOSED);
+    }
     #[test]
     fn help_in_write_value_is_not_an_option() {
         let args = [
