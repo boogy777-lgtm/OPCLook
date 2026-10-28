@@ -96,15 +96,18 @@ impl UaSearch {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct DaHit {
+    pub server: ServerEntry,
+    pub host: String,
+}
+
 pub struct ConnectDialog {
     pub open: bool,
     pub pane: ConnectPane,
     pub da_host: String,
-    pub da_servers: Vec<ServerEntry>,
-    /// Computer for each DA result, indexed in parallel with da_servers.
-    pub da_server_hosts: Vec<String>,
-    pub da_selected: Option<String>,
-    pub da_selected_host: Option<String>,
+    pub da_servers: Vec<DaHit>,
+    pub da_selected: Option<DaHit>,
     pub da_manual: String,
     pub da_pending: bool,
     pub ua_url: String,
@@ -160,9 +163,7 @@ impl Default for ConnectDialog {
             pane: ConnectPane::Da,
             da_host: String::new(),
             da_servers: Vec::new(),
-            da_server_hosts: Vec::new(),
             da_selected: None,
-            da_selected_host: None,
             da_manual: String::new(),
             da_pending: false,
             ua_url: String::new(),

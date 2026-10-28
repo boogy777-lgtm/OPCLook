@@ -125,8 +125,8 @@ fn two_endpoints_of_one_server() -> App {
     let mut app = App::new_test(&ctx);
     app.seed_session(sid(1), EndpointSpec::ua(URL));
     let mut secure = EndpointSpec::ua(URL);
-    secure.ua_security_policy = Some(UaSecurityPolicy::Basic256Sha256);
-    secure.ua_security_mode = Some(UaSecurityMode::SignAndEncrypt);
+    secure.ua_security_policy = UaSecurityPolicy::Basic256Sha256;
+    secure.ua_security_mode = UaSecurityMode::SignAndEncrypt;
     app.seed_session(sid(2), secure);
     app.seed_row(sid(1), "ns=2;s=A", "OnlyPlain", Value::I64(1));
     app.seed_row(sid(2), "ns=2;s=B", "OnlySecure", Value::I64(2));

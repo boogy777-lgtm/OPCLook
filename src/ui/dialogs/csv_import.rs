@@ -1,30 +1,27 @@
-use super::super::csv::{CsvServer, remaining_len, report_csv_server_problem, resolve_csv_session};
+use super::super::csv::{CsvServer, report_csv_server_problem, resolve_csv_session};
 use super::dialog_spacing;
-use crate::app::App;
+use crate::app::{App, CsvImportState};
 use crate::i18n::{Tr, fmt, tr};
 
 /// Modal progress window for a running CSV import; advances the job a chunk per
 /// frame and allows cancel.
 pub(super) fn csv_import_dialog(app: &mut App, ui: &mut egui::Ui) {
-    if app.csv_import.is_none() {
+    let Some(job) = app.csv_import.as_ref() else {
         return;
-    }
+    };
+    let (total, processed, loaded, state) = (job.total, job.processed, job.loaded, job.state);
     let ctx = ui.ctx().clone();
     let lang = app.lang();
     let mut cancel = false;
 
-    let (total, processed, loaded, remaining) = {
-        let job = app.csv_import.as_ref().expect("checked");
-        (job.total, job.processed, job.loaded, remaining_len(job))
-    };
-    let done = remaining == 0;
+    let done = state == CsvImportState::Completed;
     let fraction = if total > 0 {
         processed as f32 / total as f32
     } else {
         0.0
     };
     let job_done = done;
-    let job_cancelled = app.csv_import.as_ref().unwrap().cancelled;
+    let job_cancelled = state == CsvImportState::Cancelled;
 
     egui::Window::new(tr(lang, Tr::LoadTreeDialog))
         .collapsible(false)
@@ -69,13 +66,13 @@ pub(super) fn csv_import_dialog(app: &mut App, ui: &mut egui::Ui) {
             }
         });
 
-    if cancel && job_done {
+    if cancel && (job_done || job_cancelled) {
         app.csv_import = None;
         return;
     }
     if cancel {
         if let Some(job) = app.csv_import.as_mut() {
-            job.cancelled = true;
+            job.state = CsvImportState::Cancelled;
         }
         return;
     }
@@ -108,6 +105,11 @@ pub(super) fn csv_import_dialog(app: &mut App, ui: &mut egui::Ui) {
             app.add_items(session, items);
             if let Some(job) = app.csv_import.as_mut() {
                 job.loaded += app.rows.len().saturating_sub(before);
+            }
+        }
+        if let Some(job) = app.csv_import.as_mut() {
+            if job.remaining.is_empty() {
+                job.state = CsvImportState::Completed;
             }
         }
         // Keep repainting while the job is active.

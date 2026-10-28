@@ -661,19 +661,18 @@ impl App {
                     if self.dialogs.connect.da_auto_pending > 0 {
                         // A ProgID only identifies a server within a computer.
                         // The host must survive discovery and row selection.
-                        for s in servers {
+                        for server in servers {
                             let duplicate = self
                                 .dialogs
                                 .connect
                                 .da_servers
                                 .iter()
-                                .zip(&self.dialogs.connect.da_server_hosts)
-                                .any(|(existing, existing_host)| {
-                                    existing.id == s.id && existing_host == &host
-                                });
+                                .any(|hit| hit.server.id == server.id && hit.host == host);
                             if !duplicate {
-                                self.dialogs.connect.da_servers.push(s);
-                                self.dialogs.connect.da_server_hosts.push(host.clone());
+                                self.dialogs.connect.da_servers.push(super::dialogs::DaHit {
+                                    server,
+                                    host: host.clone(),
+                                });
                             }
                         }
                         self.dialogs.connect.da_auto_pending =
@@ -682,14 +681,8 @@ impl App {
                             self.dialogs.connect.da_pending = false;
                         }
                         if self.dialogs.connect.da_selected.is_none() {
-                            self.dialogs.connect.da_selected = self
-                                .dialogs
-                                .connect
-                                .da_servers
-                                .first()
-                                .map(|s| s.id.clone());
-                            self.dialogs.connect.da_selected_host =
-                                self.dialogs.connect.da_server_hosts.first().cloned();
+                            self.dialogs.connect.da_selected =
+                                self.dialogs.connect.da_servers.first().cloned();
                         }
                         self.journal.info_l(
                             Tr::ServersFoundDa,
@@ -699,16 +692,15 @@ impl App {
                     }
                     self.dialogs.connect.da_pending = false;
                     self.dialogs.connect.da_host = host.clone();
-                    self.dialogs.connect.da_server_hosts = vec![host.clone(); servers.len()];
-                    self.dialogs.connect.da_servers = servers;
-                    self.dialogs.connect.da_selected = self
-                        .dialogs
-                        .connect
-                        .da_servers
-                        .first()
-                        .map(|s| s.id.clone());
-                    self.dialogs.connect.da_selected_host =
-                        self.dialogs.connect.da_server_hosts.first().cloned();
+                    self.dialogs.connect.da_servers = servers
+                        .into_iter()
+                        .map(|server| super::dialogs::DaHit {
+                            server,
+                            host: host.clone(),
+                        })
+                        .collect();
+                    self.dialogs.connect.da_selected =
+                        self.dialogs.connect.da_servers.first().cloned();
                     self.journal.info_l(
                         Tr::ServersFoundDa,
                         &[&self.dialogs.connect.da_servers.len().to_string()],

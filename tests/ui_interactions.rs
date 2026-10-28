@@ -1491,8 +1491,8 @@ fn v2_endpoints_with_other_security_are_separate_sessions() {
         let url = "opc.tcp://127.0.0.1:4840";
         let plain = EndpointSpec::ua(url);
         let mut secure = EndpointSpec::ua(url);
-        secure.ua_security_policy = Some(UaSecurityPolicy::Basic256Sha256);
-        secure.ua_security_mode = Some(UaSecurityMode::SignAndEncrypt);
+        secure.ua_security_policy = UaSecurityPolicy::Basic256Sha256;
+        secure.ua_security_mode = UaSecurityMode::SignAndEncrypt;
 
         assert!(app.open_tab_for_endpoint(plain.clone()));
         assert!(app.open_tab_for_endpoint(secure.clone()));
@@ -3337,9 +3337,12 @@ fn connect_dialog_select_da_server_enables_connect() {
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
     app.dialogs.connect.da_pending = false;
-    app.dialogs.connect.da_servers.push(ServerEntry {
-        id: "Alpha.Server".to_string(),
-        description: "Тестовый".to_string(),
+    app.dialogs.connect.da_servers.push(opcda_egui::app::DaHit {
+        server: ServerEntry {
+            id: "Alpha.Server".to_string(),
+            description: "Тестовый".to_string(),
+        },
+        host: String::new(),
     });
     let mut h = harness(app);
     h.run_steps(3);
@@ -3348,7 +3351,12 @@ fn connect_dialog_select_da_server_enables_connect() {
     h.get_by_label("Alpha.Server — Тестовый").click();
     h.run_steps(3);
     assert_eq!(
-        h.state().dialogs.connect.da_selected.as_deref(),
+        h.state()
+            .dialogs
+            .connect
+            .da_selected
+            .as_ref()
+            .map(|hit| hit.server.id.as_str()),
         Some("Alpha.Server")
     );
     assert_eq!(h.state().dialogs.connect.da_manual, "Alpha.Server");
@@ -4963,5 +4971,117 @@ fn large_subnet_confirmation_ui_starts_only_after_yes_and_can_stop() {
             .dispatched_for_test()
             .iter()
             .any(|command| matches!(command.kind, CommandKind::CancelUaScan { .. }))
+    );
+}
+
+#[test]
+fn csv_import_cancel_retains_partial_rows_and_close_then_complete() {
+    use opcda_egui::app::CsvImportState;
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
+    let mut csv = String::from("server;item_id;name\n");
+    for i in 0..100_000 {
+        csv.push_str(&format!("Srv.Test;Tag{i};Name{i}\n"));
+    }
+    opcda_egui::ui::start_csv_import(&mut app, csv);
+    let mut h = harness(app);
+    h.run_steps(1);
+    h.get_by_label("Отмена").click();
+    h.run_steps(1);
+    let job = h.state().csv_import.as_ref().unwrap();
+    assert_eq!(job.state, CsvImportState::Cancelled);
+    assert!(job.processed > 0 && job.processed < job.total);
+    assert_eq!(job.loaded, h.state().rows.len());
+    let retained = job.loaded;
+    h.run_steps(2);
+    assert_eq!(h.state().rows.len(), retained);
+    h.get_by_label("Закрыть").click();
+    h.run_steps(1);
+    assert!(h.state().csv_import.is_none());
+    assert_eq!(h.state().rows.len(), retained);
+
+    opcda_egui::ui::start_csv_import(
+        h.state_mut(),
+        "server;item_id;name\nSrv.Test;Final;Final\n".into(),
+    );
+    h.run_steps(2);
+    let job = h.state().csv_import.as_ref().unwrap();
+    assert_eq!(job.state, CsvImportState::Completed);
+    assert_eq!((job.processed, job.loaded), (1, 1));
+    h.get_by_label("Закрыть").click();
+    h.run_steps(1);
+    assert!(h.state().csv_import.is_none());
+}
+
+#[test]
+fn da_results_with_same_progid_select_their_own_host() {
+    use opcda_egui::bff::model::ServerEntry;
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.dialogs.connect.da_auto_pending = 2;
+    app.dialogs.connect.da_pending = true;
+    for host in ["plant-a", "plant-b"] {
+        app.on_event_for_test(EventKind::Servers {
+            host: host.into(),
+            servers: vec![ServerEntry {
+                id: "Vendor.OPC".into(),
+                description: "Factory".into(),
+            }],
+        });
+    }
+    let mut h = harness(app);
+    h.run_steps(2);
+    assert_eq!(
+        h.state().dialogs.connect.da_selected.as_ref().unwrap().host,
+        "plant-a"
+    );
+    h.get_by_label("Vendor.OPC — Factory @ plant-b").click();
+    h.run_steps(2);
+    let d = &h.state().dialogs.connect;
+    let selected = d.da_selected.as_ref().unwrap();
+    assert_eq!(
+        (selected.server.id.as_str(), selected.host.as_str()),
+        ("Vendor.OPC", "plant-b")
+    );
+    assert_eq!(
+        (d.da_manual.as_str(), d.da_host.as_str()),
+        ("Vendor.OPC", "plant-b")
+    );
+}
+
+#[test]
+fn double_click_da_result_connects_to_its_host() {
+    use opcda_egui::app::DaHit;
+    use opcda_egui::bff::model::ServerEntry;
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.dialogs.connect.da_pending = false;
+    app.dialogs.connect.da_servers.push(DaHit {
+        server: ServerEntry {
+            id: "Vendor.OPC".into(),
+            description: "Factory".into(),
+        },
+        host: "plant-b".into(),
+    });
+    set_ru(&mut app);
+    let mut h = Harness::builder()
+        .with_size([1200.0, 900.0])
+        .with_step_dt(0.016)
+        .with_accessibility_check(false)
+        .allow_missing_glyphs()
+        .build_ui_state(|ui, app| opcda_egui::ui::draw(app, ui), app);
+    h.run_steps(2);
+    h.get_by_label("Vendor.OPC — Factory @ plant-b").click();
+    h.run_steps(1);
+    h.get_by_label("Vendor.OPC — Factory @ plant-b").click();
+    h.run_steps(1);
+    assert_eq!(h.state().sessions.len(), 1);
+    let endpoint = &h.state().sessions[0].endpoint;
+    assert_eq!(
+        (endpoint.host.as_str(), endpoint.address.as_str()),
+        ("plant-b", "Vendor.OPC")
     );
 }

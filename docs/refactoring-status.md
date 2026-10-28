@@ -450,3 +450,27 @@ standalone backend/CLI — typecheck без этих флагов. PNG, Windows 
 физические DA/UAC и финальный exact-head CI остаются открыты. Это лишь подэтап
 B2: остальные состояния B, E/F/G/H и измеренный 10k frame/allocation baseline
 не завершены.
+
+## Подэтап B3: DA, импорт CSV и Auto security (2026-10-28)
+
+| Состояние | Изменение и проверка |
+|---|---|
+| DA discovery | Результат и выбранный результат хранят `DaHit { server, host }`; merge различает одинаковые ProgID на разных компьютерах, первый результат остаётся fallback. Headless тесты проверяют выбор и двойной клик по нужному host, существующие проверки — manual target и изоляцию маршрутов |
+| CSV import | `Running/Cancelled/Completed`, отсутствие job означает idle. Отмена сохраняет частично загруженные строки, close освобождает job; headless тест проверяет частичную отмену и следующий завершённый импорт |
+| Endpoint security | Policy и mode напрямую содержат Auto; отсутствующие/null/legacy значения читаются, Auto не записывается, явные значения сохраняются. Контракт и session identity проверяют совместимость; прежние UI и backend проверки некорректного security остаются |
+
+Измерено на Linux: GUI unit 204/204 и UI 144/144 (1 Windows-only ignored),
+затем отдельно новые identity, DA selection и double-click регрессии прошли;
+GUI/CLI all-targets, diagnostics и boundary script прошли. Windows i686
+workspace all-targets и diagnostics прошли только typecheck с test-only
+пропуском ресурсов/manifest; standalone backend/CLI — без пропусков. PNG не
+проверен: временный renderer требует отсутствующий в offline cache пакет
+`wgpu-core-deps-apple`. Windows runtime, физические DA/UAC, exact-head CI,
+остальные состояния B, E/F/G/H и измеренный 10k baseline остаются открыты.
+
+Повторный Linux набор после очистки повреждённых metadata: backend 202/202,
+Engine 22/22, contract 27/27 + 3 doctest, CLI 6/6 + 2/2 live sample.
+
+CSV dialog читает snapshot без checked `expect`; Linux interaction отмены и
+завершения 1/1 и Windows i686 GUI all-targets typecheck с test-only пропуском
+ресурсов прошли. Предыдущие ограничения сохраняются.

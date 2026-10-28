@@ -40,9 +40,7 @@ impl App {
         d.da_pending = false;
         d.da_auto_pending = 0;
         d.da_servers.clear();
-        d.da_server_hosts.clear();
         d.da_selected = None;
-        d.da_selected_host = None;
         self.discover_da(host);
     }
 
@@ -72,9 +70,7 @@ impl App {
         hosts.dedup();
         self.dialogs.connect.da_auto_pending = 1 + hosts.len();
         self.dialogs.connect.da_servers.clear();
-        self.dialogs.connect.da_server_hosts.clear();
         self.dialogs.connect.da_selected = None;
-        self.dialogs.connect.da_selected_host = None;
         self.discover_da(String::new());
         for host in hosts {
             self.discover_da(host);

@@ -377,3 +377,31 @@ bins и boundary для Linux/Windows targets прошли. Windows i686 workspa
 all-targets и diagnostics bins прошли только typecheck с test-only пропуском
 ресурсов/manifest; standalone backend/CLI all-targets typecheck без пропусков
 прошёл. `cargo fmt --all -- --check` прошёл.
+
+### 2026-10-28 — подэтап B3: состояния DA/CSV/Auto
+
+Результаты DA и выбор используют `DaHit` с неизменной host identity; ручной
+ProgID и fallback первого найденного сервера сохранены. CSV job различает
+running, cancelled и completed; закрытие после отмены сохраняет частичный
+импорт. EndpointSpec использует прямые Auto policy/mode, старые отсутствующие,
+null и legacy значения принимаются; явный security не понижается. Это только
+подэтап B, SessionKind и следующие состояния не затронуты.
+
+Измерено Linux: GUI unit 204/204, UI 144/144 и 1 ignored до последних двух
+добавленных DA регрессий; новые DA selection, double-click и session identity
+прошли отдельно. Contract compatibility тесты 6/6, Linux GUI/CLI all-targets,
+diagnostics, boundary и fmt прошли. Windows i686 workspace all-targets и
+diagnostics проверены с test-only флагами, standalone backend/CLI без флагов.
+После повреждения локальных metadata очищены только engine/locale target
+артефакты и набор повторён. PNG renderer не собрался offline: отсутствует
+`wgpu-core-deps-apple`; визуальная проверка остаётся открытой. Windows runtime,
+физические DA/UAC, финальный exact-head CI, оставшиеся B/E/F/G/H и 10k baseline
+не выполнены.
+
+Повторный полный Linux набор после очистки metadata: backend 202/202,
+Engine 22/22, contract 27/27 + 3 doctest, CLI 6/6 + 2/2 live sample.
+
+CSV dialog больше не использует checked `expect`: состояние и счётчики читаются
+одним snapshot через `let Some`. Linux interaction отмены и завершения 1/1,
+Windows i686 GUI all-targets typecheck с test-only пропуском ресурсов и fmt
+прошли; ограничения предыдущей записи сохраняются.

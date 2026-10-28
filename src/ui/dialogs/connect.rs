@@ -177,16 +177,14 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                 } else if dialog.da_servers.is_empty() {
                                     ui.label(tr(lang, Tr::ListEmptyManual));
                                 }
-                                for (index, server) in dialog.da_servers.iter().enumerate() {
-                                    let host = dialog
-                                        .da_server_hosts
-                                        .get(index)
-                                        .cloned()
-                                        .unwrap_or_else(|| dialog.da_host.clone());
-                                    let selected = dialog.da_selected.as_deref()
-                                        == Some(server.id.as_str())
-                                        && dialog.da_selected_host.as_deref()
-                                            == Some(host.as_str());
+                                for hit in &dialog.da_servers {
+                                    let server = &hit.server;
+                                    let host = &hit.host;
+                                    let selected =
+                                        dialog.da_selected.as_ref().is_some_and(|selected| {
+                                            selected.server.id == server.id
+                                                && selected.host == *host
+                                        });
                                     let label = if server.description.is_empty() {
                                         server.id.clone()
                                     } else {
@@ -212,9 +210,8 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                         ep = ep.with_advertised_name(da_advertised_name(server));
                                         quick_connect = Some(ep);
                                     } else if response.clicked() {
-                                        dialog.da_selected = Some(server.id.clone());
-                                        dialog.da_selected_host = Some(host.clone());
-                                        dialog.da_host = host;
+                                        dialog.da_selected = Some(hit.clone());
+                                        dialog.da_host = host.clone();
                                         dialog.da_manual = server.id.clone();
                                     }
                                 }
@@ -286,11 +283,14 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                             // A selected server belongs to its original host;
                             // never reuse that selection on another PC. Keep a
                             // manually typed ProgID when the host is edited.
-                            if dialog.da_selected.as_deref() == Some(dialog.da_manual.as_str()) {
+                            if dialog
+                                .da_selected
+                                .as_ref()
+                                .is_some_and(|hit| hit.server.id == dialog.da_manual)
+                            {
                                 dialog.da_manual.clear();
                             }
                             dialog.da_selected = None;
-                            dialog.da_selected_host = None;
                         }
                         if !is_da {
                             ui.label(egui::RichText::new(tr(lang, Tr::PortLabel)).weak());
@@ -572,14 +572,11 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                             dialog.da_host = endpoint.host.clone();
                                             dialog.da_manual = endpoint.address.clone();
                                             dialog.da_selected = None;
-                                            dialog.da_selected_host = None;
                                         }
                                         Protocol::OpcUa => {
                                             dialog.ua_url = endpoint.address.clone();
-                                            dialog.ua_security_policy =
-                                                endpoint.ua_security_policy.unwrap_or_default();
-                                            dialog.ua_security_mode =
-                                                endpoint.ua_security_mode.unwrap_or_default();
+                                            dialog.ua_security_policy = endpoint.ua_security_policy;
+                                            dialog.ua_security_mode = endpoint.ua_security_mode;
                                             dialog.ua_trust_server_cert =
                                                 endpoint.ua_trust_server_cert;
                                             dialog.ua_session_timeout = endpoint
@@ -741,15 +738,8 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                 let advertised = dialog
                     .da_servers
                     .iter()
-                    .enumerate()
-                    .find(|(index, server)| {
-                        server.id == address
-                            && dialog
-                                .da_server_hosts
-                                .get(*index)
-                                .is_none_or(|saved_host| saved_host == &host)
-                    })
-                    .and_then(|(_, server)| da_advertised_name(server));
+                    .find(|hit| hit.server.id == address && hit.host == host)
+                    .and_then(|hit| da_advertised_name(&hit.server));
                 let mut ep = crate::bff::model::EndpointSpec::da(host, address);
                 ep = ep.with_advertised_name(advertised);
                 Some(ep)
@@ -782,8 +772,8 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                             }
                         });
                     endpoint = endpoint.with_advertised_name(advertised);
-                    endpoint.ua_security_policy = Some(dialog.ua_security_policy);
-                    endpoint.ua_security_mode = Some(dialog.ua_security_mode);
+                    endpoint.ua_security_policy = dialog.ua_security_policy;
+                    endpoint.ua_security_mode = dialog.ua_security_mode;
                     endpoint.ua_trust_server_cert = dialog.ua_trust_server_cert;
                     // Anonymous must not inherit credentials typed earlier.
                     if dialog.ua_identity == UaIdentity::UserName {
@@ -802,9 +792,8 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                 if endpoint.protocol == Protocol::OpcUa {
                     // Persist the dialog's security/trust/timeout choices so
                     // they survive restarts.
-                    app.settings.ua_security_policy =
-                        endpoint.ua_security_policy.unwrap_or_default();
-                    app.settings.ua_security_mode = endpoint.ua_security_mode.unwrap_or_default();
+                    app.settings.ua_security_policy = endpoint.ua_security_policy;
+                    app.settings.ua_security_mode = endpoint.ua_security_mode;
                     // U13: «Доверять сертификату» is a per-connection choice
                     // (kept on the recent endpoint), never a global setting.
                     app.settings.ua_session_timeout_ms = endpoint
@@ -830,8 +819,8 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                 return;
             }
             if endpoint.protocol == Protocol::OpcUa {
-                app.settings.ua_security_policy = endpoint.ua_security_policy.unwrap_or_default();
-                app.settings.ua_security_mode = endpoint.ua_security_mode.unwrap_or_default();
+                app.settings.ua_security_policy = endpoint.ua_security_policy;
+                app.settings.ua_security_mode = endpoint.ua_security_mode;
                 app.settings.ua_session_timeout_ms = endpoint
                     .ua_session_timeout
                     .unwrap_or_else(crate::settings::default_session_timeout);
@@ -884,15 +873,11 @@ fn da_connect_target(dialog: &crate::app::ConnectDialog) -> (String, String) {
             dialog.da_manual.trim().to_string(),
         )
     } else {
-        (
-            dialog
-                .da_selected_host
-                .as_deref()
-                .unwrap_or(&dialog.da_host)
-                .trim()
-                .to_string(),
-            dialog.da_selected.clone().unwrap_or_default(),
-        )
+        dialog
+            .da_selected
+            .as_ref()
+            .map(|hit| (hit.host.trim().to_string(), hit.server.id.clone()))
+            .unwrap_or_else(|| (dialog.da_host.trim().to_string(), String::new()))
     }
 }
 
@@ -916,8 +901,13 @@ mod tests {
     #[test]
     fn automatically_selected_da_server_uses_its_source_host() {
         let mut dialog = crate::app::ConnectDialog::default();
-        dialog.da_selected = Some("Vendor.OPC".to_string());
-        dialog.da_selected_host = Some("plant-b".to_string());
+        dialog.da_selected = Some(crate::app::DaHit {
+            server: crate::bff::model::ServerEntry {
+                id: "Vendor.OPC".into(),
+                description: String::new(),
+            },
+            host: "plant-b".into(),
+        });
         assert_eq!(
             da_connect_target(&dialog),
             ("plant-b".to_string(), "Vendor.OPC".to_string())

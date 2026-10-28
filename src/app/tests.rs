@@ -514,7 +514,12 @@ fn da_search_preserves_host_for_duplicate_progid() {
     }
     assert_eq!(app.dialogs.connect.da_servers.len(), 2);
     assert_eq!(
-        app.dialogs.connect.da_server_hosts,
+        app.dialogs
+            .connect
+            .da_servers
+            .iter()
+            .map(|hit| hit.host.as_str())
+            .collect::<Vec<_>>(),
         vec!["plant-a", "plant-b"]
     );
     assert!(!app.dialogs.connect.da_pending);

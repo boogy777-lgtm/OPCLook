@@ -280,8 +280,8 @@ pub(super) fn security_suffix(
     if endpoint.protocol != Protocol::OpcUa {
         return None;
     }
-    let policy = endpoint.ua_security_policy.unwrap_or_default();
-    let mode = endpoint.ua_security_mode.unwrap_or_default();
+    let policy = endpoint.ua_security_policy;
+    let mode = endpoint.ua_security_mode;
     if policy == UaSecurityPolicy::Auto && mode == UaSecurityMode::Auto {
         return None;
     }

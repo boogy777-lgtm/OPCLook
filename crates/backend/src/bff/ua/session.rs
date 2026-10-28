@@ -1171,8 +1171,8 @@ pub(super) async fn connect(
     //    server advertises. An unsupported explicit choice is a hard error: no
     //    silent fallback to None/other.
     let (policy_uri, mode) = resolve_security(
-        endpoint.ua_security_policy.unwrap_or_default(),
-        endpoint.ua_security_mode.unwrap_or_default(),
+        endpoint.ua_security_policy,
+        endpoint.ua_security_mode,
         &discovered,
     )
     .map_err(security_error)?;
@@ -1252,8 +1252,8 @@ pub(super) async fn connect(
     };
 
     let secure_was_available = auto_chose_unprotected_over_secure(
-        endpoint.ua_security_policy.unwrap_or_default(),
-        endpoint.ua_security_mode.unwrap_or_default(),
+        endpoint.ua_security_policy,
+        endpoint.ua_security_mode,
         mode,
         &discovered,
     );

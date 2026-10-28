@@ -387,8 +387,8 @@ impl Harness {
 
     pub fn endpoint(url: &str) -> EndpointSpec {
         let mut endpoint = EndpointSpec::ua(url);
-        endpoint.ua_security_policy = Some(UaSecurityPolicy::None);
-        endpoint.ua_security_mode = Some(UaSecurityMode::None);
+        endpoint.ua_security_policy = UaSecurityPolicy::None;
+        endpoint.ua_security_mode = UaSecurityMode::None;
         endpoint
     }
 
@@ -1184,8 +1184,8 @@ fn secure_connect_and_read(port: u16, policy: UaSecurityPolicy) {
     let server = TestServer::start(port);
     let mut app = Harness::new();
     let mut endpoint = Harness::endpoint(&server.url);
-    endpoint.ua_security_policy = Some(policy);
-    endpoint.ua_security_mode = Some(UaSecurityMode::SignAndEncrypt);
+    endpoint.ua_security_policy = policy;
+    endpoint.ua_security_mode = UaSecurityMode::SignAndEncrypt;
     endpoint.ua_trust_server_cert = true;
     let info = app
         .connect(SessionId::new(1).unwrap(), endpoint)
@@ -1255,8 +1255,8 @@ fn trusted_copy_of_server_cert(server: &TestServer) -> PathBuf {
 
 fn secure_endpoint(server: &TestServer, trust: bool) -> EndpointSpec {
     let mut endpoint = Harness::endpoint(&server.url);
-    endpoint.ua_security_policy = Some(UaSecurityPolicy::Basic256Sha256);
-    endpoint.ua_security_mode = Some(UaSecurityMode::SignAndEncrypt);
+    endpoint.ua_security_policy = UaSecurityPolicy::Basic256Sha256;
+    endpoint.ua_security_mode = UaSecurityMode::SignAndEncrypt;
     endpoint.ua_trust_server_cert = trust;
     endpoint
 }

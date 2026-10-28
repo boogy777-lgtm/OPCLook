@@ -87,8 +87,8 @@ fn live_auto_security_still_connects() {
     let gateway = Gateway::new();
     let session = next_id();
     let mut endpoint = EndpointSpec::ua(test_url());
-    endpoint.ua_security_policy = Some(UaSecurityPolicy::Auto);
-    endpoint.ua_security_mode = Some(UaSecurityMode::Auto);
+    endpoint.ua_security_policy = UaSecurityPolicy::Auto;
+    endpoint.ua_security_mode = UaSecurityMode::Auto;
     endpoint.ua_trust_server_cert = true;
     let event = connect_endpoint(&gateway, session, endpoint);
     match event.kind {
@@ -114,8 +114,8 @@ fn live_explicit_unadvertised_security_is_an_error() {
     let gateway = Gateway::new();
     let session = next_id();
     let mut endpoint = EndpointSpec::ua(test_url());
-    endpoint.ua_security_policy = Some(UaSecurityPolicy::Basic256Sha256);
-    endpoint.ua_security_mode = Some(UaSecurityMode::SignAndEncrypt);
+    endpoint.ua_security_policy = UaSecurityPolicy::Basic256Sha256;
+    endpoint.ua_security_mode = UaSecurityMode::SignAndEncrypt;
     endpoint.ua_trust_server_cert = true;
     let event = connect_endpoint(&gateway, session, endpoint);
     match event.kind {

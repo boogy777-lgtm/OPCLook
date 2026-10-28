@@ -176,8 +176,8 @@ fn parse(args: Vec<String>) -> Result<Option<Options>, String> {
             scope,
         ));
     }
-    endpoint.ua_security_policy = policy;
-    endpoint.ua_security_mode = mode;
+    endpoint.ua_security_policy = policy.unwrap_or_default();
+    endpoint.ua_security_mode = mode.unwrap_or_default();
     endpoint.ua_trust_server_cert = trust;
     endpoint.ua_use_certificate = client_cert;
     endpoint.ua_session_timeout = session_timeout;

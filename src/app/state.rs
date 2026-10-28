@@ -27,12 +27,17 @@ pub struct CsvImportRow {
     pub name: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CsvImportState {
+    Running,
+    Cancelled,
+    Completed,
+}
+
 /// Modal CSV import progress job (TFormLoad-style).
 #[derive(Clone, Debug)]
 pub struct CsvImportJob {
-    pub open: bool,
-    pub cancelled: bool,
-    pub done: bool,
+    pub state: CsvImportState,
     pub total: usize,
     pub processed: usize,
     pub loaded: usize,

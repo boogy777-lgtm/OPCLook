@@ -988,6 +988,21 @@ pub fn validate_security_pair(
     }
 }
 
+fn deserialize_auto<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+fn policy_is_auto(value: &UaSecurityPolicy) -> bool {
+    *value == UaSecurityPolicy::Auto
+}
+fn mode_is_auto(value: &UaSecurityMode) -> bool {
+    *value == UaSecurityMode::Auto
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct EndpointSpec {
     pub protocol: Protocol,
@@ -999,15 +1014,19 @@ pub struct EndpointSpec {
     pub user: String,
     #[serde(skip)]
     pub password: String,
-    /// UA: chosen security policy. `None` means "not set" and resolves as
-    /// `UaSecurityPolicy::Auto`; legacy string values are accepted by serde.
-    /// DA: unused.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ua_security_policy: Option<UaSecurityPolicy>,
-    /// UA: chosen message security mode. `None` means "not set" and resolves
-    /// as `UaSecurityMode::Auto`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ua_security_mode: Option<UaSecurityMode>,
+    /// UA security selections; absent or null legacy values mean Auto.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_auto",
+        skip_serializing_if = "policy_is_auto"
+    )]
+    pub ua_security_policy: UaSecurityPolicy,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_auto",
+        skip_serializing_if = "mode_is_auto"
+    )]
+    pub ua_security_mode: UaSecurityMode,
     /// UA: trust the server certificate without importing it into the PKI trust
     /// store (reuses `settings` trust flag on the connect dialog).
     #[serde(default)]
@@ -1040,8 +1059,8 @@ impl EndpointSpec {
             address: prog_id.into(),
             user: String::new(),
             password: String::new(),
-            ua_security_policy: None,
-            ua_security_mode: None,
+            ua_security_policy: UaSecurityPolicy::Auto,
+            ua_security_mode: UaSecurityMode::Auto,
             ua_trust_server_cert: false,
             ua_use_certificate: false,
             ua_session_timeout: None,
@@ -1057,8 +1076,8 @@ impl EndpointSpec {
             address: url.into(),
             user: String::new(),
             password: String::new(),
-            ua_security_policy: None,
-            ua_security_mode: None,
+            ua_security_policy: UaSecurityPolicy::Auto,
+            ua_security_mode: UaSecurityMode::Auto,
             ua_trust_server_cert: false,
             ua_use_certificate: false,
             ua_session_timeout: None,
@@ -2271,14 +2290,11 @@ mod tests {
             "ua_security_mode":"Sign"
         }"#;
         let ep: EndpointSpec = serde_json::from_str(legacy).unwrap();
-        assert_eq!(ep.ua_security_policy, Some(UaSecurityPolicy::Auto));
-        assert_eq!(ep.ua_security_mode, Some(UaSecurityMode::Sign));
+        assert_eq!(ep.ua_security_policy, UaSecurityPolicy::Auto);
+        assert_eq!(ep.ua_security_mode, UaSecurityMode::Sign);
         // New JSON carries stable ASCII tokens.
         let json = serde_json::to_string(&ep).unwrap();
-        assert!(
-            json.contains("\"ua_security_policy\":\"Auto\""),
-            "got: {json}"
-        );
+        assert!(!json.contains("\"ua_security_policy\""), "got: {json}");
         assert!(
             json.contains("\"ua_security_mode\":\"Sign\""),
             "got: {json}"
@@ -2286,5 +2302,29 @@ mod tests {
         // Unknown legacy value is a hard error, not a silent Auto.
         let bad = legacy.replace("Авто", "NoSuchPolicy");
         assert!(serde_json::from_str::<EndpointSpec>(&bad).is_err());
+    }
+    #[test]
+    fn endpoint_auto_legacy_forms_share_identity_and_canonical_json() {
+        let base = serde_json::to_value(EndpointSpec::ua("opc.tcp://example:4840")).unwrap();
+        let mut nulls = base.clone();
+        nulls["ua_security_policy"] = serde_json::Value::Null;
+        nulls["ua_security_mode"] = serde_json::Value::Null;
+        let mut explicit = base.clone();
+        explicit["ua_security_policy"] = serde_json::json!("Auto");
+        explicit["ua_security_mode"] = serde_json::json!("Auto");
+        for value in [base.clone(), nulls, explicit] {
+            let endpoint: EndpointSpec = serde_json::from_value(value).unwrap();
+            assert_eq!(endpoint.ua_security_policy, UaSecurityPolicy::Auto);
+            assert_eq!(endpoint.ua_security_mode, UaSecurityMode::Auto);
+            assert_eq!(serde_json::to_value(endpoint).unwrap(), base);
+        }
+        let mut concrete = base.clone();
+        concrete["ua_security_policy"] = serde_json::json!("Basic256Sha256");
+        concrete["ua_security_mode"] = serde_json::json!("SignAndEncrypt");
+        let endpoint: EndpointSpec = serde_json::from_value(concrete.clone()).unwrap();
+        assert_eq!(serde_json::to_value(endpoint).unwrap(), concrete);
+        let da = serde_json::to_value(EndpointSpec::da("host", "Server")).unwrap();
+        assert!(da.get("ua_security_policy").is_none());
+        assert!(da.get("ua_security_mode").is_none());
     }
 }

@@ -50,8 +50,8 @@ impl App {
                 };
                 EndpointKey::Ua {
                     url,
-                    policy: endpoint.ua_security_policy.unwrap_or_default(),
-                    mode: endpoint.ua_security_mode.unwrap_or_default(),
+                    policy: endpoint.ua_security_policy,
+                    mode: endpoint.ua_security_mode,
                 }
             }
         }
@@ -754,6 +754,23 @@ mod popup_identity_tests {
             App::dedup_key(&a),
             App::dedup_key(&EndpointSpec::ua("opc.tcp://host:4850/A?x=/"))
         );
+    }
+
+    #[test]
+    fn legacy_auto_security_forms_have_the_same_session_identity() {
+        let original = EndpointSpec::ua("opc.tcp://host:4840");
+        let base = serde_json::to_value(&original).unwrap();
+        for value in [serde_json::Value::Null, serde_json::json!("Auto")] {
+            let mut legacy = base.clone();
+            legacy["ua_security_policy"] = value.clone();
+            legacy["ua_security_mode"] = value;
+            let restored: EndpointSpec = serde_json::from_value(legacy).unwrap();
+            assert_eq!(App::dedup_key(&original), App::dedup_key(&restored));
+        }
+        let mut secured = original.clone();
+        secured.ua_security_policy = crate::bff::model::UaSecurityPolicy::Basic256Sha256;
+        secured.ua_security_mode = crate::bff::model::UaSecurityMode::SignAndEncrypt;
+        assert_ne!(App::dedup_key(&original), App::dedup_key(&secured));
     }
 
     #[test]

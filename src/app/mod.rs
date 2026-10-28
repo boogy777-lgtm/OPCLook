@@ -38,13 +38,14 @@ mod tests;
 
 pub use dialogs::{
     AboutDialog, AddSignalDialog, AutoPending, ColumnsDialog, ConfirmAction, ConfirmRequest,
-    ConnectDialog, ConnectPane, Dialogs, MessageDialog, OptionsDialog, PendingWrites, UaIdentity,
-    UaSearch, WriteDialog,
+    ConnectDialog, ConnectPane, DaHit, Dialogs, MessageDialog, OptionsDialog, PendingWrites,
+    UaIdentity, UaSearch, WriteDialog,
 };
 pub use present::{CJK_FONT_ENV, compose_server_name, install_fonts};
 pub use state::{
-    AddChildrenJob, BottomTab, CsvImportJob, CsvImportRow, ReconnectState, Row, RowQuality,
-    SessionState, SessionView, TreeItem, WriteKind, WriteTypeChoice, write_type_choices,
+    AddChildrenJob, BottomTab, CsvImportJob, CsvImportRow, CsvImportState, ReconnectState, Row,
+    RowQuality, SessionState, SessionView, TreeItem, WriteKind, WriteTypeChoice,
+    write_type_choices,
 };
 pub use view::{CHANGE_FLASH, MAX_FIELD_LINES, TableLine, is_numeric_value};
 
@@ -969,7 +970,6 @@ impl App {
         // Keep previously discovered DA results and their source hosts
         // across close/reopen. A manual or explicit new search replaces them.
         d.da_pending = false;
-        d.da_selected_host = None;
         d.ua_search_host.clear();
         d.ua_search_port.clear();
         d.ua_lds_host = self.settings.ua_lds_host.clone();

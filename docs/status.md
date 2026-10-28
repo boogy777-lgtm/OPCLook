@@ -139,3 +139,12 @@ baseline, Windows runtime, физические DA/UAC и финальный exa
 `docs/refactoring-status.md` и `docs/devlog.md`. Остальные пункты B/E/F/G/H,
 PNG, измеренный 10k baseline, Windows runtime, реальный DA/UAC и финальный CI
 остаются открыты.
+
+**2026-10-28, подэтап B3:** DA результат и выбор объединяют server и host,
+CSV import имеет явный lifecycle, EndpointSpec хранит Auto напрямую с чтением
+старых absent/null значений. Измеренные проверки и ограничения приведены в
+`docs/refactoring-status.md`; остальные B/E/F/G/H, PNG, 10k baseline, Windows
+runtime, физические DA/UAC и финальный exact-head CI остаются открыты.
+
+CSV dialog читает job без checked `expect`; регрессия отмены и завершения и
+Windows GUI typecheck прошли. Остальные ограничения B3 сохраняются.

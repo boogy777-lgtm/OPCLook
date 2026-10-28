@@ -1,4 +1,4 @@
-use crate::app::{App, CsvImportJob, CsvImportRow};
+use crate::app::{App, CsvImportJob, CsvImportRow, CsvImportState};
 use crate::i18n::{Tr, fmt, tr};
 
 /// UTF-8 byte order mark. Written first by the export (Excel only recognises a
@@ -75,9 +75,7 @@ pub fn start_csv_import(app: &mut App, text: String) {
     let mut rows = rows;
     rows.reverse();
     app.csv_import = Some(CsvImportJob {
-        open: true,
-        cancelled: false,
-        done: false,
+        state: CsvImportState::Running,
         total,
         processed: 0,
         loaded: 0,
@@ -184,10 +182,6 @@ pub fn import_tree_csv_from_path(app: &mut App, path: &std::path::Path) -> std::
     let text = std::fs::read_to_string(path)?;
     Ok(import_tree_csv(app, &text))
 }
-pub(super) fn remaining_len(job: &CsvImportJob) -> usize {
-    job.remaining.len()
-}
-
 pub(super) fn csv_escape(text: &str) -> String {
     if text.contains([';', '"', '\n', '\r']) {
         format!("\"{}\"", text.replace('"', "\"\""))

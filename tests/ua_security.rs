@@ -126,8 +126,8 @@ fn server_connect_explicit_none_policy() {
     let gateway = Gateway::new();
     let session = next_id();
     let mut endpoint = EndpointSpec::ua(test_url());
-    endpoint.ua_security_policy = Some(opcda_egui::bff::ua::SECURITY_POLICY_NONE);
-    endpoint.ua_security_mode = Some(opcda_egui::bff::ua::SECURITY_MODE_NONE);
+    endpoint.ua_security_policy = opcda_egui::bff::ua::SECURITY_POLICY_NONE;
+    endpoint.ua_security_mode = opcda_egui::bff::ua::SECURITY_MODE_NONE;
     endpoint.ua_trust_server_cert = true;
     endpoint.ua_session_timeout = Some(90_000);
     let connected = connect_endpoint(&gateway, session, endpoint);
