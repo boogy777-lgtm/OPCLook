@@ -15,9 +15,13 @@ impl CoString {
         if ptr.is_null() { None } else { Some(Self(ptr)) }
     }
 
-    pub(super) fn text(&self) -> String {
+    pub(super) fn try_text(&self) -> Option<String> {
         // SAFETY: construction requires a valid NUL-terminated COM string.
-        unsafe { self.0.to_string().unwrap_or_default() }
+        unsafe { self.0.to_string().ok() }
+    }
+
+    pub(super) fn text(&self) -> String {
+        self.try_text().unwrap_or_default()
     }
 }
 

@@ -16,7 +16,6 @@ use crate::opc::bindings::da::{
     tagOPCITEMRESULT, tagOPCITEMSTATE, tagOPCNAMESPACETYPE,
 };
 use std::collections::HashMap;
-use std::ffi::c_void;
 use std::mem::ManuallyDrop;
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
@@ -25,8 +24,8 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use windows::Win32::System::Com::{
     CLSCTX_LOCAL_SERVER, CLSCTX_REMOTE_SERVER, CLSCTX_SERVER, CLSIDFromProgID,
     COINIT_MULTITHREADED, COSERVERINFO, CoCreateInstance, CoCreateInstanceEx, CoInitializeEx,
-    CoInitializeSecurity, CoTaskMemFree, CoUninitialize, EOAC_NONE, MULTI_QI,
-    RPC_C_AUTHN_LEVEL_NONE, RPC_C_IMP_LEVEL_IDENTIFY,
+    CoInitializeSecurity, CoUninitialize, EOAC_NONE, MULTI_QI, RPC_C_AUTHN_LEVEL_NONE,
+    RPC_C_IMP_LEVEL_IDENTIFY,
 };
 use windows::Win32::System::Variant::VARIANT;
 use windows::core::{GUID, HRESULT, IUnknown, Interface, PCWSTR, PWSTR};
@@ -959,11 +958,11 @@ unsafe fn browse_enum(
             break;
         }
         for item in buffer.iter().take(fetched as usize) {
-            if !item.is_null() {
-                if let Ok(text) = unsafe { item.to_string() } {
+            // SAFETY: Next transfers each returned string to the caller.
+            if let Some(item) = unsafe { CoString::from_raw(*item) } {
+                if let Some(text) = item.try_text() {
                     out.push(text);
                 }
-                unsafe { CoTaskMemFree(Some(item.0 as *const c_void)) };
             }
         }
         if out.len() >= MAX_BROWSE_NODES {
