@@ -12,20 +12,27 @@ const CAPACITY: usize = 32;
 struct State {
     cancelled: AtomicBool,
     result: Mutex<Option<Result<(), DaRouteError>>>,
+    permit_live: AtomicBool,
+    permits: Arc<AtomicUsize>,
 }
 impl State {
+    fn release_permit(&self) {
+        if self.permit_live.swap(false, Ordering::AcqRel) {
+            self.permits.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
     fn finish(&self, result: Result<(), DaRouteError>) {
         *self
             .result
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(result);
+        self.release_permit();
     }
 }
 /// A preparation and, after success, its route lease. Dropping it signals
 /// cancellation/release directly; this never depends on enqueueing a message.
 pub struct RouteTicket {
     state: Arc<State>,
-    permits: Arc<AtomicUsize>,
 }
 impl RouteTicket {
     pub fn result(&self) -> Option<Result<(), DaRouteError>> {
@@ -39,7 +46,7 @@ impl RouteTicket {
 impl Drop for RouteTicket {
     fn drop(&mut self) {
         self.state.cancelled.store(true, Ordering::Release);
-        self.permits.fetch_sub(1, Ordering::AcqRel);
+        self.state.release_permit();
     }
 }
 struct Job {
@@ -101,10 +108,11 @@ impl RouteService {
         let state = Arc::new(State {
             cancelled: AtomicBool::new(false),
             result: Mutex::new(None),
+            permit_live: AtomicBool::new(true),
+            permits: Arc::clone(&self.permits),
         });
         let ticket = RouteTicket {
             state: Arc::clone(&state),
-            permits: Arc::clone(&self.permits),
         };
         self.jobs
             .try_send(Job {
@@ -255,31 +263,26 @@ mod tests {
         assert_eq!(Arc::strong_count(&state), 1);
     }
     #[test]
-    fn local_ticket_completes_and_capacity_is_bounded() {
+    fn completed_tickets_do_not_limit_retained_sessions() {
         let service = RouteService::new().unwrap();
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let tickets: Vec<_> = (0..CAPACITY)
-            .map(|_| {
-                service
-                    .prepare("127.0.0.1".into(), None, vec![], deadline)
-                    .unwrap()
-            })
-            .collect();
-        assert!(
-            service
-                .prepare("extra".into(), None, vec![], deadline)
-                .is_err()
-        );
+        let mut tickets = Vec::new();
+        for _ in 0..CAPACITY * 2 {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let ticket = service
+                .prepare("127.0.0.1".into(), None, vec![], deadline)
+                .unwrap();
+            while ticket.result().is_none() && Instant::now() < deadline {
+                std::thread::yield_now();
+            }
+            assert!(matches!(ticket.result(), Some(Ok(()))));
+            tickets.push(ticket);
+        }
         let wait = Instant::now() + Duration::from_secs(2);
-        while tickets[0].result().is_none() && Instant::now() < wait {
+        while service.permits.load(Ordering::Acquire) != 0 && Instant::now() < wait {
             std::thread::yield_now();
         }
-        assert!(matches!(tickets[0].result(), Some(Ok(()))));
+        assert_eq!(service.permits.load(Ordering::Acquire), 0);
         drop(tickets);
-        assert!(
-            service
-                .prepare("127.0.0.1".into(), None, vec![], deadline)
-                .is_ok()
-        );
+        assert_eq!(service.permits.load(Ordering::Acquire), 0);
     }
 }
