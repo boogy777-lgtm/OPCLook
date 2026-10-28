@@ -1,3 +1,5 @@
+#![deny(clippy::undocumented_unsafe_blocks)]
+
 use crate::bff::model::{BackendMsg, Value};
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use windows::Win32::Foundation::FILETIME;
@@ -51,65 +53,72 @@ fn utc_to_ole_date(dt: DateTime<Utc>) -> Option<f64> {
 /// # Safety
 /// The caller guarantees `variant` contains a valid COM VARIANT owned by the caller.
 pub unsafe fn variant_to_value(variant: &VARIANT) -> Value {
+    // SAFETY: the caller supplies an initialized VARIANT containing a tag.
     let vt = unsafe { variant.Anonymous.Anonymous.vt };
     let raw = vt.0;
     let is_array = raw & 0x2000 != 0;
     let base = raw & 0x0FFF;
 
     if is_array {
+        // SAFETY: the array flag selects the SAFEARRAY member of this VARIANT.
         return unsafe { array_to_value(variant, base) };
     }
 
+    // SAFETY: the scalar tag selects the corresponding initialized member.
     unsafe { scalar_to_value(variant, base) }
 }
 
 unsafe fn scalar_to_value(variant: &VARIANT, base: u16) -> Value {
-    let body = unsafe { &variant.Anonymous.Anonymous.Anonymous };
-    match base {
-        0 => Value::Empty,
-        1 => Value::Other("NULL".to_string()),
-        2 => Value::I64(i64::from(unsafe { body.iVal })),
-        3 => Value::I64(i64::from(unsafe { body.lVal })),
-        4 => Value::F64(f64::from(unsafe { body.fltVal })),
-        5 => Value::F64(unsafe { body.dblVal }),
-        6 => Value::F64(unsafe { body.cyVal.int64 } as f64 / 10_000.0),
-        7 => match ole_date_to_utc(unsafe { body.date }) {
-            Some(dt) => Value::DateTime(dt),
-            None => Value::Other("Invalid DATE".to_string()),
-        },
-        8 => {
-            let bstr = unsafe { &body.bstrVal };
-            Value::Str(bstr.to_string())
-        }
-        10 => Value::Other(format!("HRESULT 0x{:08X}", unsafe { body.scode } as u32)),
-        11 => Value::Bool(unsafe { body.boolVal.0 } != 0),
-        12 => {
-            let nested = unsafe { body.pvarVal };
-            if nested.is_null() {
-                Value::Empty
-            } else {
-                unsafe { variant_to_value(&*nested) }
-            }
-        }
-        16 => Value::I64(i64::from(unsafe { body.bVal as i8 })),
-        17 => Value::U64(u64::from(unsafe { body.bVal })),
-        18 => Value::U64(u64::from(unsafe { body.uiVal })),
-        19 => Value::U64(u64::from(unsafe { body.ulVal })),
-        20 => Value::I64(unsafe { *(&raw const *body).cast::<i64>() }),
-        21 => Value::U64(unsafe { *(&raw const *body).cast::<u64>() }),
-        22 => Value::I64(i64::from(unsafe { body.intVal })),
-        23 => Value::U64(u64::from(unsafe { body.uintVal })),
-        24 | 25 => Value::Empty,
-        64 => {
-            let ft = unsafe { *(&raw const *body).cast::<FILETIME>() };
-            match filetime_to_utc(ft) {
+    // SAFETY: the caller supplies a valid VARIANT and base is its active
+    // scalar tag; any referenced nested value stays live for this conversion.
+    unsafe {
+        let body = &variant.Anonymous.Anonymous.Anonymous;
+        match base {
+            0 => Value::Empty,
+            1 => Value::Other("NULL".to_string()),
+            2 => Value::I64(i64::from(body.iVal)),
+            3 => Value::I64(i64::from(body.lVal)),
+            4 => Value::F64(f64::from(body.fltVal)),
+            5 => Value::F64(body.dblVal),
+            6 => Value::F64(body.cyVal.int64 as f64 / 10_000.0),
+            7 => match ole_date_to_utc(body.date) {
                 Some(dt) => Value::DateTime(dt),
-                None => Value::Empty,
+                None => Value::Other("Invalid DATE".to_string()),
+            },
+            8 => {
+                let bstr = &body.bstrVal;
+                Value::Str(bstr.to_string())
             }
+            10 => Value::Other(format!("HRESULT 0x{:08X}", body.scode as u32)),
+            11 => Value::Bool(body.boolVal.0 != 0),
+            12 => {
+                let nested = body.pvarVal;
+                if nested.is_null() {
+                    Value::Empty
+                } else {
+                    variant_to_value(&*nested)
+                }
+            }
+            16 => Value::I64(i64::from(body.bVal as i8)),
+            17 => Value::U64(u64::from(body.bVal)),
+            18 => Value::U64(u64::from(body.uiVal)),
+            19 => Value::U64(u64::from(body.ulVal)),
+            20 => Value::I64(*(&raw const *body).cast::<i64>()),
+            21 => Value::U64(*(&raw const *body).cast::<u64>()),
+            22 => Value::I64(i64::from(body.intVal)),
+            23 => Value::U64(u64::from(body.uintVal)),
+            24 | 25 => Value::Empty,
+            64 => {
+                let ft = *(&raw const *body).cast::<FILETIME>();
+                match filetime_to_utc(ft) {
+                    Some(dt) => Value::DateTime(dt),
+                    None => Value::Empty,
+                }
+            }
+            30 | 31 => Value::Other(format!("VT {base}")),
+            72 => Value::Other("CLSID".to_string()),
+            other => Value::Other(format!("VT {other}")),
         }
-        30 | 31 => Value::Other(format!("VT {base}")),
-        72 => Value::Other("CLSID".to_string()),
-        other => Value::Other(format!("VT {other}")),
     }
 }
 
@@ -119,20 +128,25 @@ fn bounded_array_len(lower: i32, upper: i32) -> usize {
 }
 
 unsafe fn array_to_value(variant: &VARIANT, base: u16) -> Value {
+    // SAFETY: the caller supplies a valid array VARIANT.
     let parray = unsafe { variant.Anonymous.Anonymous.Anonymous.parray };
     if parray.is_null() {
         return Value::Array(Vec::new());
     }
+    // SAFETY: the non-null SAFEARRAY is live for this conversion.
     if unsafe { SafeArrayGetDim(parray) } != 1 {
         return Value::Other("Multi-dimensional array".to_string());
     }
+    // SAFETY: the live array has dimension 1 as checked above.
     let lb = unsafe { SafeArrayGetLBound(parray, 1) }.unwrap_or(0);
+    // SAFETY: the live array has dimension 1 as checked above.
     let ub = unsafe { SafeArrayGetUBound(parray, 1) }.unwrap_or(-1);
     let count = bounded_array_len(lb, ub);
     if count == 0 {
         return Value::Array(Vec::new());
     }
     let mut data: *mut core::ffi::c_void = std::ptr::null_mut();
+    // SAFETY: parray is live and data is valid writable output storage.
     if unsafe { SafeArrayAccessData(parray, &raw mut data) }.is_err() {
         return Value::Array(Vec::new());
     }
@@ -140,24 +154,31 @@ unsafe fn array_to_value(variant: &VARIANT, base: u16) -> Value {
     let mut out = Vec::with_capacity(count);
     if base == 12 {
         let len = count;
+        // SAFETY: the accessed VT_VARIANT array contains at least len initialized elements.
         let vars = unsafe { std::slice::from_raw_parts(data.cast::<VARIANT>(), len) };
         for v in vars {
+            // SAFETY: each borrowed array element is an initialized VARIANT.
             out.push(unsafe { variant_to_value(v) });
         }
     } else {
+        // SAFETY: parray remains live and accessed.
         let elem_size = unsafe { SafeArrayGetElemsize(parray) } as usize;
         let len = count;
         for i in 0..len {
             let mut tmp = VARIANT::default();
+            // SAFETY: i is within the accessed array; the copy is capped to
+            // the temporary VARIANT union's storage, with matching element type.
             unsafe {
                 set_vt(&mut tmp, base);
                 let src = (data as *const u8).add(i * elem_size);
                 let dst = variant_inner(&mut tmp).cast::<u8>();
                 std::ptr::copy_nonoverlapping(src, dst, elem_size.min(16));
             }
+            // SAFETY: tmp borrows the copied scalar matching base until conversion returns.
             out.push(unsafe { scalar_to_value(&tmp, base) });
         }
     }
+    // SAFETY: this balances the successful access above exactly once.
     unsafe {
         let _ = SafeArrayUnaccessData(parray);
     }
@@ -165,12 +186,14 @@ unsafe fn array_to_value(variant: &VARIANT, base: u16) -> Value {
 }
 
 fn set_vt(variant: &mut VARIANT, vt: u16) {
+    // SAFETY: variant is writable and vt is its tag field.
     unsafe {
         *(&raw mut (*variant.Anonymous.Anonymous).vt) = VARENUM(vt);
     }
 }
 
 fn variant_inner(variant: &mut VARIANT) -> *mut VARIANT_0_0_0 {
+    // SAFETY: this forms a pointer into the live writable VARIANT union.
     unsafe { &raw mut (*variant.Anonymous.Anonymous).Anonymous }
 }
 
@@ -210,6 +233,7 @@ pub fn variant_from_value(value: &Value, hint: Option<u16>) -> Result<VARIANT, B
     let mut variant = VARIANT::default();
     set_vt(&mut variant, vt);
     let inner = variant_inner(&mut variant);
+    // SAFETY: inner points into the initialized, writable variant tagged vt.
     unsafe { write_scalar(value, vt, inner)? };
     Ok(variant)
 }
@@ -220,104 +244,104 @@ unsafe fn write_scalar(
     vt: u16,
     inner: *mut VARIANT_0_0_0,
 ) -> Result<(), BackendMsg> {
-    match vt {
-        0 => {}
-        2 => {
-            let v = i16::try_from(convert_int(value)?).map_err(|_| da_range(value, "I2"))?;
-            unsafe { (*inner).iVal = v };
-        }
-        3 => {
-            let v = i32::try_from(convert_int(value)?).map_err(|_| da_range(value, "I4"))?;
-            unsafe { (*inner).lVal = v };
-        }
-        4 => {
-            let source = convert_float(value)?;
-            if source.is_finite() && source.abs() > f64::from(f32::MAX) {
-                return Err(da_range(value, "R4"));
+    // SAFETY: the caller supplies writable VARIANT union storage; each arm
+    // writes the member selected by vt and transfers any allocated BSTR to it.
+    unsafe {
+        match vt {
+            0 => {}
+            2 => {
+                let v = i16::try_from(convert_int(value)?).map_err(|_| da_range(value, "I2"))?;
+                (*inner).iVal = v;
             }
-            let v = source as f32;
-            unsafe { (*inner).fltVal = v };
-        }
-        5 => {
-            let v = convert_float(value)?;
-            unsafe { (*inner).dblVal = v };
-        }
-        6 => {
-            let v = (convert_float(value)? * 10_000.0).round();
-            if !v.is_finite()
-                || v < -9_223_372_036_854_775_808.0
-                || v >= 9_223_372_036_854_775_808.0
-            {
-                return Err(da_range(value, "CY"));
+            3 => {
+                let v = i32::try_from(convert_int(value)?).map_err(|_| da_range(value, "I4"))?;
+                (*inner).lVal = v;
             }
-            unsafe { (*inner).cyVal.int64 = v as i64 };
-        }
-        7 => {
-            let dt = match value {
-                Value::DateTime(dt) => *dt,
-                _ => return Err(BackendMsg::DaDateRequired),
-            };
-            let ole = utc_to_ole_date(dt).ok_or(BackendMsg::DaBadDate)?;
-            unsafe { (*inner).date = ole };
-        }
-        8 => {
-            let s = match value {
-                Value::Str(s) => s.clone(),
-                other => other.to_string(),
-            };
-            unsafe {
+            4 => {
+                let source = convert_float(value)?;
+                if source.is_finite() && source.abs() > f64::from(f32::MAX) {
+                    return Err(da_range(value, "R4"));
+                }
+                let v = source as f32;
+                (*inner).fltVal = v;
+            }
+            5 => {
+                let v = convert_float(value)?;
+                (*inner).dblVal = v;
+            }
+            6 => {
+                let v = (convert_float(value)? * 10_000.0).round();
+                if !v.is_finite()
+                    || v < -9_223_372_036_854_775_808.0
+                    || v >= 9_223_372_036_854_775_808.0
+                {
+                    return Err(da_range(value, "CY"));
+                }
+                (*inner).cyVal.int64 = v as i64;
+            }
+            7 => {
+                let dt = match value {
+                    Value::DateTime(dt) => *dt,
+                    _ => return Err(BackendMsg::DaDateRequired),
+                };
+                let ole = utc_to_ole_date(dt).ok_or(BackendMsg::DaBadDate)?;
+                (*inner).date = ole;
+            }
+            8 => {
+                let s = match value {
+                    Value::Str(s) => s.clone(),
+                    other => other.to_string(),
+                };
                 std::ptr::write(
                     &raw mut (*inner).bstrVal,
                     std::mem::ManuallyDrop::new(BSTR::from(s)),
                 );
             }
-        }
-        11 => {
-            let b = match value {
-                Value::Bool(b) => *b,
-                Value::I64(v) => *v != 0,
-                Value::U64(v) => *v != 0,
-                Value::F64(v) => *v != 0.0,
-                Value::Str(s) => {
-                    matches!(s.trim().to_ascii_lowercase().as_str(), "true" | "1" | "да")
-                }
-                _ => false,
-            };
-            unsafe {
+            11 => {
+                let b = match value {
+                    Value::Bool(b) => *b,
+                    Value::I64(v) => *v != 0,
+                    Value::U64(v) => *v != 0,
+                    Value::F64(v) => *v != 0.0,
+                    Value::Str(s) => {
+                        matches!(s.trim().to_ascii_lowercase().as_str(), "true" | "1" | "да")
+                    }
+                    _ => false,
+                };
                 (*inner).boolVal = VARIANT_BOOL(if b { -1 } else { 0 });
             }
+            16 => {
+                (*inner).bVal =
+                    i8::try_from(convert_int(value)?).map_err(|_| da_range(value, "I1"))? as u8
+            }
+            17 => {
+                (*inner).bVal =
+                    u8::try_from(convert_uint(value)?).map_err(|_| da_range(value, "UI1"))?
+            }
+            18 => {
+                (*inner).uiVal =
+                    u16::try_from(convert_uint(value)?).map_err(|_| da_range(value, "UI2"))?
+            }
+            19 => {
+                (*inner).ulVal =
+                    u32::try_from(convert_uint(value)?).map_err(|_| da_range(value, "UI4"))?
+            }
+            20 => std::ptr::write(inner.cast::<i64>(), convert_int(value)?),
+            21 => {
+                std::ptr::write(inner.cast::<u64>(), convert_uint(value)?);
+            }
+            22 => {
+                (*inner).intVal =
+                    i32::try_from(convert_int(value)?).map_err(|_| da_range(value, "INT"))?
+            }
+            23 => {
+                (*inner).uintVal =
+                    u32::try_from(convert_uint(value)?).map_err(|_| da_range(value, "UINT"))?
+            }
+            other => return Err(BackendMsg::DaVtUnsupported { vt: other }),
         }
-        16 => unsafe {
-            (*inner).bVal =
-                i8::try_from(convert_int(value)?).map_err(|_| da_range(value, "I1"))? as u8
-        },
-        17 => unsafe {
-            (*inner).bVal =
-                u8::try_from(convert_uint(value)?).map_err(|_| da_range(value, "UI1"))?
-        },
-        18 => unsafe {
-            (*inner).uiVal =
-                u16::try_from(convert_uint(value)?).map_err(|_| da_range(value, "UI2"))?
-        },
-        19 => unsafe {
-            (*inner).ulVal =
-                u32::try_from(convert_uint(value)?).map_err(|_| da_range(value, "UI4"))?
-        },
-        20 => unsafe { std::ptr::write(inner.cast::<i64>(), convert_int(value)?) },
-        21 => unsafe {
-            std::ptr::write(inner.cast::<u64>(), convert_uint(value)?);
-        },
-        22 => unsafe {
-            (*inner).intVal =
-                i32::try_from(convert_int(value)?).map_err(|_| da_range(value, "INT"))?
-        },
-        23 => unsafe {
-            (*inner).uintVal =
-                u32::try_from(convert_uint(value)?).map_err(|_| da_range(value, "UINT"))?
-        },
-        other => return Err(BackendMsg::DaVtUnsupported { vt: other }),
+        Ok(())
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -432,6 +456,7 @@ fn build_array_variant(
         single => vec![single],
     };
 
+    // SAFETY: the type and length describe the requested vector allocation.
     let psa = unsafe {
         SafeArrayCreateVector(
             windows::Win32::System::Variant::VARENUM(element_vt),
@@ -463,12 +488,14 @@ fn build_array_variant(
     };
 
     // Lock the array and write each element in place.
+    // SAFETY: psa is a newly created live array owned by the builder.
     let locked = unsafe { SafeArrayLock(psa) }.is_ok();
     if !locked {
         return Err(BackendMsg::DaArrayLockFailed { vt: element_vt });
     }
     array.locked = true;
     let mut access: *mut core::ffi::c_void = std::ptr::null_mut();
+    // SAFETY: psa is live and access is a valid writable output pointer.
     if unsafe { SafeArrayAccessData(psa, &raw mut access) }.is_err() {
         return Err(BackendMsg::DaArrayAccessFailed);
     }
@@ -487,13 +514,16 @@ fn build_array_variant(
                         break;
                     }
                 };
+                // SAFETY: i indexes a slot in the accessed VT_VARIANT vector.
                 let dst = unsafe { (data.cast::<VARIANT>()).add(i) };
+                // SAFETY: dst is an initialized empty slot whose ownership is transferred.
                 unsafe { std::ptr::write(dst, nested) };
             }
             _ => {
                 let mut tmp = VARIANT::default();
                 set_vt(&mut tmp, element_vt);
                 if let Err(e) = (|| {
+                    // SAFETY: tmp is writable and tagged with element_vt.
                     unsafe { write_scalar(item, element_vt, variant_inner(&mut tmp)) }?;
                     Ok::<(), BackendMsg>(())
                 })() {
@@ -502,7 +532,9 @@ fn build_array_variant(
                 }
                 // Copy the element value from the temporary VARIANT into the array data.
                 let src = variant_inner(&mut tmp).cast::<u8>();
+                // SAFETY: i is within the array and element_size matches its type.
                 let dst = unsafe { data.add(i * element_size) };
+                // SAFETY: the temporary union and array slot are disjoint and large enough.
                 unsafe { std::ptr::copy_nonoverlapping(src, dst, element_size) };
                 // The element (e.g. a BSTR) is now owned by the safe array; forget the
                 // temporary VARIANT so the element is not released later.
@@ -516,6 +548,7 @@ fn build_array_variant(
     let mut variant = VARIANT::default();
     set_vt(&mut variant, outer_vt);
     let inner = variant_inner(&mut variant);
+    // SAFETY: the outer VARIANT is tagged as an array and takes ownership of psa.
     unsafe {
         (*inner).parray = psa;
     }
@@ -599,6 +632,7 @@ fn convert_float(value: &Value) -> Result<f64, BackendMsg> {
 }
 
 pub fn clear_variant(variant: &mut VARIANT) {
+    // SAFETY: the caller supplies a valid initialized VARIANT to clear in place.
     unsafe {
         let _ = windows::Win32::System::Variant::VariantClear(variant);
     }
@@ -637,6 +671,7 @@ mod tests {
             (4, Value::Array(vec![Value::F64(1.5), Value::F64(2.5)])),
         ] {
             let mut variant = build_array_variant(&input, vt, vt | 0x2000).unwrap();
+            // SAFETY: the test just built this initialized array VARIANT.
             let output = unsafe { variant_to_value(&variant) };
             assert_eq!(format!("{output:?}"), format!("{input:?}"));
             clear_variant(&mut variant);
@@ -694,6 +729,7 @@ mod tests {
     /// Round-trips a value through a VARIANT of the given VT and asserts value equality.
     fn roundtrip(vt: u16, value: &Value) {
         let mut variant = variant_from_value(value, Some(vt)).expect("build variant");
+        // SAFETY: the test just built this initialized VARIANT.
         let out = unsafe { variant_to_value(&variant) };
         assert_eq!(&out, value, "roundtrip mismatch for VT {vt}");
         clear_variant(&mut variant);
@@ -740,7 +776,9 @@ mod tests {
         roundtrip(17, &Value::U64(128));
         // i64 input in range is stored as the byte value and read back as U64.
         let mut v = variant_from_value(&Value::I64(200), Some(17)).unwrap();
-        assert_eq!(unsafe { variant_to_value(&v) }, Value::U64(200));
+        // SAFETY: v is the initialized scalar VARIANT just built above.
+        let converted = unsafe { variant_to_value(&v) };
+        assert_eq!(converted, Value::U64(200));
         clear_variant(&mut v);
     }
 
@@ -838,6 +876,7 @@ mod tests {
             Value::Str("b".to_string()),
         ]);
         let mut variant = variant_from_value(&value, Some(8 | 0x2000)).expect("bstr array");
+        // SAFETY: the test just built this initialized VARIANT.
         let out = unsafe { variant_to_value(&variant) };
         assert_eq!(&out, &value);
         clear_variant(&mut variant);
@@ -847,6 +886,7 @@ mod tests {
     fn roundtrip_variant_array_without_hint_infers_element_type() {
         let value = Value::Array(vec![Value::I64(7), Value::I64(8)]);
         let mut variant = variant_from_value(&value, None).expect("inferred array");
+        // SAFETY: the test just built this initialized VARIANT.
         let out = unsafe { variant_to_value(&variant) };
         assert_eq!(&out, &value);
         clear_variant(&mut variant);
@@ -857,6 +897,7 @@ mod tests {
         // An array-typed hint turns a scalar value into a one-element array.
         let value = Value::Bool(true);
         let mut variant = variant_from_value(&value, Some(11 | 0x2000)).expect("array bool");
+        // SAFETY: the test just built this initialized VARIANT.
         let out = unsafe { variant_to_value(&variant) };
         assert_eq!(out, Value::Array(vec![Value::Bool(true)]));
         clear_variant(&mut variant);
@@ -866,8 +907,10 @@ mod tests {
     fn i1_negative_roundtrip_preserves_sign() {
         let value = Value::I64(-42);
         let mut variant = variant_from_value(&value, Some(16)).expect("VT_I1");
+        // SAFETY: the initialized VARIANT contains a valid type tag.
         let vt = unsafe { variant.Anonymous.Anonymous.vt.0 };
         assert_eq!(vt & 0x0FFF, 16, "expected VT_I1");
+        // SAFETY: the test just built this initialized VARIANT.
         let out = unsafe { variant_to_value(&variant) };
         assert_eq!(out, Value::I64(-42));
         clear_variant(&mut variant);
