@@ -1,5 +1,7 @@
 # Статус
 
+**2026-10-28, UI modules:** connection results/security, tree rows, table cells and table action handling separated. Linux 219 library, 149 interaction (one Windows-only ignored), 20 table tests; Windows i686 all-target typecheck passed. Five real headless UI scenes rerendered and visually inspected in `docs/screenshots/after-h/`. Exact-head CI and Windows runtime remain open.
+
 **2026-10-28, GUI coordinator:** event routing separated into discovery, session, data and operation-error handlers; write batch owns its counter transitions and session lookups have accessors. Linux 219 GUI library and 149 interaction tests (one Windows-only ignored) passed before a final equivalent protocol lookup simplification; Windows i686 all-target typecheck passed after it. UI module decomposition, exact-head CI and runtime checks remain open.
 
 **2026-10-28, network journal:** network control messages and blocked-save warning localized in RU/EN/ZH; script save success is logged only on success. Linux GUI 219 library and 149 interaction tests (one Windows-only ignored), Windows i686 all-target typecheck passed. GUI decomposition, exact-head CI and runtime checks remain open.

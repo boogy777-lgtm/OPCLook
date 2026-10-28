@@ -565,3 +565,8 @@ Network control messages use locale keys with technical details retained as argu
 ### 2026-10-28 — GUI coordinator
 
 Separated event dispatch by domain, introduced WriteBatch transitions and session accessors while keeping correlation in Engine. Linux 219 library and 149 interaction tests (one Windows-only ignored) passed before the final equivalent protocol lookup simplification; Windows i686 all-target typecheck passed afterward. Exact-head CI remains open.
+
+
+### 2026-10-28 — UI decomposition and images
+
+Connection results/security controls, tree row rendering, table cell rendering and table action handling now have named components. Measured: Linux 219 GUI library, 149 interaction (one Windows-only ignored), 20 table tests and Windows i686 all-target typecheck passed. Five egui/wgpu Mesa scenes were rerendered and visually inspected in `docs/screenshots/after-h/`; the preexisting F images remain intact. Exact-head CI and Windows runtime remain open.
