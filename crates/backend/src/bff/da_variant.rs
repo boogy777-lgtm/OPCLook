@@ -575,6 +575,41 @@ mod tests {
         }
     }
 
+    #[test]
+    fn variant_array_nested_failure_after_an_owned_string_returns_error() {
+        let value = Value::Array(vec![
+            Value::Str("allocated first".into()),
+            Value::Array(vec![Value::I64(1), Value::Str("not an integer".into())]),
+        ]);
+        assert!(build_array_variant(&value, 12, 12 | 0x2000).is_err());
+    }
+
+    #[test]
+    fn array_values_support_extreme_lower_bounds() {
+        for lower in [i32::MIN, i32::MAX - 1] {
+            // SAFETY: a two-element I4 array is created and owned by this test.
+            let array = unsafe { SafeArrayCreateVector(VARENUM(3), lower, 2) };
+            assert!(!array.is_null());
+            let mut data = std::ptr::null_mut();
+            // SAFETY: array is live and data is a valid output location.
+            unsafe { SafeArrayAccessData(array, &raw mut data).unwrap() };
+            // SAFETY: the accessed array has exactly two initialized I4 slots.
+            unsafe {
+                data.cast::<i32>().write(7);
+                data.cast::<i32>().add(1).write(-9);
+                SafeArrayUnaccessData(array).unwrap();
+            }
+            let mut variant = VARIANT::default();
+            set_vt(&mut variant, 3 | 0x2000);
+            // SAFETY: the variant is an array variant and takes ownership of array.
+            unsafe { (*variant_inner(&mut variant)).parray = array };
+            // SAFETY: the variant holds the initialized array until cleared below.
+            let value = unsafe { variant_to_value(&variant) };
+            assert_eq!(value, Value::Array(vec![Value::I64(7), Value::I64(-9)]));
+            clear_variant(&mut variant);
+        }
+    }
+
     /// Round-trips a value through a VARIANT of the given VT and asserts value equality.
     fn roundtrip(vt: u16, value: &Value) {
         let mut variant = variant_from_value(value, Some(vt)).expect("build variant");
