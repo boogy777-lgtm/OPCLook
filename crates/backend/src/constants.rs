@@ -101,5 +101,5 @@ pub const DA_ROUTE_REFRESH: std::time::Duration = std::time::Duration::from_secs
 const _: () = assert!(DA_ROUTE_REFRESH.as_secs() > 0);
 const _: () = assert!(DA_ROUTE_REFRESH.as_secs() < DA_ROUTE_LIFETIME.as_secs());
 pub const DA_HELPER_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
-pub const DA_HELPER_PROTOCOL_VERSION: u32 = 2;
+pub const DA_HELPER_PROTOCOL_VERSION: u32 = opclook_contract::helper_ipc::PROTOCOL_VERSION;
 pub const DA_HELPER_EXE_ENV: &str = "OPCDA_NETHELPER_EXE";

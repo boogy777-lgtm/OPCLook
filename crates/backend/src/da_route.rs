@@ -13,11 +13,10 @@
 
 #![deny(clippy::undocumented_unsafe_blocks)]
 
-use crate::constants::{
-    DA_HELPER_EXE_ENV, DA_HELPER_PROTOCOL_VERSION, DA_HELPER_START_TIMEOUT, DA_ROUTE_LIFETIME_SECS,
-};
+use crate::constants::{DA_HELPER_EXE_ENV, DA_HELPER_START_TIMEOUT, DA_ROUTE_LIFETIME_SECS};
 use crate::net::{AdapterId, AdapterInfo, SubnetSpec};
 pub use opclook_contract::da_route::{DaRouteError, DaRouteStatus, RouteDecision, RoutePlan};
+use opclook_contract::helper_ipc::{PROTOCOL_VERSION, Request, Route};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
@@ -234,6 +233,7 @@ enum HelperState {
     Launched {
         pipe: String,
         process: LaunchedProcess,
+        last_error: Option<HelperIpcError>,
     },
     Connected(HelperClient),
     Failed,
@@ -246,22 +246,22 @@ enum HelperLaunchError {
     Failed(String),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct PipeMessage {
-    version: u32,
-    op: String,
-    #[serde(default)]
-    target: Option<String>,
-    #[serde(default)]
-    prefix: Option<u8>,
-    #[serde(default)]
-    interface_luid: Option<u64>,
-    #[serde(default)]
-    next_hop: Option<String>,
-    #[serde(default)]
-    lifetime_secs: Option<u32>,
-    #[serde(default)]
-    client_pid: Option<u32>,
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+enum HelperIpcError {
+    #[error("helper I/O: {0}")]
+    Io(String),
+    #[error("helper protocol: {0}")]
+    Protocol(String),
+    #[error("helper rejected request: {0}")]
+    Rejected(String),
+    #[error("helper pipe closed")]
+    Closed,
+    #[error("helper exchange timed out")]
+    TimedOut,
+    #[error("helper message exceeds limit: {0}")]
+    Oversize(&'static str),
+    #[error("unexpected helper pipe server: expected {expected}, received {actual}")]
+    PeerMismatch { expected: u32, actual: u32 },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -274,54 +274,55 @@ struct PipeReply {
 #[cfg(any(windows, test))]
 async fn pipe_exchange<S>(
     stream: &mut S,
-    message: &PipeMessage,
+    message: &Request,
     timeout: Duration,
-) -> Result<(), String>
+) -> Result<(), HelperIpcError>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     const LIMIT: usize = 16 * 1024;
-    let mut request = serde_json::to_vec(message).map_err(|e| e.to_string())?;
+    let mut request =
+        serde_json::to_vec(message).map_err(|e| HelperIpcError::Protocol(e.to_string()))?;
     if request.len() >= LIMIT {
-        return Err("helper request exceeds limit".into());
+        return Err(HelperIpcError::Oversize("request"));
     }
     request.push(b'\n');
     tokio::time::timeout(timeout, async {
         stream
             .write_all(&request)
             .await
-            .map_err(|e| format!("pipe write failed: {e}"))?;
+            .map_err(|e| HelperIpcError::Io(format!("pipe write failed: {e}")))?;
         let mut line = Vec::new();
         loop {
             let mut byte = [0u8; 1];
             let n = stream
                 .read(&mut byte)
                 .await
-                .map_err(|e| format!("pipe read failed: {e}"))?;
+                .map_err(|e| HelperIpcError::Io(format!("pipe read failed: {e}")))?;
             if n == 0 {
-                return Err("helper closed the pipe".into());
+                return Err(HelperIpcError::Closed);
             }
             if byte[0] == b'\n' {
                 break;
             }
             if line.len() >= LIMIT {
-                return Err("helper reply exceeds limit".into());
+                return Err(HelperIpcError::Oversize("reply"));
             }
             line.push(byte[0]);
         }
-        let reply: PipeReply =
-            serde_json::from_slice(&line).map_err(|e| format!("invalid helper reply: {e}"))?;
+        let reply: PipeReply = serde_json::from_slice(&line)
+            .map_err(|e| HelperIpcError::Protocol(format!("invalid helper reply: {e}")))?;
         if reply.ok {
             Ok(())
         } else {
-            Err(reply
-                .error
-                .unwrap_or_else(|| "helper rejected the request".into()))
+            Err(HelperIpcError::Rejected(
+                reply.error.unwrap_or_else(|| "no detail".into()),
+            ))
         }
     })
     .await
-    .map_err(|_| "helper exchange timed out".to_string())?
+    .map_err(|_| HelperIpcError::TimedOut)?
 }
 
 #[cfg(windows)]
@@ -340,12 +341,11 @@ struct HelperTransport {
 struct HelperClient;
 
 impl HelperClient {
-    fn call(&mut self, mut message: PipeMessage) -> Result<(), String> {
-        message.version = DA_HELPER_PROTOCOL_VERSION;
+    fn call(&mut self, message: Request) -> Result<(), HelperIpcError> {
         #[cfg(windows)]
         {
             let Some(transport) = self.transport.as_mut() else {
-                return Err("helper pipe closed".into());
+                return Err(HelperIpcError::Closed);
             };
             let result = transport.runtime.block_on(pipe_exchange(
                 &mut transport.pipe,
@@ -362,41 +362,52 @@ impl HelperClient {
         #[cfg(not(windows))]
         {
             let _ = message;
-            Err("named pipes are only supported on Windows".into())
+            Err(HelperIpcError::Io(
+                "named pipes are only supported on Windows".into(),
+            ))
         }
     }
 
-    fn add(&mut self, plan: RoutePlan) -> Result<(), String> {
+    fn add(&mut self, plan: RoutePlan) -> Result<(), HelperIpcError> {
         self.call_with_op("add", plan)
     }
 
-    fn refresh(&mut self, plan: RoutePlan) -> Result<(), String> {
+    fn refresh(&mut self, plan: RoutePlan) -> Result<(), HelperIpcError> {
         self.call_with_op("refresh", plan)
     }
 
-    fn call_with_op(&mut self, op: &str, plan: RoutePlan) -> Result<(), String> {
-        self.call(PipeMessage {
-            version: DA_HELPER_PROTOCOL_VERSION,
-            op: op.to_string(),
-            target: Some(plan.target.to_string()),
-            prefix: Some(plan.prefix),
-            interface_luid: Some(plan.interface_luid),
-            next_hop: Some(plan.next_hop.to_string()),
-            lifetime_secs: Some(DA_ROUTE_LIFETIME_SECS),
-            client_pid: None,
-        })
+    fn call_with_op(&mut self, op: &str, plan: RoutePlan) -> Result<(), HelperIpcError> {
+        let route = Route {
+            target: plan.target,
+            prefix: plan.prefix,
+            interface_luid: plan.interface_luid,
+            next_hop: plan.next_hop,
+        };
+        let message = if op == "add" {
+            Request::Add {
+                version: PROTOCOL_VERSION,
+                route,
+                lifetime_secs: DA_ROUTE_LIFETIME_SECS,
+            }
+        } else {
+            Request::Refresh {
+                version: PROTOCOL_VERSION,
+                route,
+                lifetime_secs: DA_ROUTE_LIFETIME_SECS,
+            }
+        };
+        self.call(message)
     }
 
-    fn remove(&mut self, plan: RoutePlan) -> Result<(), String> {
-        self.call(PipeMessage {
-            version: DA_HELPER_PROTOCOL_VERSION,
-            op: "remove".to_string(),
-            target: Some(plan.target.to_string()),
-            prefix: Some(plan.prefix),
-            interface_luid: Some(plan.interface_luid),
-            next_hop: Some(plan.next_hop.to_string()),
-            lifetime_secs: None,
-            client_pid: None,
+    fn remove(&mut self, plan: RoutePlan) -> Result<(), HelperIpcError> {
+        self.call(Request::Remove {
+            version: PROTOCOL_VERSION,
+            route: Route {
+                target: plan.target,
+                prefix: plan.prefix,
+                interface_luid: plan.interface_luid,
+                next_hop: plan.next_hop,
+            },
         })
     }
 }
@@ -536,19 +547,20 @@ impl DaRouteManager {
                     };
                     if let Err(detail) = helper.add(plan) {
                         self.invalidate_helper();
-                        let error = DaRouteError::Add(target, detail);
+                        let error = DaRouteError::Add(target, detail.to_string());
                         self.release_prepared(&mut prepared);
                         self.last_error = Some(error.clone());
                         return Err(error);
                     }
                     if cancelled() || best_route_luid(target) != Some(adapter.luid) {
-                        if self
-                            .helper_mut()
-                            .is_some_and(|helper| helper.remove(plan).is_err())
+                        let error = if let Some(Err(detail)) =
+                            self.helper_mut().map(|helper| helper.remove(plan))
                         {
-                            self.invalidate_helper();
-                        }
-                        let error = DaRouteError::Verify(target);
+                            self.helper_failure(detail.clone());
+                            DaRouteError::HelperUnavailable(detail.to_string())
+                        } else {
+                            DaRouteError::Verify(target)
+                        };
                         self.release_prepared(&mut prepared);
                         self.last_error = Some(error.clone());
                         return Err(error);
@@ -572,11 +584,8 @@ impl DaRouteManager {
         }
         let plans = self.leases.owned_plans();
         for plan in plans {
-            if self
-                .helper_mut()
-                .is_some_and(|helper| helper.refresh(plan).is_err())
-            {
-                self.invalidate_helper();
+            if let Some(Err(error)) = self.helper_mut().map(|helper| helper.refresh(plan)) {
+                self.helper_failure(error);
                 break;
             }
         }
@@ -589,6 +598,11 @@ impl DaRouteManager {
     fn invalidate_helper(&mut self) {
         self.helper_state = HelperState::Failed;
         self.leases.entries.retain(|_, entry| !entry.owned);
+    }
+
+    fn helper_failure(&mut self, error: HelperIpcError) {
+        self.invalidate_helper();
+        self.last_error = Some(DaRouteError::HelperUnavailable(error.to_string()));
     }
 
     pub(crate) fn lease_is_valid(&self, prepared: &PreparedRoutes) -> bool {
@@ -609,11 +623,8 @@ impl DaRouteManager {
         for (key, identity) in prepared.keys.drain(..) {
             if let Some((plan, owned)) = self.leases.release(&key, &identity) {
                 if owned {
-                    if self
-                        .helper_mut()
-                        .is_some_and(|helper| helper.remove(plan).is_err())
-                    {
-                        self.invalidate_helper();
+                    if let Some(Err(error)) = self.helper_mut().map(|helper| helper.remove(plan)) {
+                        self.helper_failure(error);
                     }
                 }
             }
@@ -629,11 +640,25 @@ impl DaRouteManager {
     }
 
     fn ensure_helper(&mut self) -> Result<(), DaRouteError> {
+        self.ensure_helper_with(spawn_helper)
+    }
+
+    fn ensure_helper_with(
+        &mut self,
+        spawn: impl FnOnce() -> Result<HelperLaunch, DaRouteError>,
+    ) -> Result<(), DaRouteError> {
         if matches!(self.helper_state, HelperState::Connected(_)) {
             return Ok(());
         }
         if matches!(self.helper_state, HelperState::Idle | HelperState::Failed) {
-            self.helper_state = HelperState::Launching(spawn_helper()?);
+            self.helper_state = match spawn() {
+                Ok(launch) => HelperState::Launching(launch),
+                Err(error) => {
+                    self.helper_state = HelperState::Failed;
+                    self.last_error = Some(error.clone());
+                    return Err(error);
+                }
+            };
         }
         let deadline = Instant::now() + DA_HELPER_START_TIMEOUT;
         loop {
@@ -643,6 +668,7 @@ impl DaRouteManager {
                     Ok(Ok(process)) => HelperState::Launched {
                         pipe: launch.pipe,
                         process,
+                        last_error: None,
                     },
                     Err(std::sync::mpsc::TryRecvError::Empty) => HelperState::Launching(launch),
                     Ok(Err(HelperLaunchError::Declined)) => {
@@ -660,10 +686,18 @@ impl DaRouteManager {
                         ));
                     }
                 },
-                HelperState::Launched { pipe, process } => {
+                HelperState::Launched { pipe, process, .. } => {
                     match HelperClient::connect(&pipe, process.pid, Duration::from_millis(250)) {
                         Ok(client) => HelperState::Connected(client),
-                        Err(_) => HelperState::Launched { pipe, process },
+                        Err(error @ HelperIpcError::Io(_)) => HelperState::Launched {
+                            pipe,
+                            process,
+                            last_error: Some(error),
+                        },
+                        Err(error) => {
+                            self.helper_state = HelperState::Failed;
+                            return Err(DaRouteError::HelperUnavailable(error.to_string()));
+                        }
                     }
                 }
                 other => other,
@@ -672,7 +706,13 @@ impl DaRouteManager {
                 return Ok(());
             }
             if Instant::now() >= deadline {
-                return Err(DaRouteError::HelperStarting);
+                return Err(match &self.helper_state {
+                    HelperState::Launched {
+                        last_error: Some(error),
+                        ..
+                    } => DaRouteError::HelperUnavailable(error.to_string()),
+                    _ => DaRouteError::HelperStarting,
+                });
             }
             std::thread::sleep(Duration::from_millis(25));
         }
@@ -850,18 +890,18 @@ fn launch_elevated(
 
 impl HelperClient {
     #[cfg(windows)]
-    fn connect(pipe: &str, expected_pid: u32, timeout: Duration) -> Result<Self, String> {
+    fn connect(pipe: &str, expected_pid: u32, timeout: Duration) -> Result<Self, HelperIpcError> {
         let name = format!(r"\\.\pipe\{pipe}");
         wait_for_pipe(&name, timeout)?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .map_err(|e| format!("pipe runtime: {e}"))?;
+            .map_err(|e| HelperIpcError::Io(format!("pipe runtime: {e}")))?;
         let client = {
             let _guard = runtime.enter();
             tokio::net::windows::named_pipe::ClientOptions::new()
                 .open(&name)
-                .map_err(|e| format!("open {name}: {e}"))?
+                .map_err(|e| HelperIpcError::Io(format!("open helper pipe: {e}")))?
         };
         verify_pipe_server(&client, expected_pid)?;
         let mut client = Self {
@@ -870,27 +910,30 @@ impl HelperClient {
                 runtime,
             }),
         };
-        client.call(PipeMessage {
-            version: DA_HELPER_PROTOCOL_VERSION,
-            op: "hello".into(),
-            target: None,
-            prefix: None,
-            interface_luid: None,
-            next_hop: None,
-            lifetime_secs: None,
-            client_pid: Some(std::process::id()),
+        client.call(Request::Hello {
+            version: PROTOCOL_VERSION,
+            client_pid: std::process::id(),
         })?;
         Ok(client)
     }
     #[cfg(not(windows))]
-    fn connect(_pipe: &str, _expected_pid: u32, _timeout: Duration) -> Result<Self, String> {
-        Err("named pipes are only supported on Windows".into())
+    fn connect(
+        _pipe: &str,
+        _expected_pid: u32,
+        _timeout: Duration,
+    ) -> Result<Self, HelperIpcError> {
+        Err(HelperIpcError::Io(
+            "named pipes are only supported on Windows".into(),
+        ))
     }
 }
 
-fn validate_pipe_server(actual_pid: u32, expected_pid: u32) -> Result<(), String> {
+fn validate_pipe_server(actual_pid: u32, expected_pid: u32) -> Result<(), HelperIpcError> {
     if expected_pid == 0 || actual_pid != expected_pid {
-        return Err("unexpected helper pipe server".to_string());
+        return Err(HelperIpcError::PeerMismatch {
+            expected: expected_pid,
+            actual: actual_pid,
+        });
     }
     Ok(())
 }
@@ -899,18 +942,18 @@ fn validate_pipe_server(actual_pid: u32, expected_pid: u32) -> Result<(), String
 fn verify_pipe_server(
     file: &impl std::os::windows::io::AsRawHandle,
     expected_pid: u32,
-) -> Result<(), String> {
+) -> Result<(), HelperIpcError> {
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::System::Pipes::GetNamedPipeServerProcessId;
     let mut pid = 0;
     // SAFETY: file owns a live pipe handle and pid points to writable storage.
     unsafe { GetNamedPipeServerProcessId(HANDLE(file.as_raw_handle() as _), &mut pid) }
-        .map_err(|e| format!("GetNamedPipeServerProcessId: {e}"))?;
+        .map_err(|e| HelperIpcError::Io(format!("GetNamedPipeServerProcessId: {e}")))?;
     validate_pipe_server(pid, expected_pid)
 }
 
 #[cfg(windows)]
-fn wait_for_pipe(name: &str, timeout: Duration) -> Result<(), String> {
+fn wait_for_pipe(name: &str, timeout: Duration) -> Result<(), HelperIpcError> {
     use windows::Win32::Foundation::GetLastError;
     use windows::Win32::System::Pipes::WaitNamedPipeW;
     use windows::core::HSTRING;
@@ -923,7 +966,10 @@ fn wait_for_pipe(name: &str, timeout: Duration) -> Result<(), String> {
     } else {
         // SAFETY: this immediately reads the calling thread's last error.
         let error = unsafe { GetLastError() };
-        Err(format!("WaitNamedPipeW failed with {}", error.0))
+        Err(HelperIpcError::Io(format!(
+            "WaitNamedPipeW failed with {}",
+            error.0
+        )))
     }
 }
 
@@ -1046,6 +1092,40 @@ fn sockaddr_ip(address: &windows::Win32::Networking::WinSock::SOCKADDR_INET) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn spawn_failure_sets_unavailable_status_and_detail() {
+        let mut manager = super::DaRouteManager::new();
+        let error = super::DaRouteError::HelperUnavailable("spawn failed".into());
+        assert_eq!(
+            manager.ensure_helper_with(|| Err(error.clone())),
+            Err(error.clone())
+        );
+        assert_eq!(manager.status(), super::DaRouteStatus::HelperUnavailable);
+        assert_eq!(manager.last_error(), Some(&error));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn refresh_failure_preserves_detail_and_invalidates_lease() {
+        let mut manager = super::DaRouteManager::new();
+        manager.helper_state = super::HelperState::Connected(super::HelperClient);
+        let plan = super::RoutePlan {
+            target: "10.0.0.1".parse().unwrap(),
+            prefix: 32,
+            interface_luid: 1,
+            next_hop: "0.0.0.0".parse().unwrap(),
+            via_gateway: false,
+        };
+        manager
+            .leases
+            .acquire(plan, super::AdapterId::UNSPECIFIED, true);
+        manager.refresh();
+        assert!(!manager.has_owned_routes());
+        assert!(
+            matches!(manager.last_error(), Some(super::DaRouteError::HelperUnavailable(detail)) if detail.contains("named pipes"))
+        );
+    }
+
     #[cfg(not(windows))]
     #[test]
     fn cancellation_after_helper_ready_never_attempts_add() {
@@ -1071,22 +1151,16 @@ mod tests {
             .build()
             .unwrap();
         runtime.block_on(async {
-            let message = super::PipeMessage {
+            let message = super::Request::Hello {
                 version: 2,
-                op: "hello".into(),
-                target: None,
-                prefix: None,
-                interface_luid: None,
-                next_hop: None,
-                lifetime_secs: None,
-                client_pid: None,
+                client_pid: std::process::id(),
             };
             let (mut client, _server) = tokio::io::duplex(64);
             let error =
                 super::pipe_exchange(&mut client, &message, std::time::Duration::from_millis(20))
                     .await
                     .unwrap_err();
-            assert!(error.contains("timed out"));
+            assert_eq!(error, super::HelperIpcError::TimedOut);
             let (mut client, mut server) = tokio::io::duplex(32 * 1024);
             let task = tokio::spawn(async move {
                 let mut request = [0u8; 512];
@@ -1097,10 +1171,50 @@ mod tests {
                 super::pipe_exchange(&mut client, &message, std::time::Duration::from_secs(1))
                     .await
                     .unwrap_err();
-            assert!(error.contains("exceeds limit"));
+            assert_eq!(error, super::HelperIpcError::Oversize("reply"));
             task.await.unwrap();
         });
     }
+    #[test]
+    fn pipe_reply_errors_preserve_kind_and_detail() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let request = super::Request::Hello {
+                version: 2,
+                client_pid: 1,
+            };
+            for (reply, expected) in [
+                (
+                    b"{\"ok\":false,\"error\":\"route denied\"}\n".as_slice(),
+                    super::HelperIpcError::Rejected("route denied".into()),
+                ),
+                (
+                    b"not-json\n".as_slice(),
+                    super::HelperIpcError::Protocol(
+                        "invalid helper reply: expected ident at line 1 column 2".into(),
+                    ),
+                ),
+            ] {
+                let (mut client, mut server) = tokio::io::duplex(1024);
+                let task = tokio::spawn(async move {
+                    let mut buf = [0; 256];
+                    let _ = server.read(&mut buf).await.unwrap();
+                    server.write_all(reply).await.unwrap();
+                });
+                let error =
+                    super::pipe_exchange(&mut client, &request, std::time::Duration::from_secs(1))
+                        .await
+                        .unwrap_err();
+                assert_eq!(error, expected);
+                task.await.unwrap();
+            }
+        });
+    }
+
     #[test]
     fn helper_loss_invalidates_owned_but_keeps_reused_routes() {
         let mut manager = super::DaRouteManager::new();
@@ -1208,18 +1322,12 @@ mod tests {
             super::HelperClient::connect(&pipe, std::process::id(), Duration::from_secs(1))
                 .unwrap();
         let error = client
-            .call(super::PipeMessage {
+            .call(super::Request::Hello {
                 version: 2,
-                op: "refresh".into(),
-                target: None,
-                prefix: None,
-                interface_luid: None,
-                next_hop: None,
-                lifetime_secs: None,
-                client_pid: None,
+                client_pid: std::process::id(),
             })
             .unwrap_err();
-        assert!(error.contains("timed out"));
+        assert_eq!(error, super::HelperIpcError::TimedOut);
         assert!(client.transport.is_none());
         assert!(closed_rx.recv_timeout(Duration::from_secs(2)).unwrap());
         server.join().unwrap();
@@ -1249,21 +1357,15 @@ mod tests {
                 super::verify_pipe_server(&client, std::process::id().wrapping_add(1)).is_err()
             );
             server.connect().await.unwrap();
-            let message = super::PipeMessage {
+            let message = super::Request::Hello {
                 version: 2,
-                op: "hello".into(),
-                target: None,
-                prefix: None,
-                interface_luid: None,
-                next_hop: None,
-                lifetime_secs: None,
-                client_pid: None,
+                client_pid: std::process::id(),
             };
             let error =
                 super::pipe_exchange(&mut client, &message, std::time::Duration::from_millis(50))
                     .await
                     .unwrap_err();
-            assert!(error.contains("timed out"));
+            assert_eq!(error, super::HelperIpcError::TimedOut);
             drop(client);
             tokio::time::timeout(std::time::Duration::from_secs(2), async {
                 let mut buffer = [0; 512];
@@ -1362,10 +1464,11 @@ mod tests {
         manager.helper_state = super::HelperState::Launched {
             pipe: String::new(),
             process: super::LaunchedProcess { pid: 123 },
+            last_error: None,
         };
         assert!(matches!(
             manager.ensure_helper(),
-            Err(super::DaRouteError::HelperStarting)
+            Err(super::DaRouteError::HelperUnavailable(_))
         ));
         assert!(matches!(
             manager.helper_state,

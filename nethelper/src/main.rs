@@ -4,6 +4,7 @@
 mod winutil;
 use winutil::{Impersonation, LocalAllocation, OwnedHandle};
 
+use opclook_contract::helper_ipc::{PROTOCOL_VERSION, Request, Route};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -41,28 +42,9 @@ use windows::Win32::System::Threading::{
 };
 use windows::core::{PCWSTR, PWSTR};
 
-const PROTOCOL_VERSION: u32 = 2;
 const DEFAULT_LIFETIME_SECS: u32 = 3600;
 const MAX_LIFETIME_SECS: u32 = 86_400;
 const PIPE_CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
-
-#[derive(Debug, Serialize, Deserialize)]
-struct PipeMessage {
-    version: u32,
-    op: String,
-    #[serde(default)]
-    target: Option<String>,
-    #[serde(default)]
-    prefix: Option<u8>,
-    #[serde(default)]
-    interface_luid: Option<u64>,
-    #[serde(default)]
-    next_hop: Option<String>,
-    #[serde(default)]
-    lifetime_secs: Option<u32>,
-    #[serde(default)]
-    client_pid: Option<u32>,
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct PipeReply {
@@ -189,19 +171,19 @@ fn run(pipe: &str, parent: u32, audit: &Audit) -> Result<(), String> {
         if trimmed.is_empty() {
             continue;
         }
-        let message: PipeMessage = match serde_json::from_str(trimmed) {
+        let message: Request = match serde_json::from_str(trimmed) {
             Ok(message) => message,
             Err(error) => {
                 let _ = reply(&mut writer, false, Some(&format!("invalid JSON: {error}")));
                 continue;
             }
         };
-        if message.version != PROTOCOL_VERSION {
+        if message.version() != PROTOCOL_VERSION {
             let _ = reply(&mut writer, false, Some("protocol version mismatch"));
             continue;
         }
         if !authenticated {
-            if message.op != "hello" || message.client_pid != Some(parent) {
+            if !valid_hello(&message, parent) {
                 let _ = reply(&mut writer, false, Some("hello required"));
                 audit.log("reject", "bad hello");
                 break;
@@ -211,8 +193,12 @@ fn run(pipe: &str, parent: u32, audit: &Audit) -> Result<(), String> {
             audit.log("hello", &format!("client pid {client_pid}"));
             continue;
         }
-        match message.op.as_str() {
-            "add" => match add_route(&message) {
+        match message {
+            Request::Add {
+                route,
+                lifetime_secs,
+                ..
+            } => match add_route(&route, lifetime_secs) {
                 Ok(route) => {
                     created.insert(route_key(&route), route);
                     audit.log(
@@ -233,15 +219,15 @@ fn run(pipe: &str, parent: u32, audit: &Audit) -> Result<(), String> {
                     let _ = reply(&mut writer, false, Some(&error));
                 }
             },
-            "refresh" => match refresh_route(&message, &created) {
+            Request::Refresh {
+                route,
+                lifetime_secs,
+                ..
+            } => match refresh_route(&route, lifetime_secs, &created) {
                 Ok(()) => {
                     audit.log(
                         "refresh",
-                        &format!(
-                            "target={} luid={}",
-                            message.target.as_deref().unwrap_or(""),
-                            message.interface_luid.unwrap_or(0)
-                        ),
+                        &format!("target={} luid={}", route.target, route.interface_luid),
                     );
                     let _ = reply(&mut writer, true, None);
                 }
@@ -250,12 +236,9 @@ fn run(pipe: &str, parent: u32, audit: &Audit) -> Result<(), String> {
                     let _ = reply(&mut writer, false, Some(&error));
                 }
             },
-            "remove" => match remove_route(&message, &mut created) {
+            Request::Remove { route, .. } => match remove_route(&route, &mut created) {
                 Ok(()) => {
-                    audit.log(
-                        "remove",
-                        &format!("target={}", message.target.as_deref().unwrap_or("")),
-                    );
+                    audit.log("remove", &format!("target={}", route.target));
                     let _ = reply(&mut writer, true, None);
                 }
                 Err(error) => {
@@ -263,11 +246,11 @@ fn run(pipe: &str, parent: u32, audit: &Audit) -> Result<(), String> {
                     let _ = reply(&mut writer, false, Some(&error));
                 }
             },
-            "shutdown" => {
+            Request::Shutdown { .. } => {
                 let _ = reply(&mut writer, true, None);
                 break;
             }
-            _ => {
+            Request::Hello { .. } => {
                 let _ = reply(&mut writer, false, Some("unsupported operation"));
             }
         }
@@ -285,6 +268,10 @@ fn run(pipe: &str, parent: u32, audit: &Audit) -> Result<(), String> {
         let _ = DisconnectNamedPipe(pipe_handle);
     }
     Ok(())
+}
+
+fn valid_hello(message: &Request, parent: u32) -> bool {
+    matches!(message, Request::Hello { version: PROTOCOL_VERSION, client_pid } if *client_pid == parent)
 }
 
 fn reply(writer: &mut std::fs::File, ok: bool, error: Option<&str>) -> Result<(), String> {
@@ -454,8 +441,8 @@ fn sid_to_string(sid: PSID) -> Result<String, String> {
     unsafe { text.to_string() }.map_err(|e| format!("SID text: {e}"))
 }
 
-fn add_route(message: &PipeMessage) -> Result<RouteSpec, String> {
-    let route = validate_route(message)?;
+fn add_route(message: &Route, lifetime_secs: u32) -> Result<RouteSpec, String> {
+    let route = validate_route(message, lifetime_secs)?;
     let row = route_row(&route)?;
     // SAFETY: row is fully initialized and borrowed for the call.
     let result = unsafe { CreateIpForwardEntry2(&row) };
@@ -472,10 +459,10 @@ fn add_route(message: &PipeMessage) -> Result<RouteSpec, String> {
 }
 
 fn remove_route(
-    message: &PipeMessage,
+    message: &Route,
     created: &mut HashMap<CreatedRoute, RouteSpec>,
 ) -> Result<(), String> {
-    let route = validate_route(message)?;
+    let route = validate_route(message, DEFAULT_LIFETIME_SECS)?;
     let key = route_key(&route);
     let Some(removed) = created.get(&key).copied() else {
         return Err("route is not owned by this helper".to_string());
@@ -486,10 +473,11 @@ fn remove_route(
 }
 
 fn refresh_route(
-    message: &PipeMessage,
+    message: &Route,
+    lifetime_secs: u32,
     created: &HashMap<CreatedRoute, RouteSpec>,
 ) -> Result<(), String> {
-    let route = validate_route(message)?;
+    let route = validate_route(message, lifetime_secs)?;
     let key = route_key(&route);
     if !created.contains_key(&key) {
         return Err("route is not owned by this helper".to_string());
@@ -524,30 +512,20 @@ struct RouteSpec {
     lifetime_secs: u32,
 }
 
-fn validate_route(message: &PipeMessage) -> Result<RouteSpec, String> {
-    let target: IpAddr = message
-        .target
-        .as_deref()
-        .ok_or_else(|| "missing target".to_string())?
-        .parse()
-        .map_err(|_| "invalid target address".to_string())?;
+fn validate_route(message: &Route, lifetime_secs: u32) -> Result<RouteSpec, String> {
+    let target = message.target;
     if target.is_loopback() || target.is_unspecified() || is_multicast_or_broadcast(target) {
         return Err("target must be a unicast host address".to_string());
     }
     let expected_prefix = if target.is_ipv4() { 32 } else { 128 };
-    if message.prefix != Some(expected_prefix) {
+    if message.prefix != expected_prefix {
         return Err(format!("prefix must be exactly /{expected_prefix}"));
     }
-    let interface_luid = message
-        .interface_luid
-        .filter(|luid| *luid != 0)
-        .ok_or_else(|| "missing interface LUID".to_string())?;
-    let next_hop: IpAddr = message
-        .next_hop
-        .as_deref()
-        .ok_or_else(|| "missing next hop".to_string())?
-        .parse()
-        .map_err(|_| "invalid next hop".to_string())?;
+    let interface_luid = message.interface_luid;
+    if interface_luid == 0 {
+        return Err("missing interface LUID".into());
+    }
+    let next_hop = message.next_hop;
     if next_hop.is_ipv4() != target.is_ipv4() {
         return Err("next hop family does not match the target".to_string());
     }
@@ -555,10 +533,7 @@ fn validate_route(message: &PipeMessage) -> Result<RouteSpec, String> {
     if !unspecified && (next_hop.is_multicast() || next_hop.is_loopback()) {
         return Err("next hop must be on-link, a gateway or the unspecified address".to_string());
     }
-    let lifetime_secs = message
-        .lifetime_secs
-        .unwrap_or(DEFAULT_LIFETIME_SECS)
-        .clamp(1, MAX_LIFETIME_SECS);
+    let lifetime_secs = lifetime_secs.clamp(1, MAX_LIFETIME_SECS);
     Ok(RouteSpec {
         target,
         prefix: expected_prefix,
@@ -651,6 +626,92 @@ fn wide(text: &str) -> Vec<u16> {
 #[cfg(test)]
 mod regression_tests {
     use super::*;
+
+    #[test]
+    fn hello_requires_expected_pid_and_version() {
+        assert!(valid_hello(
+            &Request::Hello {
+                version: PROTOCOL_VERSION,
+                client_pid: 123
+            },
+            123
+        ));
+        assert!(!valid_hello(
+            &Request::Hello {
+                version: PROTOCOL_VERSION,
+                client_pid: 124
+            },
+            123
+        ));
+        assert!(!valid_hello(
+            &Request::Hello {
+                version: PROTOCOL_VERSION + 1,
+                client_pid: 123
+            },
+            123
+        ));
+        assert!(!valid_hello(
+            &Request::Shutdown {
+                version: PROTOCOL_VERSION
+            },
+            123
+        ));
+    }
+
+    #[test]
+    fn typed_route_validation_preserves_restrictions() {
+        let route = Route {
+            target: "192.0.2.1".parse().unwrap(),
+            prefix: 32,
+            interface_luid: 7,
+            next_hop: "0.0.0.0".parse().unwrap(),
+        };
+        assert_eq!(validate_route(&route, 0).unwrap().lifetime_secs, 1);
+        assert_eq!(
+            validate_route(&route, u32::MAX).unwrap().lifetime_secs,
+            MAX_LIFETIME_SECS
+        );
+        assert!(
+            validate_route(
+                &Route {
+                    prefix: 24,
+                    ..route
+                },
+                1
+            )
+            .is_err()
+        );
+        assert!(
+            validate_route(
+                &Route {
+                    interface_luid: 0,
+                    ..route
+                },
+                1
+            )
+            .is_err()
+        );
+        assert!(
+            validate_route(
+                &Route {
+                    target: "127.0.0.1".parse().unwrap(),
+                    ..route
+                },
+                1
+            )
+            .is_err()
+        );
+        assert!(
+            validate_route(
+                &Route {
+                    next_hop: "::1".parse().unwrap(),
+                    ..route
+                },
+                1
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn token_storage_is_aligned_and_large_enough() {

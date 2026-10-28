@@ -424,3 +424,13 @@ or process for the next attempt, preventing duplicate UAC prompts. Linux route
 manager tests: 17 passed, including pending launch, pipe retry, cancellation
 and lease loss. Windows runtime, actual DA/UAC, shared IPC and typed errors
 remain open; Windows i686 typecheck is reported separately.
+
+2026-10-28 B5/IPC: shared protocol v2 tagged requests validate required fields
+and typed IPs while accepting legacy unused null fields. IPC failures retain
+kind/detail through the client and detail in route errors, including refresh,
+remove and localized RU/EN/ZH output. Spawn failure marks the helper unavailable;
+pipe retries retain the process. Linux targeted route 20/20, IPC 2/2, locale
+10/10; Windows i686 backend/helper --tests typechecked with helper manifest
+suppression for tests only. Earlier full Linux backend 203/203 and contract
+29/29 preceded the final targeted tests. Actual Windows execution, DA/UAC,
+exact-head CI and remaining B/E/F/G/H work are open.

@@ -225,9 +225,10 @@ fn run(
                 manager.release(held.swap_remove(index).lease);
             } else if !manager.lease_is_valid(&held[index].lease) {
                 let item = held.swap_remove(index);
-                item.state.finish(Err(DaRouteError::HelperUnavailable(
-                    "route lease lost".into(),
-                )));
+                item.state.finish(Err(match manager.last_error() {
+                    Some(error @ DaRouteError::HelperUnavailable(_)) => error.clone(),
+                    _ => DaRouteError::HelperUnavailable("route lease lost".into()),
+                }));
                 manager.release(item.lease);
             } else {
                 index += 1;

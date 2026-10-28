@@ -499,3 +499,17 @@ B5 checkpoint: helper launcher, launched process and connection now have
 exclusive lifecycle states and derived status. Pending launch/process survives
 a request deadline. Linux route tests 17/17; actual Windows execution and
 DA/UAC remain open. Shared typed IPC/errors, JournalMessage and E/F/G/H remain.
+
+B5 и связанная часть E (helper IPC): `HelperState` владеет launcher, process и
+connection; status выводится из состояния, ошибка spawn устанавливает Failed.
+Запросный deadline сохраняет launcher/process и не запускает повторный UAC.
+Общий tagged Request протокола v2 проверяет обязательные поля и IP, принимает
+старые лишние null поля; неизвестная операция отклоняется. Typed IPC ошибки
+сохраняют категорию и детали до преобразования в portable route error; refresh
+и remove сохраняют причину потери lease, локализация RU/EN/ZH показывает детали.
+3 s и 16 KiB лимиты и уничтожение transport/runtime сохранены. Linux route
+20/20, contract IPC 2/2, locale 10/10; Windows i686 backend и helper --tests
+только typecheck (helper test-only без manifest), не Windows runtime. Ранее
+полные Linux backend 203/203 и contract 29/29 прошли до последних targeted
+регрессий. Финальный exact-head CI, реальный DA/UAC, JournalMessage, Ecore/CSV,
+F/G/H, PNG и измеренный 10k baseline остаются открытыми.

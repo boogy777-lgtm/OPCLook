@@ -157,3 +157,7 @@ exact-head CI остаются открыты.
 
 B5 частично: helper lifecycle типизирован, pending launch/process сохраняется
 при deadline; Linux route tests 17/17. IPC/errors и Windows runtime ещё открыты.
+
+B5/IPC: общий tagged Request сохраняет protocol v2, typed IPC ошибки передают
+причину в snapshot и локализованное сообщение; подробные проверки и пределы —
+в refactoring-status. Windows runtime и реальный DA/UAC не проверены.

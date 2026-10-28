@@ -2570,9 +2570,10 @@ pub fn da_route_error(lang: Lang, error: &opclook_contract::da_route::DaRouteErr
         E::NoGateway(ip) => fmt(lang, Tr::DaRouteNoGateway, &[&ip.to_string()]),
         E::Conflict(ip) => fmt(lang, Tr::DaRouteConflict, &[&ip.to_string()]),
         E::HelperStarting => tr(lang, Tr::DaRouteHelperStarting).to_string(),
-        E::HelperUnavailable(_) | E::UacDeclined => {
-            tr(lang, Tr::DaRouteHelperUnavailable).to_string()
+        E::HelperUnavailable(detail) => {
+            format!("{}: {}", tr(lang, Tr::DaRouteHelperUnavailable), detail)
         }
+        E::UacDeclined => tr(lang, Tr::DaRouteHelperUnavailable).to_string(),
         E::Add(ip, detail) => fmt(lang, Tr::DaRouteAdd, &[&ip.to_string(), detail]),
         E::Verify(ip) => fmt(lang, Tr::DaRouteVerify, &[&ip.to_string()]),
     };
@@ -3652,6 +3653,17 @@ mod tests {
         assert_eq!(Lang::from_str("en"), Some(Lang::En));
         assert_eq!(Lang::from_str("zh"), Some(Lang::Zh));
         assert_eq!(Lang::from_str("xx"), None);
+    }
+
+    #[test]
+    fn helper_unavailable_retains_detail_in_every_language() {
+        let error =
+            opclook_contract::da_route::DaRouteError::HelperUnavailable("pipe failure 42".into());
+        for lang in [Lang::Ru, Lang::En, Lang::Zh] {
+            let rendered = da_route_error(lang, &error);
+            assert!(rendered.contains("pipe failure 42"));
+            assert!(rendered.contains(tr(lang, Tr::DaRouteHelperUnavailable)));
+        }
     }
 
     /// One instance of every `BackendMsg` variant with the markers that its
