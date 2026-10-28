@@ -3102,7 +3102,7 @@ fn tree_enter_on_unsubscribed_item_adds_row_without_dialog() {
         .journal
         .entries()
         .last()
-        .map(|e| e.text.clone())
+        .map(|e| e.render(opcda_egui::i18n::Lang::Ru))
         .unwrap_or_default();
     assert!(note.contains("Сигнал добавлен в таблицу"), "got: {note}");
 }
@@ -3823,11 +3823,10 @@ fn add_dropped_tree_cross_session_warns_and_skips() {
     app.add_dropped_tree(sid(1), vec![other]);
 
     assert_eq!(app.rows.len(), 0, "cross-session drop must be skipped");
-    let warned = app
-        .journal
-        .entries()
-        .iter()
-        .any(|e| e.text.contains("активного сервера"));
+    let warned = app.journal.entries().iter().any(|e| {
+        e.render(opcda_egui::i18n::Lang::Ru)
+            .contains("активного сервера")
+    });
     assert!(warned, "cross-session drop must journal a warning");
 }
 

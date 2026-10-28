@@ -434,3 +434,18 @@ pipe retries retain the process. Linux targeted route 20/20, IPC 2/2, locale
 suppression for tests only. Earlier full Linux backend 203/203 and contract
 29/29 preceded the final targeted tests. Actual Windows execution, DA/UAC,
 exact-head CI and remaining B/E/F/G/H work are open.
+
+
+### 2026-10-28 — B6: JournalMessage
+
+Сообщение журнала теперь либо plain, либо localized с ключом и сохранёнными
+аргументами. Убрана заранее форматируемая русская копия; экспорт по умолчанию
+остался русским, явный экспорт и рендер используют выбранный язык, импорт
+остаётся текстовым. Регрессии проверяют все три языка, экспорт/импорт и одно
+форматирование аргумента. Тестовые читатели переведены на `render`.
+Windows i686 GUI all-targets прошёл только typecheck с test-only пропуском
+ресурсов. PNG, Windows runtime, DA/UAC и итоговый exact-head CI открыты;
+оптимизации журнала отложены до измерения baseline F.
+
+Измерено на Linux: GUI unit 208/208, headless UI interactions 148/148
+(1 ignored). `cargo fmt --all -- --check` прошёл.

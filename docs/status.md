@@ -1,9 +1,9 @@
 # Статус
 
-**Windows CI:** изолированный COM-тест воспроизвёл повреждение heap. Найдено,
-что `windows` реализует Drop для VARIANT в отдельном extension-модуле; исправлены
-владение заимствованными BSTR и двойное уничтожение тестового SAFEARRAY.
-Исправление ожидает выполнения Windows CI на точном head.
+**Windows CI:** исправление владения VARIANT прошло полный Windows CI на
+предыдущем head `7f`; для `5217` Linux прошёл, Windows COM/shared/lib/helper
+прошли, integration выполнялся на момент этой записи. Текущий head требует
+отдельного полного exact-head CI перед слиянием.
 
 **2026-10-28, продолжение этапа D:** COM/WinAPI ownership и safety lint
 продвинуты; подробная матрица реализации, проверок и открытых пунктов — в
@@ -161,3 +161,11 @@ B5 частично: helper lifecycle типизирован, pending launch/pro
 B5/IPC: общий tagged Request сохраняет protocol v2, typed IPC ошибки передают
 причину в snapshot и локализованное сообщение; подробные проверки и пределы —
 в refactoring-status. Windows runtime и реальный DA/UAC не проверены.
+
+
+**2026-10-28, подэтап B6:** JournalMessage различает обычный текст и ключ с
+аргументами; запись не хранит повторную русскую копию. Переключение RU/EN/ZH,
+экспорт и повторная загрузка покрыты тестами. Полные данные проверок и
+открытые ограничения — в `docs/refactoring-status.md`. E/F/G/H, измеренный
+10k baseline, PNG, Windows runtime, физические DA/UAC и итоговый exact-head CI
+остаются открытыми.

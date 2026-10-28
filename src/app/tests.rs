@@ -976,7 +976,7 @@ fn ua_url_userinfo_is_rejected_before_journal_or_session() {
         app.journal
             .entries()
             .iter()
-            .all(|entry| !entry.text.contains("secret"))
+            .all(|entry| !entry.render(Lang::Ru).contains("secret"))
     );
 }
 
