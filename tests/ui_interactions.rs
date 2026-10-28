@@ -3277,18 +3277,8 @@ fn columns_dialog_down_moves_row_and_persists() {
             h.state().settings.column_order.is_some(),
             "column_order must be persisted after the dialog move"
         );
-        // Persisted snapshot reflects the move. Entries are stored as plain
-        // variant names (the double-encoding bug stored JSON strings); accept both.
-        let persisted = h.state().settings.column_order.clone().unwrap();
-        let parsed: Vec<ColumnId> = persisted
-            .iter()
-            .filter_map(|s| {
-                let trimmed = s.trim();
-                serde_json::from_str::<ColumnId>(trimmed)
-                    .or_else(|_| serde_json::from_str::<ColumnId>(&format!("\"{trimmed}\"")))
-                    .ok()
-            })
-            .collect();
+        // The in-memory persisted snapshot is typed and reflects the move.
+        let parsed = h.state().settings.column_order.clone().unwrap();
         assert_eq!(parsed.len(), ColumnId::ALL.len(), "all columns persisted");
         assert_eq!(
             parsed[target_idx + 1],

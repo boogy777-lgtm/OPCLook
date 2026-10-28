@@ -230,3 +230,10 @@ backend-тест маски (1/1), а также Windows i686 workspace all-targ
 GUI all-targets typecheck с test-only отключением ресурсов прошёл. Остальные
 изменения настроек и проверка Windows runtime открыты. Дополнительно Linux
 U5 app unit test переключения фильтра прошёл (1/1).
+
+`column_order` теперь хранит `Vec<ColumnId>`; старые quoted/plain имена
+разбираются на границе, дубликаты и неизвестные имена отбрасываются, недостающие
+дополняются. При отсутствии распознанных имён сохранён прежний fallback на
+`columns.order`. Файл по-прежнему записывает прежние plain имена. Linux settings
+46/46 и UI interaction 1/1 прошли; Windows GUI all-targets typecheck с test-only
+отключением ресурсов прошёл, Windows runtime и остальные пункты C остаются.

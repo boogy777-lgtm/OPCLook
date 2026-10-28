@@ -180,8 +180,9 @@ pub struct Settings {
     pub recent_endpoints: Vec<EndpointSpec>,
     /// Column order persisted from the header context menu («Влево»/«Вправо»).
     /// `None` keeps the legacy `columns.order` (backward compatible). Stored as
-    /// serialized `ColumnId` strings so the table can render from it directly.
-    pub column_order: Option<Vec<String>>,
+    /// plain `ColumnId` names; legacy quoted names are parsed on load.
+    #[serde(default, deserialize_with = "deserialize_column_order")]
+    pub column_order: Option<Vec<ColumnId>>,
     /// UI language code ("ru", "en", "zh"). Missing/invalid entries fall back
     /// to Russian on load (see `lang()`).
     #[serde(default = "default_lang")]
@@ -225,6 +226,37 @@ pub struct Settings {
     /// destroy the only copy, so `save()` refuses until the app restarts.
     #[serde(skip)]
     pub save_blocked: bool,
+}
+
+fn deserialize_column_order<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<ColumnId>>, D::Error> {
+    let raw = Option::<Vec<serde_json::Value>>::deserialize(deserializer)?;
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let mut order = Vec::with_capacity(ColumnId::ALL.len());
+    for value in raw {
+        let Some(name) = value.as_str() else {
+            continue;
+        };
+        let name = name.trim();
+        let decoded = serde_json::from_str::<String>(name).unwrap_or_else(|_| name.to_owned());
+        if let Ok(id) = serde_json::from_value::<ColumnId>(serde_json::Value::String(decoded)) {
+            if !order.contains(&id) {
+                order.push(id);
+            }
+        }
+    }
+    if order.is_empty() {
+        return Ok(None);
+    }
+    for id in ColumnId::ALL {
+        if !order.contains(&id) {
+            order.push(id);
+        }
+    }
+    Ok(Some(order))
 }
 
 impl Default for Settings {
@@ -385,32 +417,15 @@ impl Settings {
         self.lang = lang.as_str().to_string();
     }
 
-    /// Parse a persisted column name that may be either a plain variant name
-    /// ("Server") or a JSON-encoded one from an older build ("\"Server\"").
-    fn parse_column_name(raw: &str) -> Option<ColumnId> {
-        let trimmed = raw.trim();
-        if let Ok(id) = serde_json::from_str::<ColumnId>(trimmed) {
-            return Some(id);
-        }
-        // Plain unquoted name ("Server") is not valid JSON on its own.
-        serde_json::from_str::<ColumnId>(&format!("\"{trimmed}\"")).ok()
-    }
-
-    /// The single normalized order for table headers, the setup dialog and DnD.
-    /// Reject unknown/duplicate saved ids and restore missing canonical columns.
+    /// The normalized order for table headers, the setup dialog and DnD.
     pub fn resolved_order(&self) -> Vec<ColumnId> {
         let saved = self
             .column_order
             .as_ref()
-            .map(|list| {
-                list.iter()
-                    .filter_map(|raw| Self::parse_column_name(raw))
-                    .collect::<Vec<_>>()
-            })
             .filter(|order| !order.is_empty())
-            .unwrap_or_else(|| self.columns.order.clone());
+            .unwrap_or(&self.columns.order);
         let mut order = Vec::with_capacity(ColumnId::ALL.len());
-        for id in saved.into_iter().chain(ColumnId::ALL) {
+        for id in saved.iter().copied().chain(ColumnId::ALL) {
             if !order.contains(&id) {
                 order.push(id);
             }
@@ -464,17 +479,7 @@ impl Settings {
             }
         }
         self.columns.order = normalized.clone();
-        self.column_order = Some(
-            normalized
-                .iter()
-                .map(|id| {
-                    serde_json::to_string(id)
-                        .unwrap_or_default()
-                        .trim_matches('"')
-                        .to_string()
-                })
-                .collect(),
-        );
+        self.column_order = Some(normalized);
     }
 
     /// Effective adapter selection. A missing/invalid persisted GUID means no
@@ -1101,12 +1106,8 @@ mod tests {
 
     #[test]
     fn resolved_order_ignores_unknown_entries_and_fills_missing() {
-        let mut s = Settings::default();
-        // Stored as JSON-encoded variant names (as persist_column_order writes).
-        s.column_order = Some(vec![
-            serde_json::to_string(&ColumnId::Value).unwrap(),
-            "\"NoSuchColumn\"".to_string(),
-        ]);
+        let s: Settings =
+            serde_json::from_str(r#"{"column_order":["\"Value\"","\"NoSuchColumn\""]}"#).unwrap();
         let resolved = s.resolved_order();
         // Unknown entry dropped; full canonical set preserved with Value first.
         assert_eq!(resolved[0], ColumnId::Value);
@@ -1118,13 +1119,9 @@ mod tests {
 
     #[test]
     fn column_order_deduplicates_and_repairs_legacy_entries() {
-        let mut s = Settings::default();
-        s.column_order = Some(vec![
-            "Value".into(),
-            "Value".into(),
-            "Status".into(),
-            "Unknown".into(),
-        ]);
+        let mut s: Settings =
+            serde_json::from_str(r#"{"column_order":["Value","Value","Status","Unknown"]}"#)
+                .unwrap();
         s.columns.order = vec![ColumnId::Value, ColumnId::Value];
         let resolved = s.resolved_order();
         assert_eq!(resolved.len(), ColumnId::ALL.len());
@@ -1150,7 +1147,7 @@ mod tests {
     #[test]
     fn column_drag_uses_resolved_order_and_persists() {
         let mut s = Settings::default();
-        s.column_order = Some(vec!["Value".into(), "Status".into()]);
+        s.column_order = Some(vec![ColumnId::Value, ColumnId::Status]);
         assert!(s.move_column_to_insert(ColumnId::Status, 0));
         assert_eq!(s.resolved_order()[0], ColumnId::Status);
         assert_eq!(s.resolved_order()[1], ColumnId::Value);
@@ -1164,12 +1161,9 @@ mod tests {
         // is a JSON string literal containing the quoted variant name, e.g.
         // ["\"Server\"", "…"]. Newer builds write plain names, e.g. ["Server"].
         // Both must resolve.
-        let mut legacy = Settings::default();
-        legacy.column_order = Some(vec![
-            "\"Server\"".to_string(),
-            "\"FullName\"".to_string(),
-            "\"Status\"".to_string(),
-        ]);
+        let legacy: Settings =
+            serde_json::from_str(r#"{"column_order":["\"Server\"","\"FullName\"","\"Status\""]}"#)
+                .unwrap();
         let resolved = legacy.resolved_order();
         assert_eq!(
             resolved[0],
@@ -1185,12 +1179,8 @@ mod tests {
         }
 
         // Plain form written by the current persist_column_order.
-        let mut plain = Settings::default();
-        plain.column_order = Some(vec![
-            "Value".to_string(),
-            "Time".to_string(),
-            "Server".to_string(),
-        ]);
+        let plain: Settings =
+            serde_json::from_str(r#"{"column_order":["Value","Time","Server"]}"#).unwrap();
         let resolved = plain.resolved_order();
         assert_eq!(resolved[0], ColumnId::Value, "plain form must parse");
         assert_eq!(resolved[1], ColumnId::Time);
@@ -1214,9 +1204,8 @@ mod tests {
         ]);
         let stored = s.column_order.as_ref().unwrap();
         // Persisted entries are plain variant names, NOT "\"Server\"" encodings.
-        assert_eq!(stored[0], "Value");
-        assert_eq!(stored[3], "Server");
-        assert!(!stored[3].starts_with('"'), "no leading JSON quote");
+        assert_eq!(stored[0], ColumnId::Value);
+        assert_eq!(stored[3], ColumnId::Server);
         // The settings JSON itself must not double-encode the strings.
         let json = serde_json::to_string(&s).unwrap();
         assert!(
