@@ -17,6 +17,7 @@ use windows::core::BSTR;
 pub use super::vt::vt_name;
 
 const MAX_ARRAY_ITEMS: usize = 256;
+const MAX_VARIANT_DEPTH: usize = 32;
 
 pub fn filetime_to_utc(ft: FILETIME) -> Option<DateTime<Utc>> {
     let ticks = (u64::from(ft.dwHighDateTime) << 32) | u64::from(ft.dwLowDateTime);
@@ -54,6 +55,14 @@ fn utc_to_ole_date(dt: DateTime<Utc>) -> Option<f64> {
 /// The caller guarantees the active pointer-bearing fields reference live COM
 /// allocations for the duration of this call. BYREF values are not dereferenced.
 pub unsafe fn variant_to_value(variant: &VARIANT) -> Value {
+    // SAFETY: the caller supplies live pointer-bearing fields for this conversion.
+    unsafe { variant_to_value_inner(variant, 0) }
+}
+
+unsafe fn variant_to_value_inner(variant: &VARIANT, depth: usize) -> Value {
+    if depth >= MAX_VARIANT_DEPTH {
+        return Value::Other("Nested VARIANT limit".to_string());
+    }
     // SAFETY: the caller supplies an initialized VARIANT containing a tag.
     let vt = unsafe { variant.Anonymous.Anonymous.vt };
     let raw = vt.0;
@@ -66,7 +75,7 @@ pub unsafe fn variant_to_value(variant: &VARIANT) -> Value {
 
     if is_array {
         // SAFETY: the array flag selects the SAFEARRAY member of this VARIANT.
-        return unsafe { array_to_value(variant, base) };
+        return unsafe { array_to_value(variant, base, depth) };
     }
 
     // SAFETY: the scalar tag selects the corresponding initialized member.
@@ -96,14 +105,9 @@ unsafe fn scalar_to_value(variant: &VARIANT, base: u16) -> Value {
             }
             10 => Value::Other(format!("HRESULT 0x{:08X}", body.scode as u32)),
             11 => Value::Bool(body.boolVal.0 != 0),
-            12 => {
-                let nested = body.pvarVal;
-                if nested.is_null() {
-                    Value::Empty
-                } else {
-                    variant_to_value(&*nested)
-                }
-            }
+            // VT_VARIANT is only meaningful as BYREF or an array element;
+            // a standalone scalar tag has no valid value member to follow.
+            12 => Value::Other("VT_VARIANT".to_string()),
             16 => Value::I64(i64::from(body.bVal as i8)),
             17 => Value::U64(u64::from(body.bVal)),
             18 => Value::U64(u64::from(body.uiVal)),
@@ -155,7 +159,7 @@ fn expected_array_element_size(vt: u16) -> Option<usize> {
     }
 }
 
-unsafe fn array_to_value(variant: &VARIANT, base: u16) -> Value {
+unsafe fn array_to_value(variant: &VARIANT, base: u16, depth: usize) -> Value {
     // SAFETY: the caller supplies a valid array VARIANT.
     let parray = unsafe { variant.Anonymous.Anonymous.Anonymous.parray };
     if parray.is_null() {
@@ -195,7 +199,7 @@ unsafe fn array_to_value(variant: &VARIANT, base: u16) -> Value {
         let vars = unsafe { std::slice::from_raw_parts(data.cast::<VARIANT>(), len) };
         for v in vars {
             // SAFETY: each borrowed array element is an initialized VARIANT.
-            out.push(unsafe { variant_to_value(v) });
+            out.push(unsafe { variant_to_value_inner(v, depth + 1) });
         }
     } else {
         let len = count;
@@ -750,6 +754,38 @@ mod tests {
         // ownership description for VariantClear.
         // SAFETY: this test owns the live array and did not transfer it elsewhere.
         unsafe { SafeArrayDestroy(array).unwrap() };
+    }
+
+    #[test]
+    fn nested_variant_arrays_stop_at_depth_limit() {
+        let mut value = VARIANT::default();
+        for _ in 0..=MAX_VARIANT_DEPTH {
+            // SAFETY: create a single-slot VT_VARIANT SAFEARRAY owned by this test.
+            let array = unsafe { SafeArrayCreateVector(VARENUM(12), 0, 1) };
+            assert!(!array.is_null());
+            let mut data = std::ptr::null_mut();
+            // SAFETY: the array and output pointer are live.
+            unsafe { SafeArrayAccessData(array, &raw mut data).unwrap() };
+            // SAFETY: the accessed array has one empty VARIANT slot; value is
+            // moved into it, transferring its nested ownership to the array.
+            unsafe { data.cast::<VARIANT>().write(value) };
+            // SAFETY: balances the successful access above.
+            unsafe { SafeArrayUnaccessData(array).unwrap() };
+            value = VARIANT::default();
+            set_vt(&mut value, 0x2000 | 12);
+            // SAFETY: value is array-tagged and takes ownership of array.
+            unsafe { (*variant_inner(&mut value)).parray = array };
+        }
+        // SAFETY: all arrays and variants constructed above remain live.
+        let mut output = unsafe { variant_to_value(&value) };
+        for _ in 0..MAX_VARIANT_DEPTH {
+            let Value::Array(mut elements) = output else {
+                panic!("expected nested array")
+            };
+            output = elements.pop().unwrap();
+        }
+        assert_eq!(output, Value::Other("Nested VARIANT limit".into()));
+        clear_variant(&mut value);
     }
 
     #[test]
