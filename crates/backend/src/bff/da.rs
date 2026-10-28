@@ -494,6 +494,49 @@ impl Drop for PendingServerGroup<'_> {
     }
 }
 
+fn create_group(
+    server: &IOPCServer,
+) -> Result<(PendingServerGroup<'_>, u32, IOPCItemMgt, IOPCSyncIO), BackendMsg> {
+    let mut group_handle: u32 = 0;
+    let mut revised: u32 = 0;
+    let mut group_unknown: Option<IUnknown> = None;
+    let group_name = wide("opcda-egui");
+    // SAFETY: the server is live and all input and output pointers are valid.
+    unsafe {
+        server
+            .AddGroup(
+                PCWSTR(group_name.as_ptr()),
+                true,
+                GROUP_UPDATE_RATE_MS,
+                1,
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                &raw mut group_handle,
+                &raw mut revised,
+                &IOPCItemMgt::IID,
+                &raw mut group_unknown,
+            )
+            .map_err(|e| BackendMsg::DaGroupCreateFailed {
+                detail: e.to_string(),
+            })?;
+    }
+    let pending_group = PendingServerGroup {
+        server,
+        handle: group_handle,
+        armed: true,
+    };
+    let group_unknown = group_unknown.ok_or(BackendMsg::DaGroupEmpty)?;
+    let item_mgt: IOPCItemMgt = group_unknown.cast().map_err(|e| BackendMsg::DaNoItemMgt {
+        detail: e.to_string(),
+    })?;
+    let sync: IOPCSyncIO = group_unknown.cast().map_err(|e| BackendMsg::DaNoSyncIo {
+        detail: e.to_string(),
+    })?;
+
+    Ok((pending_group, revised, item_mgt, sync))
+}
+
 impl DaSession {
     fn connect(endpoint: super::model::EndpointSpec) -> Result<Self, BackendMsg> {
         let prog_id = endpoint.address.trim();
@@ -507,41 +550,8 @@ impl DaSession {
         })?;
         let browse: Option<IOPCBrowseServerAddressSpace> = unknown.cast().ok();
 
-        let mut group_handle: u32 = 0;
-        let mut revised: u32 = 0;
-        let mut group_unknown: Option<IUnknown> = None;
-        let group_name = wide("opcda-egui");
-        unsafe {
-            server
-                .AddGroup(
-                    PCWSTR(group_name.as_ptr()),
-                    true,
-                    GROUP_UPDATE_RATE_MS,
-                    1,
-                    std::ptr::null(),
-                    std::ptr::null(),
-                    0,
-                    &raw mut group_handle,
-                    &raw mut revised,
-                    &IOPCItemMgt::IID,
-                    &raw mut group_unknown,
-                )
-                .map_err(|e| BackendMsg::DaGroupCreateFailed {
-                    detail: e.to_string(),
-                })?;
-        }
-        let mut pending_group = PendingServerGroup {
-            server: &server,
-            handle: group_handle,
-            armed: true,
-        };
-        let group_unknown = group_unknown.ok_or(BackendMsg::DaGroupEmpty)?;
-        let item_mgt: IOPCItemMgt = group_unknown.cast().map_err(|e| BackendMsg::DaNoItemMgt {
-            detail: e.to_string(),
-        })?;
-        let sync: IOPCSyncIO = group_unknown.cast().map_err(|e| BackendMsg::DaNoSyncIo {
-            detail: e.to_string(),
-        })?;
+        let (mut pending_group, revised, item_mgt, sync) = create_group(&server)?;
+        let group_handle = pending_group.handle;
 
         let mut status_info = None;
         // SAFETY: the live server transfers the GetStatus result to the caller.
@@ -1193,6 +1203,92 @@ fn wide(text: &str) -> Vec<u16> {
 #[cfg(test)]
 mod ownership_tests {
     use super::*;
+
+    #[windows::core::implement(IOPCServer)]
+    struct MockServer {
+        removes: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl crate::opc::bindings::da::IOPCServer_Impl for MockServer_Impl {
+        fn AddGroup(
+            &self,
+            _name: &PCWSTR,
+            _active: windows::core::BOOL,
+            _rate: u32,
+            _client: u32,
+            _bias: *const i32,
+            _deadband: *const f32,
+            _locale: u32,
+            handle: *mut u32,
+            revised: *mut u32,
+            _iid: *const GUID,
+            output: windows::core::OutRef<'_, IUnknown>,
+        ) -> windows::core::Result<()> {
+            // SAFETY: AddGroup passes valid output pointers as required by the ABI.
+            unsafe {
+                *handle = 42;
+                *revised = 1000;
+            }
+            // Return this server's IUnknown. It deliberately lacks IOPCItemMgt.
+            output.write(Some(windows::core::IUnknownImpl::to_interface::<IUnknown>(
+                self,
+            )))
+        }
+        fn GetErrorString(&self, _: HRESULT, _: u32) -> windows::core::Result<PWSTR> {
+            Err(windows::core::Error::from_hresult(HRESULT(
+                0x80004001u32 as i32,
+            )))
+        }
+        fn GetGroupByName(&self, _: &PCWSTR, _: *const GUID) -> windows::core::Result<IUnknown> {
+            Err(windows::core::Error::from_hresult(HRESULT(
+                0x80004001u32 as i32,
+            )))
+        }
+        fn GetStatus(
+            &self,
+        ) -> windows::core::Result<*mut crate::opc::bindings::da::tagOPCSERVERSTATUS> {
+            Err(windows::core::Error::from_hresult(HRESULT(
+                0x80004001u32 as i32,
+            )))
+        }
+        fn RemoveGroup(
+            &self,
+            handle: u32,
+            force: windows::core::BOOL,
+        ) -> windows::core::Result<()> {
+            if handle != 42 || !force.as_bool() {
+                return Err(windows::core::Error::from_hresult(HRESULT(
+                    0x80070057u32 as i32,
+                )));
+            }
+            self.removes
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+        fn CreateGroupEnumerator(
+            &self,
+            _: crate::opc::bindings::da::tagOPCENUMSCOPE,
+            _: *const GUID,
+        ) -> windows::core::Result<IUnknown> {
+            Err(windows::core::Error::from_hresult(HRESULT(
+                0x80004001u32 as i32,
+            )))
+        }
+    }
+
+    #[test]
+    fn failed_group_interface_cast_removes_successfully_added_group_once() {
+        let removes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server: IOPCServer = MockServer {
+            removes: removes.clone(),
+        }
+        .into();
+        assert!(matches!(
+            create_group(&server),
+            Err(BackendMsg::DaNoItemMgt { .. })
+        ));
+        assert_eq!(removes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn null_com_string_is_not_dereferenced() {
