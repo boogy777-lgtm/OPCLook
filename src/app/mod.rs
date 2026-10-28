@@ -37,8 +37,8 @@ mod view;
 mod tests;
 
 pub use dialogs::{
-    AboutDialog, AddSignalDialog, ColumnsDialog, ConfirmAction, ConfirmDialog, ConnectDialog,
-    Dialogs, MessageDialog, OptionsDialog, PendingWrites, WriteDialog,
+    AboutDialog, AddSignalDialog, ColumnsDialog, ConfirmAction, ConfirmRequest, ConnectDialog,
+    ConnectPane, Dialogs, MessageDialog, OptionsDialog, PendingWrites, UaIdentity, WriteDialog,
 };
 pub use present::{CJK_FONT_ENV, compose_server_name, install_fonts};
 pub use state::{
@@ -705,6 +705,14 @@ impl App {
     }
 
     #[cfg(feature = "test-support")]
+    pub fn record_dispatches_for_test(&self) {
+        self.engine.limit_dispatch_for_test(usize::MAX);
+    }
+    #[cfg(feature = "test-support")]
+    pub fn dispatched_for_test(&self) -> Vec<crate::bff::model::Command> {
+        self.engine.dispatched_for_test()
+    }
+    #[cfg(feature = "test-support")]
     pub fn gateway_for_test(&self) -> &crate::bff::Gateway {
         self.engine.gateway_for_test()
     }
@@ -951,7 +959,7 @@ impl App {
         self.engine.invalidate_session_requests(Owner::Discovery);
         let d = &mut self.dialogs.connect;
         d.open = true;
-        d.network_tab = false;
+        d.pane = ConnectPane::for_protocol(d.pane.protocol());
         d.error = None;
         // Empty by design: no persistence restores host/port/URL into the
         // fields. The servers list is what the user picks from.
@@ -979,7 +987,7 @@ impl App {
         // U13: trust is opt-in per connection; the legacy global flag is never
         // re-applied (recent endpoints carry their own).
         d.ua_trust_server_cert = crate::settings::default_trust_server_cert();
-        d.ua_identity_index = 0;
+        d.ua_identity = UaIdentity::Anonymous;
         d.ua_session_timeout = self.settings.ua_session_timeout_ms;
         d.ua_network_searching = false;
         d.ua_subnet_searching = false;

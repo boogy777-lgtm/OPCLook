@@ -43,7 +43,7 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
     let mut close = false;
     // When a confirm dialog sits on top, it owns Esc/Enter; the write dialog
     // must remain inert to those keys so only the topmost dialog responds.
-    let confirm_open = app.dialogs.confirm.open;
+    let confirm_open = app.dialogs.confirm.is_some();
     {
         let dialog = &mut app.dialogs.write;
         egui::Window::new(tr(lang, Tr::ChangeSignalValue))

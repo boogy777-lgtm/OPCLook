@@ -236,12 +236,11 @@ impl App {
                     &[&names.len().to_string(), &value_text],
                 )
             };
-            self.dialogs.confirm = ConfirmDialog {
-                open: true,
+            self.dialogs.confirm = Some(ConfirmRequest {
                 title: tr(lang, Tr::ConfirmWriteTitle).to_string(),
                 text,
-                action: Some(ConfirmAction::Write(request_list.clone())),
-            };
+                action: ConfirmAction::Write(request_list),
+            });
             return;
         }
         self.dialogs.write.open = false;
@@ -343,31 +342,28 @@ impl App {
 
     /// Execute a queued confirm-dialog action (Yes).
     pub fn confirm_yes(&mut self) {
-        let dialog = std::mem::replace(&mut self.dialogs.confirm, ConfirmDialog::default());
-        if !dialog.open {
+        let Some(request) = self.dialogs.confirm.take() else {
             return;
-        }
-        match dialog.action {
-            Some(ConfirmAction::Write(pending)) => self.perform_write(pending),
-            Some(ConfirmAction::Disconnect(session)) => self.disconnect_session(session),
-            Some(ConfirmAction::RemoveSession(session)) => self.remove_session(session),
-            None => {}
+        };
+        match request.action {
+            ConfirmAction::Write(pending) => self.perform_write(pending),
+            ConfirmAction::Disconnect(session) => self.disconnect_session(session),
+            ConfirmAction::RemoveSession(session) => self.remove_session(session),
         }
     }
 
     /// Cancel a confirm-dialog (No). Keeps the write dialog open for edits.
     pub fn confirm_no(&mut self) {
-        self.dialogs.confirm = ConfirmDialog::default();
+        self.dialogs.confirm = None;
     }
 
     /// Ask the user to confirm an action (opens the confirm dialog).
     pub fn request_confirm(&mut self, title: String, text: String, action: ConfirmAction) {
-        self.dialogs.confirm = ConfirmDialog {
-            open: true,
+        self.dialogs.confirm = Some(ConfirmRequest {
             title,
             text,
-            action: Some(action),
-        };
+            action,
+        });
     }
 }
 

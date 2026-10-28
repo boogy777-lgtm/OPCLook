@@ -342,3 +342,19 @@ Windows/Linux CI 557fca20 проверил D hotfix, но не последую�
 **2026-10-28 — A, RequestId/Origin:** RequestId отделён от ScanId и не допускает zero, внутренние команды могут быть без токена, Event различает ответ и push. Корреляция остаётся одноразовой, timeout несёт исходный токен; проверены push при pending Read, late reply, DA route и exhaustion, включая сохранение работающего Read. UI при отказе отправки освобождает ожидания и не завершает неотправленные действия; принятая часть write batch учитывается до следующей отправки. Исправлен отсутствующий locale sample InvalidItemHandle (9/9). Измерено: Linux backend 200/200, CLI 6/6 + live 2/2, contract 25/25 + doctest 2/2, Engine 20/20, GUI unit 196/196 и headless UI interactions 139/139 (1 ignored); Windows i686 all-targets typecheck с test-only флагом и standalone backend/CLI без него прошли. Реальный Windows runtime/DA/UAC, PNG и exact-head CI не проверены; SessionId/Owner, B/E/F/G/H остаются открыты.
 
 **2026-10-28 — A, SessionId/Owner:** discovery отделён от реальных ненулевых SessionId во всём стеке; checked successor сохраняет выдачу максимума один раз. Pending/таймауты ключуются Owner, backend отклоняет владельца не того вида, discovery timeout не воздействует на session. Engine test recorder фиксирует фактическую отправку ровно одного внутреннего Disconnect с Owner::Session и без RequestId при таймауте Connect. Исправлен найденный GUI эффект: unsolicited Values/Read Error не сбрасывает pending Read. Измерено Linux: backend 202/202, contract 26/26 + 3 doctests, locale 9/9, CLI 6/6 + live 2/2, Engine 22/22, GUI 198/198, UI interactions 139/139 (1 ignored); Windows i686 all-targets typecheck с test-only флагами, backend/CLI standalone без пропуска ресурсов и diagnostics bins Linux/Windows typecheck. A завершён; B/E/F/G/H, финальный CI, Windows runtime, физический DA/UAC, PNG и 10k baseline открыты.
+
+**2026-10-28 — состояния диалогов B (частично).** Подтверждение владеет
+обязательным действием до Yes/No; повторный Enter в кадре открытия и Enter с
+модификаторами не согласуют запись. UA identity — enum; введённые имя и пароль
+остаются в буферах при переключении, но не передаются для Anonymous/Certificate.
+Вкладка Network хранит предыдущий протокол, поэтому при повторном открытии
+восстанавливается последняя DA/UA вкладка; настройки и поля переключаемых вкладок
+сохраняют прежнее поведение. Измерено Linux GUI 198 unit и 141 interaction
+passed, 1 Windows-only ignored; Linux all-targets, Windows i686 workspace
+all-targets typecheck с test-only флагами, fmt и CLI boundary на обоих targets
+прошли. PNG, Windows runtime и финальный CI ещё не выполнены.
+
+Тест root browse/read гонялся с ответом DA stub и нестабильно падал при
+повторном прогоне. Test recorder теперь удерживает отправленный Browse pending
+и проверяет единственную команду Browse и отсутствие Read; отдельный тест
+прошёл, production scheduling не менялся.

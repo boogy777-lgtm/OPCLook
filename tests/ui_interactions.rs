@@ -485,7 +485,7 @@ fn write_dialog_shows_confirmation_when_enabled() {
     // Click "Записать"; because confirm_write is on, a confirm dialog appears
     // and the write is not sent yet (write dialog stays open behind it).
     click_menu_item(&mut h, "Записать");
-    assert!(h.state().dialogs.confirm.open);
+    assert!(h.state().dialogs.confirm.is_some());
     assert!(h.state().dialogs.write.open);
 }
 
@@ -502,10 +502,10 @@ fn write_confirm_no_keeps_write_dialog() {
     h.key_press(Key::Enter);
     h.run_steps(3);
     click_menu_item(&mut h, "Записать");
-    assert!(h.state().dialogs.confirm.open);
+    assert!(h.state().dialogs.confirm.is_some());
 
     click_menu_item(&mut h, "Да");
-    assert!(!h.state().dialogs.confirm.open);
+    assert!(!h.state().dialogs.confirm.is_some());
     assert!(!h.state().dialogs.write.open);
 }
 
@@ -522,7 +522,7 @@ fn write_without_confirm_writes_immediately() {
     h.key_press(Key::Enter);
     h.run_steps(3);
     click_menu_item(&mut h, "Записать");
-    assert!(!h.state().dialogs.confirm.open);
+    assert!(!h.state().dialogs.confirm.is_some());
     assert!(!h.state().dialogs.write.open);
 }
 
@@ -1095,6 +1095,45 @@ fn ua_servers_found_populates_results_state() {
     );
 }
 
+#[test]
+fn ua_discovery_reply_arrives_on_network_pane() {
+    use opcda_egui::app::ConnectPane;
+    use opcda_egui::bff::model::{AdvertisedMode, AdvertisedPolicy, UaEndpointInfo, UaServerInfo};
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.get_by_label("OPC UA").click();
+    h.run_steps(3);
+    h.get_by_label("Сетевые настройки").click();
+    h.run_steps(3);
+    h.state_mut().on_event_for_test(EventKind::UaServersFound {
+        host: "127.0.0.1".into(),
+        port: 4840,
+        servers: vec![UaServerInfo {
+            application_name: "Sample".into(),
+            application_uri: "urn:sample".into(),
+            endpoints: vec![UaEndpointInfo {
+                url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
+                security_policy: AdvertisedPolicy::from_wire("None"),
+                security_mode: AdvertisedMode::from_wire("None"),
+            }],
+        }],
+    });
+    assert!(matches!(
+        h.state().dialogs.connect.pane,
+        ConnectPane::Network { .. }
+    ));
+    assert_eq!(h.state().dialogs.connect.ua_search_results.len(), 1);
+    h.get_by_label("OPC UA").click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().dialogs.connect.ua_search_results[0].application_name,
+        "Sample"
+    );
+}
+
 /// Closing and reopening the connect popup keeps previously discovered DA
 /// servers and UA search results, and does not restart DA discovery once the
 /// DA list is already populated.
@@ -1288,6 +1327,7 @@ fn u15_connect_dialog_rejects_a_malformed_lds_host() {
 /// rewrite the saved selection.
 #[test]
 fn connect_dialog_network_tab_renders_single_adapter_combo() {
+    use opcda_egui::bff::model::Protocol;
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
@@ -1296,7 +1336,10 @@ fn connect_dialog_network_tab_renders_single_adapter_combo() {
 
     h.get_by_label("Сетевые настройки").click();
     h.run_steps(5);
-    assert!(h.state().dialogs.connect.network_tab);
+    assert!(matches!(
+        h.state().dialogs.connect.pane,
+        opcda_egui::app::ConnectPane::Network { .. }
+    ));
     assert_eq!(
         h.query_all_by_label("Сетевые адаптеры").count(),
         0,
@@ -1322,10 +1365,37 @@ fn connect_dialog_network_tab_renders_single_adapter_combo() {
         1
     );
 
+    // The last protocol and both drafts survive the network pane and reopen.
+    h.get_by_label("OPC UA").click();
+    h.run_steps(3);
+    h.state_mut().dialogs.connect.ua_url = "opc.tcp://localhost:4840".into();
+    h.state_mut().dialogs.connect.da_manual = "Draft.DA".into();
+    h.get_by_label("Сетевые настройки").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialogs.connect.pane.protocol(), Protocol::OpcUa);
+    h.state_mut().close_connect_dialog();
+    h.state_mut().open_connect_dialog();
+    assert_eq!(
+        h.state().dialogs.connect.pane,
+        opcda_egui::app::ConnectPane::Ua
+    );
+    h.state_mut().dialogs.connect.ua_url = "opc.tcp://localhost:4840".into();
+    h.state_mut().dialogs.connect.da_manual = "Draft.DA".into();
+    h.run_steps(3);
+    h.get_by_label("Сетевые настройки").click();
+    h.run_steps(3);
+    h.get_by_label("OPC UA").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialogs.connect.ua_url, "opc.tcp://localhost:4840");
+    assert_eq!(h.state().dialogs.connect.da_manual, "Draft.DA");
+
     // Switching back to a protocol tab leaves the network view.
     h.get_by_label("OPC DA (COM)").click();
     h.run_steps(5);
-    assert!(!h.state().dialogs.connect.network_tab);
+    assert!(!matches!(
+        h.state().dialogs.connect.pane,
+        opcda_egui::app::ConnectPane::Network { .. }
+    ));
 }
 
 /// A remote UA host search requires an explicitly selected adapter; without
@@ -1336,7 +1406,7 @@ fn remote_ua_search_without_adapter_is_blocked() {
     let mut app = App::new_test(&ctx);
     set_ru(&mut app);
     app.open_connect_dialog();
-    app.dialogs.connect.protocol = Protocol::OpcUa;
+    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
     app.dialogs.connect.ua_search_host = "192.0.2.10".to_string();
     app.dialogs.connect.ua_search_port = "4840".to_string();
     app.search_ua_servers();
@@ -1452,7 +1522,7 @@ fn connect_dialog_active_ua_tab_keeps_scan() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.dialogs.connect.protocol = Protocol::OpcUa;
+    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
     app.dialogs.connect.ua_subnet_searching = true;
     let mut h = harness(app);
     h.run_steps(5);
@@ -1862,7 +1932,7 @@ fn connect_dialog_anonymous_identity_does_not_send_credentials() {
             d.ua_url = "opc.tcp://127.0.0.1:4840".to_string();
             d.ua_user = "operator".to_string();
             d.ua_password = "secret".to_string();
-            d.ua_identity_index = 0;
+            d.ua_identity = opcda_egui::app::UaIdentity::Anonymous;
         }
         h.run_steps(2);
         {
@@ -1893,6 +1963,45 @@ fn connect_dialog_anonymous_identity_does_not_send_credentials() {
     });
 }
 
+#[test]
+fn connect_identity_switch_preserves_buffers_and_certificate_auth() {
+    use opcda_egui::app::UaIdentity;
+    with_settings_lock(|| {
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        app.open_connect_dialog();
+        app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
+        app.dialogs.connect.ua_url = "opc.tcp://127.0.0.1:4840".into();
+        app.dialogs.connect.ua_user = "operator".into();
+        app.dialogs.connect.ua_password = "secret".into();
+        let mut h = harness(app);
+        h.run_steps(5);
+        h.get_by_value("Анонимно").click();
+        h.run_steps(2);
+        h.get_by_label("Имя пользователя").click();
+        h.run_steps(2);
+        assert_eq!(h.state().dialogs.connect.ua_identity, UaIdentity::UserName);
+        h.get_by_value("Имя пользователя").click();
+        h.run_steps(2);
+        h.get_by_label("Сертификат").click();
+        h.run_steps(2);
+        let d = &h.state().dialogs.connect;
+        assert_eq!(d.ua_identity, UaIdentity::Certificate);
+        assert_eq!(d.ua_user, "operator");
+        assert_eq!(d.ua_password, "secret");
+        h.query_all_by_label("Подключиться")
+            .filter(|n| !n.accesskit_node().is_disabled())
+            .last()
+            .expect("enabled connect button")
+            .click();
+        h.run_steps(3);
+        let endpoint = &h.state().sessions.last().expect("session").endpoint;
+        assert!(endpoint.ua_use_certificate);
+        assert!(endpoint.user.is_empty());
+        assert!(endpoint.password.is_empty());
+    });
+}
+
 /// UserName identity without a user name must stay in the dialog with a
 /// localized error, not silently connect as Anonymous.
 #[test]
@@ -1911,7 +2020,7 @@ fn connect_dialog_username_identity_requires_user() {
             d.ua_url = "opc.tcp://127.0.0.1:4840".to_string();
             d.ua_user.clear();
             d.ua_password.clear();
-            d.ua_identity_index = 1;
+            d.ua_identity = opcda_egui::app::UaIdentity::UserName;
         }
         h.run_steps(2);
         {
@@ -1945,7 +2054,7 @@ fn connect_dialog_security_combos_are_typed_and_persist() {
         let ctx = egui::Context::default();
         let mut app = App::new_test(&ctx);
         app.open_connect_dialog();
-        app.dialogs.connect.protocol = Protocol::OpcUa;
+        app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
         let mut h = harness(app);
         h.run_steps(5);
         // Both typed combos start on Auto (selected text is the a11y value).
@@ -1988,7 +2097,7 @@ fn connect_dialog_invalid_security_pair_shows_error_and_does_not_connect() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.dialogs.connect.protocol = Protocol::OpcUa;
+    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
     app.dialogs.connect.ua_url = "opc.tcp://127.0.0.1:4840".to_string();
     app.dialogs.connect.ua_security_policy = UaSecurityPolicy::None;
     app.dialogs.connect.ua_security_mode = UaSecurityMode::SignAndEncrypt;
@@ -2022,7 +2131,7 @@ fn connect_dialog_unadvertised_security_choice_shows_error_and_does_not_connect(
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.dialogs.connect.protocol = Protocol::OpcUa;
+    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
     app.dialogs.connect.ua_url = "opc.tcp://127.0.0.1:4840".to_string();
     // A non-empty host makes the seeded endpoint list appear to belong to the
     // current search context; opening the tab no longer auto-starts a search.
@@ -2085,13 +2194,12 @@ fn connect_dialog_trust_checkbox_defaults_and_toggles() {
 /// settings file is NOT re-applied to a freshly opened dialog.
 #[test]
 fn connect_dialog_timeout_restores_but_trust_stays_opt_in() {
-    use opcda_egui::bff::model::Protocol;
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.settings.ua_trust_server_cert = true;
     app.settings.ua_session_timeout_ms = 300_000;
     app.open_connect_dialog();
-    app.dialogs.connect.protocol = Protocol::OpcUa;
+    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
     let h = harness(app);
     assert!(!h.state().dialogs.connect.ua_trust_server_cert);
     assert_eq!(h.state().dialogs.connect.ua_session_timeout, 300_000);
@@ -2174,11 +2282,11 @@ fn enter_opens_confirmation_without_accepting_it() {
     h.run_steps(3);
     h.key_press(Key::Enter);
     h.run_steps(3);
-    assert!(h.state().dialogs.confirm.open);
+    assert!(h.state().dialogs.confirm.is_some());
     assert_eq!(h.state().pending_writes, 0);
     h.key_press(Key::Enter);
     h.run_steps(3);
-    assert!(!h.state().dialogs.confirm.open);
+    assert!(!h.state().dialogs.confirm.is_some());
     assert_eq!(h.state().pending_writes, 1);
 }
 
@@ -2195,8 +2303,16 @@ fn modified_enter_cannot_accept_new_write_confirmation() {
     h.run_steps(3);
     h.key_press_modifiers(Modifiers::SHIFT, Key::Enter);
     h.run_steps(3);
-    assert!(h.state().dialogs.confirm.open);
+    assert!(h.state().dialogs.confirm.is_some());
     assert_eq!(h.state().pending_writes, 0);
+    h.key_press_modifiers(Modifiers::SHIFT, Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().dialogs.confirm.is_some());
+    assert_eq!(h.state().pending_writes, 0);
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialogs.confirm.is_none());
+    assert!(h.state().dialogs.write.open);
 }
 
 /// K3: the write dialog opens with the current value selected, so typing
@@ -2560,6 +2676,8 @@ fn read_tick_is_suppressed_while_root_loading() {
     let mut app = App::new_test(&ctx);
     app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     app.seed_row(sid(1), "ns=1;s=a", "SigA", Value::I64(1));
+    // Record the actual dispatch without allowing the DA stub to race its reply.
+    app.record_dispatches_for_test();
     // A real outstanding browse is the protocol-level gate for polling.
     app.browse(sid(1), String::new());
     {
@@ -2577,6 +2695,9 @@ fn read_tick_is_suppressed_while_root_loading() {
         !view.read_in_flight,
         "read must not be sent while root_loading"
     );
+    let commands = app.dispatched_for_test();
+    assert_eq!(commands.len(), 1);
+    assert!(matches!(commands[0].kind, CommandKind::Browse { .. }));
 }
 
 /// Once a UA session's push subscription is active, the app stops issuing
@@ -2971,7 +3092,7 @@ fn connect_dialog_opens_on_da_tab_with_auto_discovery() {
     let mut h = harness(app);
     h.run_steps(3);
     assert_eq!(
-        h.state().dialogs.connect.protocol,
+        h.state().dialogs.connect.pane.protocol(),
         opcda_egui::bff::model::Protocol::OpcDa
     );
     assert_eq!(
@@ -3036,7 +3157,7 @@ fn connect_dialog_ua_empty_host_without_adapter_searches_loopback_only() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.dialogs.connect.protocol = opcda_egui::bff::model::Protocol::OpcUa;
+    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
     app.search_ua_all();
     let d = &app.dialogs.connect;
     assert_eq!(d.ua_searching, true, "combined UA search must be running");
@@ -3136,7 +3257,7 @@ fn connect_dialog_port_field_visibility_per_tab() {
     let mut h = harness(app);
     h.run_steps(3);
     // DA tab active -> no port input visible.
-    assert_eq!(h.state().dialogs.connect.protocol, Protocol::OpcDa);
+    assert_eq!(h.state().dialogs.connect.pane.protocol(), Protocol::OpcDa);
     let da_ports = h.query_all_by_value("4840").collect::<Vec<_>>();
     assert!(
         da_ports.is_empty(),
@@ -3171,7 +3292,7 @@ fn connect_dialog_select_da_server_enables_connect() {
     });
     let mut h = harness(app);
     h.run_steps(3);
-    assert_eq!(h.state().dialogs.connect.protocol, Protocol::OpcDa);
+    assert_eq!(h.state().dialogs.connect.pane.protocol(), Protocol::OpcDa);
     // The DA server is rendered as a selectable row.
     h.get_by_label("Alpha.Server — Тестовый").click();
     h.run_steps(3);
@@ -3195,7 +3316,7 @@ fn connect_dialog_select_ua_result_fills_url() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.dialogs.connect.protocol = opcda_egui::bff::model::Protocol::OpcUa;
+    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
     app.dialogs.connect.ua_search_results.push(UaServerInfo {
         application_name: "CODESYS".to_string(),
         application_uri: "urn:test".to_string(),
@@ -3234,7 +3355,7 @@ fn rejected_ua_connect_keeps_popup_open_with_error() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.dialogs.connect.protocol = Protocol::OpcUa;
+    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
     app.dialogs.connect.ua_url = "opc.tcp://192.0.2.77:4840".to_string();
     let mut h = harness(app);
     h.run_steps(4);
@@ -3773,7 +3894,7 @@ fn remove_session_drops_container_and_rows() {
         "remove?".to_string(),
         ConfirmAction::RemoveSession(sid(1)),
     );
-    assert!(app.dialogs.confirm.open);
+    assert!(app.dialogs.confirm.is_some());
     app.confirm_yes();
 
     assert!(app.sessions.is_empty(), "container must be dropped");
@@ -3947,7 +4068,7 @@ fn tab_context_menu_remove_from_list_drops_container() {
     h.get_by_label("DA: Alpha.Server").click_secondary();
     click_menu_item(&mut h, "Удалить из списка");
     assert!(
-        h.state().dialogs.confirm.open,
+        h.state().dialogs.confirm.is_some(),
         "confirmation must be requested"
     );
 
@@ -4092,7 +4213,7 @@ fn servers_row_remove_requires_confirm_and_drops_after_yes() {
     remove.click();
     h.run_steps(3);
     assert!(
-        h.state().dialogs.confirm.open,
+        h.state().dialogs.confirm.is_some(),
         "row × must open the remove confirm dialog"
     );
     // The container and its tab are still present before confirmation.
@@ -4119,7 +4240,7 @@ fn servers_row_remove_cancel_keeps_container() {
     h.run_steps(3);
     servers_remove_button(&h).expect("servers ×").click();
     h.run_steps(3);
-    assert!(h.state().dialogs.confirm.open);
+    assert!(h.state().dialogs.confirm.is_some());
     click_menu_item(&mut h, "Нет");
     assert_eq!(h.state().sessions.len(), 1, "container kept on cancel");
     assert_eq!(h.state().rows.len(), 1, "rows kept on cancel");
@@ -4463,7 +4584,7 @@ fn u9_start_attempt(
     opcda_egui::bff::model::RequestId,
 ) {
     app.open_connect_dialog();
-    app.dialogs.connect.protocol = Protocol::OpcUa;
+    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
     app.dialogs.connect.ua_url = url.to_string();
     assert!(app.connect_from_dialog(EndpointSpec::ua(url)));
     let session = app.active_session.expect("session created by the attempt");

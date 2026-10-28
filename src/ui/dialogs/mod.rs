@@ -25,7 +25,7 @@ use write::write_dialog;
 use crate::app::App;
 
 pub(super) fn dialogs(app: &mut App, ui: &mut egui::Ui) {
-    let confirm_was_open = app.dialogs.confirm.open;
+    let confirm_was_open = app.dialogs.confirm.is_some();
     connect_dialog(app, ui);
     add_signal_dialog(app, ui);
     write_dialog(app, ui);

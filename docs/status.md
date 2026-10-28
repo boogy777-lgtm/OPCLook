@@ -123,3 +123,11 @@ Backend unit tests теперь по умолчанию используют в�
 **2026-10-28, A RequestId/Origin:** ненулевой RequestId, явный Origin и необязательный токен команды проходят через Engine, воркеры и клиенты; отказы отправки не оставляют ложных ожиданий в UI. Измеренные проверки и оставшиеся SessionId/Owner, B/E/F/G/H и точный Windows CI указаны в `docs/refactoring-status.md`. Текущая Windows проверка локально только typecheck; runtime и физический DA/UAC остаются открыты.
 
 **2026-10-28, тема A завершена:** SessionId и Owner перенесены через все слои; discovery больше не использует фиктивную сессию. RequestId/Origin и остальные роли A сохранены. Измеренные проверки, ограничения Windows typecheck и оставшиеся B/E/F/G/H перечислены в `docs/refactoring-status.md`; финальный exact-head CI, Windows runtime, DA/UAC и PNG ещё не проверены.
+
+**2026-10-28, этап B частично:** подтверждение хранит обязательное действие в
+`Option<ConfirmRequest>`, выбор UA identity и вкладки подключения типизирован.
+Linux GUI unit 198/198 и UI interaction 141/141 (1 Windows-only ignored),
+Linux all-targets и Windows i686 workspace all-targets typecheck прошли; Windows
+проверка использовала test-only пропуск ресурсов и helper manifest. Матрица и
+ограничения — в `docs/refactoring-status.md`. Остальные B/E/F/G/H, PNG, 10k
+baseline, Windows runtime, физические DA/UAC и финальный exact-head CI открыты.

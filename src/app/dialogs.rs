@@ -4,12 +4,40 @@ use crate::bff::model::{
 };
 use crate::settings::Options;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConnectPane {
+    Da,
+    Ua,
+    Network { previous: Protocol },
+}
+
+impl ConnectPane {
+    pub fn protocol(self) -> Protocol {
+        match self {
+            Self::Da => Protocol::OpcDa,
+            Self::Ua => Protocol::OpcUa,
+            Self::Network { previous } => previous,
+        }
+    }
+
+    pub fn for_protocol(protocol: Protocol) -> Self {
+        match protocol {
+            Protocol::OpcDa => Self::Da,
+            Protocol::OpcUa => Self::Ua,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UaIdentity {
+    Anonymous,
+    UserName,
+    Certificate,
+}
+
 pub struct ConnectDialog {
     pub open: bool,
-    pub protocol: Protocol,
-    /// Third popup tab: «Сетевые настройки». DA/UA rendering is unaffected when
-    /// this is false.
-    pub network_tab: bool,
+    pub pane: ConnectPane,
     pub da_host: String,
     pub da_servers: Vec<ServerEntry>,
     /// Computer for each DA result, indexed in parallel with da_servers.
@@ -42,8 +70,7 @@ pub struct ConnectDialog {
     pub ua_discovered_endpoints: Vec<crate::bff::model::UaEndpointInfo>,
     /// UA: trust the server certificate without importing it.
     pub ua_trust_server_cert: bool,
-    /// UA: identity selector (0 = Anonymous, 1 = UserName, 2 = X509 «Сертификат»).
-    pub ua_identity_index: usize,
+    pub ua_identity: UaIdentity,
     /// UA: requested session timeout in milliseconds (range 5000..=3600000).
     pub ua_session_timeout: u32,
     /// OPC UA network discovery state (mDNS/LDS `FindServersOnNetwork`).
@@ -79,8 +106,7 @@ impl Default for ConnectDialog {
     fn default() -> Self {
         Self {
             open: false,
-            protocol: Protocol::OpcDa,
-            network_tab: false,
+            pane: ConnectPane::Da,
             da_host: String::new(),
             da_servers: Vec::new(),
             da_server_hosts: Vec::new(),
@@ -103,7 +129,7 @@ impl Default for ConnectDialog {
             ua_security_mode: UaSecurityMode::Auto,
             ua_discovered_endpoints: Vec::new(),
             ua_trust_server_cert: crate::settings::default_trust_server_cert(),
-            ua_identity_index: 0,
+            ua_identity: UaIdentity::Anonymous,
             ua_session_timeout: crate::settings::default_session_timeout(),
             ua_network_searching: false,
             ua_network_results: Vec::new(),
@@ -214,24 +240,10 @@ pub enum ConfirmAction {
     Write(PendingWrites),
 }
 
-pub struct ConfirmDialog {
-    pub open: bool,
+pub struct ConfirmRequest {
     pub title: String,
     pub text: String,
-    pub action: Option<ConfirmAction>,
-}
-
-impl Default for ConfirmDialog {
-    fn default() -> Self {
-        Self {
-            open: false,
-            // Empty: the renderer fills in the localized `Tr::ConfirmTitle` when
-            // no explicit title was requested.
-            title: String::new(),
-            text: String::new(),
-            action: None,
-        }
-    }
+    pub action: ConfirmAction,
 }
 
 pub struct Dialogs {
@@ -242,7 +254,7 @@ pub struct Dialogs {
     pub options: OptionsDialog,
     pub about: AboutDialog,
     pub message: Option<MessageDialog>,
-    pub confirm: ConfirmDialog,
+    pub confirm: Option<ConfirmRequest>,
 }
 
 impl Default for Dialogs {
@@ -263,7 +275,7 @@ impl Default for Dialogs {
             },
             about: AboutDialog { open: false },
             message: None,
-            confirm: ConfirmDialog::default(),
+            confirm: None,
         }
     }
 }
@@ -279,6 +291,6 @@ impl Dialogs {
             || self.options.open
             || self.about.open
             || self.message.is_some()
-            || self.confirm.open
+            || self.confirm.is_some()
     }
 }

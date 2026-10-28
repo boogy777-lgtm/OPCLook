@@ -265,7 +265,7 @@ impl App {
     pub fn validate_ua_identity(&mut self) -> bool {
         let lang = self.lang();
         let d = &mut self.dialogs.connect;
-        if d.ua_identity_index == 1 && d.ua_user.trim().is_empty() {
+        if d.ua_identity == UaIdentity::UserName && d.ua_user.trim().is_empty() {
             d.error = Some(tr(lang, Tr::UaUserNameRequired).to_string());
             false
         } else {

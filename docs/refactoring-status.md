@@ -415,3 +415,22 @@ ItemKey типизирован ненулевым приватным NonZeroU32;
 **2026-10-28 — A, RequestId и Origin:** RequestId — приватный ненулевой тип с checked successor; Event различает Reply и Unsolicited, Command несёт Option<RequestId>. Engine и DA/UA сохраняют корреляцию ответов, таймаут использует тот же токен, поздний ответ отбрасывается; внутренние Disconnect не расходуют ID. UI обрабатывает отказ отправки без ложного ожидания browse, search, scan, add, resolve, reconnect и записи; частичная запись корректно завершает ранее принятую часть при закрытии worker. Измерено на Linux: backend 200/200, CLI 6/6 и live 2/2, contract 25/25 и doctest 2/2, locale 9/9, Engine 20/20; GUI unit 196/196 и headless UI interactions 139/139 (1 ignored). Windows i686 workspace all-targets — только typecheck с test-only пропуском ресурсов, standalone backend/CLI — без пропуска; Linux и Windows diagnostics bins отдельно typechecked, Windows с test-only пропуском ресурсов; Windows runtime/DA/UAC и exact-head CI не проверены. SessionId/Owner (включая session 0 discovery), B/E/F/G/H, PNG и 10k baseline остаются открыты. В locale sample добавлен пропущенный InvalidItemHandle, обнаруженный Linux CI предыдущего checkpoint; проверка полноты не ослаблена.
 
 **2026-10-28 — A завершён (SessionId/Owner):** SessionId — отдельный приватный ненулевой тип с проверенной выдачей; Owner явно различает Discovery и Session. В контракте Command/Event, DA/UA, Engine, GUI, CLI, probes и fixtures отсутствует sentinel session 0. Pending и таймауты ключуются Owner и RequestId; сессионные runtime и маршруты используют SessionId. DA/UA отклоняют несовместимого владельца. Регрессии проверяют разделение discovery и session, owner таймаута, корректное исчерпание, а также ровно один реальный untracked Disconnect через test recorder при таймауте Connect. Unsolicited Values/Read Error больше не снимают индикатор ожидающего Read в GUI. Измерено Linux: backend 202/202, contract 26/26 + 3 doctests, locale 9/9, CLI 6/6 + live 2/2, Engine 22/22, GUI unit 198/198, headless UI interactions 139/139 (1 ignored). Windows i686 workspace all-targets typecheck с test-only флагами, standalone backend/CLI без пропуска GUI ресурсов, Linux и Windows diagnostics bins typecheck. Это не проверка Windows runtime или физического DA/UAC; exact-head CI, PNG и измеренный 10k baseline остаются обязательными. Темы B/E/F/G/H остаются открытыми; завершение A не означает завершения плана.
+
+## Этап B: состояния диалогов (частично, 2026-10-28)
+
+| Состояние | Изменение и проверка |
+|---|---|
+| Confirm | `Option<ConfirmRequest>` с обязательным действием; Yes забирает запрос, No/Escape освобождает. Enter открытия и модифицированный Enter не подтверждают запись; headless регрессии прошли |
+| UA identity | `Anonymous/UserName/Certificate`; неактивные поля сохраняются при переключении, но в endpoint попадает только выбранная авторизация. Headless переключение и certificate endpoint проверены; локализации и certificate settings сохранены |
+| Connect pane | `Da/Ua/Network { previous }`: сетевой экран хранит предыдущий протокол без отдельного противоречивого поля. Headless переключение, сохранение полей и reopening проверены; search и настройки покрыты существующим набором |
+
+Измерено на Linux: GUI unit 198/198, UI interaction 141/141 (1 Windows-only
+ignored), all-targets typecheck и boundary script (Linux и Windows targets),
+fmt. Windows i686 workspace all-targets прошёл typecheck с test-only пропуском
+ресурсов и helper manifest, без выполнения. PNG рендер не проверен: доступного
+renderer feature пока нет. Остальные состояния B, E/F/G/H, 10k baseline,
+Windows runtime, реальный DA/UAC и финальный exact-head CI остаются открыты.
+
+В повторных прогонах `read_tick_is_suppressed_while_root_loading` выявлена
+гонка ответа DA stub: теперь test recorder удерживает реальный Browse pending
+и проверяет ровно один Browse без Read. Production scheduling не изменён.
