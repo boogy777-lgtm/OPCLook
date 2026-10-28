@@ -363,3 +363,8 @@ Review расширил границу bounded backoff до 96 удвоений:
 не меньше 1 нс, Duration::MAX меньше 2^94 нс; нулевая база возвращается сразу.
 Linux регрессия для 1 нс/Duration::MAX/u32::MAX и нулевой базы 1/1, Windows
 engine all-targets typecheck без resource skip и fmt прошли. Финальный CI нужен.
+
+`UaUrl` дополнительно отклоняет запрещённые opaque-host символы SDK и знак в
+порту до журналирования. Linux сравнение с реальным SDK и проверка отсутствия
+secret в ошибке 1/1, contract URL 1/1, Windows backend `--tests` typecheck без
+resource skip и fmt прошли. Остальные непройденные этапы и финальный CI открыты.

@@ -436,6 +436,21 @@ mod tests {
     }
 
     #[test]
+    fn parser_rejects_hosts_and_ports_that_sdk_rejects_without_echoing_them() {
+        for url in [
+            "opc.tcp://bad^host:4840",
+            "opc.tcp://bad|host:4840",
+            "opc.tcp://bad\\host:4840",
+            "opc.tcp://host:+12",
+        ] {
+            assert!(opcua::core::comms::url::hostname_port_from_url(url, 4840).is_err());
+            assert!(parse_opc_tcp_url(url).is_err());
+        }
+        let error = parse_opc_tcp_url("opc.tcp://user:secret@host:4840").unwrap_err();
+        assert!(!error.to_string().contains("secret"));
+    }
+
+    #[test]
     fn ipv6_url_is_bracketed_before_resolution() {
         assert_eq!(
             endpoint_url_for("::1".parse().unwrap(), 4840),

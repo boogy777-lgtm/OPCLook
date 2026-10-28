@@ -105,3 +105,5 @@ Interface индексы и scope типизированы NonZero; реальн
 Duration reconnect/timeout и проверки инвариантов выполнены; роли ID и этапы
 B/E/F/G/H, Windows runtime и финальный exact-head CI остаются открыты.
 Backoff покрывает весь диапазон Duration; итоговые CI и другие этапы открыты.
+Проверка UA authority согласована с запрещёнными SDK host символами; итоговый
+CI и остальные этапы открыты.

@@ -71,14 +71,20 @@ impl FromStr for UaUrl {
             let (host, port) = authority
                 .split_once(':')
                 .map_or((authority, None), |(h, p)| (h, Some(p)));
-            if host.is_empty() || host.contains(['[', ']']) {
+            // The SDK treats `opc.tcp` hosts as opaque URL hosts. Reject its
+            // forbidden authority characters here, before any caller can log
+            // or dispatch an address the SDK itself cannot parse.
+            if host.is_empty() || host.contains(['[', ']', '\\', '<', '>', '^', '|']) {
                 return Err(InvalidUaUrl);
             }
             (host, port)
         };
         let explicit_port = port.is_some();
         let port = match port {
-            Some(value) => value.parse::<u16>().map_err(|_| InvalidUaUrl)?,
+            Some(value) if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) => {
+                value.parse::<u16>().map_err(|_| InvalidUaUrl)?
+            }
+            Some(_) => return Err(InvalidUaUrl),
             None => 4840,
         };
         if port == 0 {
@@ -186,7 +192,11 @@ mod tests {
             "opc.tcp://host:bad",
             "opc.tcp://host:",
             "opc.tcp://host:0",
+            "opc.tcp://host:+12",
             "opc.tcp://host/\npath",
+            "opc.tcp://bad^host:4840",
+            "opc.tcp://bad|host:4840",
+            "opc.tcp://bad\\host:4840",
             // The underlying SDK URL parser rejects IPv6 zone identifiers.
             "opc.tcp://[fe80::1%25eth0]:4840",
         ] {

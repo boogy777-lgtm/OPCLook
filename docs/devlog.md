@@ -318,3 +318,6 @@ GUI reconnect 3/3, Windows workspace typecheck прошли; общий gate о�
 
 Граница Duration backoff исправлена для публичного API с наносекундной базой
 и огромным максимумом; Linux regression 1/1 и Windows engine typecheck прошли.
+
+UA URL валидатор отклоняет запрещённые SDK символы host и знак порта;
+Linux parity/security test 1/1 и Windows backend typecheck прошли.
