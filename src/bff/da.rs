@@ -451,6 +451,31 @@ fn send_error(
     );
 }
 
+/// Owns a nullable COM-allocated string returned by a server or COM API.
+struct CoString(PWSTR);
+
+impl CoString {
+    /// # Safety
+    /// A non-null pointer must own a NUL-terminated CoTaskMem allocation.
+    unsafe fn from_raw(ptr: PWSTR) -> Option<Self> {
+        if ptr.is_null() { None } else { Some(Self(ptr)) }
+    }
+
+    fn text(&self) -> String {
+        // SAFETY: construction requires a valid NUL-terminated COM string.
+        unsafe { self.0.to_string().unwrap_or_default() }
+    }
+}
+
+impl Drop for CoString {
+    fn drop(&mut self) {
+        // SAFETY: this guard uniquely owns a non-null CoTaskMem allocation.
+        unsafe {
+            CoTaskMemFree(Some(self.0.0 as *const c_void));
+        }
+    }
+}
+
 /// Owns a newly registered group until the session takes responsibility for it.
 struct PendingServerGroup<'a> {
     server: &'a IOPCServer,
@@ -858,17 +883,9 @@ impl DaSession {
                 let item_id = unsafe { browse.GetItemID(PCWSTR(name_w.as_ptr())) }
                     .ok()
                     .map(|p| {
-                        if p.is_null() {
-                            String::new()
-                        } else {
-                            // SAFETY: the server returned a non-null COM string; copy
-                            // it before freeing the CoTaskMem allocation.
-                            unsafe {
-                                let text = p.to_string().unwrap_or_default();
-                                CoTaskMemFree(Some(p.0 as *const c_void));
-                                text
-                            }
-                        }
+                        // SAFETY: GetItemID transfers its returned COM allocation.
+                        unsafe { CoString::from_raw(p) }
+                            .map_or_else(String::new, |owned| owned.text())
                     })
                     .filter(|s| !s.is_empty())
                     .unwrap_or_else(|| name.clone());
@@ -1040,16 +1057,8 @@ fn class_details(list: &IOPCServerList, clsid: &GUID) -> Option<ServerEntry> {
         unsafe { windows::Win32::System::Com::ProgIDFromCLSID(clsid) }
             .ok()
             .map(|p| {
-                if p.is_null() {
-                    String::new()
-                } else {
-                    // SAFETY: ProgIDFromCLSID returned a non-null COM string.
-                    unsafe {
-                        let text = p.to_string().unwrap_or_default();
-                        CoTaskMemFree(Some(p.0 as *const c_void));
-                        text
-                    }
-                }
+                // SAFETY: ProgIDFromCLSID transfers its returned COM allocation.
+                unsafe { CoString::from_raw(p) }.map_or_else(String::new, |owned| owned.text())
             })
             .unwrap_or_default()
     } else {
@@ -1201,4 +1210,15 @@ unsafe fn free_errors(errors: *mut HRESULT) {
 
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+
+    #[test]
+    fn null_com_string_is_not_dereferenced() {
+        // SAFETY: null is explicitly accepted and has no allocation to own.
+        assert!(unsafe { CoString::from_raw(PWSTR::null()) }.is_none());
+    }
 }
