@@ -1,4 +1,4 @@
-use super::com::{CoAllocation, CoString};
+use super::com::{CoAllocation, CoString, ComArray, OwnedVariant};
 use super::da_clsid::{ClsidLookup, DiscoveredClsids, is_local_host, resolve_clsid};
 use super::da_router::{DaHost, SESSION_JOIN_BUDGET, run_router};
 use super::da_status::{ServerStatusInfo, check_server_state, format_connect_info};
@@ -626,14 +626,21 @@ impl DaSession {
                 &raw mut errors_ptr,
             )
         };
+        // SAFETY: COM transfers each non-null errors allocation to the caller.
+        let _errors = unsafe { CoAllocation::from_raw(errors_ptr) };
         if let Err(e) = call {
-            unsafe { free_errors(errors_ptr) };
+            // SAFETY: a non-null returned block is task-allocated; failed calls
+            // do not guarantee that individual result elements are initialized.
+            let _results = unsafe { CoAllocation::from_raw(results_ptr) };
             return items
                 .iter()
                 .map(|i| (i.key, Err(BackendMsg::raw(format!("AddItems: {e}")))))
                 .collect();
         }
 
+        // SAFETY: successful AddItems returns one initialized result per item.
+        let results = unsafe { ComArray::from_raw(results_ptr, items.len(), clear_item_result) };
+        let results_ptr = results.as_ptr();
         let mut out = Vec::with_capacity(items.len());
         for (idx, item) in items.iter().enumerate() {
             let err = unsafe { read_hresult(errors_ptr, idx) };
@@ -662,18 +669,6 @@ impl DaSession {
             ));
         }
 
-        unsafe {
-            if !results_ptr.is_null() {
-                for idx in 0..items.len() {
-                    let blob = (*results_ptr.add(idx)).pBlob;
-                    if !blob.is_null() {
-                        CoTaskMemFree(Some(blob as *const c_void));
-                    }
-                }
-                CoTaskMemFree(Some(results_ptr as *const c_void));
-            }
-            free_errors(errors_ptr);
-        }
         out
     }
 
@@ -690,8 +685,9 @@ impl DaSession {
                     handles.as_ptr(),
                     &raw mut errors,
                 );
-                free_errors(errors);
             }
+            // SAFETY: RemoveItems transfers its nullable errors allocation.
+            let _errors = unsafe { CoAllocation::from_raw(errors) };
         }
         for key in keys {
             self.items.remove(key);
@@ -731,7 +727,13 @@ impl DaSession {
                 &raw mut errors,
             )
         };
+        // SAFETY: Read transfers its nullable error allocation to the caller.
+        let _errors = unsafe { CoAllocation::from_raw(errors) };
         if let Err(e) = call {
+            // On failure only the outer pointer can be freed: element initialization
+            // is guaranteed by the OPC interface only on success.
+            // SAFETY: a non-null returned block is task-allocated.
+            let _states = unsafe { CoAllocation::from_raw(states) };
             let message = BackendMsg::Raw(self.error_text(e.code()));
             return resolved
                 .iter()
@@ -739,6 +741,9 @@ impl DaSession {
                 .collect();
         }
 
+        // SAFETY: successful Read returns one initialized state per handle.
+        let states = unsafe { ComArray::from_raw(states, handles.len(), clear_item_state) };
+        let states = states.as_ptr();
         let mut out = Vec::with_capacity(resolved.len());
         let mut handle_idx = 0usize;
         for key in &resolved {
@@ -748,19 +753,12 @@ impl DaSession {
             }
             let err = unsafe { read_hresult(errors, handle_idx) };
             if err.is_err() || states.is_null() {
-                // Clear the per-item VARIANT even on error to avoid leaking the
-                // value buffer that the server may have filled.
-                if !states.is_null() {
-                    let state = unsafe { &mut *states.add(handle_idx) };
-                    clear_variant(&mut state.vDataValue);
-                }
                 out.push((*key, DataValue::bad(BackendMsg::Raw(self.error_text(err)))));
                 handle_idx += 1;
                 continue;
             }
             let state = unsafe { &mut *states.add(handle_idx) };
             let value = unsafe { variant_to_value(&state.vDataValue) };
-            clear_variant(&mut state.vDataValue);
             out.push((
                 *key,
                 DataValue {
@@ -773,12 +771,6 @@ impl DaSession {
             handle_idx += 1;
         }
 
-        unsafe {
-            if !states.is_null() {
-                CoTaskMemFree(Some(states as *const c_void));
-            }
-            free_errors(errors);
-        }
         out
     }
 
@@ -787,18 +779,20 @@ impl DaSession {
             .items
             .get(&request.key)
             .ok_or(BackendMsg::SignalNotSubscribed)?;
-        let mut variant = variant_from_value(&request.value, request.type_hint)?;
+        let variant = OwnedVariant(variant_from_value(&request.value, request.type_hint)?);
         let handles = [slot.server_handle];
         let mut errors: *mut HRESULT = std::ptr::null_mut();
         let call = unsafe {
             self.sync.Write(
                 1,
                 handles.as_ptr(),
-                &variant as *const VARIANT,
+                &variant.0 as *const VARIANT,
                 &raw mut errors,
             )
         };
-        let result = match call {
+        // SAFETY: Write transfers its nullable errors allocation.
+        let _errors = unsafe { CoAllocation::from_raw(errors) };
+        match call {
             Err(e) => Err(BackendMsg::Raw(self.error_text(e.code()))),
             Ok(()) => {
                 let err = unsafe { read_hresult(errors, 0) };
@@ -808,10 +802,7 @@ impl DaSession {
                     Ok(())
                 }
             }
-        };
-        clear_variant(&mut variant);
-        unsafe { free_errors(errors) };
-        result
+        }
     }
 
     fn browse(&mut self, node_id: &str) -> Result<Vec<BrowseNode>, BackendMsg> {
@@ -1178,17 +1169,20 @@ fn resolve_server_clsid(host: &str, prog_id: &str) -> Result<GUID, BackendMsg> {
     resolve_clsid(host, prog_id, &mut WinClsidLookup).map(GUID::from_u128)
 }
 
+unsafe fn clear_item_result(result: &mut tagOPCITEMRESULT) {
+    // SAFETY: each result transfers its nullable pBlob task allocation.
+    unsafe { drop(CoAllocation::from_raw(result.pBlob)) };
+}
+
+unsafe fn clear_item_state(state: &mut tagOPCITEMSTATE) {
+    clear_variant(&mut state.vDataValue);
+}
+
 unsafe fn read_hresult(errors: *mut HRESULT, index: usize) -> HRESULT {
     if errors.is_null() {
         HRESULT(0)
     } else {
         unsafe { *errors.add(index) }
-    }
-}
-
-unsafe fn free_errors(errors: *mut HRESULT) {
-    if !errors.is_null() {
-        unsafe { CoTaskMemFree(Some(errors as *const c_void)) };
     }
 }
 
