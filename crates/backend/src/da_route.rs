@@ -18,7 +18,6 @@ use crate::net::{AdapterId, AdapterInfo, SubnetSpec};
 pub use opclook_contract::da_route::{DaRouteError, DaRouteStatus, RouteDecision, RoutePlan};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -185,14 +184,6 @@ impl RouteLeases {
         Some((entry.plan, entry.owned))
     }
 
-    fn owned_keys(&self) -> Vec<RouteKey> {
-        self.entries
-            .iter()
-            .filter(|(_, entry)| entry.owned)
-            .map(|(key, _)| *key)
-            .collect()
-    }
-
     fn owned_plans(&self) -> Vec<RoutePlan> {
         self.entries
             .iter()
@@ -295,41 +286,87 @@ struct PipeReply {
     error: Option<String>,
 }
 
-struct HelperClient {
-    reader: BufReader<std::fs::File>,
-    writer: std::fs::File,
-}
-
-impl HelperClient {
-    fn send(&mut self, message: &PipeMessage) -> Result<(), String> {
-        let mut line = serde_json::to_vec(message).map_err(|e| e.to_string())?;
-        line.push(b'\n');
-        self.writer
-            .write_all(&line)
-            .map_err(|e| format!("pipe write failed: {e}"))?;
-        self.writer
-            .flush()
-            .map_err(|e| format!("pipe flush failed: {e}"))
+#[cfg(any(windows, test))]
+async fn pipe_exchange<S>(
+    stream: &mut S,
+    message: &PipeMessage,
+    timeout: Duration,
+) -> Result<(), String>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    const LIMIT: usize = 16 * 1024;
+    let mut request = serde_json::to_vec(message).map_err(|e| e.to_string())?;
+    if request.len() >= LIMIT {
+        return Err("helper request exceeds limit".into());
     }
-
-    fn call(&mut self, mut message: PipeMessage) -> Result<(), String> {
-        message.version = DA_HELPER_PROTOCOL_VERSION;
-        self.send(&message)?;
-        let mut line = String::new();
-        self.reader
-            .read_line(&mut line)
-            .map_err(|e| format!("pipe read failed: {e}"))?;
-        if line.trim().is_empty() {
-            return Err("helper closed the pipe".to_string());
+    request.push(b'\n');
+    tokio::time::timeout(timeout, async {
+        stream
+            .write_all(&request)
+            .await
+            .map_err(|e| format!("pipe write failed: {e}"))?;
+        let mut line = Vec::new();
+        loop {
+            let mut byte = [0u8; 1];
+            let n = stream
+                .read(&mut byte)
+                .await
+                .map_err(|e| format!("pipe read failed: {e}"))?;
+            if n == 0 {
+                return Err("helper closed the pipe".into());
+            }
+            if byte[0] == b'\n' {
+                break;
+            }
+            if line.len() >= LIMIT {
+                return Err("helper reply exceeds limit".into());
+            }
+            line.push(byte[0]);
         }
         let reply: PipeReply =
-            serde_json::from_str(line.trim()).map_err(|e| format!("invalid helper reply: {e}"))?;
+            serde_json::from_slice(&line).map_err(|e| format!("invalid helper reply: {e}"))?;
         if reply.ok {
             Ok(())
         } else {
             Err(reply
                 .error
-                .unwrap_or_else(|| "helper rejected the request".to_string()))
+                .unwrap_or_else(|| "helper rejected the request".into()))
+        }
+    })
+    .await
+    .map_err(|_| "helper exchange timed out".to_string())?
+}
+
+#[cfg(windows)]
+struct HelperClient {
+    runtime: tokio::runtime::Runtime,
+    pipe: Option<tokio::net::windows::named_pipe::NamedPipeClient>,
+}
+#[cfg(not(windows))]
+struct HelperClient;
+
+impl HelperClient {
+    fn call(&mut self, mut message: PipeMessage) -> Result<(), String> {
+        message.version = DA_HELPER_PROTOCOL_VERSION;
+        #[cfg(windows)]
+        {
+            let Some(pipe) = self.pipe.as_mut() else {
+                return Err("helper pipe closed".into());
+            };
+            let result =
+                self.runtime
+                    .block_on(pipe_exchange(pipe, &message, Duration::from_secs(3)));
+            if result.is_err() {
+                self.pipe = None;
+            }
+            result
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = message;
+            Err("named pipes are only supported on Windows".into())
         }
     }
 
@@ -477,14 +514,19 @@ impl DaRouteManager {
                         return Err(error);
                     };
                     if let Err(detail) = helper.add(plan) {
+                        self.invalidate_helper();
                         let error = DaRouteError::Add(target, detail);
                         self.release_prepared(&mut prepared);
                         self.last_error = Some(error.clone());
                         return Err(error);
                     }
                     if best_route_luid(target) != Some(adapter.luid) {
-                        if let Some(helper) = self.helper.as_mut() {
-                            let _ = helper.remove(plan);
+                        if self
+                            .helper
+                            .as_mut()
+                            .is_some_and(|helper| helper.remove(plan).is_err())
+                        {
+                            self.invalidate_helper();
                         }
                         let error = DaRouteError::Verify(target);
                         self.release_prepared(&mut prepared);
@@ -515,14 +557,25 @@ impl DaRouteManager {
         }
         let plans = self.leases.owned_plans();
         for plan in plans {
-            if let Some(helper) = self.helper.as_mut() {
-                let _ = helper.refresh(plan);
+            if self
+                .helper
+                .as_mut()
+                .is_some_and(|helper| helper.refresh(plan).is_err())
+            {
+                self.invalidate_helper();
+                break;
             }
         }
     }
 
     pub fn has_owned_routes(&self) -> bool {
         !self.leases.owned_plans().is_empty()
+    }
+
+    fn invalidate_helper(&mut self) {
+        self.helper = None;
+        self.leases.entries.retain(|_, entry| !entry.owned);
+        self.status = DaRouteStatus::HelperUnavailable;
     }
 
     pub fn release(&mut self, prepared: PreparedRoutes) {
@@ -534,8 +587,12 @@ impl DaRouteManager {
         for key in prepared.keys.drain(..) {
             if let Some((plan, owned)) = self.leases.release(&key) {
                 if owned {
-                    if let Some(helper) = self.helper.as_mut() {
-                        let _ = helper.remove(plan);
+                    if self
+                        .helper
+                        .as_mut()
+                        .is_some_and(|helper| helper.remove(plan).is_err())
+                    {
+                        self.invalidate_helper();
                     }
                 }
             }
@@ -606,16 +663,9 @@ impl DaRouteManager {
 
 impl Drop for DaRouteManager {
     fn drop(&mut self) {
-        let keys = self.leases.owned_keys();
-        for key in keys {
-            if let Some((plan, owned)) = self.leases.release(&key) {
-                if owned {
-                    if let Some(helper) = self.helper.as_mut() {
-                        let _ = helper.remove(plan);
-                    }
-                }
-            }
-        }
+        // Closing the authenticated pipe makes the helper remove its routes.
+        // Avoid a separate, potentially slow round trip for each lease.
+        self.helper = None;
     }
 }
 
@@ -783,34 +833,40 @@ fn launch_elevated(
 }
 
 impl HelperClient {
+    #[cfg(windows)]
     fn connect(pipe: &str, expected_pid: u32, timeout: Duration) -> Result<Self, String> {
         let name = format!(r"\\.\pipe\{pipe}");
         wait_for_pipe(&name, timeout)?;
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&name)
-            .map_err(|e| format!("open {name}: {e}"))?;
-        verify_pipe_server(&file, expected_pid)?;
-        let writer = file
-            .try_clone()
-            .map_err(|e| format!("clone pipe handle: {e}"))?;
-        let mut client = Self {
-            reader: BufReader::new(file),
-            writer,
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("pipe runtime: {e}"))?;
+        let client = {
+            let _guard = runtime.enter();
+            tokio::net::windows::named_pipe::ClientOptions::new()
+                .open(&name)
+                .map_err(|e| format!("open {name}: {e}"))?
         };
-        let hello = PipeMessage {
+        verify_pipe_server(&client, expected_pid)?;
+        let mut client = Self {
+            runtime,
+            pipe: Some(client),
+        };
+        client.call(PipeMessage {
             version: DA_HELPER_PROTOCOL_VERSION,
-            op: "hello".to_string(),
+            op: "hello".into(),
             target: None,
             prefix: None,
             interface_luid: None,
             next_hop: None,
             lifetime_secs: None,
             client_pid: Some(std::process::id()),
-        };
-        client.call(hello)?;
+        })?;
         Ok(client)
+    }
+    #[cfg(not(windows))]
+    fn connect(_pipe: &str, _expected_pid: u32, _timeout: Duration) -> Result<Self, String> {
+        Err("named pipes are only supported on Windows".into())
     }
 }
 
@@ -822,8 +878,10 @@ fn validate_pipe_server(actual_pid: u32, expected_pid: u32) -> Result<(), String
 }
 
 #[cfg(windows)]
-fn verify_pipe_server(file: &std::fs::File, expected_pid: u32) -> Result<(), String> {
-    use std::os::windows::io::AsRawHandle;
+fn verify_pipe_server(
+    file: &impl std::os::windows::io::AsRawHandle,
+    expected_pid: u32,
+) -> Result<(), String> {
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::System::Pipes::GetNamedPipeServerProcessId;
     let mut pid = 0;
@@ -831,11 +889,6 @@ fn verify_pipe_server(file: &std::fs::File, expected_pid: u32) -> Result<(), Str
     unsafe { GetNamedPipeServerProcessId(HANDLE(file.as_raw_handle() as _), &mut pid) }
         .map_err(|e| format!("GetNamedPipeServerProcessId: {e}"))?;
     validate_pipe_server(pid, expected_pid)
-}
-
-#[cfg(not(windows))]
-fn verify_pipe_server(_file: &std::fs::File, _expected_pid: u32) -> Result<(), String> {
-    Err("helper pipe verification is Windows-only".to_string())
 }
 
 #[cfg(windows)]
@@ -852,11 +905,6 @@ fn wait_for_pipe(name: &str, timeout: Duration) -> Result<(), String> {
         let error = unsafe { GetLastError() };
         Err(format!("WaitNamedPipeW failed with {}", error.0))
     }
-}
-
-#[cfg(not(windows))]
-fn wait_for_pipe(_name: &str, _timeout: Duration) -> Result<(), String> {
-    Err("named pipes are only supported on Windows".to_string())
 }
 
 #[cfg(windows)]
@@ -973,6 +1021,77 @@ fn sockaddr_ip(address: &windows::Win32::Networking::WinSock::SOCKADDR_INET) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pipe_exchange_times_out_and_limits_reply() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let message = super::PipeMessage {
+                version: 2,
+                op: "hello".into(),
+                target: None,
+                prefix: None,
+                interface_luid: None,
+                next_hop: None,
+                lifetime_secs: None,
+                client_pid: None,
+            };
+            let (mut client, _server) = tokio::io::duplex(64);
+            let error =
+                super::pipe_exchange(&mut client, &message, std::time::Duration::from_millis(20))
+                    .await
+                    .unwrap_err();
+            assert!(error.contains("timed out"));
+            let (mut client, mut server) = tokio::io::duplex(32 * 1024);
+            let task = tokio::spawn(async move {
+                let mut request = [0u8; 512];
+                let _ = server.read(&mut request).await.unwrap();
+                server.write_all(&vec![b'x'; 16 * 1024 + 1]).await.unwrap();
+            });
+            let error =
+                super::pipe_exchange(&mut client, &message, std::time::Duration::from_secs(1))
+                    .await
+                    .unwrap_err();
+            assert!(error.contains("exceeds limit"));
+            task.await.unwrap();
+        });
+    }
+    #[test]
+    fn helper_loss_invalidates_owned_but_keeps_reused_routes() {
+        let mut manager = super::DaRouteManager::new();
+        let adapter = super::AdapterId::UNSPECIFIED;
+        let owned = super::RoutePlan {
+            target: "10.0.0.1".parse().unwrap(),
+            prefix: 32,
+            interface_luid: 1,
+            next_hop: "0.0.0.0".parse().unwrap(),
+            via_gateway: false,
+        };
+        let reused = super::RoutePlan {
+            target: "10.0.0.2".parse().unwrap(),
+            ..owned
+        };
+        manager.leases.acquire(owned, adapter, true);
+        manager.leases.acquire(reused, adapter, false);
+        manager.invalidate_helper();
+        assert_eq!(
+            manager.leases.count(&super::RouteKey {
+                target: owned.target,
+                adapter
+            }),
+            0
+        );
+        assert_eq!(
+            manager.leases.count(&super::RouteKey {
+                target: reused.target,
+                adapter
+            }),
+            1
+        );
+    }
     #[cfg(windows)]
     #[test]
     fn pipe_server_process_is_verified_before_use() {
