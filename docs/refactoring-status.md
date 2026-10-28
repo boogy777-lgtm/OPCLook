@@ -19,7 +19,7 @@
 | B12 | Подтверждён; guard группы при ошибке cast добавлен, COM runtime-регрессии ещё нет |
 | B13 | Подтверждён; CoString проверяет null и освобождает память; Windows null-регрессия прошла CI для `2a6d017` |
 | B14 | Подтверждён; восстановление poisoned mutex, регрессия отмены прошла Linux |
-| B15 | Подтверждён; загрузка типов прерывается Disconnect, после timeout сессия закрывается до команд; регрессия ожидания прошла Linux, необходим live-тест |
+| B15 | Live UA sample server и TCP proxy подтвердили: Disconnect прерывает загрузку; после реального timeout queued Browse не передаётся и Read получает NoConnection. Linux 2/2; Windows runtime остаётся открыт |
 | B16 | Подтверждён; добавлены идентификаторы завершения, Windows-регрессия прошла CI для `2a6d017` |
 | B17 | Подтверждён; сохранение состояния запуска и регрессия, Linux тест пройден |
 | B18 | Подтверждён; исправление и регрессия, Linux тест пройден |
@@ -574,3 +574,10 @@ unresolved sessions include their source line. Mixed newline and multiline
 records, escaped quotes, the issue cap and both import paths have regression
 coverage. Windows i686 all-targets typecheck passed with test-only resource and
 manifest skips; Windows execution remains open. B15 live testing remains open.
+
+B15 live proxy: Linux 2/2 (измерено 62.78 с вместе с запуском и
+завершением сервера); удержание настоящего NamespaceArray ReadResponse через
+None-security TCP proxy, 30-секундный production deadline, queued Browse
+проверяется на проводе, queued Read получает typed NoConnection. Disconnect
+проверен отдельно. Windows i686 backend all-targets typecheck прошёл, runtime
+на Windows и финальный exact-head CI остаются открыты.

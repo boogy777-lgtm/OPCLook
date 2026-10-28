@@ -1696,3 +1696,253 @@ fn test_server_moves_off_a_taken_port() {
 }
 
 const KEY_1: ItemKey = ItemKey::FIRST;
+
+/// Transparent None-security proxy which withholds the real initial namespace
+/// ReadResponse and subsequent responses, counting queued Browse requests.
+struct HeldNamespaceProxy {
+    url: String,
+    held: std::sync::mpsc::Receiver<()>,
+    later_services: Arc<std::sync::atomic::AtomicUsize>,
+    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl HeldNamespaceProxy {
+    fn start(server: &TestServer) -> Self {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server_port = server.port;
+        let (held_tx, held) = channel();
+        let later_services = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = later_services.clone();
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let thread = std::thread::spawn(move || {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(async move {
+                let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+                let mut tasks = tokio::task::JoinSet::new();
+                tokio::pin!(stopped);
+                loop {
+                    tokio::select! {
+                        _ = &mut stopped => break,
+                        accepted = listener.accept() => {
+                            let Ok((client, _)) = accepted else { break; };
+                            let held_tx = held_tx.clone();
+                            let counter = counter.clone();
+                            tasks.spawn(async move {
+                                let Ok(server) = tokio::net::TcpStream::connect(("127.0.0.1", server_port)).await else { return; };
+                                let (mut cr, mut cw) = client.into_split();
+                                let (mut sr, mut sw) = server.into_split();
+                                let pending = Arc::new(std::sync::atomic::AtomicU64::new(0));
+                                let pending_request = pending.clone();
+                                let upstream = async move {
+                                    let mut held = false;
+                                    loop {
+                                        let mut header = [0u8; 8];
+                                        if cr.read_exact(&mut header).await.is_err() { break; }
+                                        let len = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize;
+                                        if !(8..=1_048_576).contains(&len) { break; }
+                                        let mut frame = vec![0; len];
+                                        frame[..8].copy_from_slice(&header);
+                                        if cr.read_exact(&mut frame[8..]).await.is_err() { break; }
+                                        if &header[..4] == b"MSGF" && len > 24 {
+                                            use opcua::types::{BinaryDecodable, ContextOwned, ObjectId, ReadRequest};
+                                            let context = ContextOwned::default();
+                                            let mut body = std::io::Cursor::new(&frame[24..]);
+                                            if let Ok(id) = NodeId::decode(&mut body, &context.context()) {
+                                                if id == NodeId::from(ObjectId::ReadRequest_Encoding_DefaultBinary) {
+                                                    if let Ok(request) = ReadRequest::decode(&mut body, &context.context()) {
+                                                        let namespace = NodeId::new(0, 2255u32);
+                                                        if !held && request.nodes_to_read.as_ref().is_some_and(|nodes| nodes.iter().any(|n| n.node_id == namespace)) {
+                                                            held = true;
+                                                            let request_id = u32::from_le_bytes([frame[20], frame[21], frame[22], frame[23]]);
+                                                            pending_request.store(u64::from(request_id) + 1, std::sync::atomic::Ordering::SeqCst);
+                                                            let _ = held_tx.send(());
+                                                        }
+                                                    }
+                                                }
+                                                if held && id == NodeId::from(ObjectId::BrowseRequest_Encoding_DefaultBinary) {
+                                                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                                }
+                                            }
+                                        }
+                                        if sw.write_all(&frame).await.is_err() { break; }
+                                    }
+                                };
+                                let downstream = async move {
+                                    let mut withholding = false;
+                                    loop {
+                                        let mut header = [0u8; 8];
+                                        if sr.read_exact(&mut header).await.is_err() { break; }
+                                        let len = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize;
+                                        if !(8..=1_048_576).contains(&len) { break; }
+                                        let mut frame = vec![0; len];
+                                        frame[..8].copy_from_slice(&header);
+                                        if sr.read_exact(&mut frame[8..]).await.is_err() { break; }
+                                        if &header[..4] == b"MSGF" && len >= 24 {
+                                            let id = u32::from_le_bytes([frame[20], frame[21], frame[22], frame[23]]);
+                                            let held_id = pending.load(std::sync::atomic::Ordering::SeqCst);
+                                            if held_id != 0 && u64::from(id) + 1 == held_id { withholding = true; }
+                                        }
+                                        if !withholding && cw.write_all(&frame).await.is_err() { break; }
+                                    }
+                                };
+                                tokio::select! { _ = upstream => {}, _ = downstream => {} }
+                            });
+                        }
+                    }
+                }
+                tasks.abort_all();
+                while tasks.join_next().await.is_some() {}
+            });
+        });
+        Self {
+            url: format!("opc.tcp://127.0.0.1:{port}/"),
+            held,
+            later_services,
+            stop: Some(stop),
+            thread: Some(thread),
+        }
+    }
+}
+impl Drop for HeldNamespaceProxy {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+#[test]
+fn b15_live_initial_load_timeout_rejects_queued_service() {
+    let server = TestServer::start(48721);
+    let proxy = HeldNamespaceProxy::start(&server);
+    let mut app = Harness::new();
+    let session = SessionId::new(1).unwrap();
+    app.connect(session, Harness::endpoint(&proxy.url))
+        .expect("connect through proxy");
+    proxy
+        .held
+        .recv_timeout(Duration::from_secs(10))
+        .expect("namespace read held");
+    let request = app.send(
+        session.into(),
+        CommandKind::Browse {
+            node_id: "i=85".into(),
+            filter: crate::bff::model::NodeClassFilter::All,
+            view_id: None,
+        },
+    );
+    let read = app.send(
+        session.into(),
+        CommandKind::Read {
+            keys: vec![ItemKey::new(1).unwrap()],
+        },
+    );
+    let disconnected = app.wait(Duration::from_secs(50), |event| {
+        matches!(
+            &event.kind,
+            EventKind::Disconnected {
+                reason: BackendMsg::SessionClosedAfterTimeout
+            }
+        )
+        .then_some(())
+    });
+    assert!(
+        disconnected.is_some(),
+        "typed timeout disconnect; events: {:?}",
+        app.seen
+    );
+    let reply = app.reply(request, Duration::from_secs(5));
+    assert!(
+        matches!(
+            reply,
+            Some(Event {
+                kind: EventKind::Error {
+                    message: BackendMsg::NoConnection,
+                    ..
+                },
+                ..
+            })
+        ),
+        "queued command rejected: {reply:?}"
+    );
+    let read_reply = app.reply(read, Duration::from_secs(5));
+    assert!(
+        matches!(read_reply, Some(Event { kind: EventKind::Values { values }, .. }) if values.len() == 1 && matches!(values[0].1.reason, Some(BackendMsg::NoConnection))),
+        "queued read rejected"
+    );
+    assert_eq!(
+        proxy
+            .later_services
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+}
+
+#[test]
+fn b15_live_disconnect_interrupts_held_initial_load() {
+    let server = TestServer::start(48722);
+    let proxy = HeldNamespaceProxy::start(&server);
+    let mut app = Harness::new();
+    let session = SessionId::new(1).unwrap();
+    app.connect(session, Harness::endpoint(&proxy.url))
+        .expect("connect through proxy");
+    proxy
+        .held
+        .recv_timeout(Duration::from_secs(10))
+        .expect("namespace read held");
+    let request = app.send(
+        session.into(),
+        CommandKind::Browse {
+            node_id: "i=85".into(),
+            filter: crate::bff::model::NodeClassFilter::All,
+            view_id: None,
+        },
+    );
+    let started = Instant::now();
+    let disconnect = app.send(session.into(), CommandKind::Disconnect);
+    let reply = app.reply(disconnect, Duration::from_secs(12));
+    assert!(
+        matches!(
+            reply,
+            Some(Event {
+                kind: EventKind::Disconnected {
+                    reason: BackendMsg::ConnectionClosed
+                },
+                ..
+            })
+        ),
+        "disconnect: {reply:?}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(12));
+    let reply = app.reply(request, Duration::from_secs(5));
+    assert!(
+        matches!(
+            reply,
+            Some(Event {
+                kind: EventKind::Error {
+                    message: BackendMsg::NoConnection,
+                    ..
+                },
+                ..
+            })
+        ),
+        "queued command rejected: {reply:?}"
+    );
+    assert_eq!(
+        proxy
+            .later_services
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+}

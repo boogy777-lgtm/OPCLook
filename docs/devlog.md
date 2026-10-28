@@ -486,3 +486,9 @@ E CI follow-up: the boundary guard rejected the GUI's new direct dependency on
 `opclook-contract`, which supplies shared typed errors. Allow that explicit
 edge while retaining the other boundary checks. The guard passed locally for
 both Linux x86_64 and Windows i686 targets.
+
+B15 live: sample server + bounded TCP proxy задерживает ответ на настоящий
+NamespaceArray Read, сохраняя последовательность кадров. Измерено Linux 2/2
+за 62.78 с, включая startup/teardown: timeout закрывает сессию без Browse на
+проводе, ожидающий Read получает NoConnection; Disconnect прерывает загрузку.
+Windows i686 backend all-targets typecheck прошёл, runtime не проверен.

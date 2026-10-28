@@ -181,3 +181,7 @@ B5/IPC: общий tagged Request сохраняет protocol v2, typed IPC ош
 с ошибками, число сообщений ограничено; номера учитывают многострочные поля и
 разные переводы строки. Локальный Windows i686 typecheck не заменяет runtime.
 B15 live proxy и прочие открытые проверки плана остаются открыты.
+
+**2026-10-28, B15 live:** Linux sample server + TCP proxy подтвердили
+timeout и прерывание Disconnect (2/2); Windows i686 backend typecheck прошёл,
+Windows runtime и финальный exact-head CI остаются открыты.
