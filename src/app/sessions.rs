@@ -150,8 +150,16 @@ impl App {
                 }
             }
         }
-        let id = self.next_session;
-        self.next_session += 1;
+        let Some(id) = self.next_session else {
+            let message = tr(self.lang(), Tr::SessionIdsExhausted).to_string();
+            self.status = message.clone();
+            self.journal.error(message.clone());
+            if self.dialogs.connect.open {
+                self.dialogs.connect.error = Some(message);
+            }
+            return false;
+        };
+        self.next_session = id.checked_add(1);
         self.settings.remember(&endpoint);
         self.settings.save();
         self.journal.info_l(

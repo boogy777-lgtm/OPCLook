@@ -90,8 +90,8 @@ pub struct App {
     pub csv_import: Option<CsvImportJob>,
     /// Active recursive «Добавить дочерние» job (one per session).
     pub add_children: Option<AddChildrenJob>,
-    next_session: SessionId,
-    next_key: ItemKey,
+    next_session: Option<SessionId>,
+    next_key: Option<ItemKey>,
     /// Monotonic id for streaming subnet scans (independent of request ids).
     next_scan: Option<ScanId>,
     /// Outstanding `(session, request_id)` pairs. Non-zero events are accepted
@@ -239,8 +239,8 @@ impl App {
             last_write_summary: None,
             csv_import: None,
             add_children: None,
-            next_session: 1,
-            next_key: 1,
+            next_session: Some(1),
+            next_key: Some(1),
             next_scan: Some(ScanId::FIRST),
             cjk_font: CjkFont::NotProbed,
             row_index: row_index::RowIndex::default(),
@@ -809,8 +809,8 @@ impl App {
             .find(|s| s.id == session)
             .map(|s| s.endpoint.display_name())
             .unwrap_or_default();
-        let key = self.next_key;
-        self.next_key += 1;
+        let key = self.next_key.expect("test row IDs exhausted");
+        self.next_key = key.checked_add(1);
         self.push_row(Row {
             key,
             session,

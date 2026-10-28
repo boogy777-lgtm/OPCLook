@@ -14,6 +14,7 @@ impl App {
         let server_label = view.endpoint.display_name();
         let mut specs = Vec::new();
         let mut added = 0usize;
+        let mut exhausted = false;
         for (item_id, display_name) in items {
             if item_id.trim().is_empty() {
                 continue;
@@ -23,8 +24,14 @@ impl App {
             if self.has_row_for_item(session, &item_id) {
                 continue;
             }
-            let key = self.next_key;
-            self.next_key += 1;
+            let Some(key) = self.next_key else {
+                exhausted = true;
+                let message = tr(self.lang(), Tr::ItemIdsExhausted).to_string();
+                self.status = message.clone();
+                self.journal.error(message);
+                break;
+            };
+            self.next_key = key.checked_add(1);
             let display_name = if display_name.trim().is_empty() {
                 item_id.clone()
             } else {
@@ -52,7 +59,9 @@ impl App {
             added += 1;
         }
         if specs.is_empty() {
-            self.journal.info_l(Tr::AddFailedEmpty, &[]);
+            if !exhausted {
+                self.journal.info_l(Tr::AddFailedEmpty, &[]);
+            }
             return;
         }
         let keys: Vec<ItemKey> = specs.iter().map(|spec| spec.key).collect();

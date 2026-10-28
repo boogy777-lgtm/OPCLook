@@ -328,3 +328,5 @@ Linux regressions 1/1 + 1/1 и Windows workspace typecheck прошли. Ком�
 Windows/Linux CI 557fca20 проверил D hotfix, но не последующие C/FILETIME.
 
 **2026-10-28 — A, ScanId:** ненулевой тип проходит через контракт, GUI и scanner; checked successor выдаёт u64::MAX один раз, затем остановка видима в диалоге и журнале (RU/EN/ZH). Измерено: Linux regression исчерпания 1/1, scanner 10/10, stale scan UI 1/1; Linux all-targets check основных пакетов и Windows i686 workspace all-targets check с test-only флагами прошли. Windows runtime, физические DA/UAC/маршруты и PNG не проверены; прочие роли и Origin/Owner открыты.
+
+**2026-10-28 — A, исчерпание GUI:** генерация session/item прекращается после выдачи максимума; ошибка локализована и видна в статусе и журнале. Частичная партия сигналов сохраняет выданные ключи и отправляется; остаток не создаётся. Измерено: Linux две регрессии исчерпания прошли; Windows i686 workspace all-targets typecheck с test-only флагами прошёл. Типизация ролей и реальный Windows runtime остаются открыты.

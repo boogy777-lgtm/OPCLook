@@ -1876,3 +1876,33 @@ fn remove_active_session_activates_nearest_right_neighbor() {
     app.remove_session(2);
     assert_eq!(app.active_session, Some(3));
 }
+
+#[test]
+fn session_ids_stop_after_maximum_and_report_exhaustion() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.next_session = Some(u64::MAX);
+    assert!(app.connect_endpoint(EndpointSpec::ua("opc.tcp://127.0.0.1:4840")));
+    assert_eq!(app.sessions.last().unwrap().id, u64::MAX);
+    assert!(app.next_session.is_none());
+    let count = app.sessions.len();
+    assert!(!app.connect_endpoint(EndpointSpec::ua("opc.tcp://127.0.0.1:4841")));
+    assert_eq!(app.sessions.len(), count);
+    assert_eq!(app.status, tr(app.lang(), Tr::SessionIdsExhausted));
+}
+
+#[test]
+fn item_ids_stop_after_maximum_and_keep_earlier_items() {
+    let (_ctx, mut app) = tree_app();
+    app.next_key = Some(u32::MAX);
+    app.add_items(
+        1,
+        vec![("one".into(), "one".into()), ("two".into(), "two".into())],
+    );
+    assert_eq!(app.rows.len(), 1);
+    assert_eq!(app.rows[0].key, u32::MAX);
+    assert!(app.next_key.is_none());
+    assert_eq!(app.status, tr(app.lang(), Tr::ItemIdsExhausted));
+    app.add_items(1, vec![("three".into(), "three".into())]);
+    assert_eq!(app.rows.len(), 1);
+}
