@@ -530,6 +530,12 @@ impl DaRouteManager {
                         self.last_error = Some(error.clone());
                         return Err(error);
                     }
+                    if cancelled() {
+                        self.release_prepared(&mut prepared);
+                        return Err(DaRouteError::Resolve(
+                            "route preparation cancelled or timed out".into(),
+                        ));
+                    }
                     let Some(helper) = self.helper.as_mut() else {
                         let error = DaRouteError::HelperUnavailable("no helper client".to_string());
                         self.release_prepared(&mut prepared);
@@ -1053,6 +1059,23 @@ fn sockaddr_ip(address: &windows::Win32::Networking::WinSock::SOCKADDR_INET) -> 
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(windows))]
+    #[test]
+    fn cancellation_after_helper_ready_never_attempts_add() {
+        use std::cell::Cell;
+        let mut manager = super::DaRouteManager::new();
+        manager.helper = Some(super::HelperClient);
+        let selected = adapter("192.168.1.20", 24, &[]);
+        let target = "192.168.1.50".parse().unwrap();
+        let checks = Cell::new(0);
+        let result = manager.prepare_resolved(vec![target], Some(&selected), &[], || {
+            checks.set(checks.get() + 1);
+            checks.get() >= 2
+        });
+        assert!(matches!(result, Err(super::DaRouteError::Resolve(_))));
+        assert_eq!(checks.get(), 2);
+        assert!(manager.leases.entries.is_empty());
+    }
     #[test]
     fn pipe_exchange_times_out_and_limits_reply() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
