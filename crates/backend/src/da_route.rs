@@ -216,23 +216,9 @@ impl PreparedRoutes {
 /// preventing the operating system from recycling its process ID meanwhile.
 #[derive(Debug)]
 struct LaunchedProcess {
-    handle: usize,
+    #[cfg(windows)]
+    _handle: Option<crate::winutil::OwnedHandle>,
     pid: u32,
-}
-
-impl Drop for LaunchedProcess {
-    fn drop(&mut self) {
-        #[cfg(windows)]
-        if self.handle != 0 {
-            // SAFETY: this is the process handle returned by ShellExecuteExW,
-            // owned by this object and closed exactly once.
-            unsafe {
-                let _ = windows::Win32::Foundation::CloseHandle(
-                    windows::Win32::Foundation::HANDLE(self.handle as _),
-                );
-            }
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -857,10 +843,12 @@ fn launch_elevated(
             "launcher returned no process handle".to_string(),
         ));
     }
-    // SAFETY: ShellExecuteExW returned an owned process handle.
-    let pid = unsafe { GetProcessId(handle) };
+    // SAFETY: ShellExecuteExW transferred a valid process handle.
+    let handle = unsafe { crate::winutil::OwnedHandle::from_raw(handle) };
+    // SAFETY: the guard holds the live process handle for the call.
+    let pid = unsafe { GetProcessId(handle.raw()) };
     let process = LaunchedProcess {
-        handle: handle.0 as usize,
+        _handle: Some(handle),
         pid,
     };
     if pid == 0 {
@@ -1355,7 +1343,8 @@ mod tests {
     fn successful_launch_remains_ready_after_first_pipe_retry() {
         let (tx, rx) = std::sync::mpsc::channel();
         tx.send(Ok(super::LaunchedProcess {
-            handle: 0,
+            #[cfg(windows)]
+            _handle: None,
             pid: 123,
         }))
         .unwrap();

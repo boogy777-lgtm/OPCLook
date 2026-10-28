@@ -2,11 +2,37 @@
 #![deny(clippy::undocumented_unsafe_blocks)]
 
 use std::ffi::CStr;
-use windows::Win32::Foundation::{FreeLibrary, HMODULE};
+use windows::Win32::Foundation::{CloseHandle, FreeLibrary, HANDLE, HMODULE};
 use windows::Win32::System::LibraryLoader::{
     GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
 };
 use windows::core::{PCSTR, PCWSTR, PWSTR};
+
+/// One closeable Windows handle. The integer stores the opaque handle value,
+/// so ownership can move between threads without exposing a borrowed pointer.
+#[derive(Debug)]
+pub(crate) struct OwnedHandle(usize);
+
+impl OwnedHandle {
+    /// # Safety
+    /// The handle must be valid, closeable, and uniquely owned by the caller.
+    pub(crate) unsafe fn from_raw(handle: HANDLE) -> Self {
+        Self(handle.0 as usize)
+    }
+
+    pub(crate) fn raw(&self) -> HANDLE {
+        HANDLE(self.0 as *mut core::ffi::c_void)
+    }
+}
+
+impl Drop for OwnedHandle {
+    fn drop(&mut self) {
+        // SAFETY: construction transferred the sole close obligation.
+        unsafe {
+            let _ = CloseHandle(self.raw());
+        }
+    }
+}
 
 /// A loaded system DLL, retained for at least as long as any resolved symbol.
 pub(crate) struct SystemLibrary(usize);
@@ -65,6 +91,23 @@ pub(crate) unsafe fn wide_to_string(value: PWSTR) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn owned_handle_closes_during_unwind() {
+        use windows::Win32::Foundation::GetHandleInformation;
+        use windows::Win32::System::Threading::CreateEventW;
+        // SAFETY: null attributes and name create an unnamed event.
+        let raw = unsafe { CreateEventW(None, false, false, PCWSTR::null()) }.unwrap();
+        let outcome = std::panic::catch_unwind(|| {
+            // SAFETY: the newly created event is transferred exactly once.
+            let _owned = unsafe { OwnedHandle::from_raw(raw) };
+            panic!("exercise handle cleanup during unwind");
+        });
+        assert!(outcome.is_err());
+        let mut flags = 0;
+        // SAFETY: querying the closed handle value reports an invalid handle.
+        assert!(unsafe { GetHandleInformation(raw, &mut flags) }.is_err());
+    }
 
     #[test]
     fn system_library_resolves_typed_symbol_and_missing_export() {
