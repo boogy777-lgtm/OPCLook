@@ -170,7 +170,7 @@ future перед закрытием сессии; замена на отбра�
 | B20 / LocalAlloc | Дескриптор и SID helper освобождаются guard; ключ маршрута сохраняет next hop | Запуск Windows CI и реальный UAC/маршруты |
 | COM arrays / VARIANT | `ComArray` освобождает вложенные blobs и read VARIANT, `OwnedVariant` — запись; тест счётчика cleanup при ошибке/unwind | Windows runtime и реальный DA |
 | Группа / COM status | Guard группы хранится всю жизнь сессии и удаляет её ровно один раз при shutdown или drop; status и vendor освобождаются guard | Windows runtime |
-| WinAPI handles / tables | Guard для helper token, SID, дескриптора, процесса и IP Helper table; тест закрытия handle и тест возврата impersonation | Windows runtime, UAC и реальные маршруты; pipe connect worker может ждать до завершения процесса после timeout |
+| WinAPI handles / tables | Guard для helper token, SID, дескриптора, процесса и IP Helper table; тест закрытия handle и тест возврата impersonation | Windows runtime, UAC и реальные маршруты; при timeout helper завершает процесс, завершая ожидающий pipe worker |
 | DNS / символы / UTF-16 | System32-only загрузка DLL с владением библиотекой; типизированные символы и общий конвертер; Windows тесты символов и Unicode | Windows runtime и сетевое обнаружение |
 | Безопасные границы | `deny(clippy::undocumented_unsafe_blocks)` в `com`, `da`, `da_variant`, `winutil`, DA route, Windows inventory, сетевом binding, Windows mDNS и helper; generated COM bindings не менялись | Независимый review инвариантов и финальный Windows CI; другие этапы и проверки плана не завершены |
 | Tr / diagnostics | enum и `ALL` генерируются вместе без transmute или последнего sentinel; dispatch ошибок probes проходит через Engine и `Result` | Полный gate актуального head |
@@ -200,3 +200,11 @@ SAFEARRAY разблокируется guard даже при unwind. Windows р�
 0 failed, 0 ignored (60,42 с); текущий Windows runtime и полный exact-head CI
 ещё не выполнены. Helper явно сообщает об ошибке запуска потока и об ошибке
 возврата impersonation; guard остаётся резервом при раннем выходе.
+
+`SafeArrayBuilder::finish` теперь передаёт массив только после успешного
+Unaccess/Unlock; неудача возвращает типизированную ошибку, Drop повторяет
+освобождение и вызывает Destroy. Тесты с одноразовым отказом каждой операции
+проверяют повтор и успешное настоящее уничтожение; пока выполнен только
+Windows typecheck. При постоянном сбое OLE освобождение не гарантируется.
+Helper после timeout завершает процесс, поэтому ожидающий поток ConnectNamedPipe
+и его клонированный handle ограничены временем жизни этого процесса.
