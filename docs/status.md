@@ -176,3 +176,8 @@ B5/IPC: общий tagged Request сохраняет protocol v2, typed IPC ош
 открытые ограничения — в `docs/refactoring-status.md`. E/F/G/H, измеренный
 10k baseline, PNG, Windows runtime, физические DA/UAC и итоговый exact-head CI
 остаются открытыми.
+
+**2026-10-28, CSV diagnostics:** обе формы импорта сообщают в журнале строки
+с ошибками, число сообщений ограничено; номера учитывают многострочные поля и
+разные переводы строки. Локальный Windows i686 typecheck не заменяет runtime.
+B15 live proxy и прочие открытые проверки плана остаются открыты.

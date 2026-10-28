@@ -103,6 +103,11 @@ translation_keys! {
     SessionIdsExhausted,
     ItemIdsExhausted,
     InvalidItemHandle,
+    CsvIssueLine,
+    CsvIssuesOmitted,
+    CsvMalformedQuote,
+    CsvMissingFields,
+    CsvEmptyItem,
     CsvServerAmbiguous,
     CsvServerEmpty,
     CjkFontMissing,
@@ -799,6 +804,11 @@ fn ru(key: Tr) -> &'static str {
         CsvServerAmbiguous => {
             "Строка CSV пропущена: имени сервера «{0}» соответствует несколько подключений, укажите точное имя"
         }
+        CsvIssueLine => "Строка CSV {0}: {1}",
+        CsvIssuesOmitted => "Ещё ошибок CSV: {0}",
+        CsvMalformedQuote => "неверное кавычение",
+        CsvMissingFields => "не хватает полей",
+        CsvEmptyItem => "пустой идентификатор сигнала",
         CsvServerEmpty => "Строка CSV пропущена: для сигнала «{0}» не указан сервер",
         CjkFontMissing => {
             "Не найден шрифт для китайского текста (msyh.ttc, simsun.ttc): интерфейс на 中文 будет показан квадратами"
@@ -1407,6 +1417,11 @@ fn en(key: Tr) -> &'static str {
         CsvServerAmbiguous => {
             "CSV row skipped: server name \"{0}\" matches several connections, give the exact name"
         }
+        CsvIssueLine => "CSV line {0}: {1}",
+        CsvIssuesOmitted => "Additional CSV issues omitted: {0}",
+        CsvMalformedQuote => "malformed quoting",
+        CsvMissingFields => "missing fields",
+        CsvEmptyItem => "empty item ID",
         CsvServerEmpty => "CSV row skipped: no server given for signal \"{0}\"",
         CjkFontMissing => {
             "No font for Chinese text was found (msyh.ttc, simsun.ttc): the 中文 interface will show boxes"
@@ -2003,6 +2018,11 @@ fn zh(key: Tr) -> &'static str {
         ItemIdsExhausted => "信号标识符已耗尽",
         InvalidItemHandle => "收到无效的信号标识符",
         CsvServerAmbiguous => "已跳过 CSV 行：服务器名“{0}”匹配多个连接，请指定准确名称",
+        CsvIssueLine => "CSV 第 {0} 行：{1}",
+        CsvIssuesOmitted => "省略的其他 CSV 问题：{0}",
+        CsvMalformedQuote => "引号格式错误",
+        CsvMissingFields => "缺少字段",
+        CsvEmptyItem => "信号标识为空",
         CsvServerEmpty => "已跳过 CSV 行：信号“{0}”未指定服务器",
         CjkFontMissing => "未找到可显示中文的字体（msyh.ttc、simsun.ttc）：界面文字可能显示为方块",
         CjkFontLoaded => "中文字体：{0}",

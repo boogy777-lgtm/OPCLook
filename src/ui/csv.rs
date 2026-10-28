@@ -30,41 +30,178 @@ pub fn export_tree_csv_to_path(app: &App, path: &std::path::Path) -> std::io::Re
     std::fs::write(path, export_tree_csv(app))
 }
 
-/// Parse CSV text into import rows (server / item_id / name), skipping the
-/// header and blank or empty-item lines. Quoted fields may contain `;`, `""`
-/// and line breaks (what the export writes), `\r\n` / `\n` / `\r` end a record
-/// and a leading BOM is ignored.
-pub(super) fn parse_csv_rows(text: &str) -> Vec<CsvImportRow> {
-    let mut rows = Vec::new();
-    for (record_index, record) in parse_csv_records(text).into_iter().enumerate() {
-        let mut fields = record.into_iter();
-        let Some(server) = fields.next() else {
-            continue;
-        };
-        if record_index == 0 && server.trim().to_ascii_lowercase().starts_with("server") {
-            continue;
+const MAX_CSV_ISSUES: usize = 100;
+
+#[derive(Debug, PartialEq, Eq)]
+enum CsvIssueKind {
+    MalformedQuote,
+    MissingFields,
+    EmptyItem,
+}
+#[derive(Debug, PartialEq, Eq)]
+struct CsvIssue {
+    line: usize,
+    kind: CsvIssueKind,
+}
+#[derive(Default, Debug)]
+struct CsvParseResult {
+    rows: Vec<CsvImportRow>,
+    issues: Vec<CsvIssue>,
+    omitted: usize,
+}
+impl CsvParseResult {
+    fn issue(&mut self, line: usize, kind: CsvIssueKind) {
+        if self.issues.len() < MAX_CSV_ISSUES {
+            self.issues.push(CsvIssue { line, kind });
+        } else {
+            self.omitted = self.omitted.saturating_add(1);
         }
-        let Some(item_id) = fields.next() else {
-            continue;
-        };
-        let item_id = item_id.trim().to_string();
-        if item_id.is_empty() {
-            continue;
-        }
-        let name = fields.next().unwrap_or_else(|| item_id.clone());
-        rows.push(CsvImportRow {
-            server: server.trim().to_string(),
-            item_id,
-            name,
-        });
     }
-    rows
+}
+
+fn parse_csv_rows(text: &str) -> CsvParseResult {
+    let mut result = CsvParseResult::default();
+    let text = text.strip_prefix(CSV_BOM).unwrap_or(text);
+    let mut chars = text.chars().peekable();
+    let mut fields = Vec::new();
+    let mut field = String::new();
+    let mut line = 1usize;
+    let mut start = 1usize;
+    let mut quoted = false;
+    let mut closed = false;
+    let mut malformed = false;
+    let mut first = true;
+    loop {
+        let c = chars.next();
+        if quoted {
+            match c {
+                Some('"') if chars.peek() == Some(&'"') => {
+                    chars.next();
+                    field.push('"');
+                }
+                Some('"') => {
+                    quoted = false;
+                    closed = true;
+                }
+                Some('\r') => {
+                    field.push('\r');
+                    if chars.peek() == Some(&'\n') {
+                        chars.next();
+                        field.push('\n');
+                    }
+                    line = line.saturating_add(1);
+                }
+                Some('\n') => {
+                    field.push('\n');
+                    line = line.saturating_add(1);
+                }
+                Some(ch) => field.push(ch),
+                None => {
+                    malformed = true;
+                    quoted = false;
+                }
+            }
+            if c.is_some() {
+                continue;
+            }
+        }
+        match c {
+            Some('"') if field.is_empty() && !closed => quoted = true,
+            Some('"') => {
+                malformed = true;
+                field.push('"');
+            }
+            Some(';') => {
+                fields.push(std::mem::take(&mut field));
+                closed = false;
+            }
+            Some('\r' | '\n') | None => {
+                if c == Some('\r') && chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                fields.push(std::mem::take(&mut field));
+                let blank = fields.len() == 1
+                    && fields.first().is_some_and(|f| f.trim().is_empty())
+                    && !malformed;
+                if !blank {
+                    let header = first
+                        && fields
+                            .first()
+                            .is_some_and(|f| f.trim().eq_ignore_ascii_case("server"))
+                        && fields
+                            .get(1)
+                            .is_some_and(|f| f.trim().eq_ignore_ascii_case("item_id"));
+                    first = false;
+                    if malformed {
+                        result.issue(start, CsvIssueKind::MalformedQuote);
+                    } else if !header {
+                        if fields.len() < 2 {
+                            result.issue(start, CsvIssueKind::MissingFields);
+                        } else if fields[1].trim().is_empty() {
+                            result.issue(start, CsvIssueKind::EmptyItem);
+                        } else {
+                            let item_id = fields[1].trim().to_owned();
+                            result.rows.push(CsvImportRow {
+                                line: start,
+                                server: fields[0].trim().to_owned(),
+                                name: fields.get(2).cloned().unwrap_or_else(|| item_id.clone()),
+                                item_id,
+                            });
+                        }
+                    }
+                }
+                fields.clear();
+                malformed = false;
+                closed = false;
+                if c.is_none() {
+                    break;
+                }
+                line = line.saturating_add(1);
+                start = line;
+            }
+            Some(ch) => {
+                if closed {
+                    malformed = true;
+                }
+                field.push(ch);
+            }
+        }
+    }
+    result
+}
+
+fn report_csv_issues(app: &mut App, parsed: &CsvParseResult) {
+    let lang = app.lang();
+    for issue in &parsed.issues {
+        let kind = tr(
+            lang,
+            match issue.kind {
+                CsvIssueKind::MalformedQuote => Tr::CsvMalformedQuote,
+                CsvIssueKind::MissingFields => Tr::CsvMissingFields,
+                CsvIssueKind::EmptyItem => Tr::CsvEmptyItem,
+            },
+        );
+        app.journal.warn(fmt(
+            lang,
+            Tr::CsvIssueLine,
+            &[&issue.line.to_string(), &kind],
+        ));
+    }
+    if parsed.omitted > 0 {
+        app.journal.warn(fmt(
+            lang,
+            Tr::CsvIssuesOmitted,
+            &[&parsed.omitted.to_string()],
+        ));
+    }
 }
 
 /// Begin a modal CSV import (TFormLoad-style progress window). The job is
 /// advanced a chunk at a time from the UI and supports cancel.
 pub fn start_csv_import(app: &mut App, text: String) {
-    let rows = parse_csv_rows(&text);
+    let parsed = parse_csv_rows(&text);
+    report_csv_issues(app, &parsed);
+    let rows = parsed.rows;
     let total = rows.len();
     if total == 0 {
         app.journal.warn(tr(app.lang(), Tr::CsvNoSignals));
@@ -88,7 +225,9 @@ pub fn start_csv_import(app: &mut App, text: String) {
 /// modal progress job instead.
 pub fn import_tree_csv(app: &mut App, text: &str) -> usize {
     let mut loaded = 0usize;
-    for row in parse_csv_rows(text) {
+    let parsed = parse_csv_rows(text);
+    report_csv_issues(app, &parsed);
+    for row in parsed.rows {
         match resolve_csv_session(app, &row.server) {
             CsvServer::Session(session) => {
                 app.add_items(session, vec![(row.item_id, row.name)]);
@@ -162,19 +301,17 @@ pub(super) fn resolve_csv_session(app: &App, server: &str) -> CsvServer {
 /// Journal why a CSV row was skipped.
 pub(super) fn report_csv_server_problem(app: &mut App, row: &CsvImportRow, problem: CsvServer) {
     let lang = app.lang();
-    match problem {
-        CsvServer::Session(_) => {}
-        CsvServer::Empty => app
-            .journal
-            .warn(fmt(lang, Tr::CsvServerEmpty, &[&row.item_id])),
-        CsvServer::NotFound => {
-            app.journal
-                .warn(fmt(lang, Tr::CsvServerNotConnected, &[&row.server]))
-        }
-        CsvServer::Ambiguous => app
-            .journal
-            .warn(fmt(lang, Tr::CsvServerAmbiguous, &[&row.server])),
-    }
+    let message = match problem {
+        CsvServer::Session(_) => return,
+        CsvServer::Empty => fmt(lang, Tr::CsvServerEmpty, &[&row.item_id]),
+        CsvServer::NotFound => fmt(lang, Tr::CsvServerNotConnected, &[&row.server]),
+        CsvServer::Ambiguous => fmt(lang, Tr::CsvServerAmbiguous, &[&row.server]),
+    };
+    app.journal.warn(fmt(
+        lang,
+        Tr::CsvIssueLine,
+        &[&row.line.to_string(), &message],
+    ));
 }
 
 /// Load signal rows from a CSV file. Returns the number of signals added.
@@ -188,59 +325,6 @@ pub(super) fn csv_escape(text: &str) -> String {
     } else {
         text.to_string()
     }
-}
-
-/// Split CSV text into records of `;`-separated fields (RFC 4180 quoting with
-/// `;` as the separator). A quote opens a quoted field only at the start of a
-/// field; inside quotes `""` is a quote and line breaks are data. An
-/// unterminated quote swallows the rest of the text instead of failing.
-pub(super) fn parse_csv_records(text: &str) -> Vec<Vec<String>> {
-    let text = text.strip_prefix(CSV_BOM).unwrap_or(text);
-    let mut records: Vec<Vec<String>> = Vec::new();
-    let mut record: Vec<String> = Vec::new();
-    let mut field = String::new();
-    let mut in_quotes = false;
-    let mut chars = text.chars().peekable();
-    let end_record =
-        |record: &mut Vec<String>, field: &mut String, records: &mut Vec<Vec<String>>| {
-            record.push(std::mem::take(field));
-            let blank = record.len() == 1 && record.first().is_some_and(|f| f.trim().is_empty());
-            let finished = std::mem::take(record);
-            if !blank {
-                records.push(finished);
-            }
-        };
-    while let Some(c) = chars.next() {
-        if in_quotes {
-            if c == '"' {
-                if chars.peek() == Some(&'"') {
-                    field.push('"');
-                    chars.next();
-                } else {
-                    in_quotes = false;
-                }
-            } else {
-                field.push(c);
-            }
-            continue;
-        }
-        match c {
-            '"' if field.is_empty() => in_quotes = true,
-            ';' => record.push(std::mem::take(&mut field)),
-            '\r' => {
-                if chars.peek() == Some(&'\n') {
-                    chars.next();
-                }
-                end_record(&mut record, &mut field, &mut records);
-            }
-            '\n' => end_record(&mut record, &mut field, &mut records),
-            other => field.push(other),
-        }
-    }
-    if !field.is_empty() || !record.is_empty() {
-        end_record(&mut record, &mut field, &mut records);
-    }
-    records
 }
 
 #[cfg(test)]
@@ -316,7 +400,7 @@ mod tests {
 
     #[test]
     fn a6_import_ignores_a_bom_in_front_of_the_header() {
-        let rows = parse_csv_rows("\u{feff}server;item_id;name\r\nA.OPC;Tag1;One\r\n");
+        let rows = parse_csv_rows("\u{feff}server;item_id;name\r\nA.OPC;Tag1;One\r\n").rows;
         assert_eq!(rows.len(), 1, "the header must not become a data row");
         assert_eq!(rows[0].server, "A.OPC");
         assert_eq!(rows[0].item_id, "Tag1");
@@ -341,7 +425,7 @@ mod tests {
         );
         assert!(key != plain);
         let text = export_tree_csv(&app);
-        let rows = parse_csv_rows(&text);
+        let rows = parse_csv_rows(&text).rows;
         assert_eq!(rows.len(), 2, "{rows:?}");
         assert_eq!(rows[0].name, nasty);
         assert_eq!(rows[1].name, "Plain");
@@ -354,24 +438,56 @@ mod tests {
     }
 
     #[test]
-    fn a6_records_split_on_crlf_lf_and_cr_and_skip_blank_lines() {
-        let records = parse_csv_records("a;b\r\nc;d\n\ne;f\rg;h");
+    fn diagnostics_track_physical_lines_and_preserve_valid_records() {
+        let parsed = parse_csv_rows(
+            "serverName;id;\"a\r\nb;\"\"c\"\"\"\r\n\rmissing\nA;\rB;x;bad\"quote\rC;y;\"unterminated",
+        );
+        assert_eq!(parsed.rows.len(), 1);
+        assert_eq!(parsed.rows[0].server, "serverName");
+        assert_eq!(parsed.rows[0].name, "a\r\nb;\"c\"");
         assert_eq!(
-            records,
+            parsed.issues,
             vec![
-                vec!["a", "b"],
-                vec!["c", "d"],
-                vec!["e", "f"],
-                vec!["g", "h"],
+                CsvIssue {
+                    line: 4,
+                    kind: CsvIssueKind::MissingFields
+                },
+                CsvIssue {
+                    line: 5,
+                    kind: CsvIssueKind::EmptyItem
+                },
+                CsvIssue {
+                    line: 6,
+                    kind: CsvIssueKind::MalformedQuote
+                },
+                CsvIssue {
+                    line: 7,
+                    kind: CsvIssueKind::MalformedQuote
+                }
             ]
         );
     }
 
     #[test]
-    fn a6_unterminated_quote_does_not_panic_or_loop() {
-        let records = parse_csv_records("server;item_id\nA;\"never closed\nB;C");
-        assert_eq!(records.len(), 2);
-        assert_eq!(records[1][1], "never closed\nB;C");
+    fn issue_collection_is_bounded() {
+        let parsed = parse_csv_rows(&"missing\n".repeat(MAX_CSV_ISSUES + 7));
+        assert_eq!(parsed.issues.len(), MAX_CSV_ISSUES);
+        assert_eq!(parsed.omitted, 7);
+    }
+
+    #[test]
+    fn both_import_paths_report_parse_errors_and_source_lines() {
+        for modal in [false, true] {
+            let (_ctx, mut app) = app_with(&["A.OPC"]);
+            app.journal.clear();
+            let input = "server;item_id;name\nmissing\nA.OPC;T;ok";
+            if modal {
+                start_csv_import(&mut app, input.to_owned());
+            } else {
+                assert_eq!(import_tree_csv(&mut app, input), 1);
+            }
+            assert!(app.journal.entries().iter().any(|entry| matches!(&entry.message, crate::journal::JournalMessage::Plain(text) if text.contains('2'))));
+        }
     }
 
     #[test]

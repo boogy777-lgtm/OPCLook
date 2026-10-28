@@ -471,3 +471,11 @@ Release profile перешёл с `panic = "abort"` на стандартный 
 паники worker могли быть обнаружены; размер бинарника может вырасти (не измерен).
 CLI unit 6/6 и live 2/2 прошли на Linux; Windows i686 contract release cfg
 подтвердил `panic="unwind"`. Полная release-сборка и её размер не проверены.
+
+**2026-10-28, CSV diagnostics:** malformed quoting, missing fields and empty
+item IDs are reported with physical record start lines; reports are capped at
+100 with an omitted count. Blank lines remain intentional. Exact `server` +
+`item_id` header recognition avoids dropping servers named `server...`.
+Unresolved sessions also include the source line. RU/EN/ZH messages cover both
+modal and synchronous imports. Linux targeted CSV tests and Windows i686
+all-targets typecheck are used; Windows runtime remains unverified.

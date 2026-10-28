@@ -566,3 +566,11 @@ catch_unwind не могли бы сообщить о панике. Это мо�
 Измерено: CLI unit 6/6 и live 2/2 на Linux; Windows i686 contract release
 `--print cfg` подтвердил `panic="unwind"`. Полный release binary не собран,
 размер не измерен.
+
+CSV parsing now reports malformed quotes, missing fields and empty item IDs
+with physical line numbers in both import paths, bounded to 100 issues with an
+omitted count. Header detection requires exact `server;item_id` fields;
+unresolved sessions include their source line. Mixed newline and multiline
+records, escaped quotes, the issue cap and both import paths have regression
+coverage. Windows i686 all-targets typecheck passed with test-only resource and
+manifest skips; Windows execution remains open. B15 live testing remains open.

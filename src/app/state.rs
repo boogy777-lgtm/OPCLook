@@ -22,6 +22,7 @@ pub enum BottomTab {
 /// A parsed CSV row awaiting import (server + signal identity).
 #[derive(Clone, Debug)]
 pub struct CsvImportRow {
+    pub line: usize,
     pub server: String,
     pub item_id: String,
     pub name: String,
