@@ -581,3 +581,9 @@ None-security TCP proxy, 30-секундный production deadline, queued Brows
 проверяется на проводе, queued Read получает typed NoConnection. Disconnect
 проверен отдельно. Windows i686 backend all-targets typecheck прошёл, runtime
 на Windows и финальный exact-head CI остаются открыты.
+
+**2026-10-28, F baseline — стенд, промежуточно:** игнорируемый полный
+`App::update` с 10k строк, пакетом 100 Values и отдельным журналом 5000 записей
+прошёл Linux debug smoke; Windows i686 test typecheck и boundary guard двух
+целей прошли. Оптимизированный baseline и PNG ещё выполняются; F/G/H остаются
+открытыми.

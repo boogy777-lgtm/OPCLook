@@ -38,6 +38,7 @@ members = ["nethelper", "crates/backend", "crates/contract", "crates/locale", "c
 
 [features]
 diagnostics = []
+ui-snapshots = ["egui_kittest/wgpu", "egui_kittest/snapshot"]
 test-support = ["opclook-engine/test-support"]
 
 [dependencies]
@@ -69,6 +70,7 @@ winres = "0.1"
 [dev-dependencies]
 opcda-egui = { path = ".", features = ["test-support"] }
 egui_kittest = "0.37"
+stats_alloc = "0.1.10"
 # In-process OPC UA server for the live backend tests (src/bff/ua/live_tests.rs).
 async-opcua = { version = "0.19", features = ["client", "server"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }

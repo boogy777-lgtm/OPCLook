@@ -30,6 +30,17 @@ impl App {
         });
     }
 
+    /// Feed an event after fixture sessions have been synchronized once with
+    /// `tick_for_test`; avoids rebuilding the fixture during measurements.
+    #[cfg(feature = "test-support")]
+    pub fn on_synced_event_for_test_at(&mut self, session: SessionId, kind: EventKind) {
+        self.on_event(Event {
+            origin: Origin::Unsolicited,
+            owner: Owner::Session(session),
+            kind,
+        });
+    }
+
     /// Test-only hook to feed an event for a specific session into the app state.
     #[cfg(feature = "test-support")]
     pub fn on_event_for_test_at(&mut self, session: SessionId, kind: EventKind) {

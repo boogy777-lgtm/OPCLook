@@ -185,3 +185,9 @@ B15 live proxy и прочие открытые проверки плана ос
 **2026-10-28, B15 live:** Linux sample server + TCP proxy подтвердили
 timeout и прерывание Disconnect (2/2); Windows i686 backend typecheck прошёл,
 Windows runtime и финальный exact-head CI остаются открыты.
+
+**2026-10-28, F измерительный стенд (промежуточный):** добавлен headless
+`App::update` для 10 000 строк и отдельного журнала на 5000 записей; 120 кадров
+и обновление 100 значений через обработчик событий прошли Linux smoke в debug.
+Это ещё не оптимизированный baseline. Рендер PNG, оптимизированные измерения,
+F/G/H, Windows runtime и итоговый exact-head CI остаются открыты.
