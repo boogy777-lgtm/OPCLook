@@ -236,6 +236,7 @@ pub(crate) fn dedupe_services(services: Vec<MdnService>) -> Vec<MdnService> {
 
 #[cfg(windows)]
 mod windows_impl {
+    #![deny(clippy::undocumented_unsafe_blocks)]
     use super::*;
     use crate::winutil::{SystemLibrary, wide_to_string};
     use std::collections::{HashMap, HashSet};
@@ -388,8 +389,10 @@ mod windows_impl {
         }
         let mut current = record;
         while !current.is_null() {
+            // SAFETY: DNS supplies a linked record list valid for this callback.
             let entry = unsafe { &*current };
             if entry.wType == DNS_TYPE_PTR.0 {
+                // SAFETY: a PTR record's host field is a nullable terminated DNS string.
                 let name = unsafe { wide_to_string(entry.Data.PTR.pNameHost) };
                 if !name.is_empty() {
                     let _ = sink.tx.send(CallbackEvent::BrowseInstance(name));
@@ -414,6 +417,7 @@ mod windows_impl {
             });
             return;
         }
+        // SAFETY: a successful callback supplies a live instance for its duration.
         let service = unsafe { parse_service_instance(&*instance) };
         let _ = sink.tx.send(CallbackEvent::Resolve {
             request: context as usize,
@@ -422,21 +426,28 @@ mod windows_impl {
     }
 
     unsafe fn parse_service_instance(instance: &DNS_SERVICE_INSTANCE) -> ResolvedService {
+        // SAFETY: DNS supplies nullable terminated strings in a live instance.
         let instance_name = unsafe { wide_to_string(instance.pszInstanceName) };
+        // SAFETY: the host field is a nullable terminated DNS string.
         let host = unsafe { wide_to_string(instance.pszHostName) };
         let mut addresses = Vec::new();
         if !instance.ip4Address.is_null() {
+            // SAFETY: DNS supplies a live IPv4 address when this pointer is non-null.
             let raw = unsafe { *instance.ip4Address };
             addresses.push(IpAddr::V4(Ipv4Addr::from(u32::from_be(raw))));
         }
         if !instance.ip6Address.is_null() {
+            // SAFETY: DNS supplies a live IPv6 address when this pointer is non-null.
             let bytes = unsafe { (*instance.ip6Address).IP6Byte };
             addresses.push(IpAddr::V6(Ipv6Addr::from(bytes)));
         }
         let mut properties = Vec::new();
         if !instance.keys.is_null() && !instance.values.is_null() {
             for index in 0..instance.dwPropertyCount as usize {
+                // SAFETY: DNS supplies property-count entries in both arrays,
+                // each containing a nullable terminated string.
                 let key = unsafe { wide_to_string(*instance.keys.add(index)) };
+                // SAFETY: this index is within the DNS property-value array.
                 let value = unsafe { wide_to_string(*instance.values.add(index)) };
                 if !key.is_empty() {
                     properties.push((key, value));
@@ -476,6 +487,7 @@ mod windows_impl {
             pQueryContext: id as *mut c_void,
         };
         let mut cancel = DNS_SERVICE_CANCEL::default();
+        // SAFETY: request and its query live through registration; cancel is writable.
         let started = unsafe { (api.browse)(&request, &mut cancel) };
         if started != DNS_REQUEST_PENDING && started != 0 {
             unregister_callback(id);
@@ -508,6 +520,7 @@ mod windows_impl {
             }
         }
 
+        // SAFETY: successful browse initialized the cancellation token.
         let cancelled = unsafe { (api.browse_cancel)(&cancel) };
         if cancelled != 0 {
             notes.push(BackendMsg::MdnsBrowseCancelFailed { code: cancelled });
@@ -548,6 +561,7 @@ mod windows_impl {
                 pQueryContext: id as *mut c_void,
             };
             let mut cancel = DNS_SERVICE_CANCEL::default();
+            // SAFETY: request and query are valid; the query is retained if pending.
             let started = unsafe { (api.resolve)(&request, &mut cancel) };
             if started == DNS_REQUEST_PENDING || started == 0 {
                 pending.push(PendingResolve {
@@ -589,6 +603,7 @@ mod windows_impl {
         }
 
         for entry in &pending {
+            // SAFETY: this token belongs to a successfully started resolve.
             let cancelled = unsafe { (api.resolve_cancel)(&entry.cancel) };
             if cancelled != 0 {
                 notes.push(BackendMsg::MdnsResolveCancelFailed { code: cancelled });
