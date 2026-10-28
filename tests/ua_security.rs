@@ -26,12 +26,12 @@ fn wait_for(
     predicate: impl Fn(&EventKind) -> bool,
 ) -> Option<Event> {
     let request_id = command.request_id;
-    let session = command.session;
+    let owner = command.owner;
     gateway.send(command).expect("gateway send");
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         while let Some(event) = gateway.try_recv() {
-            if event.origin != request_id.into() || event.session != session {
+            if event.origin != request_id.into() || event.owner != owner {
                 continue;
             }
             if predicate(&event.kind) {
@@ -49,7 +49,9 @@ fn connect_endpoint(gateway: &Gateway, session: u64, endpoint: EndpointSpec) -> 
         gateway,
         Command {
             request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            session,
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Connect { endpoint },
         },
@@ -64,7 +66,9 @@ fn disconnect(gateway: &Gateway, session: u64) {
         gateway,
         Command {
             request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            session,
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Disconnect,
         },
@@ -84,7 +88,9 @@ fn server_search_enumerates_endpoints() {
         &gateway,
         Command {
             request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            session,
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::SearchUaServers {
                 host: "127.0.0.1".to_string(),
@@ -173,7 +179,9 @@ fn server_network_search_reaches_server() {
         &gateway,
         Command {
             request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            session,
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::SearchUaNetwork {
                 bind: None,

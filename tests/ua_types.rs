@@ -30,12 +30,12 @@ fn wait_for(
     predicate: impl Fn(&EventKind) -> bool,
 ) -> Option<Event> {
     let request_id = command.request_id;
-    let session = command.session;
+    let owner = command.owner;
     gateway.send(command).expect("gateway send");
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         while let Some(event) = gateway.try_recv() {
-            if event.origin != request_id.into() || event.session != session {
+            if event.origin != request_id.into() || event.owner != owner {
                 continue;
             }
             if predicate(&event.kind) {
@@ -52,7 +52,9 @@ fn connect(gateway: &Gateway, session: u64) -> Event {
         gateway,
         Command {
             request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            session,
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Connect {
                 endpoint: EndpointSpec::ua(test_url()),
@@ -69,7 +71,9 @@ fn disconnect(gateway: &Gateway, session: u64) {
         gateway,
         Command {
             request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            session,
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Disconnect,
         },
@@ -100,7 +104,9 @@ fn browse(gateway: &Gateway, session: u64, node_id: &str) -> Vec<BrowseNode> {
         gateway,
         Command {
             request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            session,
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Browse {
                 node_id: node_id.to_string(),
@@ -123,7 +129,9 @@ fn read_values(gateway: &Gateway, session: u64, items: &[ItemSpec]) -> Event {
         gateway,
         Command {
             request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            session,
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::AddItems {
                 items: items.to_vec(),
@@ -138,7 +146,9 @@ fn read_values(gateway: &Gateway, session: u64, items: &[ItemSpec]) -> Event {
         gateway,
         Command {
             request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            session,
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Read { keys },
         },
@@ -221,7 +231,9 @@ fn ua_variable_filter_browse_returns_variables_only() {
             gateway,
             Command {
                 request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                session,
+                owner: opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                ),
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Browse {
                     node_id: "i=85".to_string(),
@@ -262,7 +274,9 @@ fn ua_browse_views_lists_views_and_browsing_in_them_does_not_error() {
             gateway,
             Command {
                 request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                session,
+                owner: opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                ),
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::BrowseViews,
             },
@@ -290,7 +304,9 @@ fn ua_browse_views_lists_views_and_browsing_in_them_does_not_error() {
             gateway,
             Command {
                 request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                session,
+                owner: opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                ),
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Browse {
                     node_id: "i=85".to_string(),
@@ -318,7 +334,9 @@ fn ua_resolve_browse_path_resolves_objects() {
             gateway,
             Command {
                 request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                session,
+                owner: opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                ),
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::ResolveBrowsePath {
                     start_node: None,

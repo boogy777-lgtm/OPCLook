@@ -9,12 +9,12 @@ fn main() -> Result<(), String> {
     let url = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "opc.tcp://milo.digitalpetri.com:62541/milo".to_string());
-    let session = 1u64;
+    let session = opcda_egui::bff::model::SessionId::FIRST;
     let probe = Probe::new();
     let mut request = opcda_egui::bff::model::RequestId::FIRST;
     probe.send(Command {
         request_id: Some(request),
-        session,
+        owner: session.into(),
         protocol: Protocol::OpcUa,
         kind: CommandKind::Connect {
             endpoint: EndpointSpec::ua(url),
@@ -37,7 +37,7 @@ fn main() -> Result<(), String> {
 
     probe.send(Command {
         request_id: Some(request),
-        session,
+        owner: session.into(),
         protocol: Protocol::OpcUa,
         kind: CommandKind::AddItems {
             items: vec![
@@ -59,7 +59,7 @@ fn main() -> Result<(), String> {
 
     probe.send(Command {
         request_id: Some(request),
-        session,
+        owner: session.into(),
         protocol: Protocol::OpcUa,
         kind: CommandKind::Read {
             keys: vec![
@@ -75,7 +75,7 @@ fn main() -> Result<(), String> {
 
     probe.send(Command {
         request_id: Some(request),
-        session,
+        owner: session.into(),
         protocol: Protocol::OpcUa,
         kind: CommandKind::Disconnect,
     })?;

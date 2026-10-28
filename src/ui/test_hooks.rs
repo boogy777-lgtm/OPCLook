@@ -286,9 +286,12 @@ mod dnd_proof {
         ctx.set_visuals(egui::Visuals::dark());
         let mut app = App::new_test(&ctx);
         app.settings.set_lang(crate::i18n::Lang::Ru);
-        app.seed_session(1, crate::bff::model::EndpointSpec::da("", "Srv.Test"));
+        app.seed_session(
+            crate::bff::model::SessionId::new(1).unwrap(),
+            crate::bff::model::EndpointSpec::da("", "Srv.Test"),
+        );
         app.seed_tree_item(
-            1,
+            crate::bff::model::SessionId::new(1).unwrap(),
             None,
             0,
             BrowseNode {
@@ -472,20 +475,23 @@ mod dnd_proof {
     /// Seed a session with a branch of many item children so the table has rows
     /// to drag in / scroll, plus an Item sibling for direct drops.
     fn seed_wide_table(app: &mut App, rows: usize) -> u64 {
-        app.seed_session(1, crate::bff::model::EndpointSpec::da("", "Srv.Test"));
+        app.seed_session(
+            crate::bff::model::SessionId::new(1).unwrap(),
+            crate::bff::model::EndpointSpec::da("", "Srv.Test"),
+        );
         for i in 0..rows {
             app.seed_row(
-                1,
+                crate::bff::model::SessionId::new(1).unwrap(),
                 &format!("ns=1;s=item{i}"),
                 &format!("Sig{i:0>2}"),
                 crate::bff::model::Value::I64(i as i64),
             );
         }
-        app.activate_session(1);
+        app.activate_session(crate::bff::model::SessionId::new(1).unwrap());
         app.selected_tree = None;
         // A tree Item not yet subscribed, for the drop path.
         app.seed_tree_item(
-            1,
+            crate::bff::model::SessionId::new(1).unwrap(),
             None,
             0,
             BrowseNode {
@@ -532,7 +538,7 @@ mod dnd_proof {
         // reset the scroll offset.
         for i in 0..10 {
             app.seed_row(
-                1,
+                crate::bff::model::SessionId::new(1).unwrap(),
                 &format!("ns=1;s=new{i}"),
                 &format!("New{i}"),
                 crate::bff::model::Value::I64(i as i64),
@@ -647,12 +653,15 @@ mod dnd_proof {
         ctx.set_visuals(egui::Visuals::dark());
         let mut app = App::new_test(&ctx);
         app.settings.set_lang(crate::i18n::Lang::Ru);
-        app.seed_session(1, crate::bff::model::EndpointSpec::da("", "Alpha.Server"));
         app.seed_session(
-            2,
+            crate::bff::model::SessionId::new(1).unwrap(),
+            crate::bff::model::EndpointSpec::da("", "Alpha.Server"),
+        );
+        app.seed_session(
+            crate::bff::model::SessionId::new(2).unwrap(),
             crate::bff::model::EndpointSpec::da("box2", "Beta.Long.Server.Name"),
         );
-        app.activate_session(1);
+        app.activate_session(crate::bff::model::SessionId::new(1).unwrap());
         reset_ui_test_hooks();
 
         frame_at(&ctx, &mut app, SIZE);
@@ -735,7 +744,10 @@ mod dnd_proof {
         ctx.set_visuals(egui::Visuals::dark());
         let mut app = App::new_test(&ctx);
         app.settings.set_lang(crate::i18n::Lang::Ru);
-        app.seed_session(1, crate::bff::model::EndpointSpec::da("", "Srv.Test"));
+        app.seed_session(
+            crate::bff::model::SessionId::new(1).unwrap(),
+            crate::bff::model::EndpointSpec::da("", "Srv.Test"),
+        );
         app.dialogs.columns.open = true;
         for _ in 0..3 {
             frame(&ctx, &mut app, base_input());
@@ -789,7 +801,10 @@ mod dnd_proof {
         ctx.set_visuals(egui::Visuals::dark());
         let mut app = App::new_test(&ctx);
         app.settings.set_lang(crate::i18n::Lang::Ru);
-        app.seed_session(1, crate::bff::model::EndpointSpec::da("", "Srv.Test"));
+        app.seed_session(
+            crate::bff::model::SessionId::new(1).unwrap(),
+            crate::bff::model::EndpointSpec::da("", "Srv.Test"),
+        );
         app.dialogs.columns.open = true;
         columns_hook_api::clear();
 

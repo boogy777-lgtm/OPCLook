@@ -7,7 +7,7 @@ fn main() -> Result<(), String> {
     let probe = Probe::new();
     probe.send(Command {
         request_id: Some(opcda_egui::bff::model::RequestId::FIRST),
-        session: 0,
+        owner: opcda_egui::bff::model::Owner::Discovery,
         protocol: Protocol::OpcDa,
         kind: CommandKind::Discover {
             host: String::new(),

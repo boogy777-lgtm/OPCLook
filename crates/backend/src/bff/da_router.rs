@@ -8,7 +8,7 @@
 #![cfg_attr(not(windows), allow(dead_code))]
 
 use super::model::{
-    BackendMsg, Command, CommandKind, DataValue, Event, EventKind, Operation, SessionId,
+    BackendMsg, Command, CommandKind, DataValue, Event, EventKind, Operation, Owner, SessionId,
 };
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -85,7 +85,7 @@ pub fn route_of(kind: &CommandKind) -> Route {
 fn error_event(command: &Command, operation: Operation, message: BackendMsg) -> Event {
     Event {
         origin: command.request_id.into(),
-        session: command.session,
+        owner: command.owner,
         kind: EventKind::Error { operation, message },
     }
 }
@@ -133,7 +133,7 @@ pub fn no_connection_reply(command: &Command) -> Option<Event> {
     };
     Some(Event {
         origin: command.request_id.into(),
-        session: command.session,
+        owner: command.owner,
         kind,
     })
 }
@@ -212,7 +212,25 @@ impl<H: DaHost> Router<H> {
     /// Route one command. Never blocks on a session or on COM.
     pub fn dispatch(&mut self, command: Command) {
         self.reap();
-        match route_of(&command.kind) {
+        let route = route_of(&command.kind);
+        let is_discovery = matches!(
+            &command.kind,
+            CommandKind::Discover { .. }
+                | CommandKind::SearchUaServers { .. }
+                | CommandKind::SearchUaNetwork { .. }
+                | CommandKind::ScanUaNetwork { .. }
+                | CommandKind::CancelUaScan { .. }
+        );
+        let valid = is_discovery == matches!(command.owner, Owner::Discovery);
+        if !valid {
+            self.send(error_event(
+                &command,
+                command.kind.operation(),
+                BackendMsg::NoConnection,
+            ));
+            return;
+        }
+        match route {
             Route::Ignored => {}
             Route::Unsupported(operation, text) => {
                 self.send(error_event(&command, operation, text));
@@ -222,13 +240,19 @@ impl<H: DaHost> Router<H> {
             Route::Disconnect => {
                 // Detach first: a following Connect for the same id gets a
                 // fresh thread even while this one is still tearing down.
-                if let Some(handle) = self.sessions.remove(&command.session) {
+                if let Some(handle) = self.sessions.remove(&match command.owner {
+                    Owner::Session(id) => id,
+                    Owner::Discovery => return,
+                }) {
                     // A dead thread gives no reply, like an unknown session.
                     let _ = handle.tx.send(command);
                     self.retired.push(handle.join);
                 }
             }
-            Route::Session => match self.sessions.get(&command.session) {
+            Route::Session => match self.sessions.get(&match command.owner {
+                Owner::Session(id) => id,
+                Owner::Discovery => return,
+            }) {
                 Some(handle) => {
                     if let Err(returned) = handle.tx.send(command) {
                         self.answer_no_connection(&returned.0);
@@ -246,7 +270,9 @@ impl<H: DaHost> Router<H> {
     }
 
     fn start_session(&mut self, command: Command) {
-        let id = command.session;
+        let Owner::Session(id) = command.owner else {
+            return;
+        };
         if self.sessions.contains_key(&id) {
             // `reap` just removed dead entries, so this one is alive.
             self.send(error_event(
@@ -268,7 +294,7 @@ impl<H: DaHost> Router<H> {
                 if outcome.is_err() {
                     let _ = events.send(Event {
                         origin: crate::bff::model::Origin::Unsolicited,
-                        session: id,
+                        owner: id.into(),
                         kind: EventKind::Log {
                             message: BackendMsg::DaSessionThreadCrashed,
                         },
@@ -318,7 +344,7 @@ impl<H: DaHost> Router<H> {
         let host = Arc::clone(&self.host);
         let events = self.events.clone();
         let request_id = command.request_id;
-        let session = command.session;
+        let owner = command.owner;
         let spawned = std::thread::Builder::new()
             .name("opc-da-discover".to_string())
             .spawn(move || {
@@ -328,7 +354,7 @@ impl<H: DaHost> Router<H> {
                 if outcome.is_err() {
                     let _ = events.send(Event {
                         origin: request_id.into(),
-                        session,
+                        owner,
                         kind: EventKind::Error {
                             operation: Operation::Discover,
                             message: BackendMsg::DaDiscoveryCrashed,
@@ -340,7 +366,7 @@ impl<H: DaHost> Router<H> {
             Ok(join) => self.discoveries.push(join),
             Err(e) => self.send(Event {
                 origin: request_id.into(),
-                session,
+                owner,
                 kind: EventKind::Error {
                     operation: Operation::Discover,
                     message: BackendMsg::DaDiscoverySpawnFailed {
@@ -417,10 +443,14 @@ mod tests {
 
     const WAIT: Duration = Duration::from_secs(5);
 
-    fn command(request_id: u64, session: SessionId, kind: CommandKind) -> Command {
+    fn sid(n: u64) -> SessionId {
+        SessionId::new(n).unwrap()
+    }
+
+    fn command(request_id: u64, owner: Owner, kind: CommandKind) -> Command {
         Command {
             request_id: crate::bff::model::RequestId::new(request_id),
-            session,
+            owner,
             protocol: Protocol::OpcDa,
             kind,
         }
@@ -429,7 +459,7 @@ mod tests {
     fn connect(request_id: u64, session: SessionId, progid: &str) -> Command {
         command(
             request_id,
-            session,
+            session.into(),
             CommandKind::Connect {
                 endpoint: EndpointSpec::da("", progid),
             },
@@ -481,11 +511,11 @@ mod tests {
         ) {
             let mut connected = false;
             while let Some(cmd) = commands.blocking_recv() {
-                let (request_id, sid) = (cmd.request_id, cmd.session);
+                let (request_id, sid) = (cmd.request_id, cmd.owner);
                 let reply = |kind| {
                     let _ = events.send(Event {
                         origin: request_id.into(),
-                        session: sid,
+                        owner: sid,
                         kind,
                     });
                 };
@@ -570,7 +600,7 @@ mod tests {
             }
             let _ = events.send(Event {
                 origin: command.request_id.into(),
-                session: command.session,
+                owner: command.owner,
                 kind: EventKind::Servers {
                     host: String::new(),
                     servers: Vec::new(),
@@ -599,17 +629,54 @@ mod tests {
     }
 
     #[test]
+    fn rejects_mismatched_owners_without_starting_a_session_or_discovery() {
+        let (host, _r, _d) = MockHost::new();
+        let (mut router, rx) = router_with(host);
+        router.dispatch(command(
+            1,
+            Owner::Discovery,
+            CommandKind::Connect {
+                endpoint: EndpointSpec::da("", "ok"),
+            },
+        ));
+        let event = next(&rx);
+        assert_eq!(event.owner, Owner::Discovery);
+        assert!(matches!(
+            event.kind,
+            EventKind::Error {
+                message: BackendMsg::NoConnection,
+                ..
+            }
+        ));
+        router.dispatch(command(
+            2,
+            sid(1).into(),
+            CommandKind::Discover { host: "x".into() },
+        ));
+        let event = next(&rx);
+        assert_eq!(event.owner, Owner::Session(sid(1)));
+        assert!(matches!(
+            event.kind,
+            EventKind::Error {
+                message: BackendMsg::NoConnection,
+                ..
+            }
+        ));
+        assert_eq!(router.session_count(), 0);
+    }
+
+    #[test]
     fn hung_session_does_not_block_other_sessions() {
         // D2: before the fix one thread served every session, so a Connect that
         // never returns froze all of them.
         let (host, release, _disc) = MockHost::new();
         let (mut router, rx) = router_with(host);
 
-        router.dispatch(connect(1, 1, "block"));
-        router.dispatch(connect(2, 2, "ok"));
+        router.dispatch(connect(1, sid(1), "block"));
+        router.dispatch(connect(2, sid(2), "ok"));
         router.dispatch(command(
             3,
-            2,
+            sid(2).into(),
             CommandKind::Read {
                 keys: vec![ItemKey::new(7).unwrap()],
             },
@@ -627,7 +694,7 @@ mod tests {
 
         release.send(()).unwrap();
         let c = next(&rx);
-        assert!(is_kind(&c, 1) && c.session == 1);
+        assert!(is_kind(&c, 1) && c.owner == sid(1).into());
         assert!(matches!(c.kind, EventKind::Connected { .. }));
     }
 
@@ -635,17 +702,17 @@ mod tests {
     fn commands_for_a_session_keep_their_order() {
         let (host, release, _disc) = MockHost::new();
         let (mut router, rx) = router_with(host);
-        router.dispatch(connect(1, 1, "block"));
+        router.dispatch(connect(1, sid(1), "block"));
         router.dispatch(command(
             2,
-            1,
+            sid(1).into(),
             CommandKind::Read {
                 keys: vec![ItemKey::new(1).unwrap()],
             },
         ));
         router.dispatch(command(
             3,
-            1,
+            sid(1).into(),
             CommandKind::Read {
                 keys: vec![ItemKey::new(2).unwrap()],
             },
@@ -661,7 +728,7 @@ mod tests {
         let (mut router, rx) = router_with(host);
         router.dispatch(command(
             1,
-            9,
+            sid(9).into(),
             CommandKind::AddItems {
                 items: vec![ItemSpec {
                     key: ItemKey::new(5).unwrap(),
@@ -671,21 +738,21 @@ mod tests {
         ));
         router.dispatch(command(
             2,
-            9,
+            sid(9).into(),
             CommandKind::Read {
                 keys: vec![ItemKey::new(5).unwrap(), ItemKey::new(6).unwrap()],
             },
         ));
         router.dispatch(command(
             3,
-            9,
+            sid(9).into(),
             CommandKind::RemoveItems {
                 keys: vec![ItemKey::new(5).unwrap()],
             },
         ));
-        router.dispatch(command(4, 9, CommandKind::Test));
+        router.dispatch(command(4, sid(9).into(), CommandKind::Test));
         // Disconnect of an unknown session stays silent, like before.
-        router.dispatch(command(5, 9, CommandKind::Disconnect));
+        router.dispatch(command(5, sid(9).into(), CommandKind::Disconnect));
 
         let e1 = next(&rx);
         match e1.kind {
@@ -714,7 +781,7 @@ mod tests {
     fn failed_connect_leaves_no_session_and_allows_a_retry() {
         let (host, _r, _d) = MockHost::new();
         let (mut router, rx) = router_with(host);
-        router.dispatch(connect(1, 1, "fail"));
+        router.dispatch(connect(1, sid(1), "fail"));
         let e = next(&rx);
         assert!(matches!(
             e.kind,
@@ -738,12 +805,12 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
 
-        router.dispatch(command(2, 1, CommandKind::Test));
+        router.dispatch(command(2, sid(1).into(), CommandKind::Test));
         match next(&rx).kind {
             EventKind::Error { message, .. } => assert_eq!(message, BackendMsg::NoConnection),
             other => panic!("{other:?}"),
         }
-        router.dispatch(connect(3, 1, "ok"));
+        router.dispatch(connect(3, sid(1), "ok"));
         assert!(matches!(next(&rx).kind, EventKind::Connected { .. }));
     }
 
@@ -753,13 +820,13 @@ mod tests {
         let (mut router, rx) = router_with(host);
         // "block" holds the thread inside Connect while the follow-ups queue
         // up; the session then fails because the mock fails after release.
-        router.dispatch(connect(1, 1, "block"));
+        router.dispatch(connect(1, sid(1), "block"));
         release.send(()).unwrap();
         assert!(matches!(next(&rx).kind, EventKind::Connected { .. }));
         // Now a "fail" connect for another id with queued commands behind it.
-        router.dispatch(connect(2, 2, "fail"));
+        router.dispatch(connect(2, sid(2), "fail"));
         for id in 3..6 {
-            router.dispatch(command(id, 2, CommandKind::Test));
+            router.dispatch(command(id, sid(2).into(), CommandKind::Test));
         }
         let mut seen = std::collections::HashMap::<u64, usize>::new();
         while let Ok(event) = rx.recv_timeout(Duration::from_millis(300)) {
@@ -778,9 +845,9 @@ mod tests {
     fn second_connect_for_a_live_session_is_rejected() {
         let (host, _r, _d) = MockHost::new();
         let (mut router, rx) = router_with(host);
-        router.dispatch(connect(1, 1, "ok"));
+        router.dispatch(connect(1, sid(1), "ok"));
         assert!(matches!(next(&rx).kind, EventKind::Connected { .. }));
-        router.dispatch(connect(2, 1, "ok"));
+        router.dispatch(connect(2, sid(1), "ok"));
         let e = next(&rx);
         assert!(is_kind(&e, 2));
         assert!(matches!(
@@ -796,14 +863,14 @@ mod tests {
     fn disconnect_removes_the_group_and_allows_reconnect_of_the_same_id() {
         let (host, _r, _d) = MockHost::new();
         let (mut router, rx) = router_with(Arc::clone(&host));
-        router.dispatch(connect(1, 1, "ok"));
+        router.dispatch(connect(1, sid(1), "ok"));
         assert!(matches!(next(&rx).kind, EventKind::Connected { .. }));
-        router.dispatch(command(2, 1, CommandKind::Disconnect));
+        router.dispatch(command(2, sid(1).into(), CommandKind::Disconnect));
         assert!(matches!(next(&rx).kind, EventKind::Disconnected { .. }));
         assert_eq!(router.session_count(), 0);
-        router.dispatch(connect(3, 1, "ok"));
+        router.dispatch(connect(3, sid(1), "ok"));
         assert!(matches!(next(&rx).kind, EventKind::Connected { .. }));
-        assert_eq!(host.torn_down(), vec![1]);
+        assert_eq!(host.torn_down(), vec![sid(1)]);
     }
 
     #[test]
@@ -813,19 +880,19 @@ mod tests {
         let (host, _r, _d) = MockHost::new();
         let (mut router, rx) = router_with(Arc::clone(&host));
         for id in 1..=3 {
-            router.dispatch(connect(id, id, "ok"));
+            router.dispatch(connect(id, sid(id), "ok"));
             assert!(matches!(next(&rx).kind, EventKind::Connected { .. }));
         }
         let detached = router.shutdown(WAIT);
         assert_eq!(detached, 0);
-        assert_eq!(host.torn_down(), vec![1, 2, 3]);
+        assert_eq!(host.torn_down(), vec![sid(1), sid(2), sid(3)]);
     }
 
     #[test]
     fn shutdown_does_not_wait_forever_for_a_hung_session() {
         let (host, release, _d) = MockHost::new();
         let (mut router, _rx) = router_with(host);
-        router.dispatch(connect(1, 1, "block"));
+        router.dispatch(connect(1, sid(1), "block"));
         let started = Instant::now();
         let detached = router.shutdown(Duration::from_millis(150));
         assert_eq!(detached, 1);
@@ -839,7 +906,7 @@ mod tests {
         let (cmd_tx, cmd_rx) = unbounded_channel();
         let (ev_tx, ev_rx) = channel();
         let join = std::thread::spawn(move || run_router(host, cmd_rx, ev_tx, WAIT));
-        cmd_tx.send(connect(1, 1, "ok")).unwrap();
+        cmd_tx.send(connect(1, sid(1), "ok")).unwrap();
         assert!(matches!(next(&ev_rx).kind, EventKind::Connected { .. }));
         drop(cmd_tx);
         let deadline = Instant::now() + WAIT;
@@ -854,8 +921,8 @@ mod tests {
     fn panicking_session_is_reported_and_commands_do_not_vanish() {
         let (host, _r, _d) = MockHost::new();
         let (mut router, rx) = router_with(host);
-        router.dispatch(connect(1, 1, "panic"));
-        router.dispatch(command(2, 1, CommandKind::Test));
+        router.dispatch(connect(1, sid(1), "panic"));
+        router.dispatch(command(2, sid(1).into(), CommandKind::Test));
         let mut seen = std::collections::HashSet::new();
         while let Ok(event) = rx.recv_timeout(Duration::from_millis(500)) {
             seen.insert(event_id(&event));
@@ -877,15 +944,15 @@ mod tests {
         let (mut router, rx) = router_with(host);
         router.dispatch(command(
             1,
-            0,
+            Owner::Discovery,
             CommandKind::Discover {
                 host: "hang".into(),
             },
         ));
-        router.dispatch(connect(2, 1, "ok"));
+        router.dispatch(connect(2, sid(1), "ok"));
         router.dispatch(command(
             3,
-            0,
+            Owner::Discovery,
             CommandKind::Discover {
                 host: "other".into(),
             },
@@ -910,7 +977,11 @@ mod tests {
                 let _g = gate.lock();
             }));
         }
-        router.dispatch(command(50, 0, CommandKind::Discover { host: "x".into() }));
+        router.dispatch(command(
+            50,
+            Owner::Discovery,
+            CommandKind::Discover { host: "x".into() },
+        ));
         let e = next(&rx);
         assert!(is_kind(&e, 50));
         assert!(matches!(
@@ -929,7 +1000,7 @@ mod tests {
         let (mut router, rx) = router_with(host);
         router.dispatch(command(
             1,
-            0,
+            Owner::Discovery,
             CommandKind::Discover {
                 host: "panic".into(),
             },
@@ -949,10 +1020,10 @@ mod tests {
     fn ua_only_commands_get_the_documented_reply() {
         let (host, _r, _d) = MockHost::new();
         let (mut router, rx) = router_with(host);
-        router.dispatch(command(1, 1, CommandKind::BrowseViews));
+        router.dispatch(command(1, sid(1).into(), CommandKind::BrowseViews));
         router.dispatch(command(
             2,
-            1,
+            Owner::Discovery,
             CommandKind::SearchUaNetwork {
                 bind: None,
                 lds: None,
@@ -960,7 +1031,7 @@ mod tests {
         ));
         router.dispatch(command(
             3,
-            1,
+            Owner::Discovery,
             CommandKind::CancelUaScan {
                 scan_id: opclook_contract::model::ScanId::FIRST,
             },

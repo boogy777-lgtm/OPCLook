@@ -249,13 +249,11 @@ impl App {
     }
 
     fn build_write_requests(&self, keys: &[ItemKey]) -> Result<PendingWrites, String> {
-        let Some(row) = self.rows.iter().find(|r| r.key == keys[0]) else {
-            return Ok(PendingWrites {
-                session: 0,
-                protocol: Protocol::OpcDa,
-                requests: Vec::new(),
-                type_label: String::new(),
-            });
+        let Some(row) = keys
+            .first()
+            .and_then(|key| self.rows.iter().find(|r| r.key == *key))
+        else {
+            return Err(tr(self.lang(), Tr::NoConnection).to_string());
         };
         let session = row.session;
         let Some(view) = self.sessions.iter().find(|s| s.id == session) else {

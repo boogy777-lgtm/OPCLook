@@ -22,7 +22,7 @@ use super::io::{browse, browse_views, read, resolve_browse_path, test, write};
 use super::scanner::{ScanRegistry, abort_all_scans, cancel_scan, start_scan_task};
 use super::session::{UaSession, connect};
 use crate::bff::model::{
-    BackendMsg, Command, CommandKind, DataValue, EndpointSpec, Event, EventKind, Operation,
+    BackendMsg, Command, CommandKind, DataValue, EndpointSpec, Event, EventKind, Operation, Owner,
     SessionId,
 };
 use crate::constants::{GRACEFUL_CLOSE_TIMEOUT, UA_HOST_RUNTIME_THREADS, UA_SESSION_BACKLOG_LIMIT};
@@ -56,7 +56,7 @@ pub(super) fn spawn(event_tx: Sender<Event>) -> crate::bff::WorkerHandle {
                 Err(err) => {
                     let _ = event_tx.send(Event {
                         origin: crate::bff::model::Origin::Unsolicited,
-                        session: 0,
+                        owner: Owner::Discovery,
                         kind: EventKind::Error {
                             operation: Operation::UaRuntime,
                             message: BackendMsg::UaRuntimeStartFailed {
@@ -173,12 +173,30 @@ async fn run_host(mut cmd_rx: UnboundedReceiver<Command>, event_tx: Sender<Event
 impl Host {
     fn on_command(&mut self, command: Command) {
         let request_id = command.request_id;
-        let session = command.session;
+        let owner = command.owner;
+        let is_discovery = matches!(
+            &command.kind,
+            CommandKind::Discover { .. }
+                | CommandKind::SearchUaServers { .. }
+                | CommandKind::SearchUaNetwork { .. }
+                | CommandKind::ScanUaNetwork { .. }
+                | CommandKind::CancelUaScan { .. }
+        );
+        if is_discovery != matches!(owner, Owner::Discovery) {
+            send_error(
+                &self.event_tx,
+                request_id,
+                owner,
+                command.kind.operation(),
+                BackendMsg::NoConnection,
+            );
+            return;
+        }
         match command.kind {
             CommandKind::Discover { .. } => send_error(
                 &self.event_tx,
                 request_id,
-                session,
+                owner,
                 Operation::Discover,
                 BackendMsg::UaNeedsServerUrl,
             ),
@@ -187,12 +205,12 @@ impl Host {
                 self.tasks.spawn(async move {
                     match search_servers(&host, port, bind.as_ref()).await {
                         Ok(searched) => {
-                            send_notes(&tx, session, searched.notes);
+                            send_notes(&tx, owner, searched.notes);
                             send(
                                 &tx,
                                 Event {
                                     origin: request_id.into(),
-                                    session,
+                                    owner,
                                     kind: EventKind::UaServersFound {
                                         host,
                                         port,
@@ -202,7 +220,7 @@ impl Host {
                             );
                         }
                         Err(message) => {
-                            send_error(&tx, request_id, session, Operation::SearchServers, message)
+                            send_error(&tx, request_id, owner, Operation::SearchServers, message)
                         }
                     }
                 });
@@ -212,12 +230,12 @@ impl Host {
                 self.tasks.spawn(async move {
                     match search_network_servers(bind.as_ref(), lds.as_ref()).await {
                         Ok(searched) => {
-                            send_notes(&tx, session, searched.notes);
+                            send_notes(&tx, owner, searched.notes);
                             send(
                                 &tx,
                                 Event {
                                     origin: request_id.into(),
-                                    session,
+                                    owner,
                                     kind: EventKind::UaNetworkFound {
                                         servers: searched.found,
                                     },
@@ -225,7 +243,7 @@ impl Host {
                             );
                         }
                         Err(message) => {
-                            send_error(&tx, request_id, session, Operation::SearchNetwork, message)
+                            send_error(&tx, request_id, owner, Operation::SearchNetwork, message)
                         }
                     }
                 });
@@ -241,11 +259,20 @@ impl Host {
             CommandKind::CancelUaScan { scan_id } => {
                 cancel_scan(&self.scans, scan_id);
             }
-            CommandKind::Connect { endpoint } => self.start_connect(request_id, session, endpoint),
-            CommandKind::Disconnect => self.disconnect(command_for_disconnect(request_id, session)),
+            CommandKind::Connect { endpoint } => {
+                if let Owner::Session(session) = owner {
+                    self.start_connect(request_id, session, endpoint)
+                }
+            }
+            CommandKind::Disconnect => self.disconnect(Command {
+                request_id,
+                owner,
+                protocol: command.protocol,
+                kind: CommandKind::Disconnect,
+            }),
             _ => self.route(Command {
                 request_id,
-                session,
+                owner,
                 protocol: command.protocol,
                 kind: command.kind,
             }),
@@ -337,7 +364,10 @@ impl Host {
     }
 
     fn disconnect(&mut self, command: Command) {
-        let session = command.session;
+        let Owner::Session(session) = command.owner else {
+            reply_no_connection(&self.event_tx, command);
+            return;
+        };
         let _ = self.live(session);
         match self.slots.remove(&session) {
             Some(Slot::Live(live)) => {
@@ -360,7 +390,10 @@ impl Host {
     }
 
     fn route(&mut self, command: Command) {
-        let session = command.session;
+        let Owner::Session(session) = command.owner else {
+            reply_no_connection(&self.event_tx, command);
+            return;
+        };
         let _ = self.live(session);
         match self.slots.get_mut(&session) {
             Some(Slot::Live(live)) => {
@@ -470,7 +503,7 @@ impl Host {
             &self.event_tx,
             Event {
                 origin: request_id.into(),
-                session,
+                owner: session.into(),
                 kind: EventKind::Connected { endpoint, info },
             },
         );
@@ -555,18 +588,6 @@ impl Host {
         for task in pending {
             let _ = task.await;
         }
-    }
-}
-
-fn command_for_disconnect(
-    request_id: Option<crate::bff::model::RequestId>,
-    session: SessionId,
-) -> Command {
-    Command {
-        request_id,
-        session,
-        protocol: crate::bff::model::Protocol::OpcUa,
-        kind: CommandKind::Disconnect,
     }
 }
 
@@ -879,7 +900,7 @@ impl Actor {
             &self.event_tx,
             Event {
                 origin: request_id.into(),
-                session: self.id,
+                owner: self.id.into(),
                 kind,
             },
         );
@@ -1127,14 +1148,14 @@ pub(super) fn send(tx: &Sender<Event>, event: Event) {
 }
 
 /// Diagnostics of a search or scan as journal lines. They are unsolicited
-/// (request id 0), so they never take the place of the request's own reply.
-fn send_notes(tx: &Sender<Event>, session: SessionId, notes: Vec<BackendMsg>) {
+/// (without a request ID), so they never take the place of the request's own reply.
+fn send_notes(tx: &Sender<Event>, owner: Owner, notes: Vec<BackendMsg>) {
     for message in notes {
         send(
             tx,
             Event {
                 origin: crate::bff::model::Origin::Unsolicited,
-                session,
+                owner,
                 kind: EventKind::Log { message },
             },
         );
@@ -1144,7 +1165,7 @@ fn send_notes(tx: &Sender<Event>, session: SessionId, notes: Vec<BackendMsg>) {
 fn send_error(
     tx: &Sender<Event>,
     request_id: Option<crate::bff::model::RequestId>,
-    session: SessionId,
+    owner: impl Into<Owner>,
     operation: Operation,
     message: BackendMsg,
 ) {
@@ -1152,7 +1173,7 @@ fn send_error(
         tx,
         Event {
             origin: request_id.into(),
-            session,
+            owner: owner.into(),
             kind: EventKind::Error { operation, message },
         },
     );
@@ -1164,12 +1185,12 @@ fn send_error(
 pub(super) fn reply_no_connection(tx: &Sender<Event>, command: Command) {
     let Command {
         request_id,
-        session,
+        owner,
         kind,
         ..
     } = command;
     let error = |operation: Operation| {
-        send_error(tx, request_id, session, operation, BackendMsg::NoConnection);
+        send_error(tx, request_id, owner, operation, BackendMsg::NoConnection);
     };
     match kind {
         CommandKind::Browse { .. } => error(Operation::Browse),
@@ -1184,7 +1205,7 @@ pub(super) fn reply_no_connection(tx: &Sender<Event>, command: Command) {
             tx,
             Event {
                 origin: request_id.into(),
-                session,
+                owner,
                 kind: EventKind::Values {
                     values: keys
                         .into_iter()
@@ -1224,6 +1245,51 @@ mod initial_load_regression {
     use crate::bff::model::Protocol;
 
     #[test]
+    fn rejects_commands_with_mismatched_owner() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut worker = spawn(tx);
+        for (owner, kind) in [
+            (
+                Owner::Discovery,
+                CommandKind::Connect {
+                    endpoint: EndpointSpec::ua("opc.tcp://127.0.0.1:4840"),
+                },
+            ),
+            (
+                Owner::Session(SessionId::FIRST),
+                CommandKind::SearchUaNetwork {
+                    bind: None,
+                    lds: None,
+                },
+            ),
+        ] {
+            let id = crate::bff::model::RequestId::FIRST;
+            worker
+                .tx
+                .as_ref()
+                .unwrap()
+                .send(Command {
+                    request_id: Some(id),
+                    owner,
+                    protocol: Protocol::OpcUa,
+                    kind,
+                })
+                .unwrap();
+            let event = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert_eq!(event.owner, owner);
+            assert_eq!(event.origin, crate::bff::model::Origin::Reply(id));
+            assert!(matches!(
+                event.kind,
+                EventKind::Error {
+                    message: BackendMsg::NoConnection,
+                    ..
+                }
+            ));
+        }
+        worker.shutdown(Duration::from_secs(5));
+    }
+
+    #[test]
     fn disconnect_interrupts_pending_type_loading() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
@@ -1233,7 +1299,7 @@ mod initial_load_regression {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             tx.send(ActorMsg::Command(Command {
                 request_id: crate::bff::model::RequestId::new(8),
-                session: 1,
+                owner: crate::bff::model::SessionId::FIRST.into(),
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Disconnect,
             }))

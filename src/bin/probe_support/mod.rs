@@ -13,7 +13,7 @@ impl Probe {
         let id = self
             .0
             .borrow_mut()
-            .send(command.session, command.protocol, command.kind, ())
+            .send(command.owner, command.protocol, command.kind, ())
             .map_err(|error| format!("dispatch failed: {error:?}"))?;
         if Some(id) != expected {
             return Err("probe request sequence diverged".into());

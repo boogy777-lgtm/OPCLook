@@ -16,7 +16,7 @@ const N: usize = 10_000;
 fn app() -> (egui::Context, App) {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
     (ctx, app)
 }
 
@@ -38,7 +38,7 @@ fn a4_ten_thousand_rows() {
         .map(|i| (format!("ns=2;i={i}"), format!("Tag{i}")))
         .collect();
     let started = Instant::now();
-    app.add_items(1, items);
+    app.add_items(sid(1), items);
     let add_items = started.elapsed();
     assert_eq!(app.rows.len(), N);
 
@@ -47,7 +47,7 @@ fn a4_ten_thousand_rows() {
     let started = Instant::now();
     for (i, key) in keys.iter().enumerate() {
         app.on_event_for_test_at(
-            1,
+            sid(1),
             EventKind::Values {
                 values: vec![(
                     *key,
@@ -75,7 +75,7 @@ fn a4_ten_thousand_rows() {
         .collect();
     let started = Instant::now();
     tree.on_event_for_test_at(
-        1,
+        sid(1),
         EventKind::Browse {
             node_id: "ns=1;s=Branch".to_string(),
             children,
@@ -92,7 +92,7 @@ fn a4_ten_thousand_rows() {
 fn app_with_branch() -> (egui::Context, App) {
     let (ctx, mut app) = app();
     app.on_event_for_test_at(
-        1,
+        sid(1),
         EventKind::Browse {
             node_id: String::new(),
             children: vec![BrowseNode {
@@ -104,4 +104,8 @@ fn app_with_branch() -> (egui::Context, App) {
         },
     );
     (ctx, app)
+}
+
+fn sid(raw: u64) -> opcda_egui::bff::model::SessionId {
+    opcda_egui::bff::model::SessionId::new(raw).unwrap()
 }

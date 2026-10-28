@@ -447,7 +447,7 @@ impl UaSession {
                         tx,
                         Event {
                             origin: crate::bff::model::Origin::Unsolicited,
-                            session: self.session_id,
+                            owner: self.session_id.into(),
                             kind: EventKind::PollOnly {
                                 keys: outcome.poll_only,
                             },
@@ -500,7 +500,7 @@ impl UaSession {
                 let Some(key) = ItemKey::new(item.client_handle()) else {
                     let _ = event_tx.send(Event {
                         origin: crate::bff::model::Origin::Unsolicited,
-                        session: session_id,
+                        owner: session_id.into(),
                         kind: EventKind::Log {
                             message: BackendMsg::InvalidItemHandle,
                         },
@@ -509,7 +509,7 @@ impl UaSession {
                 };
                 let _ = event_tx.send(Event {
                     origin: crate::bff::model::Origin::Unsolicited,
-                    session: session_id,
+                    owner: session_id.into(),
                     kind: EventKind::Values {
                         values: vec![(key, ua_data_value_typed(&data_value, types.as_deref()))],
                     },
@@ -926,7 +926,7 @@ impl UaSession {
             tx,
             Event {
                 origin: crate::bff::model::Origin::Unsolicited,
-                session: self.session_id,
+                owner: self.session_id.into(),
                 kind: EventKind::SubscriptionState { state },
             },
         );
@@ -938,7 +938,7 @@ impl UaSession {
             tx,
             Event {
                 origin: crate::bff::model::Origin::Unsolicited,
-                session: self.session_id,
+                owner: self.session_id.into(),
                 kind: EventKind::Log { message },
             },
         );
@@ -1158,7 +1158,7 @@ pub(super) async fn connect(
         Err(_) => {
             let _ = event_tx.send(Event {
                 origin: crate::bff::model::Origin::Unsolicited,
-                session: session_id,
+                owner: session_id.into(),
                 kind: EventKind::Log {
                     message: BackendMsg::InvalidDiscoveredUaUrl,
                 },

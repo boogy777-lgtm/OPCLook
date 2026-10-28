@@ -41,12 +41,12 @@ fn wait_for(
     predicate: impl Fn(&EventKind) -> bool,
 ) -> Option<Event> {
     let request_id = command.request_id;
-    let session = command.session;
+    let owner = command.owner;
     gateway.send(command).expect("gateway send");
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         while let Some(event) = gateway.try_recv() {
-            if event.origin != request_id.into() || event.session != session {
+            if event.origin != request_id.into() || event.owner != owner {
                 continue;
             }
             if predicate(&event.kind) {
@@ -91,7 +91,9 @@ fn da_write_roundtrip() {
             &gateway,
             Command {
                 request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                session,
+                owner: opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                ),
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::Connect {
                     endpoint: EndpointSpec::da("", &prog_id),
@@ -117,7 +119,9 @@ fn da_write_roundtrip() {
             &gateway,
             Command {
                 request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                session,
+                owner: opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                ),
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::Browse {
                     node_id: String::new(),
@@ -150,7 +154,9 @@ fn da_write_roundtrip() {
             &gateway,
             Command {
                 request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                session,
+                owner: opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                ),
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::AddItems {
                     items: vec![ItemSpec {
@@ -186,7 +192,9 @@ fn da_write_roundtrip() {
             &gateway,
             Command {
                 request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                session,
+                owner: opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                ),
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::Read {
                     keys: vec![opcda_egui::bff::model::ItemKey::new(1).unwrap()],
@@ -214,7 +222,9 @@ fn da_write_roundtrip() {
             &gateway,
             Command {
                 request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                session,
+                owner: opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                ),
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::Write {
                     request: WriteRequest {
@@ -241,7 +251,9 @@ fn da_write_roundtrip() {
         &gateway,
         Command {
             request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            session,
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcDa,
             kind: CommandKind::Disconnect,
         },

@@ -98,9 +98,8 @@ pub(super) fn handle_tree_keys(app: &mut App, ui: &mut egui::Ui) {
     let Some((session, focus_id)) = app.tree_focus else {
         // Clicked empty tree space: no node focused yet. Arrow keys pick the
         // first (or last) visible node so navigation can begin.
-        let session = match app.selected_tree {
-            Some((sid, _)) => sid,
-            None => app.active_session.unwrap_or(0),
+        let Some(session) = app.selected_tree.map(|(sid, _)| sid).or(app.active_session) else {
+            return;
         };
         let Some(view) = app.sessions.iter().find(|s| s.id == session) else {
             return;

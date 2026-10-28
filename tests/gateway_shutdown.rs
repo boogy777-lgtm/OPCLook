@@ -10,7 +10,7 @@ use support::dfb::Dfb;
 fn test_command() -> Command {
     Command {
         request_id: opcda_egui::bff::model::RequestId::new(1),
-        session: 1,
+        owner: opcda_egui::bff::model::Owner::Session(opcda_egui::bff::model::SessionId::FIRST),
         protocol: Protocol::OpcUa,
         kind: CommandKind::Test,
     }

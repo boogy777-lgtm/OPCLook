@@ -121,3 +121,5 @@ ItemKey теперь ненулевой отдельный тип до backend/C
 Backend unit tests теперь по умолчанию используют временный PKI-каталог; Windows runtime остаётся открытым.
 
 **2026-10-28, A RequestId/Origin:** ненулевой RequestId, явный Origin и необязательный токен команды проходят через Engine, воркеры и клиенты; отказы отправки не оставляют ложных ожиданий в UI. Измеренные проверки и оставшиеся SessionId/Owner, B/E/F/G/H и точный Windows CI указаны в `docs/refactoring-status.md`. Текущая Windows проверка локально только typecheck; runtime и физический DA/UAC остаются открыты.
+
+**2026-10-28, тема A завершена:** SessionId и Owner перенесены через все слои; discovery больше не использует фиктивную сессию. RequestId/Origin и остальные роли A сохранены. Измеренные проверки, ограничения Windows typecheck и оставшиеся B/E/F/G/H перечислены в `docs/refactoring-status.md`; финальный exact-head CI, Windows runtime, DA/UAC и PNG ещё не проверены.

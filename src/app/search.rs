@@ -16,7 +16,7 @@ impl App {
         };
         self.journal.info_l(Tr::ReqServerList, &[&host_suffix]);
         if let Err(error) = self.send_da_prepared(
-            0,
+            Owner::Discovery,
             CommandKind::Discover { host: host.clone() },
             PendingCtx::Host(host.clone()),
         ) {
@@ -34,7 +34,7 @@ impl App {
     /// Start a direct DA host search, invalidating all previous popup
     /// discovery requests. Used by the Search button and host-field Enter.
     pub fn restart_da_discovery(&mut self, host: String) {
-        self.clear_pending_requests(0);
+        self.engine.invalidate_session_requests(Owner::Discovery);
         self.release_da_discovery_routes();
         let d = &mut self.dialogs.connect;
         d.da_pending = false;
@@ -52,7 +52,7 @@ impl App {
     pub fn discover_da_all(&mut self) {
         // A new user search owns a new set of request IDs and result rows.
         // Late replies from the previous search may not overwrite them.
-        self.clear_pending_requests(0);
+        self.engine.invalidate_session_requests(Owner::Discovery);
         self.release_da_discovery_routes();
         // Without an explicitly selected adapter only this computer is
         // discovered; remote search/connect is an explicit error instead of a
@@ -109,7 +109,7 @@ impl App {
             .info_l(Tr::SearchingUaHost, &[&host, &port.to_string()]);
         if self
             .send(
-                0,
+                Owner::Discovery,
                 Protocol::OpcUa,
                 CommandKind::SearchUaServers {
                     host,
@@ -149,7 +149,7 @@ impl App {
         let commands = ua_all_commands(bind, lds);
         d.ua_auto_pending = commands.len();
         for kind in commands {
-            if self.send(0, Protocol::OpcUa, kind).is_none() {
+            if self.send(Owner::Discovery, Protocol::OpcUa, kind).is_none() {
                 self.ua_auto_step_done(|_| {});
                 self.dialogs.connect.error = Some(self.status.clone());
             }
@@ -301,7 +301,7 @@ impl App {
         }
         if self
             .send(
-                0,
+                Owner::Discovery,
                 Protocol::OpcUa,
                 CommandKind::SearchUaNetwork { bind, lds },
             )
@@ -401,7 +401,7 @@ impl App {
         self.journal.info_l(Tr::SearchingUaSubnet, &[]);
         if self
             .send(
-                0,
+                Owner::Discovery,
                 Protocol::OpcUa,
                 CommandKind::ScanUaNetwork {
                     scan_id,
@@ -429,7 +429,11 @@ impl App {
             self.dialogs.connect.ua_scan_error = None;
         }
         if let Some(scan_id) = scan_id {
-            self.send(0, Protocol::OpcUa, CommandKind::CancelUaScan { scan_id });
+            self.send(
+                Owner::Discovery,
+                Protocol::OpcUa,
+                CommandKind::CancelUaScan { scan_id },
+            );
         }
     }
 }

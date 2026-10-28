@@ -219,7 +219,7 @@ fn ua_type_name_mapping() {
 fn cmd(kind: CommandKind) -> Command {
     Command {
         request_id: None,
-        session: 1,
+        owner: crate::bff::model::SessionId::FIRST.into(),
         protocol: Protocol::OpcUa,
         kind,
     }

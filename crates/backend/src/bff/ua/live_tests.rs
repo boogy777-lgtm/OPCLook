@@ -327,12 +327,12 @@ impl Harness {
         }
     }
 
-    pub fn send(&mut self, session: SessionId, kind: CommandKind) -> u64 {
+    pub fn send(&mut self, owner: crate::bff::model::Owner, kind: CommandKind) -> u64 {
         self.next_request += 1;
         let request_id = self.next_request;
         let command = Command {
             request_id: crate::bff::model::RequestId::new(request_id),
-            session,
+            owner,
             protocol: Protocol::OpcUa,
             kind,
         };
@@ -398,7 +398,7 @@ impl Harness {
         session: SessionId,
         endpoint: EndpointSpec,
     ) -> Result<String, String> {
-        let id = self.send(session, CommandKind::Connect { endpoint });
+        let id = self.send(session.into(), CommandKind::Connect { endpoint });
         match self.reply(id, Duration::from_secs(60)) {
             Some(Event {
                 kind: EventKind::Connected { info, .. },
@@ -418,7 +418,7 @@ impl Harness {
         items: &[(ItemKey, String)],
     ) -> Vec<(ItemKey, Result<ItemInfo, BackendMsg>)> {
         let id = self.send(
-            session,
+            session.into(),
             CommandKind::AddItems {
                 items: items
                     .iter()
@@ -456,9 +456,9 @@ impl Harness {
 
     #[allow(dead_code)]
     pub fn disconnect(&mut self, session: SessionId) {
-        let _ = self.send(session, CommandKind::Disconnect);
+        let _ = self.send(session.into(), CommandKind::Disconnect);
         let _ = self.wait(Duration::from_secs(20), |event| {
-            (event.session == session && matches!(event.kind, EventKind::Disconnected { .. }))
+            (event.owner == session.into() && matches!(event.kind, EventKind::Disconnected { .. }))
                 .then_some(())
         });
     }
@@ -478,11 +478,11 @@ impl Drop for Harness {
 fn u2_unknown_node_is_reported_as_error_and_valid_node_delivers_values() {
     let server = TestServer::start(48601);
     let mut app = Harness::new();
-    app.connect(1, Harness::endpoint(&server.url))
+    app.connect(SessionId::new(1).unwrap(), Harness::endpoint(&server.url))
         .expect("connect");
 
     let results = app.add_items(
-        1,
+        SessionId::new(1).unwrap(),
         &[
             (ItemKey::new(1).unwrap(), server.node("Level")),
             (
@@ -519,10 +519,10 @@ fn u2_unknown_node_is_reported_as_error_and_valid_node_delivers_values() {
 fn u2_malformed_node_id_is_an_error_not_a_silent_ok() {
     let server = TestServer::start(48602);
     let mut app = Harness::new();
-    app.connect(1, Harness::endpoint(&server.url))
+    app.connect(SessionId::new(1).unwrap(), Harness::endpoint(&server.url))
         .expect("connect");
     let results = app.add_items(
-        1,
+        SessionId::new(1).unwrap(),
         &[(ItemKey::new(1).unwrap(), "это не NodeId".to_string())],
     );
     assert!(
@@ -536,10 +536,10 @@ fn u2_no_monitored_item_means_no_active_subscription() {
     use crate::bff::model::SubscriptionState;
     let server = TestServer::start(48603);
     let mut app = Harness::new();
-    app.connect(1, Harness::endpoint(&server.url))
+    app.connect(SessionId::new(1).unwrap(), Harness::endpoint(&server.url))
         .expect("connect");
     let results = app.add_items(
-        1,
+        SessionId::new(1).unwrap(),
         &[(ItemKey::new(1).unwrap(), format!("ns={};s=Nope", server.ns))],
     );
     assert!(matches!(results.first(), Some((KEY_1, Err(_)))));
@@ -561,11 +561,11 @@ fn u2_removing_one_item_keeps_the_other_subscribed() {
     // handle: deleting the wrong ids would silence the item that stays.
     let server = TestServer::start(48604);
     let mut app = Harness::new();
-    app.connect(1, Harness::endpoint(&server.url))
+    app.connect(SessionId::new(1).unwrap(), Harness::endpoint(&server.url))
         .expect("connect");
     // Keys far from the server's own id sequence (1, 2, ...).
     let results = app.add_items(
-        1,
+        SessionId::new(1).unwrap(),
         &[
             (ItemKey::new(501).unwrap(), server.node("Level")),
             (ItemKey::new(502).unwrap(), server.node("Counter")),
@@ -574,7 +574,7 @@ fn u2_removing_one_item_keeps_the_other_subscribed() {
     assert!(results.iter().all(|(_, r)| r.is_ok()), "{results:?}");
 
     let removed = app.send(
-        1,
+        SessionId::new(1).unwrap().into(),
         CommandKind::RemoveItems {
             keys: vec![ItemKey::new(501).unwrap()],
         },
@@ -660,14 +660,17 @@ fn u1_hung_connect_does_not_block_other_sessions() {
     let server = TestServer::start(48611);
     let silent = SilentServer::start(48612);
     let mut app = Harness::new();
-    app.connect(1, Harness::endpoint(&server.url))
+    app.connect(SessionId::new(1).unwrap(), Harness::endpoint(&server.url))
         .expect("connect to the live server");
-    let added = app.add_items(1, &[(ItemKey::new(1).unwrap(), server.node("Level"))]);
+    let added = app.add_items(
+        SessionId::new(1).unwrap(),
+        &[(ItemKey::new(1).unwrap(), server.node("Level"))],
+    );
     assert!(matches!(added.first(), Some((KEY_1, Ok(_)))));
 
     // Session 2 connects to a host that never answers.
     let hung = app.send(
-        2,
+        SessionId::new(2).unwrap().into(),
         CommandKind::Connect {
             endpoint: Harness::endpoint(&silent.url()),
         },
@@ -676,7 +679,7 @@ fn u1_hung_connect_does_not_block_other_sessions() {
 
     let started = Instant::now();
     let browse = app.send(
-        1,
+        SessionId::new(1).unwrap().into(),
         CommandKind::Browse {
             node_id: "i=85".to_string(),
             filter: crate::bff::model::NodeClassFilter::All,
@@ -697,7 +700,7 @@ fn u1_hung_connect_does_not_block_other_sessions() {
     );
 
     let read = app.send(
-        1,
+        SessionId::new(1).unwrap().into(),
         CommandKind::Read {
             keys: vec![ItemKey::new(1).unwrap()],
         },
@@ -715,7 +718,7 @@ fn u1_hung_connect_does_not_block_other_sessions() {
     );
 
     // A third session can connect to a healthy server in the meantime.
-    app.connect(3, Harness::endpoint(&server.url))
+    app.connect(SessionId::new(3).unwrap(), Harness::endpoint(&server.url))
         .expect("a second healthy connect must not wait for the hung one");
 
     // The hung connect has not produced a reply yet (it is still running).
@@ -730,13 +733,13 @@ fn u1_disconnect_cancels_a_pending_connect_with_one_error_reply() {
     let silent = SilentServer::start(48613);
     let mut app = Harness::new();
     let connect = app.send(
-        7,
+        SessionId::new(7).unwrap().into(),
         CommandKind::Connect {
             endpoint: Harness::endpoint(&silent.url()),
         },
     );
     std::thread::sleep(Duration::from_millis(300));
-    let _ = app.send(7, CommandKind::Disconnect);
+    let _ = app.send(SessionId::new(7).unwrap().into(), CommandKind::Disconnect);
 
     let reply = app
         .reply(connect, PROMPT)
@@ -761,7 +764,7 @@ fn u1_disconnect_cancels_a_pending_connect_with_one_error_reply() {
 fn u1_commands_for_a_session_without_connection_get_exactly_one_error_each() {
     let mut app = Harness::new();
     let browse = app.send(
-        5,
+        SessionId::new(5).unwrap().into(),
         CommandKind::Browse {
             node_id: String::new(),
             filter: crate::bff::model::NodeClassFilter::All,
@@ -769,13 +772,13 @@ fn u1_commands_for_a_session_without_connection_get_exactly_one_error_each() {
         },
     );
     let read = app.send(
-        5,
+        SessionId::new(5).unwrap().into(),
         CommandKind::Read {
             keys: vec![ItemKey::new(1).unwrap(), ItemKey::new(2).unwrap()],
         },
     );
     let write = app.send(
-        5,
+        SessionId::new(5).unwrap().into(),
         CommandKind::Write {
             request: crate::bff::model::WriteRequest {
                 key: ItemKey::new(1).unwrap(),
@@ -784,8 +787,11 @@ fn u1_commands_for_a_session_without_connection_get_exactly_one_error_each() {
             },
         },
     );
-    let add = app.send(5, CommandKind::AddItems { items: Vec::new() });
-    let test = app.send(5, CommandKind::Test);
+    let add = app.send(
+        SessionId::new(5).unwrap().into(),
+        CommandKind::AddItems { items: Vec::new() },
+    );
+    let test = app.send(SessionId::new(5).unwrap().into(), CommandKind::Test);
 
     let browse_reply = app.reply(browse, PROMPT).expect("browse");
     assert!(matches!(
@@ -838,12 +844,12 @@ fn u1_disconnect_is_reported_before_the_next_connect_of_the_same_session() {
     // `Connect`. Its state machine relies on `Disconnected` coming first.
     let server = TestServer::start(48614);
     let mut app = Harness::new();
-    app.connect(1, Harness::endpoint(&server.url))
+    app.connect(SessionId::new(1).unwrap(), Harness::endpoint(&server.url))
         .expect("first connect");
 
-    let disconnect = app.send(1, CommandKind::Disconnect);
+    let disconnect = app.send(SessionId::new(1).unwrap().into(), CommandKind::Disconnect);
     let connect = app.send(
-        1,
+        SessionId::new(1).unwrap().into(),
         CommandKind::Connect {
             endpoint: Harness::endpoint(&server.url),
         },
@@ -887,14 +893,14 @@ fn u1_commands_sent_while_connecting_are_delivered_after_the_connect() {
     let server = TestServer::start(48615);
     let mut app = Harness::new();
     let connect = app.send(
-        1,
+        SessionId::new(1).unwrap().into(),
         CommandKind::Connect {
             endpoint: Harness::endpoint(&server.url),
         },
     );
     // Sent before the session is ready: must wait, not fail with "no connection".
     let browse = app.send(
-        1,
+        SessionId::new(1).unwrap().into(),
         CommandKind::Browse {
             node_id: "i=85".to_string(),
             filter: crate::bff::model::NodeClassFilter::All,
@@ -919,13 +925,13 @@ fn u1_a_failed_connect_answers_the_commands_queued_behind_it() {
     let mut app = Harness::new();
     // Nothing listens on this port: the connect fails.
     let connect = app.send(
-        1,
+        SessionId::new(1).unwrap().into(),
         CommandKind::Connect {
             endpoint: Harness::endpoint("opc.tcp://127.0.0.1:48619/"),
         },
     );
     let browse = app.send(
-        1,
+        SessionId::new(1).unwrap().into(),
         CommandKind::Browse {
             node_id: String::new(),
             filter: crate::bff::model::NodeClassFilter::All,
@@ -955,12 +961,12 @@ fn u1_shutdown_closes_live_sessions_and_pending_connects_promptly() {
     let server = TestServer::start(48616);
     let silent = SilentServer::start(48617);
     let mut app = Harness::new();
-    app.connect(1, Harness::endpoint(&server.url))
+    app.connect(SessionId::new(1).unwrap(), Harness::endpoint(&server.url))
         .expect("connect");
-    app.connect(2, Harness::endpoint(&server.url))
+    app.connect(SessionId::new(2).unwrap(), Harness::endpoint(&server.url))
         .expect("connect");
     let _ = app.send(
-        3,
+        SessionId::new(3).unwrap().into(),
         CommandKind::Connect {
             endpoint: Harness::endpoint(&silent.url()),
         },
@@ -987,9 +993,12 @@ fn u1_shutdown_closes_live_sessions_and_pending_connects_promptly() {
 fn u4_deadband_change_is_applied_to_a_live_subscription() {
     let server = TestServer::start(48621);
     let mut app = Harness::new();
-    app.connect(1, Harness::endpoint(&server.url))
+    app.connect(SessionId::new(1).unwrap(), Harness::endpoint(&server.url))
         .expect("connect");
-    let added = app.add_items(1, &[(ItemKey::new(1).unwrap(), server.node("Level"))]);
+    let added = app.add_items(
+        SessionId::new(1).unwrap(),
+        &[(ItemKey::new(1).unwrap(), server.node("Level"))],
+    );
     assert!(matches!(added.first(), Some((KEY_1, Ok(_)))), "{added:?}");
     assert!(
         app.value_of(ItemKey::new(1).unwrap(), Duration::from_secs(10), |v| *v
@@ -1000,7 +1009,7 @@ fn u4_deadband_change_is_applied_to_a_live_subscription() {
 
     // The subscription is already running: a new deadband must reach it.
     let _ = app.send(
-        1,
+        SessionId::new(1).unwrap().into(),
         CommandKind::ConfigureUaSubscription {
             publishing_interval_ms: 100,
             deadband: 5.0,
@@ -1024,7 +1033,7 @@ fn u4_deadband_change_is_applied_to_a_live_subscription() {
 
     // And switching the deadband off again also reaches the live items.
     let _ = app.send(
-        1,
+        SessionId::new(1).unwrap().into(),
         CommandKind::ConfigureUaSubscription {
             publishing_interval_ms: 100,
             deadband: 0.0,
@@ -1044,9 +1053,12 @@ fn u4_deadband_change_is_applied_to_a_live_subscription() {
 fn u4_publishing_interval_change_is_applied_to_a_live_subscription() {
     let server = TestServer::start(48622);
     let mut app = Harness::new();
-    app.connect(1, Harness::endpoint(&server.url))
+    app.connect(SessionId::new(1).unwrap(), Harness::endpoint(&server.url))
         .expect("connect");
-    let added = app.add_items(1, &[(ItemKey::new(1).unwrap(), server.node("Level"))]);
+    let added = app.add_items(
+        SessionId::new(1).unwrap(),
+        &[(ItemKey::new(1).unwrap(), server.node("Level"))],
+    );
     assert!(matches!(added.first(), Some((KEY_1, Ok(_)))), "{added:?}");
     assert!(
         app.value_of(ItemKey::new(1).unwrap(), Duration::from_secs(10), |v| *v
@@ -1056,7 +1068,7 @@ fn u4_publishing_interval_change_is_applied_to_a_live_subscription() {
 
     // An hour between publishes: a change must not arrive any time soon.
     let _ = app.send(
-        1,
+        SessionId::new(1).unwrap().into(),
         CommandKind::ConfigureUaSubscription {
             publishing_interval_ms: 3_600_000,
             deadband: 0.0,
@@ -1073,7 +1085,7 @@ fn u4_publishing_interval_change_is_applied_to_a_live_subscription() {
 
     // Back to a fast interval: the pending change is delivered.
     let _ = app.send(
-        1,
+        SessionId::new(1).unwrap().into(),
         CommandKind::ConfigureUaSubscription {
             publishing_interval_ms: 100,
             deadband: 0.0,
@@ -1091,16 +1103,19 @@ fn u4_publishing_interval_change_is_applied_to_a_live_subscription() {
 fn u4_configure_before_the_first_item_is_used_when_the_subscription_is_created() {
     let server = TestServer::start(48623);
     let mut app = Harness::new();
-    app.connect(1, Harness::endpoint(&server.url))
+    app.connect(SessionId::new(1).unwrap(), Harness::endpoint(&server.url))
         .expect("connect");
     let _ = app.send(
-        1,
+        SessionId::new(1).unwrap().into(),
         CommandKind::ConfigureUaSubscription {
             publishing_interval_ms: 100,
             deadband: 5.0,
         },
     );
-    let added = app.add_items(1, &[(ItemKey::new(1).unwrap(), server.node("Level"))]);
+    let added = app.add_items(
+        SessionId::new(1).unwrap(),
+        &[(ItemKey::new(1).unwrap(), server.node("Level"))],
+    );
     assert!(matches!(added.first(), Some((KEY_1, Ok(_)))), "{added:?}");
     assert!(
         app.value_of(ItemKey::new(1).unwrap(), Duration::from_secs(10), |v| *v
@@ -1125,12 +1140,12 @@ fn u5_variables_filter_still_lists_folders_so_the_tree_can_be_walked() {
     use crate::bff::model::NodeKind;
     let server = TestServer::start(48631);
     let mut app = Harness::new();
-    app.connect(1, Harness::endpoint(&server.url))
+    app.connect(SessionId::new(1).unwrap(), Harness::endpoint(&server.url))
         .expect("connect");
 
     let browse = |app: &mut Harness, node: &str| {
         let id = app.send(
-            1,
+            SessionId::new(1).unwrap().into(),
             CommandKind::Browse {
                 node_id: node.to_string(),
                 filter: crate::bff::model::NodeClassFilter::Variables,
@@ -1173,13 +1188,16 @@ fn secure_connect_and_read(port: u16, policy: UaSecurityPolicy) {
     endpoint.ua_security_mode = Some(UaSecurityMode::SignAndEncrypt);
     endpoint.ua_trust_server_cert = true;
     let info = app
-        .connect(1, endpoint)
+        .connect(SessionId::new(1).unwrap(), endpoint)
         .unwrap_or_else(|e| panic!("{policy} / SignAndEncrypt must connect: {e}"));
     assert!(
         info.contains(policy.as_str()),
         "the session info names the policy: {info:?}"
     );
-    let added = app.add_items(1, &[(ItemKey::new(1).unwrap(), server.node("Level"))]);
+    let added = app.add_items(
+        SessionId::new(1).unwrap(),
+        &[(ItemKey::new(1).unwrap(), server.node("Level"))],
+    );
     assert!(matches!(added.first(), Some((KEY_1, Ok(_)))), "{added:?}");
     assert!(
         app.value_of(ItemKey::new(1).unwrap(), Duration::from_secs(10), |v| *v
@@ -1209,7 +1227,7 @@ fn u12_auto_connect_reports_the_unencrypted_channel_and_the_secure_alternative()
     let mut app = Harness::new();
     // Auto/Auto, as a user who never touched the security fields.
     let info = app
-        .connect(1, EndpointSpec::ua(&server.url))
+        .connect(SessionId::new(1).unwrap(), EndpointSpec::ua(&server.url))
         .expect("connect");
     assert!(info.contains("not encrypted"), "{info:?}");
     assert!(
@@ -1250,15 +1268,16 @@ fn u13_trusting_a_certificate_lasts_only_for_the_session() {
     let trusted = trusted_copy_of_server_cert(&server);
 
     assert!(
-        app.connect(1, secure_endpoint(&server, false)).is_err(),
+        app.connect(SessionId::new(1).unwrap(), secure_endpoint(&server, false))
+            .is_err(),
         "an unknown server certificate is refused without the trust choice"
     );
     assert!(!trusted.exists());
 
-    app.connect(1, secure_endpoint(&server, true))
+    app.connect(SessionId::new(1).unwrap(), secure_endpoint(&server, true))
         .expect("connects when the user trusts the certificate");
     assert!(trusted.exists(), "trusted while the session lives");
-    let _ = app.send(1, CommandKind::Disconnect);
+    let _ = app.send(SessionId::new(1).unwrap().into(), CommandKind::Disconnect);
     assert!(
         app.wait(Duration::from_secs(20), |event| matches!(
             event.kind,
@@ -1273,7 +1292,8 @@ fn u13_trusting_a_certificate_lasts_only_for_the_session() {
     );
 
     assert!(
-        app.connect(1, secure_endpoint(&server, false)).is_err(),
+        app.connect(SessionId::new(1).unwrap(), secure_endpoint(&server, false))
+            .is_err(),
         "the earlier session's trust must not carry over"
     );
 }
@@ -1287,7 +1307,7 @@ fn u15_host_search_on_loopback_finds_the_server_without_lds_noise() {
     let server = TestServer::start(48671);
     let mut app = Harness::new();
     let id = app.send(
-        0,
+        crate::bff::model::Owner::Discovery,
         CommandKind::SearchUaServers {
             host: "127.0.0.1".to_string(),
             port: server.port,
@@ -1325,7 +1345,7 @@ fn u15_host_search_on_loopback_finds_the_server_without_lds_noise() {
 fn a9_network_search_reports_its_problems_as_journal_lines() {
     let mut app = Harness::new();
     let id = app.send(
-        0,
+        crate::bff::model::Owner::Discovery,
         CommandKind::SearchUaNetwork {
             bind: None,
             lds: None,
@@ -1376,7 +1396,7 @@ fn u15_the_named_lds_host_is_the_one_that_is_asked() {
 
     // Nothing listens on the named port: the journal names exactly that URL.
     let id = app.send(
-        0,
+        crate::bff::model::Owner::Discovery,
         CommandKind::SearchUaNetwork {
             bind: None,
             lds: Some(target(48673)),
@@ -1415,7 +1435,7 @@ fn u15_the_named_lds_host_is_the_one_that_is_asked() {
 
     // A UA server that is not an LDS answers "unsupported": reachable, no noise.
     let id = app.send(
-        0,
+        crate::bff::model::Owner::Discovery,
         CommandKind::SearchUaNetwork {
             bind: None,
             lds: Some(target(server.port)),
@@ -1447,7 +1467,10 @@ fn u1_a_retry_right_after_a_failed_connect_never_meets_a_stale_connecting_slot()
     let mut app = Harness::new();
     for attempt in 0..15 {
         let message = app
-            .connect(9, Harness::endpoint("opc.tcp://127.0.0.1:48679/"))
+            .connect(
+                SessionId::new(9).unwrap(),
+                Harness::endpoint("opc.tcp://127.0.0.1:48679/"),
+            )
             .expect_err("nothing listens there");
         assert!(
             !message.contains("already in progress") && !message.contains("already connected"),
@@ -1464,9 +1487,12 @@ fn u1_a_retry_right_after_a_failed_connect_never_meets_a_stale_connecting_slot()
 fn v3_custom_structure_reads_as_named_fields() {
     let server = TestServer::start(48700);
     let mut app = Harness::new();
-    app.connect(1, Harness::endpoint(&server.url))
+    app.connect(SessionId::new(1).unwrap(), Harness::endpoint(&server.url))
         .expect("connect");
-    let results = app.add_items(1, &[(ItemKey::new(1).unwrap(), server.node("Pump"))]);
+    let results = app.add_items(
+        SessionId::new(1).unwrap(),
+        &[(ItemKey::new(1).unwrap(), server.node("Pump"))],
+    );
     assert!(results.iter().all(|(_, r)| r.is_ok()), "{results:?}");
     let type_name = results
         .first()
@@ -1549,10 +1575,10 @@ impl TestServer {
 fn p1_run(server: &TestServer, total: usize, pushed: usize) -> (usize, usize, Vec<ItemKey>) {
     let nodes = server.add_many(total);
     let mut app = Harness::new();
-    app.connect(1, Harness::endpoint(&server.url))
+    app.connect(SessionId::new(1).unwrap(), Harness::endpoint(&server.url))
         .expect("connect");
     app.send(
-        1,
+        SessionId::new(1).unwrap().into(),
         CommandKind::ConfigureUaSubscription {
             publishing_interval_ms: 500,
             deadband: 0.0,
@@ -1568,7 +1594,10 @@ fn p1_run(server: &TestServer, total: usize, pushed: usize) -> (usize, usize, Ve
                 item_id: node.clone(),
             })
             .collect();
-        requests.push(app.send(1, CommandKind::AddItems { items }));
+        requests.push(app.send(
+            SessionId::new(1).unwrap().into(),
+            CommandKind::AddItems { items },
+        ));
     }
     for id in requests {
         let reply = app
@@ -1661,7 +1690,7 @@ fn test_server_moves_off_a_taken_port() {
     let server = TestServer::start(48710);
     assert_ne!(server.port, 48710);
     let mut app = Harness::new();
-    app.connect(1, Harness::endpoint(&server.url))
+    app.connect(SessionId::new(1).unwrap(), Harness::endpoint(&server.url))
         .expect("connect on the moved port");
 }
 

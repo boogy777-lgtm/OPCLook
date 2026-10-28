@@ -33,12 +33,12 @@ fn wait_for(
     predicate: impl Fn(&EventKind) -> bool,
 ) -> Option<Event> {
     let request_id = command.request_id;
-    let session = command.session;
+    let owner = command.owner;
     gateway.send(command).expect("gateway send");
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         while let Some(event) = gateway.try_recv() {
-            if event.origin != request_id.into() || event.session != session {
+            if event.origin != request_id.into() || event.owner != owner {
                 continue;
             }
             if predicate(&event.kind) {
@@ -55,7 +55,9 @@ fn connect(gateway: &Gateway, session: u64) -> Event {
         gateway,
         Command {
             request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            session,
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Connect {
                 endpoint: EndpointSpec::ua(test_url()),
@@ -72,7 +74,9 @@ fn disconnect(gateway: &Gateway, session: u64) {
         gateway,
         Command {
             request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            session,
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Disconnect,
         },
@@ -86,7 +90,9 @@ fn browse_children(gateway: &Gateway, session: u64, node_id: &str) -> Vec<Browse
         gateway,
         Command {
             request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            session,
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Browse {
                 node_id: node_id.to_string(),
@@ -155,7 +161,9 @@ fn add_items(gateway: &Gateway, session: u64, items: &[String]) -> Event {
         gateway,
         Command {
             request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            session,
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::AddItems { items: specs },
         },
@@ -170,7 +178,9 @@ fn read_value(gateway: &Gateway, session: u64, key: ItemKey) -> Value {
         gateway,
         Command {
             request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            session,
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Read { keys: vec![key] },
         },
@@ -196,7 +206,9 @@ fn write_value(gateway: &Gateway, session: u64, key: ItemKey, value: Value) {
         gateway,
         Command {
             request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            session,
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Write {
                 request: WriteRequest {
@@ -296,7 +308,9 @@ fn find_writable(
             gateway,
             Command {
                 request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                session,
+                owner: opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                ),
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Write {
                     request: WriteRequest {
@@ -322,7 +336,9 @@ fn find_writable(
             gateway
                 .send(Command {
                     request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                    session,
+                    owner: opcda_egui::bff::model::Owner::Session(
+                        opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                    ),
                     protocol: Protocol::OpcUa,
                     kind: CommandKind::Write {
                         request: WriteRequest {

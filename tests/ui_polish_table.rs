@@ -58,8 +58,8 @@ fn pump_value() -> Value {
 fn ui1_value_expander_is_labelled_and_toggles_by_click() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    let key = app.seed_row(1, "ns=2;s=Pump", "Pump", pump_value());
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let key = app.seed_row(sid(1), "ns=2;s=Pump", "Pump", pump_value());
     let mut h = harness(app);
     h.run_steps(3);
     assert!(h.query_by_label("Свернуть значение").is_none());
@@ -85,8 +85,8 @@ fn ui1_value_expander_is_labelled_and_toggles_by_click() {
 fn ui1_value_expander_is_a_painted_triangle_not_text() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    app.seed_row(1, "ns=2;s=Pump", "Pump", pump_value());
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_row(sid(1), "ns=2;s=Pump", "Pump", pump_value());
     let mut h = harness(app);
     h.run_steps(3);
     let rect = h.get_by_label("Развернуть значение").rect();
@@ -175,7 +175,7 @@ fn quality(kind: QualityKind) -> Quality {
 /// Deliver a value update for a row of session 1 (as the backend would).
 fn push_value(app: &mut App, key: ItemKey, value: Value, kind: QualityKind) {
     app.on_event_for_test_at(
-        1,
+        sid(1),
         EventKind::Values {
             values: vec![(
                 key,
@@ -194,9 +194,9 @@ fn two_quality_rows(show_colors: bool) -> Harness<'static, App> {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.settings.options.show_colors = show_colors;
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    let good = app.seed_row(1, "ns=2;s=A", "Level", Value::F64(21.5));
-    let bad = app.seed_row(1, "ns=2;s=B", "Pressure", Value::F64(7.25));
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let good = app.seed_row(sid(1), "ns=2;s=A", "Level", Value::F64(21.5));
+    let bad = app.seed_row(sid(1), "ns=2;s=B", "Pressure", Value::F64(7.25));
     push_value(&mut app, good, Value::F64(21.5), QualityKind::Good);
     push_value(&mut app, bad, Value::F64(7.25), QualityKind::Bad);
     let mut h = harness(app);
@@ -282,12 +282,12 @@ fn text_extent(shapes: &[egui::Shape], text: &str) -> (f32, f32, bool) {
 fn ui5_numbers_are_right_aligned_and_monospace() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    app.seed_row(1, "ns=2;s=A", "Count", Value::I64(7));
-    app.seed_row(1, "ns=2;s=B", "Ratio", Value::F64(0.5));
-    app.seed_row(1, "ns=2;s=C", "Big", Value::U64(9));
-    app.seed_row(1, "ns=2;s=D", "Name", Value::Str("Pump".into()));
-    app.seed_row(1, "ns=2;s=E", "Flag", Value::Bool(true));
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_row(sid(1), "ns=2;s=A", "Count", Value::I64(7));
+    app.seed_row(sid(1), "ns=2;s=B", "Ratio", Value::F64(0.5));
+    app.seed_row(sid(1), "ns=2;s=C", "Big", Value::U64(9));
+    app.seed_row(sid(1), "ns=2;s=D", "Name", Value::Str("Pump".into()));
+    app.seed_row(sid(1), "ns=2;s=E", "Flag", Value::Bool(true));
     let mut h = harness(app);
     h.run_steps(3);
     let shapes = flat_shapes(&h);
@@ -316,9 +316,9 @@ fn ui5_numbers_are_right_aligned_and_monospace() {
 fn ui5_field_lines_follow_the_same_alignment() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
     let key = app.seed_row(
-        1,
+        sid(1),
         "ns=2;s=Pump",
         "Pump",
         Value::Struct {
@@ -352,8 +352,8 @@ fn changed_at(app: &App, key: ItemKey) -> Option<std::time::Instant> {
 fn ui4_changed_value_is_stamped_and_the_same_value_is_not() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    let key = app.seed_row(1, "ns=2;s=A", "Level", Value::F64(1.0));
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let key = app.seed_row(sid(1), "ns=2;s=A", "Level", Value::F64(1.0));
     assert!(changed_at(&app, key).is_none());
 
     push_value(&mut app, key, Value::F64(1.0), QualityKind::Good);
@@ -369,8 +369,8 @@ fn ui4_changed_value_is_stamped_and_the_same_value_is_not() {
 fn ui4_first_value_after_adding_a_row_is_not_highlighted() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    let key = app.seed_row(1, "ns=2;s=A", "Level", Value::Empty);
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let key = app.seed_row(sid(1), "ns=2;s=A", "Level", Value::Empty);
     // Still pending: the first value arrives.
     app.rows[0].pending = true;
     push_value(&mut app, key, Value::F64(5.0), QualityKind::Good);
@@ -399,8 +399,8 @@ fn ui4_first_value_after_adding_a_row_is_not_highlighted() {
 fn ui4_flash_strength_fades_over_a_second() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    let key = app.seed_row(1, "ns=2;s=A", "Level", Value::F64(1.0));
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let key = app.seed_row(sid(1), "ns=2;s=A", "Level", Value::F64(1.0));
     let now = std::time::Instant::now();
     assert_eq!(app.rows[0].change_flash(now), 0.0, "never changed");
     app.rows[0].changed_at = Some(now);
@@ -430,8 +430,8 @@ fn repaint_delay(h: &Harness<'_, App>) -> std::time::Duration {
 fn ui4_changed_value_cell_glows_and_requests_repaints_until_it_fades() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    let key = app.seed_row(1, "ns=2;s=A", "Level", Value::F64(1.0));
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let key = app.seed_row(sid(1), "ns=2;s=A", "Level", Value::F64(1.0));
     let mut h = harness(app);
     h.run_steps(3);
     let calm = rect_fills(&flat_shapes(&h));
@@ -469,8 +469,8 @@ fn empty_harness(with_session: bool) -> Harness<'static, App> {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     if with_session {
-        app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-        app.activate_session(1);
+        app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+        app.activate_session(sid(1));
     }
     let mut h = harness(app);
     h.run_steps(3);
@@ -578,11 +578,11 @@ fn ui10_enter_with_an_empty_table_opens_nothing() {
 fn server_quality_codes_do_not_collide_with_row_placeholders() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    let key = app.seed_row(1, "ns=2;s=A", "Level", Value::I64(0));
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let key = app.seed_row(sid(1), "ns=2;s=A", "Level", Value::I64(0));
     for (index, code) in [0xFFFF_FFFE, 0xFFFF_FFFD].into_iter().enumerate() {
         app.on_event_for_test_at(
-            1,
+            sid(1),
             EventKind::Values {
                 values: vec![(
                     key,
@@ -603,4 +603,8 @@ fn server_quality_codes_do_not_collide_with_row_placeholders() {
         );
         assert_eq!(row.quality.text(), "vendor status");
     }
+}
+
+fn sid(raw: u64) -> opcda_egui::bff::model::SessionId {
+    opcda_egui::bff::model::SessionId::new(raw).unwrap()
 }

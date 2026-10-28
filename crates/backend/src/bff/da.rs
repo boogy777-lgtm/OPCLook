@@ -163,7 +163,7 @@ pub(crate) fn spawn(event_tx: Sender<Event>) -> super::WorkerHandle {
                     &event_tx,
                     Event {
                         origin: crate::bff::model::Origin::Unsolicited,
-                        session: 0,
+                        owner: crate::bff::model::Owner::Discovery,
                         kind: EventKind::Log {
                             message: BackendMsg::DaDcomSecurityNotSet { detail: e },
                         },
@@ -186,30 +186,51 @@ fn handle_command(
     sessions: &mut HashMap<SessionId, DaSession>,
     tx: &Sender<Event>,
 ) {
-    let session_id = command.session;
-    let request_id = command.request_id;
-    match command.kind {
-        CommandKind::Discover { host } => match enumerate_servers(&host) {
-            Ok(servers) => send(
-                tx,
-                Event {
-                    origin: request_id.into(),
-                    session: session_id,
-                    kind: EventKind::Servers { host, servers },
-                },
-            ),
-            Err(message) => send(
-                tx,
-                Event {
-                    origin: request_id.into(),
-                    session: session_id,
-                    kind: EventKind::Error {
+    let owner = command.owner;
+    if let crate::bff::model::Owner::Discovery = owner {
+        match &command.kind {
+            CommandKind::Discover { host } => {
+                let kind = match enumerate_servers(host) {
+                    Ok(servers) => EventKind::Servers {
+                        host: host.clone(),
+                        servers,
+                    },
+                    Err(message) => EventKind::Error {
                         operation: Operation::Discover,
                         message,
                     },
-                },
+                };
+                send(
+                    tx,
+                    Event {
+                        origin: command.request_id.into(),
+                        owner,
+                        kind,
+                    },
+                );
+            }
+            kind => send_error(
+                tx,
+                command.request_id,
+                owner,
+                kind.operation(),
+                BackendMsg::NoConnection,
             ),
-        },
+        }
+        return;
+    }
+    let crate::bff::model::Owner::Session(session_id) = owner else {
+        return;
+    };
+    let request_id = command.request_id;
+    match command.kind {
+        CommandKind::Discover { .. } => send_error(
+            tx,
+            request_id,
+            owner,
+            Operation::Discover,
+            BackendMsg::NoConnection,
+        ),
         CommandKind::SearchUaServers { .. } => send_error(
             tx,
             request_id,
@@ -242,7 +263,7 @@ fn handle_command(
                         tx,
                         Event {
                             origin: request_id.into(),
-                            session: session_id,
+                            owner,
                             kind: EventKind::Connected { endpoint, info },
                         },
                     );
@@ -252,7 +273,7 @@ fn handle_command(
                     tx,
                     Event {
                         origin: request_id.into(),
-                        session: session_id,
+                        owner,
                         kind: EventKind::Error {
                             operation: Operation::Connect,
                             message,
@@ -268,7 +289,7 @@ fn handle_command(
                     tx,
                     Event {
                         origin: request_id.into(),
-                        session: session_id,
+                        owner,
                         kind: EventKind::Disconnected { reason },
                     },
                 );
@@ -284,7 +305,7 @@ fn handle_command(
                     tx,
                     Event {
                         origin: request_id.into(),
-                        session: session_id,
+                        owner,
                         kind: EventKind::Browse { node_id, children },
                     },
                 ),
@@ -319,7 +340,7 @@ fn handle_command(
                     tx,
                     Event {
                         origin: request_id.into(),
-                        session: session_id,
+                        owner,
                         kind: EventKind::AddItems { results },
                     },
                 );
@@ -333,7 +354,7 @@ fn handle_command(
                     tx,
                     Event {
                         origin: request_id.into(),
-                        session: session_id,
+                        owner,
                         kind: EventKind::AddItems { results },
                     },
                 );
@@ -346,7 +367,7 @@ fn handle_command(
                     tx,
                     Event {
                         origin: request_id.into(),
-                        session: session_id,
+                        owner,
                         kind: EventKind::Removed { keys },
                     },
                 );
@@ -366,7 +387,7 @@ fn handle_command(
                     tx,
                     Event {
                         origin: request_id.into(),
-                        session: session_id,
+                        owner,
                         kind: EventKind::Values { values },
                     },
                 );
@@ -380,7 +401,7 @@ fn handle_command(
                     tx,
                     Event {
                         origin: request_id.into(),
-                        session: session_id,
+                        owner,
                         kind: EventKind::Values { values },
                     },
                 );
@@ -394,7 +415,7 @@ fn handle_command(
                     tx,
                     Event {
                         origin: request_id.into(),
-                        session: session_id,
+                        owner,
                         kind: EventKind::Wrote { key, result },
                     },
                 );
@@ -413,7 +434,7 @@ fn handle_command(
                     tx,
                     Event {
                         origin: request_id.into(),
-                        session: session_id,
+                        owner,
                         kind: EventKind::Log { message },
                     },
                 ),
@@ -441,7 +462,7 @@ fn send(tx: &Sender<Event>, event: Event) {
 fn send_error(
     tx: &Sender<Event>,
     request_id: Option<crate::bff::model::RequestId>,
-    session: SessionId,
+    owner: impl Into<crate::bff::model::Owner>,
     operation: Operation,
     message: BackendMsg,
 ) {
@@ -449,7 +470,7 @@ fn send_error(
         tx,
         Event {
             origin: request_id.into(),
-            session,
+            owner: owner.into(),
             kind: EventKind::Error { operation, message },
         },
     );

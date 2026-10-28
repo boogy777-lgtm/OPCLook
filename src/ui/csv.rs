@@ -258,7 +258,10 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = App::new_test(&ctx);
         for (index, address) in servers.iter().enumerate() {
-            app.seed_session(index as u64 + 1, EndpointSpec::da("", *address));
+            app.seed_session(
+                crate::bff::model::SessionId::new(index as u64 + 1).unwrap(),
+                EndpointSpec::da("", *address),
+            );
         }
         (ctx, app)
     }
@@ -267,8 +270,14 @@ mod tests {
     fn a5_exact_server_match_beats_an_earlier_substring_match() {
         // "A.OPC.2" comes first and contains "A.OPC": the old code picked it.
         let (_ctx, app) = app_with(&["A.OPC.2", "A.OPC"]);
-        assert_eq!(resolve_csv_session(&app, "A.OPC"), CsvServer::Session(2));
-        assert_eq!(resolve_csv_session(&app, "a.opc.2"), CsvServer::Session(1));
+        assert_eq!(
+            resolve_csv_session(&app, "A.OPC"),
+            CsvServer::Session(crate::bff::model::SessionId::new(2).unwrap())
+        );
+        assert_eq!(
+            resolve_csv_session(&app, "a.opc.2"),
+            CsvServer::Session(crate::bff::model::SessionId::new(1).unwrap())
+        );
     }
 
     #[test]
@@ -295,7 +304,10 @@ mod tests {
     #[test]
     fn a5_substring_is_only_a_fallback_and_must_be_unambiguous() {
         let (_ctx, app) = app_with(&["Vendor.Alpha.OPC", "Vendor.Beta.OPC"]);
-        assert_eq!(resolve_csv_session(&app, "alpha"), CsvServer::Session(1));
+        assert_eq!(
+            resolve_csv_session(&app, "alpha"),
+            CsvServer::Session(crate::bff::model::SessionId::new(1).unwrap())
+        );
         assert_eq!(resolve_csv_session(&app, "Vendor"), CsvServer::Ambiguous);
         assert_eq!(resolve_csv_session(&app, "Gamma"), CsvServer::NotFound);
     }
@@ -321,8 +333,18 @@ mod tests {
     fn a6_quoted_fields_with_newlines_and_separators_roundtrip() {
         let (_ctx, mut app) = app_with(&["A.OPC"]);
         let nasty = "Line one\nLine \"two\"; and more\r\nthird";
-        let key = app.seed_row(1, "Tag.1", nasty, Value::I64(5));
-        let plain = app.seed_row(1, "Tag.2", "Plain", Value::I64(6));
+        let key = app.seed_row(
+            crate::bff::model::SessionId::new(1).unwrap(),
+            "Tag.1",
+            nasty,
+            Value::I64(5),
+        );
+        let plain = app.seed_row(
+            crate::bff::model::SessionId::new(1).unwrap(),
+            "Tag.2",
+            "Plain",
+            Value::I64(6),
+        );
         assert!(key != plain);
         let text = export_tree_csv(&app);
         let rows = parse_csv_rows(&text);

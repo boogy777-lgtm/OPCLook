@@ -1,6 +1,6 @@
 use crate::bff::model::{
-    BrowseNode, CommandKind, ItemKey, Operation, Protocol, Quality, QualityKind, RequestId, ScanId,
-    SessionId, SubscriptionState, Value,
+    BrowseNode, CommandKind, ItemKey, Operation, Owner, Protocol, Quality, QualityKind, RequestId,
+    ScanId, SessionId, SubscriptionState, Value,
 };
 use crate::bff::net::NetworkBinding;
 
@@ -145,6 +145,13 @@ pub enum CjkFont {
     Loaded(String),
 }
 
+fn owner_label(lang: Lang, owner: Owner) -> String {
+    match owner {
+        Owner::Session(session) => session.to_string(),
+        Owner::Discovery => operation_label(lang, Operation::Discover),
+    }
+}
+
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let cjk = install_fonts(&cc.egui_ctx);
@@ -239,7 +246,7 @@ impl App {
             last_write_summary: None,
             csv_import: None,
             add_children: None,
-            next_session: Some(1),
+            next_session: Some(SessionId::FIRST),
             next_key: Some(ItemKey::FIRST),
             next_scan: Some(ScanId::FIRST),
             cjk_font: CjkFont::NotProbed,
@@ -559,23 +566,24 @@ impl App {
 
     pub(super) fn send(
         &mut self,
-        session: SessionId,
+        owner: impl Into<Owner>,
         protocol: Protocol,
         kind: CommandKind,
     ) -> Option<RequestId> {
-        self.send_with(session, protocol, kind, PendingCtx::None)
+        self.send_with(owner, protocol, kind, PendingCtx::None)
     }
 
     /// Like [`App::send`], remembering `ctx` until the reply arrives.
     pub(super) fn send_with(
         &mut self,
-        session: SessionId,
+        owner: impl Into<Owner>,
         protocol: Protocol,
         kind: CommandKind,
         ctx: PendingCtx,
     ) -> Option<RequestId> {
+        let owner = owner.into();
         let operation = kind.operation();
-        let dispatch = self.engine.send(session, protocol, kind, ctx);
+        let dispatch = self.engine.send(owner, protocol, kind, ctx);
         let (request_id, failure) = match dispatch {
             Ok(id) => (id, None),
             Err(DispatchError::Exhausted) => {
@@ -606,7 +614,7 @@ impl App {
                 &[
                     &request_id.to_string(),
                     &operation_label(self.lang(), operation),
-                    &session.to_string(),
+                    &owner_label(self.lang(), owner),
                 ],
             );
         }
@@ -701,12 +709,12 @@ impl App {
         self.engine.gateway_for_test()
     }
     #[cfg(feature = "test-support")]
-    pub fn age_pending_requests_for_test(&mut self, session: SessionId, secs: u64) {
+    pub fn age_pending_requests_for_test(&mut self, session: impl Into<Owner>, secs: u64) {
         self.engine
             .age_requests_for_test(session, Duration::from_secs(secs));
     }
     #[cfg(feature = "test-support")]
-    pub fn pending_request_ids_for_test(&self, session: SessionId) -> Vec<RequestId> {
+    pub fn pending_request_ids_for_test(&self, session: impl Into<Owner>) -> Vec<RequestId> {
         self.engine.pending_ids_for_test(session)
     }
 }
@@ -914,12 +922,12 @@ impl App {
     }
     pub(super) fn send_da_prepared(
         &mut self,
-        session: SessionId,
+        owner: impl Into<Owner>,
         kind: CommandKind,
         ctx: PendingCtx,
     ) -> Result<RequestId, DaRouteError> {
         let options = self.route_options();
-        self.engine.prepare_da(session, kind, ctx, options)
+        self.engine.prepare_da(owner, kind, ctx, options)
     }
     pub(super) fn release_da_routes_for_session(&mut self, session: SessionId) {
         self.engine.cancel_da_routes(session);
@@ -928,7 +936,7 @@ impl App {
         // Correlated discovery completion releases exactly its own ticket in Engine::accept.
     }
     pub(super) fn release_da_discovery_routes(&mut self) {
-        self.engine.cancel_da_routes(0);
+        self.engine.cancel_da_routes(Owner::Discovery);
     }
 }
 
@@ -940,7 +948,7 @@ impl App {
         // Never leave a previous popup's scan running behind a closed dialog.
         self.cancel_ua_subnet_scan();
         // Discard replies from a search owned by the previous popup instance.
-        self.clear_pending_requests(0);
+        self.engine.invalidate_session_requests(Owner::Discovery);
         let d = &mut self.dialogs.connect;
         d.open = true;
         d.network_tab = false;
@@ -992,7 +1000,7 @@ impl App {
     /// rolled back by closing the dialog.
     pub fn close_connect_dialog(&mut self) {
         self.cancel_ua_subnet_scan();
-        self.clear_pending_requests(0);
+        self.engine.invalidate_session_requests(Owner::Discovery);
         // D5: replies of an abandoned DA search are dropped now, so nothing
         // would ever release their temporary discovery routes later.
         self.release_da_discovery_routes();

@@ -9,11 +9,11 @@ fn main() -> Result<(), String> {
     let url = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "opc.tcp://milo.digitalpetri.com:62541/milo".to_string());
-    let session = 1;
+    let session = opcda_egui::bff::model::SessionId::FIRST;
     let probe = Probe::new();
     probe.send(Command {
         request_id: Some(opcda_egui::bff::model::RequestId::FIRST),
-        session,
+        owner: session.into(),
         protocol: Protocol::OpcUa,
         kind: CommandKind::Connect {
             endpoint: EndpointSpec::ua(url.clone()),
@@ -34,7 +34,7 @@ fn main() -> Result<(), String> {
                     connected = true;
                     probe.send(Command {
                         request_id: Some(request),
-                        session,
+                        owner: session.into(),
                         protocol: Protocol::OpcUa,
                         kind: CommandKind::Browse {
                             node_id: String::new(),
@@ -45,7 +45,7 @@ fn main() -> Result<(), String> {
                     request = request.successor().ok_or("request identifiers exhausted")?;
                     probe.send(Command {
                         request_id: Some(request),
-                        session,
+                        owner: session.into(),
                         protocol: Protocol::OpcUa,
                         kind: CommandKind::AddItems {
                             items: vec![ItemSpec {
@@ -71,7 +71,7 @@ fn main() -> Result<(), String> {
         if connected && Instant::now() >= next_step {
             probe.send(Command {
                 request_id: Some(request),
-                session,
+                owner: session.into(),
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Read {
                     keys: vec![ItemKey::FIRST],
@@ -80,7 +80,7 @@ fn main() -> Result<(), String> {
             request = request.successor().ok_or("request identifiers exhausted")?;
             probe.send(Command {
                 request_id: Some(request),
-                session,
+                owner: session.into(),
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Write {
                     request: WriteRequest {
@@ -94,7 +94,7 @@ fn main() -> Result<(), String> {
             std::thread::sleep(Duration::from_secs(3));
             probe.send(Command {
                 request_id: Some(request),
-                session,
+                owner: session.into(),
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Disconnect,
             })?;

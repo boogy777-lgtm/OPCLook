@@ -39,7 +39,11 @@ fn wait_for(
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         while let Some(event) = gateway.try_recv() {
-            if event.session != session {
+            if event.owner
+                != opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                )
+            {
                 continue;
             }
             if predicate(&event.kind) {
@@ -55,7 +59,9 @@ fn connect(gateway: &Gateway, session: u64) {
     gateway
         .send(Command {
             request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            session,
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Connect {
                 endpoint: EndpointSpec::ua(test_url()),
@@ -76,7 +82,9 @@ fn send(gateway: &Gateway, session: u64, kind: CommandKind) {
     gateway
         .send(Command {
             request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            session,
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind,
         })
@@ -220,7 +228,9 @@ fn find_sticky_writable(gateway: &Gateway, session: u64) -> Option<(ItemKey, Str
             gateway
                 .send(Command {
                     request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                    session,
+                    owner: opcda_egui::bff::model::Owner::Session(
+                        opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                    ),
                     protocol: Protocol::OpcUa,
                     kind: CommandKind::Write {
                         request: opcda_egui::bff::model::WriteRequest {
@@ -265,7 +275,11 @@ fn push_value(
 /// unambiguous new-value push.
 fn drain_stale_pushes(gateway: &Gateway, session: u64) {
     while let Some(event) = gateway.try_recv() {
-        if event.session != session {
+        if event.owner
+            != opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            )
+        {
             continue;
         }
     }

@@ -159,7 +159,7 @@ impl App {
             }
             return false;
         };
-        self.next_session = id.checked_add(1);
+        self.next_session = id.successor();
         self.settings.remember(&endpoint);
         self.settings.save();
         self.journal.info_l(

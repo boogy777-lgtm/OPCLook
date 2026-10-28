@@ -37,7 +37,7 @@ fn reply(command: Command, tx: &Sender<Event>) {
         kind => {
             let _ = tx.send(Event {
                 origin: command.request_id.into(),
-                session: command.session,
+                owner: command.owner,
                 kind: EventKind::Error {
                     operation: kind.operation(),
                     message: BackendMsg::DaOnlyOnWindows,

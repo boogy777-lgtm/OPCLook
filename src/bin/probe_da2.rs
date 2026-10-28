@@ -9,11 +9,11 @@ use std::time::{Duration, Instant};
 fn main() -> Result<(), String> {
     let probe = Probe::new();
     let mut request = opcda_egui::bff::model::RequestId::FIRST;
-    let session = 7u64;
+    let session = opcda_egui::bff::model::SessionId::new(7).ok_or("invalid session")?;
 
     probe.send(Command {
         request_id: Some(request),
-        session: 0,
+        owner: opcda_egui::bff::model::Owner::Discovery,
         protocol: Protocol::OpcDa,
         kind: CommandKind::Discover {
             host: String::new(),
@@ -42,7 +42,7 @@ fn main() -> Result<(), String> {
 
     probe.send(Command {
         request_id: Some(request),
-        session,
+        owner: session.into(),
         protocol: Protocol::OpcDa,
         kind: CommandKind::Connect {
             endpoint: EndpointSpec::da(String::new(), id.clone()),
@@ -66,7 +66,7 @@ fn main() -> Result<(), String> {
 
     probe.send(Command {
         request_id: Some(request),
-        session,
+        owner: session.into(),
         protocol: Protocol::OpcDa,
         kind: CommandKind::Browse {
             node_id: String::new(),
@@ -107,7 +107,7 @@ fn main() -> Result<(), String> {
         if let Some(branch) = branch {
             probe.send(Command {
                 request_id: Some(request),
-                session,
+                owner: session.into(),
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::Browse {
                     node_id: branch.clone(),
@@ -144,7 +144,7 @@ fn main() -> Result<(), String> {
 
     probe.send(Command {
         request_id: Some(request),
-        session,
+        owner: session.into(),
         protocol: Protocol::OpcDa,
         kind: CommandKind::AddItems {
             items: vec![ItemSpec {
@@ -165,7 +165,7 @@ fn main() -> Result<(), String> {
 
     probe.send(Command {
         request_id: Some(request),
-        session,
+        owner: session.into(),
         protocol: Protocol::OpcDa,
         kind: CommandKind::Read {
             keys: vec![ItemKey::FIRST],
@@ -206,12 +206,12 @@ fn main() -> Result<(), String> {
 
 fn disconnect(
     probe: &Probe,
-    session: u64,
+    session: opcda_egui::bff::model::SessionId,
     request: opcda_egui::bff::model::RequestId,
 ) -> Result<(), String> {
     probe.send(Command {
         request_id: Some(request),
-        session,
+        owner: session.into(),
         protocol: Protocol::OpcDa,
         kind: CommandKind::Disconnect,
     })?;

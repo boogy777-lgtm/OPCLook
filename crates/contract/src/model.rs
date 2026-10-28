@@ -2,7 +2,57 @@ pub use crate::ua_url::{UaUrl, UaUrlIdentity};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
-pub type SessionId = u64;
+/// Nonzero identity of a session, distinct from a request identity.
+///
+/// ```compile_fail
+/// use opclook_contract::model::{RequestId, SessionId};
+/// let _: RequestId = SessionId::FIRST;
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SessionId(std::num::NonZeroU64);
+impl SessionId {
+    pub const FIRST: Self = Self(std::num::NonZeroU64::MIN);
+    pub const fn new(value: u64) -> Option<Self> {
+        match std::num::NonZeroU64::new(value) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
+    }
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+    pub const fn successor(self) -> Option<Self> {
+        match self.get().checked_add(1) {
+            Some(value) => Self::new(value),
+            None => None,
+        }
+    }
+}
+impl fmt::Display for SessionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.get().fmt(f)
+    }
+}
+/// The owner of a command or event: global discovery or a real session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Owner {
+    Discovery,
+    Session(SessionId),
+}
+impl From<SessionId> for Owner {
+    fn from(id: SessionId) -> Self {
+        Self::Session(id)
+    }
+}
+impl fmt::Display for Owner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Discovery => f.write_str("discovery"),
+            Self::Session(id) => id.fmt(f),
+        }
+    }
+}
+
 /// Nonzero client handle identifying one item.
 ///
 /// Item and scan identities cannot be interchanged:
@@ -1486,7 +1536,7 @@ pub struct WriteRequest {
 #[derive(Clone, Debug)]
 pub struct Command {
     pub request_id: Option<RequestId>,
-    pub session: SessionId,
+    pub owner: Owner,
     pub protocol: Protocol,
     pub kind: CommandKind,
 }
@@ -1635,7 +1685,7 @@ pub enum SubscriptionState {
 pub struct Event {
     /// Correlation with a tracked command, or an unsolicited update.
     pub origin: Origin,
-    pub session: SessionId,
+    pub owner: Owner,
     pub kind: EventKind,
 }
 
@@ -1731,6 +1781,14 @@ pub enum EventKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_ids_are_nonzero_and_do_not_wrap() {
+        assert_eq!(SessionId::new(0), None);
+        assert_eq!(SessionId::FIRST.get(), 1);
+        assert_eq!(SessionId::FIRST.successor().unwrap().get(), 2);
+        assert_eq!(SessionId::new(u64::MAX).unwrap().successor(), None);
+    }
 
     #[test]
     fn synthetic_views_root_is_identified_by_reserved_id() {

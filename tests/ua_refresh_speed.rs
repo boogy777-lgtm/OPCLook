@@ -26,13 +26,13 @@ fn wait_for(
     predicate: impl Fn(&EventKind) -> bool,
 ) -> Option<Event> {
     let request_id = command.request_id;
-    let session = command.session;
+    let owner = command.owner;
     let started = Instant::now();
     gateway.send(command).expect("gateway send");
     let deadline = started + timeout;
     while Instant::now() < deadline {
         while let Some(event) = gateway.try_recv() {
-            if event.origin != request_id.into() || event.session != session {
+            if event.origin != request_id.into() || event.owner != owner {
                 continue;
             }
             if predicate(&event.kind) {
@@ -49,7 +49,9 @@ fn connect(gateway: &Gateway, session: u64) {
         gateway,
         Command {
             request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            session,
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Connect {
                 endpoint: EndpointSpec::ua(test_url()),
@@ -67,7 +69,9 @@ fn disconnect(gateway: &Gateway, session: u64) {
         gateway,
         Command {
             request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            session,
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Disconnect,
         },
@@ -110,7 +114,9 @@ fn browse_refresh_jumps_over_queued_reads() {
             &gateway,
             Command {
                 request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                session,
+                owner: opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                ),
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::AddItems { items },
             },
@@ -135,7 +141,9 @@ fn browse_refresh_jumps_over_queued_reads() {
                 &gateway,
                 Command {
                     request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                    session,
+                    owner: opcda_egui::bff::model::Owner::Session(
+                        opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                    ),
                     protocol: Protocol::OpcUa,
                     kind: CommandKind::Read {
                         keys: (1..=10)
@@ -156,7 +164,9 @@ fn browse_refresh_jumps_over_queued_reads() {
             &gateway,
             Command {
                 request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                session,
+                owner: opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                ),
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Browse {
                     node_id: String::new(),

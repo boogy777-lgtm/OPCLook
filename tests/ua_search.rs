@@ -31,7 +31,7 @@ fn wait_for_servers(gateway: &Gateway, host: &str, port: u16, timeout: Duration)
     gateway
         .send(Command {
             request_id: opcda_egui::bff::model::RequestId::new(request_id),
-            session: 0,
+            owner: opcda_egui::bff::model::Owner::Discovery,
             protocol: Protocol::OpcUa,
             kind: CommandKind::SearchUaServers {
                 host: host.to_string(),

@@ -1,6 +1,7 @@
 use opclook_contract::model::{
     BackendMsg, CommandKind, DataValue, EndpointSpec, Event, EventKind, ItemKey, ItemSpec,
-    Operation, Protocol, QualityKind, UaSecurityMode, UaSecurityPolicy, Value, WriteRequest,
+    Operation, Protocol, QualityKind, SessionId, UaSecurityMode, UaSecurityPolicy, Value,
+    WriteRequest,
 };
 use opclook_contract::net::NetworkBinding;
 use opclook_engine::{DispatchError, Due, Engine};
@@ -220,7 +221,7 @@ fn send(
     kind: CommandKind,
 ) -> Result<opclook_contract::model::RequestId, String> {
     engine
-        .send(1, protocol, kind, ())
+        .send(SessionId::FIRST, protocol, kind, ())
         .map_err(|error| match error {
             DispatchError::Exhausted => "request identifiers exhausted".into(),
             DispatchError::SessionLimit => "UA session limit reached".into(),
@@ -485,7 +486,7 @@ fn run(options: &Options) -> Result<(), String> {
         _ => return Err("unexpected connect response".into()),
     }
     if options.poll {
-        engine.set_force_poll(1, true);
+        engine.set_force_poll(SessionId::FIRST, true);
     }
     if command == "browse" {
         let node_id = options.command.get(1).cloned().unwrap_or_default();
@@ -596,16 +597,13 @@ fn run(options: &Options) -> Result<(), String> {
         ) {
             match due {
                 Due::Read {
-                    session: 1,
+                    session,
                     protocol,
                     keys,
-                } => {
+                } if session == SessionId::FIRST => {
                     send(&mut engine, protocol, CommandKind::Read { keys })?;
                 }
-                Due::Test {
-                    session: 1,
-                    protocol,
-                } => {
+                Due::Test { session, protocol } if session == SessionId::FIRST => {
                     send(&mut engine, protocol, CommandKind::Test)?;
                 }
                 _ => {}
@@ -615,7 +613,7 @@ fn run(options: &Options) -> Result<(), String> {
             break;
         }
         if engine.has_expired_operation(
-            1,
+            SessionId::FIRST,
             Instant::now(),
             options.timeout,
             &[Operation::Read, Operation::Test],

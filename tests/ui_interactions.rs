@@ -71,10 +71,10 @@ fn harness(app: App) -> Harness<'static, App> {
 }
 
 fn seed_table(app: &mut App, names: &[(&str, &str, i64)]) -> Vec<ItemKey> {
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     names
         .iter()
-        .map(|(id, name, value)| app.seed_row(1, id, name, Value::I64(*value)))
+        .map(|(id, name, value)| app.seed_row(sid(1), id, name, Value::I64(*value)))
         .collect()
 }
 
@@ -124,9 +124,9 @@ fn open_combo_right_of(h: &mut Harness<'_, App>, label: &str, dx: f32) {
 
 /// Seed a session with two sibling Item nodes and return their ids.
 fn seed_tree(app: &mut App) -> (u64, u64) {
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     let a = app.seed_tree_item(
-        1,
+        sid(1),
         None,
         0,
         BrowseNode {
@@ -137,7 +137,7 @@ fn seed_tree(app: &mut App) -> (u64, u64) {
         },
     );
     let b = app.seed_tree_item(
-        1,
+        sid(1),
         None,
         0,
         BrowseNode {
@@ -162,9 +162,9 @@ fn tree_empty_pos(h: &Harness<'_, App>, name: &str) -> egui::Pos2 {
 fn tree_row_context_menu_copies_node_name() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     app.seed_tree_item(
-        1,
+        sid(1),
         None,
         0,
         BrowseNode {
@@ -402,9 +402,9 @@ fn enter_opens_write_dialog() {
 fn tree_space_toggles_expansion() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     let branch = app.seed_tree_item(
-        1,
+        sid(1),
         None,
         0,
         BrowseNode {
@@ -414,7 +414,7 @@ fn tree_space_toggles_expansion() {
             has_children: true,
         },
     );
-    app.set_tree_focus(1, branch);
+    app.set_tree_focus(sid(1), branch);
 
     let mut h = harness(app);
     h.key_press(Key::Space);
@@ -424,7 +424,7 @@ fn tree_space_toggles_expansion() {
         .state()
         .sessions
         .iter()
-        .find(|s| s.id == 1)
+        .find(|s| s.id == sid(1))
         .unwrap()
         .tree
         .iter()
@@ -449,7 +449,7 @@ fn csv_save_load_roundtrip_preserves_rows() {
     assert!(text.contains("SigB"));
 
     let mut loaded = App::new_test(&ctx);
-    loaded.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    loaded.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     let count = opcda_egui::ui::import_tree_csv_from_path(&mut loaded, &tmp).expect("import");
     let _ = std::fs::remove_file(&tmp);
 
@@ -461,10 +461,10 @@ fn csv_save_load_roundtrip_preserves_rows() {
 
 /// Seeding helper for a writable row.
 fn seed_writable_table(app: &mut App, names: &[(&str, &str, i64)]) -> Vec<ItemKey> {
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     names
         .iter()
-        .map(|(id, name, value)| app.seed_writable_row(1, id, name, Value::I64(*value)))
+        .map(|(id, name, value)| app.seed_writable_row(sid(1), id, name, Value::I64(*value)))
         .collect()
 }
 
@@ -579,10 +579,10 @@ fn reconnect_stop_sets_flag_and_changes_hint() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.settings.options.auto_reconnect = true;
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     // Simulate a disconnected session the auto-reconnect loop is looking at.
     {
-        let view = app.sessions.iter_mut().find(|s| s.id == 1).unwrap();
+        let view = app.sessions.iter_mut().find(|s| s.id == sid(1)).unwrap();
         view.state = SessionState::Disconnected;
         view.reconnect = ReconnectState::Waiting {
             at: std::time::Instant::now(),
@@ -594,7 +594,7 @@ fn reconnect_stop_sets_flag_and_changes_hint() {
     assert!(hint.is_some());
     assert!(hint.unwrap().contains("Повторное подключение 2/20"));
 
-    h.state_mut().stop_reconnect(1);
+    h.state_mut().stop_reconnect(sid(1));
     let hint2 = h.state().reconnect_hint();
     assert!(hint2.is_none() || hint2.unwrap().contains("остановлено"));
 }
@@ -605,11 +605,11 @@ fn reconnect_stop_sets_flag_and_changes_hint() {
 fn stale_reply_with_unknown_request_id_is_ignored() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     let info_before = app.sessions[0].info.clone();
 
     app.on_event_for_test_with_request(
-        1,
+        sid(1),
         opcda_egui::bff::model::RequestId::new(9_999).unwrap(),
         EventKind::Connected {
             endpoint: EndpointSpec::da("", "Srv.Stale"),
@@ -623,7 +623,7 @@ fn stale_reply_with_unknown_request_id_is_ignored() {
     );
 
     app.on_event_for_test_with_request(
-        1,
+        sid(1),
         opcda_egui::bff::model::RequestId::new(9_999).unwrap(),
         EventKind::Browse {
             node_id: String::new(),
@@ -649,11 +649,11 @@ fn matching_request_id_reply_is_accepted() {
         let ctx = egui::Context::default();
         let mut app = App::new_test(&ctx);
         app.open_tab_for_endpoint(EndpointSpec::da("", "Srv.Match"));
-        let ids = app.pending_request_ids_for_test(1);
+        let ids = app.pending_request_ids_for_test(sid(1));
         assert_eq!(ids.len(), 1, "one Connect outstanding, got {ids:?}");
         let connect_id = ids[0];
         app.on_event_for_test_with_request(
-            1,
+            sid(1),
             connect_id,
             EventKind::Connected {
                 endpoint: EndpointSpec::da("", "Srv.Match"),
@@ -665,7 +665,7 @@ fn matching_request_id_reply_is_accepted() {
 
         // Replaying the same id after it was consumed is now stale.
         app.on_event_for_test_with_request(
-            1,
+            sid(1),
             connect_id,
             EventKind::Connected {
                 endpoint: EndpointSpec::da("", "Srv.Match"),
@@ -685,9 +685,9 @@ fn matching_request_id_reply_is_accepted() {
 fn push_event_with_zero_request_id_is_accepted() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
     app.on_event_for_test_at(
-        1,
+        sid(1),
         EventKind::SubscriptionState {
             state: SubscriptionState::Active,
         },
@@ -707,14 +707,14 @@ fn disconnect_connect_does_not_let_old_connected_mutate_new_state() {
         let ctx = egui::Context::default();
         let mut app = App::new_test(&ctx);
         app.open_tab_for_endpoint(EndpointSpec::da("", "Srv.Old"));
-        let old_connect = app.pending_request_ids_for_test(1)[0];
+        let old_connect = app.pending_request_ids_for_test(sid(1))[0];
 
-        app.disconnect_session(1);
-        app.reconnect_session(1);
+        app.disconnect_session(sid(1));
+        app.reconnect_session(sid(1));
         assert_eq!(app.sessions[0].state, SessionState::Connecting);
 
         app.on_event_for_test_with_request(
-            1,
+            sid(1),
             old_connect,
             EventKind::Connected {
                 endpoint: EndpointSpec::da("", "Srv.Old"),
@@ -729,12 +729,12 @@ fn disconnect_connect_does_not_let_old_connected_mutate_new_state() {
         assert_ne!(app.sessions[0].info, "old");
 
         let new_connect = *app
-            .pending_request_ids_for_test(1)
+            .pending_request_ids_for_test(sid(1))
             .iter()
             .max()
             .expect("new Disconnect+Connect outstanding");
         app.on_event_for_test_with_request(
-            1,
+            sid(1),
             new_connect,
             EventKind::Connected {
                 endpoint: EndpointSpec::da("", "Srv.Old"),
@@ -786,7 +786,7 @@ fn column_reorder_persists_in_settings() {
 fn status_popup_opens_from_indicator_state() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     seed_table(&mut app, &[("a", "SigA", 1)]);
 
     let mut h = harness(app);
@@ -805,7 +805,7 @@ fn status_popup_opens_from_indicator_state() {
 fn pending_write_shows_status_label_then_summary() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     seed_table(&mut app, &[("a", "SigA", 1)]);
 
     let mut h = harness(app);
@@ -1048,12 +1048,18 @@ fn ua_subnet_scan_commands_are_not_pending_requests() {
     app.open_connect_dialog();
     app.network.loaded = true;
     app.network.lease = Some(lease_with_subnet("10.0.0.5", 30));
-    let before = app.pending_request_ids_for_test(0);
+    let before = app.pending_request_ids_for_test(opcda_egui::bff::model::Owner::Discovery);
     app.start_ua_subnet_scan();
     assert!(app.dialogs.connect.ua_subnet_searching);
-    assert_eq!(app.pending_request_ids_for_test(0), before);
+    assert_eq!(
+        app.pending_request_ids_for_test(opcda_egui::bff::model::Owner::Discovery),
+        before
+    );
     app.cancel_ua_subnet_scan();
-    assert_eq!(app.pending_request_ids_for_test(0), before);
+    assert_eq!(
+        app.pending_request_ids_for_test(opcda_egui::bff::model::Owner::Discovery),
+        before
+    );
 }
 
 /// UaServersFound populates the connect dialog's search results state.
@@ -1151,7 +1157,8 @@ fn connect_dialog_reopen_keeps_discovered_servers() {
     // discovery (no fresh pending request on session 0).
     assert_eq!(app.dialogs.connect.da_auto_pending, 0);
     assert!(
-        app.pending_request_ids_for_test(0).is_empty(),
+        app.pending_request_ids_for_test(opcda_egui::bff::model::Owner::Discovery)
+            .is_empty(),
         "reopening with a populated DA list must not restart discovery"
     );
 }
@@ -2282,7 +2289,7 @@ fn k3_tab_moves_the_keyboard_between_tree_and_table() {
     let mut app = App::new_test(&ctx);
     seed_table(&mut app, &[("a", "SigA", 1)]);
     let node = app.seed_tree_item(
-        1,
+        sid(1),
         None,
         0,
         BrowseNode {
@@ -2304,7 +2311,7 @@ fn k3_tab_moves_the_keyboard_between_tree_and_table() {
     h.key_press(Key::Tab);
     h.run_steps(3);
     assert!(h.state().tree_focused);
-    assert_eq!(h.state().tree_focus, Some((1, node)));
+    assert_eq!(h.state().tree_focus, Some((sid(1), node)));
     assert_eq!(h.state().table_focus, None);
 
     h.key_press_modifiers(Modifiers::SHIFT, Key::Tab);
@@ -2322,21 +2329,21 @@ fn k3_tab_moves_the_keyboard_between_tree_and_table() {
 fn k3_ctrl_tab_switches_sessions_and_ctrl_n_connects() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    app.seed_session(2, EndpointSpec::ua("opc.tcp://127.0.0.1:4841"));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_session(sid(2), EndpointSpec::ua("opc.tcp://127.0.0.1:4841"));
+    app.activate_session(sid(1));
     let mut h = harness(app);
     h.run_steps(2);
 
     h.key_press_modifiers(Modifiers::COMMAND, Key::Tab);
     h.run_steps(3);
-    assert_eq!(h.state().active_session, Some(2));
+    assert_eq!(h.state().active_session, Some(sid(2)));
     h.key_press_modifiers(Modifiers::COMMAND, Key::Tab);
     h.run_steps(3);
-    assert_eq!(h.state().active_session, Some(1), "wraps around");
+    assert_eq!(h.state().active_session, Some(sid(1)), "wraps around");
     h.key_press_modifiers(Modifiers::COMMAND, Key::PageUp);
     h.run_steps(3);
-    assert_eq!(h.state().active_session, Some(2));
+    assert_eq!(h.state().active_session, Some(sid(2)));
 
     h.key_press_modifiers(Modifiers::COMMAND, Key::N);
     h.run_steps(3);
@@ -2370,8 +2377,8 @@ fn pump_value() -> Value {
 fn v3_structured_value_expands_into_field_lines() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    let key = app.seed_row(1, "ns=2;s=Pump", "Pump", pump_value());
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let key = app.seed_row(sid(1), "ns=2;s=Pump", "Pump", pump_value());
     let mut h = harness(app);
     h.run_steps(3);
     assert!(
@@ -2411,8 +2418,8 @@ fn v3_structured_value_expands_into_field_lines() {
 fn v3_arrow_keys_expand_and_collapse_a_structure() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    app.seed_row(1, "ns=2;s=Pump", "Pump", pump_value());
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_row(sid(1), "ns=2;s=Pump", "Pump", pump_value());
     let mut h = harness(app);
     h.state_mut().select_only(0);
     h.run_steps(2);
@@ -2439,9 +2446,9 @@ fn v3_arrow_keys_expand_and_collapse_a_structure() {
 fn v3_field_lines_select_their_row() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    let pump = app.seed_row(1, "ns=2;s=Pump", "Pump", pump_value());
-    let other = app.seed_row(1, "ns=2;s=Level", "Level", Value::F64(1.0));
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let pump = app.seed_row(sid(1), "ns=2;s=Pump", "Pump", pump_value());
+    let other = app.seed_row(sid(1), "ns=2;s=Level", "Level", Value::F64(1.0));
     app.toggle_value(pump, vec![]);
     let mut h = harness(app);
     h.run_steps(3);
@@ -2465,9 +2472,9 @@ fn disconnect_event_keeps_rows_and_marks_them_stale() {
     let mut app = App::new_test(&ctx);
     set_ru(&mut app);
     app.settings.options.auto_reconnect = true;
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     app.seed_tree_item(
-        1,
+        sid(1),
         None,
         0,
         BrowseNode {
@@ -2477,10 +2484,10 @@ fn disconnect_event_keeps_rows_and_marks_them_stale() {
             has_children: false,
         },
     );
-    app.seed_row(1, "ns=1;s=keep", "Keep", Value::I64(5));
+    app.seed_row(sid(1), "ns=1;s=keep", "Keep", Value::I64(5));
 
     app.on_event_for_test_at(
-        1,
+        sid(1),
         opcda_egui::bff::model::EventKind::Disconnected {
             reason: opcda_egui::bff::model::BackendMsg::raw("связь потеряна"),
         },
@@ -2509,13 +2516,13 @@ fn disconnect_event_keeps_rows_and_marks_them_stale() {
 fn reconnect_connected_resubscribes_rows_requests_browse_and_read() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
-    app.seed_row(1, "ns=1;s=a", "SigA", Value::I64(1));
-    app.seed_row(1, "ns=1;s=b", "SigB", Value::I64(2));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
+    app.seed_row(sid(1), "ns=1;s=a", "SigA", Value::I64(1));
+    app.seed_row(sid(1), "ns=1;s=b", "SigB", Value::I64(2));
 
     // Drop the connection.
     app.on_event_for_test_at(
-        1,
+        sid(1),
         opcda_egui::bff::model::EventKind::Disconnected {
             reason: opcda_egui::bff::model::BackendMsg::raw("связь потеряна"),
         },
@@ -2524,7 +2531,7 @@ fn reconnect_connected_resubscribes_rows_requests_browse_and_read() {
 
     // Server comes back.
     app.on_event_for_test_at(
-        1,
+        sid(1),
         opcda_egui::bff::model::EventKind::Connected {
             endpoint: EndpointSpec::da("", "Srv.Test"),
             info: opcda_egui::bff::model::BackendMsg::raw("подключено"),
@@ -2537,7 +2544,7 @@ fn reconnect_connected_resubscribes_rows_requests_browse_and_read() {
         "rows must be re-registered"
     );
     // Fresh root browse in flight.
-    let view = app.sessions.iter().find(|s| s.id == 1).unwrap();
+    let view = app.sessions.iter().find(|s| s.id == sid(1)).unwrap();
     assert!(view.root_loading, "root must be re-browsed after reconnect");
     assert!(view.root_loaded == false);
     assert!(view.tree.is_empty());
@@ -2551,12 +2558,12 @@ fn reconnect_connected_resubscribes_rows_requests_browse_and_read() {
 fn read_tick_is_suppressed_while_root_loading() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
-    app.seed_row(1, "ns=1;s=a", "SigA", Value::I64(1));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
+    app.seed_row(sid(1), "ns=1;s=a", "SigA", Value::I64(1));
     // A real outstanding browse is the protocol-level gate for polling.
-    app.browse(1, String::new());
+    app.browse(sid(1), String::new());
     {
-        let view = app.sessions.iter_mut().find(|s| s.id == 1).unwrap();
+        let view = app.sessions.iter_mut().find(|s| s.id == sid(1)).unwrap();
         // Force a due read while the browse remains in flight.
         view.last_poll = std::time::Instant::now()
             .checked_sub(std::time::Duration::from_secs(60))
@@ -2565,7 +2572,7 @@ fn read_tick_is_suppressed_while_root_loading() {
     }
     app.tick_for_test();
     // No read was dispatched: read_in_flight stays false and last_poll unchanged.
-    let view = app.sessions.iter().find(|s| s.id == 1).unwrap();
+    let view = app.sessions.iter().find(|s| s.id == sid(1)).unwrap();
     assert!(
         !view.read_in_flight,
         "read must not be sent while root_loading"
@@ -2578,10 +2585,10 @@ fn read_tick_is_suppressed_while_root_loading() {
 fn ua_subscription_active_stops_periodic_read() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    app.seed_row(1, "i=2258", "CurrentTime", Value::Empty);
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_row(sid(1), "i=2258", "CurrentTime", Value::Empty);
     {
-        let view = app.sessions.iter_mut().find(|s| s.id == 1).unwrap();
+        let view = app.sessions.iter_mut().find(|s| s.id == sid(1)).unwrap();
         // A periodic read is due and permitted (no browse/tree load in flight).
         view.root_loading = false;
         view.read_in_flight = false;
@@ -2594,7 +2601,7 @@ fn ua_subscription_active_stops_periodic_read() {
     // Without an active subscription a due Read is dispatched.
     app.tick_for_test();
     {
-        let view = app.sessions.iter().find(|s| s.id == 1).unwrap();
+        let view = app.sessions.iter().find(|s| s.id == sid(1)).unwrap();
         assert!(
             view.read_in_flight,
             "poll driven Read must be sent while inactive"
@@ -2603,13 +2610,13 @@ fn ua_subscription_active_stops_periodic_read() {
 
     // Mark the subscription active: the same due read is now suppressed.
     app.on_event_for_test_at(
-        1,
+        sid(1),
         EventKind::SubscriptionState {
             state: SubscriptionState::Active,
         },
     );
     {
-        let view = app.sessions.iter_mut().find(|s| s.id == 1).unwrap();
+        let view = app.sessions.iter_mut().find(|s| s.id == sid(1)).unwrap();
         view.read_in_flight = false;
         view.last_poll = std::time::Instant::now()
             .checked_sub(std::time::Duration::from_secs(60))
@@ -2617,7 +2624,7 @@ fn ua_subscription_active_stops_periodic_read() {
         view.root_loading = false;
     }
     app.tick_for_test();
-    let view = app.sessions.iter().find(|s| s.id == 1).unwrap();
+    let view = app.sessions.iter().find(|s| s.id == sid(1)).unwrap();
     assert!(
         !view.read_in_flight,
         "UA read must not be sent while subscription is active"
@@ -2635,10 +2642,10 @@ fn ua_subscription_active_stops_periodic_read() {
 fn da_keeps_polling_unaffected_by_subscription_flag() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
-    app.seed_row(1, "ns=1;s=a", "SigA", Value::I64(1));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
+    app.seed_row(sid(1), "ns=1;s=a", "SigA", Value::I64(1));
     {
-        let view = app.sessions.iter_mut().find(|s| s.id == 1).unwrap();
+        let view = app.sessions.iter_mut().find(|s| s.id == sid(1)).unwrap();
         view.root_loading = false;
         view.read_in_flight = false;
         view.subscription = SubscriptionState::Active; // meaningless for DA, must be ignored
@@ -2647,7 +2654,7 @@ fn da_keeps_polling_unaffected_by_subscription_flag() {
             .unwrap_or(std::time::Instant::now());
     }
     app.tick_for_test();
-    let view = app.sessions.iter().find(|s| s.id == 1).unwrap();
+    let view = app.sessions.iter().find(|s| s.id == sid(1)).unwrap();
     assert!(
         view.read_in_flight,
         "DA must keep polling (subscription flag ignored)"
@@ -2661,32 +2668,32 @@ fn da_keeps_polling_unaffected_by_subscription_flag() {
 fn ua_reconnect_resubscribes_rows_and_resets_subscription_flag() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    app.seed_row(1, "i=2258", "CurrentTime", Value::I64(0));
-    app.seed_row(1, "i=2256", "ServerStatus", Value::I64(0));
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_row(sid(1), "i=2258", "CurrentTime", Value::I64(0));
+    app.seed_row(sid(1), "i=2256", "ServerStatus", Value::I64(0));
     {
-        let view = app.sessions.iter_mut().find(|s| s.id == 1).unwrap();
+        let view = app.sessions.iter_mut().find(|s| s.id == sid(1)).unwrap();
         view.subscription = SubscriptionState::Active;
     }
     app.on_event_for_test_at(
-        1,
+        sid(1),
         EventKind::Disconnected {
             reason: opcda_egui::bff::model::BackendMsg::raw("связь потеряна"),
         },
     );
     // While disconnected the subscription is gone.
-    let view = app.sessions.iter().find(|s| s.id == 1).unwrap();
+    let view = app.sessions.iter().find(|s| s.id == sid(1)).unwrap();
     assert_eq!(view.state, SessionState::Disconnected);
 
     // Server returns: a fresh subscription must be re-established.
     app.on_event_for_test_at(
-        1,
+        sid(1),
         EventKind::Connected {
             endpoint: EndpointSpec::ua("opc.tcp://127.0.0.1:4840"),
             info: opcda_egui::bff::model::BackendMsg::raw("подключено"),
         },
     );
-    let view = app.sessions.iter().find(|s| s.id == 1).unwrap();
+    let view = app.sessions.iter().find(|s| s.id == sid(1)).unwrap();
     assert_eq!(view.state, SessionState::Connected);
     assert!(view.root_loading, "root must be re-browsed after reconnect");
     assert_eq!(
@@ -2695,7 +2702,8 @@ fn ua_reconnect_resubscribes_rows_and_resets_subscription_flag() {
         "state must reset so a new subscription is created on re-add"
     );
     // Rows offered for re-add (AddItems dispatched via register_rows).
-    let rows: Vec<&opcda_egui::app::Row> = app.rows.iter().filter(|r| r.session == 1).collect();
+    let rows: Vec<&opcda_egui::app::Row> =
+        app.rows.iter().filter(|r| r.session == sid(1)).collect();
     assert_eq!(rows.len(), 2);
     assert!(
         rows.iter().all(|r| r.pending),
@@ -2709,10 +2717,10 @@ fn ua_reconnect_resubscribes_rows_and_resets_subscription_flag() {
 fn ua_failed_subscription_falls_back_to_polling() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    app.seed_row(1, "i=2258", "CurrentTime", Value::Empty);
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_row(sid(1), "i=2258", "CurrentTime", Value::Empty);
     {
-        let view = app.sessions.iter_mut().find(|s| s.id == 1).unwrap();
+        let view = app.sessions.iter_mut().find(|s| s.id == sid(1)).unwrap();
         view.subscription = SubscriptionState::Active;
         view.root_loading = false;
         view.read_in_flight = false;
@@ -2721,7 +2729,7 @@ fn ua_failed_subscription_falls_back_to_polling() {
             .unwrap_or(std::time::Instant::now());
     }
     app.on_event_for_test_at(
-        1,
+        sid(1),
         EventKind::SubscriptionState {
             state: SubscriptionState::Failed,
         },
@@ -2740,7 +2748,7 @@ fn server_info_popup_shows_subscription_state() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     set_ru(&mut app);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
     app.sessions[0].subscription = SubscriptionState::Failed;
     app.status_popup = true;
 
@@ -2764,11 +2772,11 @@ fn reconnect_attempts_cap_stops_the_loop_and_shows_exhausted() {
     let mut app = App::new_test(&ctx);
     set_ru(&mut app);
     app.settings.options.auto_reconnect = true;
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
+    app.activate_session(sid(1));
     // The twentieth automatic Connect is in flight; its failure exhausts the cap.
     {
-        let view = app.sessions.iter_mut().find(|s| s.id == 1).unwrap();
+        let view = app.sessions.iter_mut().find(|s| s.id == sid(1)).unwrap();
         view.state = SessionState::Connecting;
         view.reconnect = ReconnectState::Waiting {
             at: std::time::Instant::now(),
@@ -2776,14 +2784,14 @@ fn reconnect_attempts_cap_stops_the_loop_and_shows_exhausted() {
         };
     }
     app.on_event_for_test_at(
-        1,
+        sid(1),
         EventKind::Error {
             operation: opcda_egui::bff::model::Operation::Connect,
             message: opcda_egui::bff::model::BackendMsg::raw("опять"),
         },
     );
     // Re-scheduling must refuse: the state becomes Exhausted, no new timer.
-    let view = app.sessions.iter().find(|s| s.id == 1).unwrap();
+    let view = app.sessions.iter().find(|s| s.id == sid(1)).unwrap();
     assert_eq!(view.reconnect, ReconnectState::Exhausted);
     let hint = app.reconnect_hint().unwrap_or_default();
     assert!(hint.contains("Попытки исчерпаны (20)"), "got: {hint}");
@@ -2854,9 +2862,9 @@ fn tree_item_click_keeps_focus_for_arrows() {
 fn tree_enter_on_subscribed_item_opens_write_dialog() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     let id = app.seed_tree_item(
-        1,
+        sid(1),
         None,
         0,
         BrowseNode {
@@ -2866,8 +2874,8 @@ fn tree_enter_on_subscribed_item_opens_write_dialog() {
             has_children: false,
         },
     );
-    let row_key = app.seed_writable_row(1, "ns=1;s=sub", "Subscribed", Value::I64(7));
-    app.set_tree_focus(1, id);
+    let row_key = app.seed_writable_row(sid(1), "ns=1;s=sub", "Subscribed", Value::I64(7));
+    app.set_tree_focus(sid(1), id);
     assert!(!app.dialogs.write.open);
 
     let mut h = harness(app);
@@ -2889,9 +2897,9 @@ fn tree_enter_on_subscribed_item_opens_write_dialog() {
 fn tree_enter_on_unsubscribed_item_adds_row_without_dialog() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     let id = app.seed_tree_item(
-        1,
+        sid(1),
         None,
         0,
         BrowseNode {
@@ -2904,7 +2912,7 @@ fn tree_enter_on_unsubscribed_item_adds_row_without_dialog() {
     assert_eq!(app.rows.len(), 0, "no rows yet");
 
     let mut h = harness(app);
-    h.state_mut().set_tree_focus(1, id);
+    h.state_mut().set_tree_focus(sid(1), id);
     h.run_steps(3);
     h.key_press(Key::Enter);
     h.run_steps(3);
@@ -2936,7 +2944,7 @@ fn tree_focus_cleared_by_typing_in_text_field() {
     app.settings.options.show_script = true;
     app.settings.options.show_log = false;
     let (_a, _b) = seed_tree(&mut app);
-    app.set_tree_focus(1, _a);
+    app.set_tree_focus(sid(1), _a);
     let mut h = harness(app);
     h.run_steps(3);
     assert_eq!(h.state().tree_focused, true);
@@ -3013,8 +3021,8 @@ fn tab_strip_is_in_tags_area_not_top_panel() {
     );
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.One"));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.One"));
+    app.activate_session(sid(1));
     let mut h = harness(app);
     h.run_steps(5);
     // The tab label is rendered (now inside the central tags panel).
@@ -3068,8 +3076,8 @@ fn connect_dialog_ua_empty_host_without_adapter_searches_loopback_only() {
 fn tab_strip_has_no_connect_button() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.One"));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.One"));
+    app.activate_session(sid(1));
     let mut h = harness(app);
     h.run_steps(5);
     assert!(
@@ -3093,12 +3101,12 @@ fn tab_strip_has_no_connect_button() {
 fn tab_strip_many_tabs_scroll_without_breaking_table() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.One"));
-    app.seed_row(1, "a", "SigA", Value::I64(1));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.One"));
+    app.seed_row(sid(1), "a", "SigA", Value::I64(1));
     for i in 2..=14 {
-        app.seed_session(i, EndpointSpec::da("", &format!("Srv.{i:0>2}")));
+        app.seed_session(sid(i), EndpointSpec::da("", &format!("Srv.{i:0>2}")));
     }
-    app.activate_session(1);
+    app.activate_session(sid(1));
     let mut h = harness(app);
     h.run_steps(5);
     // A representative sample of the tabs is mounted, and the table row renders.
@@ -3385,9 +3393,9 @@ fn language_switch_keeps_rows_and_selection() {
 /// Seed an active session with a Branch whose direct Item children are already
 /// loaded into the tree.
 fn seed_branch_with_items(app: &mut App) -> (u64, u64, u64) {
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     let branch = app.seed_tree_item(
-        1,
+        sid(1),
         None,
         0,
         BrowseNode {
@@ -3398,7 +3406,7 @@ fn seed_branch_with_items(app: &mut App) -> (u64, u64, u64) {
         },
     );
     let c1 = app.seed_tree_item(
-        1,
+        sid(1),
         Some(branch),
         1,
         BrowseNode {
@@ -3409,7 +3417,7 @@ fn seed_branch_with_items(app: &mut App) -> (u64, u64, u64) {
         },
     );
     let c2 = app.seed_tree_item(
-        1,
+        sid(1),
         Some(branch),
         1,
         BrowseNode {
@@ -3424,7 +3432,12 @@ fn seed_branch_with_items(app: &mut App) -> (u64, u64, u64) {
 
 /// Feed a Browse reply using the request id the running add-children job issued
 /// for `node_id` (request-id correlation).
-fn feed_job_browse(app: &mut App, session: u64, node_id: &str, children: Vec<BrowseNode>) {
+fn feed_job_browse(
+    app: &mut App,
+    session: opcda_egui::bff::model::SessionId,
+    node_id: &str,
+    children: Vec<BrowseNode>,
+) {
     let request_id = app
         .add_children
         .as_ref()
@@ -3455,7 +3468,7 @@ fn add_dropped_tree_branch_with_loaded_children_adds_items() {
     let (branch, _, _) = seed_branch_with_items(&mut app);
     assert_eq!(app.rows.len(), 0);
 
-    app.add_dropped_tree(1, vec![branch]);
+    app.add_dropped_tree(sid(1), vec![branch]);
 
     // No rows yet: the browse for the branch is in flight.
     assert_eq!(app.rows.len(), 0);
@@ -3463,7 +3476,7 @@ fn add_dropped_tree_branch_with_loaded_children_adds_items() {
     // Feed the browse response for the branch; its Item children are collected.
     feed_job_browse(
         &mut app,
-        1,
+        sid(1),
         "branch",
         vec![
             BrowseNode {
@@ -3497,9 +3510,9 @@ fn add_dropped_tree_branch_with_loaded_children_adds_items() {
 fn add_dropped_tree_unloaded_branch_browses_then_adds() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     let branch = app.seed_tree_item(
-        1,
+        sid(1),
         None,
         0,
         BrowseNode {
@@ -3511,7 +3524,7 @@ fn add_dropped_tree_unloaded_branch_browses_then_adds() {
     );
     // Simulate a branch the client has not browsed into yet.
     {
-        let view = app.sessions.iter_mut().find(|s| s.id == 1).unwrap();
+        let view = app.sessions.iter_mut().find(|s| s.id == sid(1)).unwrap();
         view.tree
             .iter_mut()
             .find(|t| t.id == branch)
@@ -3519,11 +3532,11 @@ fn add_dropped_tree_unloaded_branch_browses_then_adds() {
             .loaded = false;
     }
 
-    app.add_dropped_tree(1, vec![branch]);
+    app.add_dropped_tree(sid(1), vec![branch]);
 
     // No rows yet; the browse is in flight (branch marked loading).
     assert_eq!(app.rows.len(), 0);
-    let view = app.sessions.iter().find(|s| s.id == 1).unwrap();
+    let view = app.sessions.iter().find(|s| s.id == sid(1)).unwrap();
     let item = view.tree.iter().find(|t| t.id == branch).unwrap();
     assert!(
         item.loading,
@@ -3534,7 +3547,7 @@ fn add_dropped_tree_unloaded_branch_browses_then_adds() {
     // The browse completes with two Item children.
     feed_job_browse(
         &mut app,
-        1,
+        sid(1),
         "branch",
         vec![
             BrowseNode {
@@ -3567,7 +3580,7 @@ fn add_dropped_tree_item_adds_row() {
     let (a, _b) = seed_tree(&mut app);
     assert_eq!(app.rows.len(), 0);
 
-    app.add_dropped_tree(1, vec![a]);
+    app.add_dropped_tree(sid(1), vec![a]);
 
     assert_eq!(app.rows.len(), 1);
     assert_eq!(app.rows[0].item_id, "ns=1;s=a");
@@ -3579,10 +3592,10 @@ fn add_dropped_tree_deduplicates_existing_rows() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     let (a, _b) = seed_tree(&mut app);
-    app.add_items(1, vec![("ns=1;s=a".to_string(), "SigA".to_string())]);
+    app.add_items(sid(1), vec![("ns=1;s=a".to_string(), "SigA".to_string())]);
     assert_eq!(app.rows.len(), 1);
 
-    app.add_dropped_tree(1, vec![a]);
+    app.add_dropped_tree(sid(1), vec![a]);
 
     assert_eq!(app.rows.len(), 1, "duplicate drop must be skipped");
 }
@@ -3593,9 +3606,9 @@ fn add_dropped_tree_deduplicates_existing_rows() {
 fn add_dropped_tree_cross_session_warns_and_skips() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     let other = app.seed_tree_item(
-        1,
+        sid(1),
         None,
         0,
         BrowseNode {
@@ -3606,10 +3619,10 @@ fn add_dropped_tree_cross_session_warns_and_skips() {
         },
     );
     // Seed a second session and make it the active one.
-    app.seed_session(2, EndpointSpec::da("", "Srv.Other"));
-    assert_eq!(app.active_session, Some(2));
+    app.seed_session(sid(2), EndpointSpec::da("", "Srv.Other"));
+    assert_eq!(app.active_session, Some(sid(2)));
 
-    app.add_dropped_tree(1, vec![other]);
+    app.add_dropped_tree(sid(1), vec![other]);
 
     assert_eq!(app.rows.len(), 0, "cross-session drop must be skipped");
     let warned = app
@@ -3700,12 +3713,12 @@ fn reopen_tab_for_same_endpoint_does_not_duplicate() {
 fn close_tab_hides_view_keeps_rows_and_keeps_connection() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    app.seed_row(1, "ns=1;s=a", "SigA", Value::I64(1));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    app.seed_row(sid(1), "ns=1;s=a", "SigA", Value::I64(1));
+    app.activate_session(sid(1));
     assert_eq!(app.sessions[0].state, SessionState::Connected);
 
-    app.close_tab(1);
+    app.close_tab(sid(1));
 
     assert!(!app.sessions[0].visible, "closed tab must be hidden");
     assert_eq!(
@@ -3727,15 +3740,15 @@ fn close_tab_hides_view_keeps_rows_and_keeps_connection() {
 fn close_active_tab_activates_nearest_visible() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.One"));
-    app.seed_session(2, EndpointSpec::da("", "Srv.Two"));
-    app.seed_session(3, EndpointSpec::da("", "Srv.Three"));
-    app.activate_session(2);
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.One"));
+    app.seed_session(sid(2), EndpointSpec::da("", "Srv.Two"));
+    app.seed_session(sid(3), EndpointSpec::da("", "Srv.Three"));
+    app.activate_session(sid(2));
 
-    app.close_tab(2);
+    app.close_tab(sid(2));
 
     // Nearest remaining visible to the right is session 3.
-    assert_eq!(app.active_session, Some(3));
+    assert_eq!(app.active_session, Some(sid(3)));
     assert!(!app.sessions[1].visible);
     assert_eq!(
         app.sessions.iter().filter(|s| s.visible).count(),
@@ -3749,16 +3762,16 @@ fn close_active_tab_activates_nearest_visible() {
 fn remove_session_drops_container_and_rows() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    app.seed_row(1, "ns=1;s=a", "SigA", Value::I64(1));
-    app.seed_row(1, "ns=1;s=b", "SigB", Value::I64(2));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    app.seed_row(sid(1), "ns=1;s=a", "SigA", Value::I64(1));
+    app.seed_row(sid(1), "ns=1;s=b", "SigB", Value::I64(2));
+    app.activate_session(sid(1));
 
     // The destructive path is gated behind the confirm dialog.
     app.request_confirm(
         "t".to_string(),
         "remove?".to_string(),
-        ConfirmAction::RemoveSession(1),
+        ConfirmAction::RemoveSession(sid(1)),
     );
     assert!(app.dialogs.confirm.open);
     app.confirm_yes();
@@ -3771,7 +3784,7 @@ fn remove_session_drops_container_and_rows() {
 fn seed_ua_sessions(app: &mut App, count: usize) {
     for index in 0..count {
         app.seed_session(
-            1000 + index as u64,
+            sid(1000 + index as u64),
             EndpointSpec::ua(format!("opc.tcp://127.0.0.1:{}", 20000 + index)),
         );
     }
@@ -3815,7 +3828,7 @@ fn ua_session_cap_allows_reconnect_at_the_limit() {
         seed_ua_sessions(&mut app, 100);
         assert_eq!(app.ua_session_count(), 100);
 
-        app.reconnect_session(1000);
+        app.reconnect_session(sid(1000));
         assert_eq!(
             app.ua_session_count(),
             100,
@@ -3863,7 +3876,7 @@ fn ua_session_cap_counts_hidden_disconnected_and_frees_on_remove() {
             "hidden/disconnected UA sessions count"
         );
 
-        app.remove_session(1000);
+        app.remove_session(sid(1000));
         assert_eq!(app.ua_session_count(), 99);
         app.open_tab_for_endpoint(EndpointSpec::ua("opc.tcp://127.0.0.1:4841"));
         assert_eq!(app.ua_session_count(), 100, "removal frees a slot");
@@ -3876,17 +3889,17 @@ fn ua_session_cap_counts_hidden_disconnected_and_frees_on_remove() {
 fn tab_switch_changes_active_session_and_rendered_rows() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.One"));
-    app.seed_row(1, "a", "SigA1", Value::I64(1));
-    app.seed_session(2, EndpointSpec::da("", "Srv.Two"));
-    app.seed_row(2, "b", "SigB2", Value::I64(2));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.One"));
+    app.seed_row(sid(1), "a", "SigA1", Value::I64(1));
+    app.seed_session(sid(2), EndpointSpec::da("", "Srv.Two"));
+    app.seed_row(sid(2), "b", "SigB2", Value::I64(2));
+    app.activate_session(sid(1));
 
     // Session 2's row is present but not active yet.
-    assert_eq!(app.active_session, Some(1));
+    assert_eq!(app.active_session, Some(sid(1)));
     // Switch to session 2 via the tab bar: active changes.
-    app.activate_session(2);
-    assert_eq!(app.active_session, Some(2));
+    app.activate_session(sid(2));
+    assert_eq!(app.active_session, Some(sid(2)));
 
     let mut h = harness(app);
     h.run_steps(5);
@@ -3894,7 +3907,7 @@ fn tab_switch_changes_active_session_and_rendered_rows() {
     assert!(h.query_all_by_label("DA: Srv.One").count() >= 1);
     assert!(h.query_all_by_label("DA: Srv.Two").count() >= 1);
     // The table renders both sessions' rows (global signal table).
-    assert_eq!(h.state().active_session, Some(2));
+    assert_eq!(h.state().active_session, Some(sid(2)));
 }
 
 /// The tab bar renders an empty-state hint + «Подключиться...» when no tab is open.
@@ -3902,8 +3915,8 @@ fn tab_switch_changes_active_session_and_rendered_rows() {
 fn tab_bar_shows_empty_state_even_with_hidden_containers() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    app.close_tab(1); // hide the only container
+    app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    app.close_tab(sid(1)); // hide the only container
 
     let mut h = harness(app);
     h.run_steps(5);
@@ -3925,9 +3938,9 @@ fn tab_bar_shows_empty_state_even_with_hidden_containers() {
 fn tab_context_menu_remove_from_list_drops_container() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    app.seed_row(1, "a", "SigA", Value::I64(1));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    app.seed_row(sid(1), "a", "SigA", Value::I64(1));
+    app.activate_session(sid(1));
 
     let mut h = harness(app);
     // Open the tab's context menu and pick «Удалить из списка».
@@ -3952,12 +3965,12 @@ fn disconnect_keeps_container_and_does_not_arm_reconnect() {
     let mut app = App::new_test(&ctx);
     set_ru(&mut app);
     app.settings.options.auto_reconnect = true;
-    app.seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    app.seed_row(1, "ns=1;s=a", "SigA", Value::I64(5));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    app.seed_row(sid(1), "ns=1;s=a", "SigA", Value::I64(5));
+    app.activate_session(sid(1));
 
     // User disconnects manually (menu → «Отключиться» → confirm).
-    app.disconnect_session(1);
+    app.disconnect_session(sid(1));
 
     // Container survives: session + row still present, row marked stale.
     assert_eq!(app.sessions.len(), 1);
@@ -3971,7 +3984,7 @@ fn disconnect_keeps_container_and_does_not_arm_reconnect() {
     // The backend reports the link closed; because this was a manual disconnect
     // it must NOT re-arm the auto-reconnect loop.
     app.on_event_for_test_at(
-        1,
+        sid(1),
         EventKind::Disconnected {
             reason: opcda_egui::bff::model::BackendMsg::raw("отключено"),
         },
@@ -4023,8 +4036,8 @@ fn servers_add_button_opens_connect_dialog() {
 fn servers_row_shows_state_name_and_remove() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    app.activate_session(sid(1));
     let mut h = harness(app);
     h.run_steps(3);
     // The servers list shows the bare name (the tab shows "DA: Alpha.Server").
@@ -4053,8 +4066,8 @@ fn servers_row_shows_state_name_and_remove() {
 fn servers_row_applies_remote_host_suffix() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("box1", "Alpha.Server"));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("box1", "Alpha.Server"));
+    app.activate_session(sid(1));
     let mut h = harness(app);
     h.run_steps(3);
     assert!(
@@ -4069,9 +4082,9 @@ fn servers_row_applies_remote_host_suffix() {
 fn servers_row_remove_requires_confirm_and_drops_after_yes() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    app.seed_row(1, "a", "SigA", Value::I64(1));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    app.seed_row(sid(1), "a", "SigA", Value::I64(1));
+    app.activate_session(sid(1));
     let mut h = harness(app);
     h.run_steps(3);
 
@@ -4099,9 +4112,9 @@ fn servers_row_remove_requires_confirm_and_drops_after_yes() {
 fn servers_row_remove_cancel_keeps_container() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    app.seed_row(1, "a", "SigA", Value::I64(1));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    app.seed_row(sid(1), "a", "SigA", Value::I64(1));
+    app.activate_session(sid(1));
     let mut h = harness(app);
     h.run_steps(3);
     servers_remove_button(&h).expect("servers ×").click();
@@ -4117,9 +4130,9 @@ fn servers_row_remove_cancel_keeps_container() {
 fn tab_close_button_only_hides_view() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    app.seed_row(1, "a", "SigA", Value::I64(1));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    app.seed_row(sid(1), "a", "SigA", Value::I64(1));
+    app.activate_session(sid(1));
     let mut h = harness(app);
 
     // The tab × is inside the central panel (x >= 400), unlike the servers ×.
@@ -4141,8 +4154,8 @@ fn tab_close_button_only_hides_view() {
 fn tab_strip_plus_opens_connect_dialog() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    app.activate_session(sid(1));
     let mut h = harness(app);
     h.run_steps(3);
     assert!(!h.state().dialogs.connect.open);
@@ -4164,8 +4177,8 @@ fn servers_row_reconnect_counter_and_stop_resume_toggle() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.settings.options.auto_reconnect = true;
-    app.seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    app.activate_session(sid(1));
     // Simulate a lost link that armed a reconnect loop at attempt 3.
     app.sessions[0].state = SessionState::Disconnected;
     app.sessions[0].reconnect = ReconnectState::Waiting {
@@ -4226,8 +4239,8 @@ fn toolbar_enable_states_follow_active_session() {
 
     // Connected: all three enabled.
     h.state_mut()
-        .seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    h.state_mut().activate_session(1);
+        .seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    h.state_mut().activate_session(sid(1));
     h.run_steps(3);
     assert!(widget_enabled(&h, "Подключиться"));
     assert!(widget_enabled(&h, "Отключиться"));
@@ -4254,11 +4267,11 @@ fn toolbar_enable_states_follow_active_session() {
 fn v1_each_tab_shows_its_own_tags_and_row_menu_has_no_tree_actions() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    app.seed_session(2, EndpointSpec::ua("opc.tcp://127.0.0.1:4841"));
-    app.activate_session(1);
-    app.seed_row(1, "a", "SigA", Value::I64(1));
-    app.seed_row(2, "b", "SigB", Value::I64(2));
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_session(sid(2), EndpointSpec::ua("opc.tcp://127.0.0.1:4841"));
+    app.activate_session(sid(1));
+    app.seed_row(sid(1), "a", "SigA", Value::I64(1));
+    app.seed_row(sid(2), "b", "SigB", Value::I64(2));
     let mut h = harness(app);
     h.run_steps(3);
     assert!(h.query_by_label_contains("SigA").is_some());
@@ -4277,7 +4290,7 @@ fn v1_each_tab_shows_its_own_tags_and_row_menu_has_no_tree_actions() {
     h.run_steps(3);
 
     // Switching the tab shows the other endpoint's own list.
-    h.state_mut().activate_session(2);
+    h.state_mut().activate_session(sid(2));
     h.run_steps(3);
     assert!(h.query_by_label_contains("SigB").is_some());
     assert!(h.query_by_label_contains("SigA").is_none());
@@ -4289,11 +4302,11 @@ fn v1_each_tab_shows_its_own_tags_and_row_menu_has_no_tree_actions() {
 fn v1_switching_tabs_drops_the_hidden_selection() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    app.seed_session(2, EndpointSpec::ua("opc.tcp://127.0.0.1:4841"));
-    app.activate_session(1);
-    let a = app.seed_row(1, "a", "SigA", Value::I64(1));
-    let b = app.seed_row(2, "b", "SigB", Value::I64(2));
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_session(sid(2), EndpointSpec::ua("opc.tcp://127.0.0.1:4841"));
+    app.activate_session(sid(1));
+    let a = app.seed_row(sid(1), "a", "SigA", Value::I64(1));
+    let b = app.seed_row(sid(2), "b", "SigB", Value::I64(2));
     let mut h = harness(app);
     h.run_steps(2);
     h.state_mut().select_only(0);
@@ -4306,7 +4319,7 @@ fn v1_switching_tabs_drops_the_hidden_selection() {
     );
     assert!(h.state().selected_rows.contains(&a));
 
-    h.state_mut().activate_session(2);
+    h.state_mut().activate_session(sid(2));
     h.run_steps(2);
     assert!(h.state().selected_rows.is_empty());
     h.key_press(Key::Delete);
@@ -4320,14 +4333,14 @@ fn v1_switching_tabs_drops_the_hidden_selection() {
 fn v1_signal_count_is_per_tab() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    app.seed_session(2, EndpointSpec::ua("opc.tcp://127.0.0.1:4841"));
-    app.activate_session(2);
-    app.seed_row(1, "a", "SigA", Value::I64(1));
-    app.seed_row(1, "c", "SigC", Value::I64(3));
-    app.seed_row(2, "b", "SigB", Value::I64(2));
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_session(sid(2), EndpointSpec::ua("opc.tcp://127.0.0.1:4841"));
+    app.activate_session(sid(2));
+    app.seed_row(sid(1), "a", "SigA", Value::I64(1));
+    app.seed_row(sid(1), "c", "SigC", Value::I64(3));
+    app.seed_row(sid(2), "b", "SigB", Value::I64(2));
     assert_eq!(app.visible_row_count(), 1);
-    app.activate_session(1);
+    app.activate_session(sid(1));
     assert_eq!(app.visible_row_count(), 2);
     assert_eq!(app.visible_row_positions(), vec![0, 1]);
 }
@@ -4337,11 +4350,11 @@ fn v1_signal_count_is_per_tab() {
 fn a12_a_huge_tree_builds_only_the_visible_rows() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.activate_session(sid(1));
     for index in 0..5000 {
         app.seed_tree_item(
-            1,
+            sid(1),
             None,
             0,
             BrowseNode {
@@ -4382,8 +4395,8 @@ fn a7_toolbar_connect_opens_the_dialog_on_first_start() {
 fn a7_toolbar_connect_reconnects_a_disconnected_active_session() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.activate_session(sid(1));
     app.sessions[0].state = SessionState::Disconnected;
     let mut h = harness(app);
     h.run_steps(3);
@@ -4417,7 +4430,7 @@ fn on_exit_shuts_down_the_gateway() {
     with_settings_lock(|| {
         let ctx = egui::Context::default();
         let mut app = App::new_test(&ctx);
-        app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+        app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
 
         let started = std::time::Instant::now();
         <App as eframe::App>::on_exit(&mut app, None);
@@ -4431,7 +4444,7 @@ fn on_exit_shuts_down_the_gateway() {
             .gateway_for_test()
             .send(Command {
                 request_id: opcda_egui::bff::model::RequestId::new(1),
-                session: 1,
+                owner: sid(1).into(),
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::Test,
             })
@@ -4442,7 +4455,13 @@ fn on_exit_shuts_down_the_gateway() {
 
 // ---- U9: the connect dialog waits for Connected / Error of its attempt ----
 
-fn u9_start_attempt(app: &mut App, url: &str) -> (u64, opcda_egui::bff::model::RequestId) {
+fn u9_start_attempt(
+    app: &mut App,
+    url: &str,
+) -> (
+    opcda_egui::bff::model::SessionId,
+    opcda_egui::bff::model::RequestId,
+) {
     app.open_connect_dialog();
     app.dialogs.connect.protocol = Protocol::OpcUa;
     app.dialogs.connect.ua_url = url.to_string();
@@ -4543,10 +4562,10 @@ fn u9_other_session_connecting_does_not_close_the_dialog() {
     with_settings_lock(|| {
         let ctx = egui::Context::default();
         let mut app = App::new_test(&ctx);
-        app.seed_session(7, EndpointSpec::ua("opc.tcp://127.0.0.1:2"));
+        app.seed_session(sid(7), EndpointSpec::ua("opc.tcp://127.0.0.1:2"));
         app.open_connect_dialog();
         app.on_event_for_test_at(
-            7,
+            sid(7),
             EventKind::Connected {
                 endpoint: EndpointSpec::ua("opc.tcp://127.0.0.1:2"),
                 info: opcda_egui::bff::model::BackendMsg::raw("background"),
@@ -4644,7 +4663,7 @@ fn a3_failed_connectivity_test_marks_rows_stale_like_disconnected() {
             .all(|r| r.quality.kind() == opcda_egui::bff::model::QualityKind::Good)
     );
     app.on_event_for_test_at(
-        1,
+        sid(1),
         EventKind::Error {
             operation: opcda_egui::bff::model::Operation::Test,
             message: opcda_egui::bff::model::BackendMsg::raw("link down"),
@@ -4681,4 +4700,8 @@ fn da_preparation_failure_is_rendered_by_real_update_frames() {
         assert!(h.state().dialogs.connect.connecting.is_none());
         assert_eq!(h.state().sessions[0].state, SessionState::Disconnected);
     });
+}
+
+fn sid(raw: u64) -> opcda_egui::bff::model::SessionId {
+    opcda_egui::bff::model::SessionId::new(raw).unwrap()
 }
