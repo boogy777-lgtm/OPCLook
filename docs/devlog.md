@@ -482,3 +482,7 @@ all-targets typecheck are used; Windows runtime remains unverified.
 CSV follow-up: retain at most three import columns while still validating
 quoting in discarded columns; tested a 100,000-delimiter row (measured test
 input). Linux CSV tests 11/11 and Windows i686 all-targets typecheck passed.
+E CI follow-up: the boundary guard rejected the GUI's new direct dependency on
+`opclook-contract`, which supplies shared typed errors. Allow that explicit
+edge while retaining the other boundary checks. The guard passed locally for
+both Linux x86_64 and Windows i686 targets.
