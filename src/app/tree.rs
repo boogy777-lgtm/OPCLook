@@ -60,10 +60,10 @@ impl App {
             item.loading = true;
         }
         let protocol = view.protocol();
-        let filter = if protocol == Protocol::OpcUa && view.ua_browse_vars_only {
-            Some(2)
+        let filter = if protocol == Protocol::OpcUa {
+            view.ua_browse_filter
         } else {
-            None
+            crate::bff::model::NodeClassFilter::All
         };
         let view_id = if protocol == Protocol::OpcUa {
             view.ua_view_id.clone()
@@ -132,8 +132,13 @@ impl App {
         let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) else {
             return;
         };
-        let changed = view.ua_browse_vars_only != only;
-        view.ua_browse_vars_only = only;
+        let filter = if only {
+            crate::bff::model::NodeClassFilter::Variables
+        } else {
+            crate::bff::model::NodeClassFilter::All
+        };
+        let changed = view.ua_browse_filter != filter;
+        view.ua_browse_filter = filter;
         let live = view.state == SessionState::Connected && view.protocol() == Protocol::OpcUa;
         if changed && live {
             self.reread_tree(session);

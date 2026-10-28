@@ -843,7 +843,10 @@ fn u5_toggling_vars_only_rereads_the_tree_from_the_root() {
     assert_eq!(app.sessions[0].tree.len(), 1);
     app.set_ua_browse_vars_only(1, true);
     let view = &app.sessions[0];
-    assert!(view.ua_browse_vars_only);
+    assert_eq!(
+        view.ua_browse_filter,
+        crate::bff::model::NodeClassFilter::Variables
+    );
     assert!(view.tree.is_empty(), "stale tree dropped");
     assert!(view.root_loading, "root browse issued");
     assert_eq!(app.pending_request_ids_for_test(1).len(), 1);

@@ -652,7 +652,7 @@ fn u1_hung_connect_does_not_block_other_sessions() {
         1,
         CommandKind::Browse {
             node_id: "i=85".to_string(),
-            filter: None,
+            filter: crate::bff::model::NodeClassFilter::All,
             view_id: None,
         },
     );
@@ -732,7 +732,7 @@ fn u1_commands_for_a_session_without_connection_get_exactly_one_error_each() {
         5,
         CommandKind::Browse {
             node_id: String::new(),
-            filter: None,
+            filter: crate::bff::model::NodeClassFilter::All,
             view_id: None,
         },
     );
@@ -852,7 +852,7 @@ fn u1_commands_sent_while_connecting_are_delivered_after_the_connect() {
         1,
         CommandKind::Browse {
             node_id: "i=85".to_string(),
-            filter: None,
+            filter: crate::bff::model::NodeClassFilter::All,
             view_id: None,
         },
     );
@@ -883,7 +883,7 @@ fn u1_a_failed_connect_answers_the_commands_queued_behind_it() {
         1,
         CommandKind::Browse {
             node_id: String::new(),
-            filter: None,
+            filter: crate::bff::model::NodeClassFilter::All,
             view_id: None,
         },
     );
@@ -1079,7 +1079,7 @@ fn u5_variables_filter_still_lists_folders_so_the_tree_can_be_walked() {
             1,
             CommandKind::Browse {
                 node_id: node.to_string(),
-                filter: Some(2),
+                filter: crate::bff::model::NodeClassFilter::Variables,
                 view_id: None,
             },
         );

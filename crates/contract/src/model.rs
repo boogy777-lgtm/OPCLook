@@ -1248,6 +1248,15 @@ pub enum NodeKind {
     Item,
 }
 
+/// Classes returned by a browse command. Variables includes folders so that
+/// variables remain reachable through the UA hierarchy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NodeClassFilter {
+    All,
+    Objects,
+    Variables,
+}
+
 #[derive(Clone, Debug)]
 pub struct BrowseNode {
     /// DA: branch path encoded with 0x1F separators or fully-qualified item id.
@@ -1340,16 +1349,15 @@ pub enum CommandKind {
     Disconnect,
     /// Browse the children of `node_id`.
     ///
-    /// `filter` (UA only, None for DA) restricts the node-class mask:
-    /// `None` = all classes, `Some(1)` = Objects only, `Some(2)` = Variables
-    /// **and** the Objects/folders leading to them (a mask of Variables alone
+    /// `filter` (UA only) restricts the node-class mask. Variables includes
+    /// the Objects/folders leading to them (a mask of Variables alone
     /// would hide the folders and leave nothing to expand).
     ///
     /// `view_id` (UA only, None for DA) selects a server View node to browse
     /// through; `None` browses the default (Objects/value) view.
     Browse {
         node_id: String,
-        filter: Option<u8>,
+        filter: NodeClassFilter,
         view_id: Option<String>,
     },
     /// Lists the server's Views (UA only; DA reports an unsupported error).

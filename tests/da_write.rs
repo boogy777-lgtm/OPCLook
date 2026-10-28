@@ -121,7 +121,7 @@ fn da_write_roundtrip() {
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::Browse {
                     node_id: String::new(),
-                    filter: None,
+                    filter: opcda_egui::bff::model::NodeClassFilter::All,
                     view_id: None,
                 },
             },

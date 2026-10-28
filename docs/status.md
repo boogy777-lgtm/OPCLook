@@ -70,3 +70,7 @@ passed, 23 ignored — 22 требуют живой DA/UA-сервер, 1 Window
 - `src/bff/mod.rs`, `src/opc/mod.rs`: `#[cfg(windows)]` на модули `da`, `da_variant`, `opc::bindings`.
 - `src/bff/mdns.rs`, `src/da_route.rs`: только `cfg_attr(not(windows), allow(dead_code…))`.
 - Всё это на Windows должно собираться как раньше, но не скомпилировано — проверит CI.
+
+**2026-10-28, типизация Browse:** фильтр классов узлов передаётся enum от
+состояния GUI до команды; остальные A/C и финальные проверки остаются открыты.
+Подробности — `docs/refactoring-status.md`.

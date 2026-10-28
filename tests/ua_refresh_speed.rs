@@ -158,7 +158,7 @@ fn browse_refresh_jumps_over_queued_reads() {
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Browse {
                     node_id: String::new(),
-                    filter: None,
+                    filter: opcda_egui::bff::model::NodeClassFilter::All,
                     view_id: None,
                 },
             },

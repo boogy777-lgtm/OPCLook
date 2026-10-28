@@ -100,7 +100,7 @@ fn server_browse_add_and_read() {
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Browse {
                     node_id: "i=85".to_string(),
-                    filter: None,
+                    filter: opcda_egui::bff::model::NodeClassFilter::All,
                     view_id: None,
                 },
             },

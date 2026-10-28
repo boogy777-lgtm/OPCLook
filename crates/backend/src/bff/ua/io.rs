@@ -1,7 +1,9 @@
 use super::session::UaSession;
 use super::values::{parse_node, ua_data_value_typed, value_to_ua_variant};
 use super::worker::timeout_drain;
-use crate::bff::model::{BackendMsg, BrowseNode, DataValue, ItemKey, NodeKind, WriteRequest};
+use crate::bff::model::{
+    BackendMsg, BrowseNode, DataValue, ItemKey, NodeClassFilter, NodeKind, WriteRequest,
+};
 use crate::constants::{
     BROWSE_MAX_REFERENCES_PER_NODE, IO_TIMEOUT, MAX_BROWSE_NODES, READ_MAX_ITEMS_PER_CALL,
 };
@@ -14,23 +16,23 @@ use opcua::types::{
 use std::collections::{HashMap, HashSet};
 
 /// Node-class mask of a browse request. UA mask bits equal the `NodeClass`
-/// values. The "variables" filter (`Some(2)`) keeps the Objects too: a Variable
+/// values. The "variables" filter (`Variables`) keeps the Objects too: a Variable
 /// is usually reached through folders, and a mask of Variable alone would hide
 /// every folder and leave nothing to expand.
-pub(super) fn browse_node_class_mask(filter: Option<u8>) -> u32 {
+pub(super) fn browse_node_class_mask(filter: NodeClassFilter) -> u32 {
     let object = NodeClass::Object as i32 as u32;
     let variable = NodeClass::Variable as i32 as u32;
     match filter {
-        Some(1) => object,
-        Some(2) => object | variable,
-        _ => 0,
+        NodeClassFilter::Objects => object,
+        NodeClassFilter::Variables => object | variable,
+        NodeClassFilter::All => 0,
     }
 }
 
 pub(super) async fn browse(
     session: &mut UaSession,
     node_id: &str,
-    filter: Option<u8>,
+    filter: NodeClassFilter,
     view_id: Option<String>,
 ) -> Result<Vec<BrowseNode>, BackendMsg> {
     let node = parse_node(node_id).unwrap_or_else(|| NodeId::from(ObjectId::RootFolder));

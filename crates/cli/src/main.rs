@@ -490,7 +490,7 @@ fn run(options: &Options) -> Result<(), String> {
             protocol,
             CommandKind::Browse {
                 node_id,
-                filter: None,
+                filter: opclook_contract::model::NodeClassFilter::All,
                 view_id: None,
             },
         )?;

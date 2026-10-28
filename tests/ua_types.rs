@@ -104,7 +104,7 @@ fn browse(gateway: &Gateway, session: u64, node_id: &str) -> Vec<BrowseNode> {
             protocol: Protocol::OpcUa,
             kind: CommandKind::Browse {
                 node_id: node_id.to_string(),
-                filter: None,
+                filter: opcda_egui::bff::model::NodeClassFilter::All,
                 view_id: None,
             },
         },
@@ -225,7 +225,7 @@ fn ua_variable_filter_browse_returns_variables_only() {
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Browse {
                     node_id: "i=85".to_string(),
-                    filter: Some(2),
+                    filter: opcda_egui::bff::model::NodeClassFilter::Variables,
                     view_id: None,
                 },
             },
@@ -294,7 +294,7 @@ fn ua_browse_views_lists_views_and_browsing_in_them_does_not_error() {
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Browse {
                     node_id: "i=85".to_string(),
-                    filter: None,
+                    filter: opcda_egui::bff::model::NodeClassFilter::All,
                     view_id: Some(first_view.node_id.clone()),
                 },
             },

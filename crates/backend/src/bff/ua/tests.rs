@@ -230,7 +230,7 @@ fn control_command_classification() {
     assert!(!is_control_command(&CommandKind::Test));
     assert!(is_control_command(&CommandKind::Browse {
         node_id: "".into(),
-        filter: None,
+        filter: crate::bff::model::NodeClassFilter::All,
         view_id: None
     }));
     assert!(is_control_command(&CommandKind::Connect {
@@ -323,7 +323,7 @@ fn controls_jump_over_reads_without_losing_them() {
         cmd(CommandKind::Read { keys: vec![2] }),
         cmd(CommandKind::Browse {
             node_id: "i=85".into(),
-            filter: None,
+            filter: crate::bff::model::NodeClassFilter::All,
             view_id: None,
         }),
         cmd(CommandKind::Read { keys: vec![3] }),
@@ -1185,9 +1185,17 @@ fn missing_node_statuses_are_recognised() {
 #[test]
 fn variables_filter_keeps_folders_navigable() {
     use super::io::browse_node_class_mask;
-    assert_eq!(browse_node_class_mask(None), 0, "no filter = every class");
-    assert_eq!(browse_node_class_mask(Some(1)), 1, "objects only");
-    let mask = browse_node_class_mask(Some(2));
+    assert_eq!(
+        browse_node_class_mask(crate::bff::model::NodeClassFilter::All),
+        0,
+        "no filter = every class"
+    );
+    assert_eq!(
+        browse_node_class_mask(crate::bff::model::NodeClassFilter::Objects),
+        1,
+        "objects only"
+    );
+    let mask = browse_node_class_mask(crate::bff::model::NodeClassFilter::Variables);
     assert_eq!(mask & 2, 2, "variables are listed");
     assert_eq!(mask & 1, 1, "folders (objects) are listed too");
     assert_eq!(mask & !3, 0, "methods, types and views stay hidden");

@@ -70,7 +70,7 @@ fn main() -> Result<(), String> {
         protocol: Protocol::OpcDa,
         kind: CommandKind::Browse {
             node_id: String::new(),
-            filter: None,
+            filter: opcda_egui::bff::model::NodeClassFilter::All,
             view_id: None,
         },
     })?;
@@ -111,7 +111,7 @@ fn main() -> Result<(), String> {
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::Browse {
                     node_id: branch.clone(),
-                    filter: None,
+                    filter: opcda_egui::bff::model::NodeClassFilter::All,
                     view_id: None,
                 },
             })?;

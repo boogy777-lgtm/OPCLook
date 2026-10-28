@@ -111,7 +111,7 @@ fn run_cycle(gateway: &Gateway, session: u64, cycle: u32) {
             protocol: Protocol::OpcUa,
             kind: CommandKind::Browse {
                 node_id: "i=85".to_string(),
-                filter: None,
+                filter: opcda_egui::bff::model::NodeClassFilter::All,
                 view_id: None,
             },
         },

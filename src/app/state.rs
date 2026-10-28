@@ -1,7 +1,7 @@
 use super::present::compose_server_name;
 use crate::bff::model::{
-    BrowseNode, EndpointSpec, ItemKey, Protocol, Quality, RequestId, SessionId, SubscriptionState,
-    Value,
+    BrowseNode, EndpointSpec, ItemKey, NodeClassFilter, Protocol, Quality, RequestId, SessionId,
+    SubscriptionState, Value,
 };
 use crate::i18n::{Lang, Tr, tr};
 use chrono::{DateTime, Local, Utc};
@@ -101,7 +101,7 @@ pub struct SessionView {
     /// `None` browses the default view.
     pub ua_view_id: Option<String>,
     /// UA-only: restrict future browses to Variable nodes.
-    pub ua_browse_vars_only: bool,
+    pub ua_browse_filter: NodeClassFilter,
     /// UA-only: requested session timeout in ms (displayed in the status popup;
     /// the revised server value is not exposed by async-opcua, so we show the
     /// requested one).
@@ -131,7 +131,7 @@ impl SessionView {
             last_test: now,
             reconnect: ReconnectState::Idle,
             ua_view_id: None,
-            ua_browse_vars_only: false,
+            ua_browse_filter: NodeClassFilter::All,
             ua_session_timeout_ms: crate::settings::default_session_timeout(),
             subscription: SubscriptionState::Inactive,
         }

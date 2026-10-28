@@ -36,7 +36,7 @@ fn main() -> Result<(), String> {
                         protocol: Protocol::OpcUa,
                         kind: CommandKind::Browse {
                             node_id: String::new(),
-                            filter: None,
+                            filter: opcda_egui::bff::model::NodeClassFilter::All,
                             view_id: None,
                         },
                     })?;

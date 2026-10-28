@@ -89,7 +89,7 @@ fn browse_children(gateway: &Gateway, session: u64, node_id: &str) -> Vec<Browse
             protocol: Protocol::OpcUa,
             kind: CommandKind::Browse {
                 node_id: node_id.to_string(),
-                filter: None,
+                filter: opcda_egui::bff::model::NodeClassFilter::All,
                 view_id: None,
             },
         },

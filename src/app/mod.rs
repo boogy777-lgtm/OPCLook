@@ -755,7 +755,7 @@ impl App {
             last_test: Instant::now(),
             reconnect: ReconnectState::Idle,
             ua_view_id: None,
-            ua_browse_vars_only: false,
+            ua_browse_filter: crate::bff::model::NodeClassFilter::All,
             ua_session_timeout_ms: crate::settings::default_session_timeout(),
             subscription: SubscriptionState::Inactive,
         });

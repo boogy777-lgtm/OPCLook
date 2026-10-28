@@ -208,3 +208,14 @@ Unaccess/Unlock; неудача возвращает типизированну�
 Windows typecheck. При постоянном сбое OLE освобождение не гарантируется.
 Helper после timeout завершает процесс, поэтому ожидающий поток ConnectNamedPipe
 и его клонированный handle ограничены временем жизни этого процесса.
+
+## Тип фильтра Browse (этап C, частично)
+
+`CommandKind::Browse` и состояние фильтра сессии используют `NodeClassFilter`
+вместо неявных чисел и отдельного bool. `Variables` по-прежнему включает UA
+Object/folder для навигации. Это только один пункт этапов A/C; идентификаторы,
+качество строк, настройки и остальные типизированные границы ещё не завершены.
+Полный Linux gate, Windows runtime и exact-head CI остаются обязательными.
+Локально прошли Linux all-targets typecheck для GUI/CLI и библиотек и один
+backend-тест маски (1/1), а также Windows i686 workspace all-targets typecheck
+с test-only отключением ресурсов/манифеста; Windows тесты не запускались.

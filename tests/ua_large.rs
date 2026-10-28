@@ -116,7 +116,7 @@ fn browse(gateway: &Gateway, session: u64, node_id: &str) -> Vec<BrowseNode> {
             protocol: Protocol::OpcUa,
             kind: CommandKind::Browse {
                 node_id: node_id.to_string(),
-                filter: None,
+                filter: opcda_egui::bff::model::NodeClassFilter::All,
                 view_id: None,
             },
         },
