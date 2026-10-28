@@ -161,9 +161,13 @@ pub struct Engine<C> {
     route_events: VecDeque<Event>,
     invalidated: HashMap<SessionId, Vec<Operation>>,
     timeout_queued: HashSet<(SessionId, u64)>,
+    #[cfg(test)]
+    test_skip_dispatch: bool,
 }
 impl<C> Default for Engine<C> {
     fn default() -> Self {
+        #[cfg(test)]
+        let _ = opclook_backend::bff::ua::use_private_pki_dir();
         Self {
             gateway: Gateway::new(),
             next: Some(1),
@@ -178,6 +182,8 @@ impl<C> Default for Engine<C> {
             route_events: VecDeque::new(),
             invalidated: HashMap::new(),
             timeout_queued: HashSet::new(),
+            #[cfg(test)]
+            test_skip_dispatch: false,
         }
     }
 }
@@ -387,6 +393,13 @@ impl<C> Engine<C> {
                 .iter()
                 .any(|item| item.session == session)
     }
+    fn dispatch(&self, command: Command) -> Result<(), String> {
+        #[cfg(test)]
+        if self.test_skip_dispatch {
+            return Ok(());
+        }
+        self.gateway.send(command)
+    }
     pub fn send(
         &mut self,
         session: SessionId,
@@ -444,7 +457,7 @@ impl<C> Engine<C> {
                 },
             );
         }
-        if let Err(message) = self.gateway.send(Command {
+        if let Err(message) = self.dispatch(Command {
             request_id: id,
             session,
             protocol,
@@ -1262,7 +1275,8 @@ mod tests {
     #[test]
     fn reconnect_drops_old_confirmations_before_failed_readd() {
         let mut engine = Engine::<()>::default();
-        let endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+        engine.test_skip_dispatch = true;
+        let endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:0");
         let mut view = SessionRuntime::new(endpoint.clone(), Instant::now());
         view.state = SessionState::Connected;
         view.subscription = SubscriptionState::Active;
