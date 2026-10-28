@@ -51,11 +51,16 @@ fn utc_to_ole_date(dt: DateTime<Utc>) -> Option<f64> {
 /// Converts a COM VARIANT into the protocol-neutral BFF value.
 ///
 /// # Safety
-/// The caller guarantees `variant` contains a valid COM VARIANT owned by the caller.
+/// The caller guarantees the active pointer-bearing fields reference live COM
+/// allocations for the duration of this call. BYREF values are not dereferenced.
 pub unsafe fn variant_to_value(variant: &VARIANT) -> Value {
     // SAFETY: the caller supplies an initialized VARIANT containing a tag.
     let vt = unsafe { variant.Anonymous.Anonymous.vt };
     let raw = vt.0;
+    // BYREF stores pointers instead of the scalar or SAFEARRAY members below.
+    if raw & 0x4000 != 0 {
+        return Value::Other(format!("VT_BYREF 0x{raw:04X}"));
+    }
     let is_array = raw & 0x2000 != 0;
     let base = raw & 0x0FFF;
 
@@ -127,6 +132,29 @@ fn bounded_array_len(lower: i32, upper: i32) -> usize {
     (i64::from(upper) - i64::from(lower) + 1).clamp(0, MAX_ARRAY_ITEMS as i64) as usize
 }
 
+/// Unlocks borrowed SAFEARRAY data even if conversion unwinds.
+struct ArrayAccess(*mut windows::Win32::System::Com::SAFEARRAY);
+impl Drop for ArrayAccess {
+    fn drop(&mut self) {
+        // SAFETY: the guard is created only after one successful access.
+        unsafe {
+            let _ = SafeArrayUnaccessData(self.0);
+        }
+    }
+}
+
+fn expected_array_element_size(vt: u16) -> Option<usize> {
+    match vt {
+        16 | 17 => Some(1),
+        2 | 11 | 18 => Some(2),
+        3 | 4 | 10 | 19 | 22 | 23 => Some(4),
+        5 | 6 | 7 | 20 | 21 | 64 => Some(8),
+        8 => Some(std::mem::size_of::<BSTR>()),
+        12 => Some(std::mem::size_of::<VARIANT>()),
+        _ => None,
+    }
+}
+
 unsafe fn array_to_value(variant: &VARIANT, base: u16) -> Value {
     // SAFETY: the caller supplies a valid array VARIANT.
     let parray = unsafe { variant.Anonymous.Anonymous.Anonymous.parray };
@@ -142,6 +170,11 @@ unsafe fn array_to_value(variant: &VARIANT, base: u16) -> Value {
     // SAFETY: the live array has dimension 1 as checked above.
     let ub = unsafe { SafeArrayGetUBound(parray, 1) }.unwrap_or(-1);
     let count = bounded_array_len(lb, ub);
+    // SAFETY: parray is a live SAFEARRAY and exposes its element size.
+    let elem_size = unsafe { SafeArrayGetElemsize(parray) } as usize;
+    if expected_array_element_size(base).is_some_and(|expected| expected != elem_size) {
+        return Value::Other("Invalid array element size".to_string());
+    }
     if count == 0 {
         return Value::Array(Vec::new());
     }
@@ -149,6 +182,10 @@ unsafe fn array_to_value(variant: &VARIANT, base: u16) -> Value {
     // SAFETY: parray is live and data is valid writable output storage.
     if unsafe { SafeArrayAccessData(parray, &raw mut data) }.is_err() {
         return Value::Array(Vec::new());
+    }
+    let _access = ArrayAccess(parray);
+    if data.is_null() {
+        return Value::Other("Invalid array data".to_string());
     }
 
     let mut out = Vec::with_capacity(count);
@@ -161,8 +198,6 @@ unsafe fn array_to_value(variant: &VARIANT, base: u16) -> Value {
             out.push(unsafe { variant_to_value(v) });
         }
     } else {
-        // SAFETY: parray remains live and accessed.
-        let elem_size = unsafe { SafeArrayGetElemsize(parray) } as usize;
         let len = count;
         for i in 0..len {
             let mut tmp = VARIANT::default();
@@ -177,10 +212,6 @@ unsafe fn array_to_value(variant: &VARIANT, base: u16) -> Value {
             // SAFETY: tmp borrows the copied scalar matching base until conversion returns.
             out.push(unsafe { scalar_to_value(&tmp, base) });
         }
-    }
-    // SAFETY: this balances the successful access above exactly once.
-    unsafe {
-        let _ = SafeArrayUnaccessData(parray);
     }
     Value::Array(out)
 }
@@ -691,6 +722,34 @@ mod tests {
         assert!(observation.unlocked);
         assert!(observation.first_is_bstr);
         assert!(observation.destroyed);
+    }
+
+    #[test]
+    fn byref_and_mismatched_array_storage_are_not_dereferenced() {
+        let mut scalar = VARIANT::default();
+        set_vt(&mut scalar, 0x4000 | 3);
+        let mut integer = 7i32;
+        // SAFETY: plVal points to a live integer for this BYREF test.
+        unsafe { (*variant_inner(&mut scalar)).plVal = &raw mut integer };
+        // SAFETY: the BYREF VARIANT refers to the live integer above.
+        let converted = unsafe { variant_to_value(&scalar) };
+        assert!(matches!(converted, Value::Other(_)));
+
+        // SAFETY: create a byte array and transfer it into a mismatched VARIANT.
+        let array = unsafe { SafeArrayCreateVector(VARENUM(17), 0, 1) };
+        assert!(!array.is_null());
+        let mut variant = VARIANT::default();
+        set_vt(&mut variant, 0x2000 | 8);
+        // SAFETY: the array pointer is owned by variant until it is cleared.
+        unsafe { (*variant_inner(&mut variant)).parray = array };
+        // SAFETY: the pointer is valid; its one-byte element must be rejected
+        // before interpreting it as a BSTR pointer.
+        let value = unsafe { variant_to_value(&variant) };
+        assert_eq!(value, Value::Other("Invalid array element size".into()));
+        // Destroy directly because the deliberately mismatched tag is not a valid
+        // ownership description for VariantClear.
+        // SAFETY: this test owns the live array and did not transfer it elsewhere.
+        unsafe { SafeArrayDestroy(array).unwrap() };
     }
 
     #[test]
