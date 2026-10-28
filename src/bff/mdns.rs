@@ -304,7 +304,26 @@ mod windows_impl {
             request: usize,
             service: ResolvedService,
         },
-        ResolveDone(u32),
+        ResolveDone {
+            request: usize,
+            status: u32,
+        },
+    }
+
+    #[cfg(test)]
+    #[test]
+    fn failed_resolve_callback_identifies_the_request() {
+        let (tx, rx) = mpsc::channel();
+        let id = register_callback(tx);
+        // SAFETY: the callback accepts this registered context and a null
+        // instance on failure; no foreign memory is accessed.
+        unsafe {
+            resolve_callback(5, id as *const c_void, std::ptr::null());
+        }
+        assert!(
+            matches!(rx.recv(), Ok(CallbackEvent::ResolveDone { request, status: 5 }) if request == id)
+        );
+        unregister_callback(id);
     }
 
     struct Sink {
@@ -403,7 +422,10 @@ mod windows_impl {
             return;
         };
         if status != ERROR_SUCCESS.0 || instance.is_null() {
-            let _ = sink.tx.send(CallbackEvent::ResolveDone(status));
+            let _ = sink.tx.send(CallbackEvent::ResolveDone {
+                request: context as usize,
+                status,
+            });
             return;
         }
         let service = unsafe { parse_service_instance(&*instance) };
@@ -569,7 +591,8 @@ mod windows_impl {
                         resolved.push(service);
                     }
                 }
-                Ok(CallbackEvent::ResolveDone(status)) => {
+                Ok(CallbackEvent::ResolveDone { request, status }) => {
+                    completed.insert(request);
                     if status != 0 {
                         notes.push(BackendMsg::MdnsResolveCompleted { code: status });
                     }
