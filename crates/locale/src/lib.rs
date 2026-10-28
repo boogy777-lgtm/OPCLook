@@ -117,6 +117,20 @@ translation_keys! {
     SettingsParseFailed,
     SettingsParseNoBackup,
     SettingsSaveFailed,
+    SettingsSaveBlocked,
+    NetworkCacheWarning,
+    NetworkCacheLoaded,
+    NetworkCacheSkipped,
+    NetworkRefreshStart,
+    NetworkRefreshError,
+    NetworkRefreshInventory,
+    NetworkRefreshDone,
+    NetworkAdapterSkipped,
+    NetworkAdapterDetails,
+    NetworkSelectionDetails,
+    NetworkSelectionStale,
+    NetworkSelectionNone,
+    NetworkSelectionCleared,
     ConnectInProgress,
     MenuServers,
     MenuSignals,
@@ -828,6 +842,22 @@ fn ru(key: Tr) -> &'static str {
             "Файл настроек {0} повреждён ({1}), копию сделать не удалось ({2}). Файл не будет перезаписан, используются значения по умолчанию"
         }
         SettingsSaveFailed => "Не удалось сохранить настройки {0}: {1}",
+        SettingsSaveBlocked => {
+            "Не удалось сохранить настройки {0}: существующий файл повреждён или недоступен, а его резервная копия не создана. Файл не будет перезаписан"
+        }
+        NetworkCacheWarning => "Кэш сетевых адаптеров: {0}",
+        NetworkCacheLoaded => "Загружен кэш сетевых адаптеров: {0}",
+        NetworkCacheSkipped => "Пропущена запись кэша: {0}",
+        NetworkRefreshStart => "Обновление сетевых адаптеров начато",
+        NetworkRefreshError => "Не удалось обновить сетевые адаптеры: {0}",
+        NetworkRefreshInventory => "Найдено сетевых адаптеров: {0}",
+        NetworkRefreshDone => "Обновление завершено, доступных адаптеров: {0}",
+        NetworkAdapterSkipped => "Адаптер пропущен: {0}",
+        NetworkAdapterDetails => "Сетевой адаптер: {0}",
+        NetworkSelectionDetails => "Выбран сетевой адаптер: {0}",
+        NetworkSelectionStale => "Выбранный адаптер недоступен: {0}",
+        NetworkSelectionNone => "Сетевой адаптер не выбран",
+        NetworkSelectionCleared => "Выбор сетевого адаптера сброшен",
         ConnectInProgress => "Подключение…",
         MenuServers => "Серверы",
         MenuSignals => "Сигналы",
@@ -1439,6 +1469,22 @@ fn en(key: Tr) -> &'static str {
             "Settings file {0} is damaged ({1}) and could not be backed up ({2}). It will not be overwritten; defaults are used"
         }
         SettingsSaveFailed => "Could not save settings {0}: {1}",
+        SettingsSaveBlocked => {
+            "Could not save settings {0}: the existing file is damaged or unreadable and could not be backed up. It will not be overwritten"
+        }
+        NetworkCacheWarning => "Network adapter cache: {0}",
+        NetworkCacheLoaded => "Network adapter cache loaded: {0}",
+        NetworkCacheSkipped => "Network cache entry skipped: {0}",
+        NetworkRefreshStart => "Network adapter refresh started",
+        NetworkRefreshError => "Network adapter refresh failed: {0}",
+        NetworkRefreshInventory => "Network adapters found: {0}",
+        NetworkRefreshDone => "Network refresh complete, usable adapters: {0}",
+        NetworkAdapterSkipped => "Network adapter skipped: {0}",
+        NetworkAdapterDetails => "Network adapter: {0}",
+        NetworkSelectionDetails => "Network adapter selected: {0}",
+        NetworkSelectionStale => "Selected adapter is unavailable: {0}",
+        NetworkSelectionNone => "No network adapter selected",
+        NetworkSelectionCleared => "Network adapter selection cleared",
         ConnectInProgress => "Connecting…",
         MenuServers => "Servers",
         MenuSignals => "Signals",
@@ -2036,6 +2082,22 @@ fn zh(key: Tr) -> &'static str {
             "设置文件 {0} 已损坏（{1}），且无法备份（{2}）。不会覆盖该文件，使用默认值"
         }
         SettingsSaveFailed => "无法保存设置 {0}：{1}",
+        SettingsSaveBlocked => {
+            "无法保存设置 {0}：现有文件已损坏或无法读取，且无法备份。不会覆盖该文件"
+        }
+        NetworkCacheWarning => "网络适配器缓存：{0}",
+        NetworkCacheLoaded => "已加载网络适配器缓存：{0}",
+        NetworkCacheSkipped => "已跳过缓存记录：{0}",
+        NetworkRefreshStart => "开始刷新网络适配器",
+        NetworkRefreshError => "网络适配器刷新失败：{0}",
+        NetworkRefreshInventory => "发现网络适配器：{0}",
+        NetworkRefreshDone => "网络刷新完成，可用适配器：{0}",
+        NetworkAdapterSkipped => "已跳过网络适配器：{0}",
+        NetworkAdapterDetails => "网络适配器：{0}",
+        NetworkSelectionDetails => "已选择网络适配器：{0}",
+        NetworkSelectionStale => "所选适配器不可用：{0}",
+        NetworkSelectionNone => "未选择网络适配器",
+        NetworkSelectionCleared => "已清除网络适配器选择",
         ConnectInProgress => "连接中…",
         MenuServers => "服务器",
         MenuSignals => "信号",

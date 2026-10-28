@@ -555,3 +555,8 @@ Load returns settings with notices, saves return typed failures, and the applica
 ### 2026-10-28 — grouped settings
 
 View, UA and network preferences are grouped with flattened serialization preserving all legacy keys; existing default, clamp, security, adapter and column migration tests remain in place, with an exact top-level key regression. Measured: Linux GUI 217 library, 149 interaction (one Windows-only ignored), 14 theme tests, and Windows i686 all-target typecheck passed. Other GUI structural work and exact-head CI remain open.
+
+
+### 2026-10-28 — localized network and save diagnostics
+
+Network control messages use locale keys with technical details retained as arguments; save-blocked is typed and localized, and a failed script save does not report success. Measured: Linux GUI 219 library, 149 interactions (one Windows-only ignored), Windows i686 workspace all-target typecheck passed. Exact-head CI and Windows runtime remain open.

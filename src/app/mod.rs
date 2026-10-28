@@ -341,6 +341,7 @@ impl App {
             SettingsNotice::SaveFailed { path, error } => {
                 (Tr::SettingsSaveFailed, vec![path, error])
             }
+            SettingsNotice::SaveBlocked { path } => (Tr::SettingsSaveBlocked, vec![path]),
         };
         let refs: Vec<&dyn std::fmt::Display> = args
             .iter()
@@ -355,21 +356,22 @@ impl App {
     fn init_network_from_cache(&mut self) {
         let cached = self.settings.network.cached_adapters.adapters.clone();
         for warning in self.settings.network.cached_adapters.rejected.clone() {
-            self.journal.warn(format!("network cache: {warning}"));
+            self.journal.warn_l(Tr::NetworkCacheWarning, &[&warning]);
         }
         self.journal
-            .info(format!("network cache loaded: {} adapter(s)", cached.len()));
+            .info_l(Tr::NetworkCacheLoaded, &[&cached.len()]);
         for adapter in &cached {
             self.journal_cached_adapter(adapter);
         }
         let report = self.network.load_cache(&cached);
         for rejection in &report.rejected {
-            self.journal.warn(format!(
-                "network cache: skipped id={} name=\"{}\" reason={}",
+            let details = format!(
+                "id={} name=\"{}\" reason={}",
                 rejection.id,
                 rejection.name,
                 rejection.reason.as_str()
-            ));
+            );
+            self.journal.warn_l(Tr::NetworkCacheSkipped, &[&details]);
         }
         let changed = self.sync_network_from_settings();
         if changed {
@@ -381,7 +383,7 @@ impl App {
     /// inventory. This is the only caller of `GetAdaptersAddresses`.
     pub fn refresh_network(&mut self) {
         let lang = self.lang();
-        self.journal.info("network refresh: start");
+        self.journal.info_l(Tr::NetworkRefreshStart, &[]);
         match inventory_adapters() {
             Ok(inventory) => self.apply_network_inventory(inventory),
             Err(err) => {
@@ -389,8 +391,7 @@ impl App {
                 self.network.error = Some(err.to_string());
                 self.network.refresh_failed = true;
                 self.status = tr(lang, Tr::NetworkRefreshFailed).to_string();
-                self.journal
-                    .error(format!("network refresh: failed: {err}"));
+                self.journal.error_l(Tr::NetworkRefreshError, &[&err]);
             }
         }
     }
@@ -398,22 +399,21 @@ impl App {
     /// Apply a freshly read inventory. Public so integration tests can exercise
     /// the same replacement path without touching the real Windows API.
     pub fn apply_network_inventory(&mut self, inventory: Vec<AdapterInfo>) {
-        self.journal.info(format!(
-            "network refresh: inventory {} adapter(s)",
-            inventory.len()
-        ));
+        self.journal
+            .info_l(Tr::NetworkRefreshInventory, &[&inventory.len()]);
         for adapter in &inventory {
             self.journal_network_adapter(adapter);
         }
         let build = build_adapter_cache(&inventory);
         for skip in &build.skipped {
             self.journal_network_adapter(&skip.adapter);
-            self.journal.info(format!(
-                "network adapter skipped: id={} name=\"{}\" reason={}",
+            let details = format!(
+                "id={} name=\"{}\" reason={}",
                 skip.adapter.id,
                 skip.adapter.name,
                 skip.reason.as_str()
-            ));
+            );
+            self.journal.info_l(Tr::NetworkAdapterSkipped, &[&details]);
         }
         let cached = build.cached;
         self.network
@@ -421,10 +421,8 @@ impl App {
         self.settings.network.cached_adapters = CachedAdapters::from_vec(cached);
         let _ = self.sync_network_from_settings();
         self.persist_settings();
-        self.journal.info(format!(
-            "network refresh: done, {} usable adapter(s)",
-            self.network.adapters.len()
-        ));
+        self.journal
+            .info_l(Tr::NetworkRefreshDone, &[&self.network.adapters.len()]);
         self.dialogs.connect.error = None;
     }
 
@@ -448,8 +446,8 @@ impl App {
         } else {
             "virtual"
         };
-        self.journal.info(format!(
-            "network adapter: id={} name=\"{}\" description=\"{}\" state={} addresses=[{}] gateways=[{}] metric={} type={}",
+        let details = format!(
+            "id={} name=\"{}\" description=\"{}\" state={} addresses=[{}] gateways=[{}] metric={} type={}",
             adapter.id,
             adapter.name,
             adapter.description,
@@ -458,7 +456,8 @@ impl App {
             gateways,
             adapter.metric,
             kind
-        ));
+        );
+        self.journal.info_l(Tr::NetworkAdapterDetails, &[&details]);
     }
 
     fn journal_cached_adapter(&mut self, adapter: &CachedAdapter) {
@@ -487,13 +486,15 @@ impl App {
                 }
                 self.network
                     .resolve(resolution.selection.clone(), resolution.local_ip);
-                self.journal.info(format!(
-                    "network selection: adapter={} ip={} binding={} lease_generation={}",
+                let details = format!(
+                    "adapter={} ip={} binding={} lease_generation={}",
                     id.map(|value| value.to_string()).unwrap_or_default(),
                     ip.map(|value| value.to_string()).unwrap_or_default(),
                     self.binding_summary(),
                     self.network.generation
-                ));
+                );
+                self.journal
+                    .info_l(Tr::NetworkSelectionDetails, &[&details]);
             }
             SelectionState::Stale => {
                 self.network.resolve(AdapterSelection::None, None);
@@ -503,9 +504,7 @@ impl App {
                     .preferred_adapter
                     .map(|value| value.to_string())
                     .unwrap_or_default();
-                self.journal.warn(format!(
-                    "network selection stale: saved adapter {id} is unavailable"
-                ));
+                self.journal.warn_l(Tr::NetworkSelectionStale, &[&id]);
             }
             SelectionState::NotSelected => {
                 if self.settings.network.preferred_adapter.is_some()
@@ -516,7 +515,7 @@ impl App {
                     changed = true;
                 }
                 self.network.resolve(AdapterSelection::None, None);
-                self.journal.info("network selection: none");
+                self.journal.info_l(Tr::NetworkSelectionNone, &[]);
             }
         }
         changed
@@ -572,7 +571,7 @@ impl App {
                 self.report_settings_notice(notice);
             }
             self.network.resolve(AdapterSelection::None, None);
-            self.journal.info("network selection: cleared");
+            self.journal.info_l(Tr::NetworkSelectionCleared, &[]);
             return;
         }
         // A saved IP survives only while it belongs to the target adapter;
@@ -589,8 +588,8 @@ impl App {
                 }
                 self.network
                     .resolve(resolution.selection.clone(), resolution.local_ip);
-                self.journal.info(format!(
-                    "network selection: adapter={} ip={} binding={} lease_generation={}",
+                let details = format!(
+                    "adapter={} ip={} binding={} lease_generation={}",
                     self.settings
                         .network
                         .preferred_adapter
@@ -603,7 +602,9 @@ impl App {
                         .unwrap_or_default(),
                     self.binding_summary(),
                     self.network.generation
-                ));
+                );
+                self.journal
+                    .info_l(Tr::NetworkSelectionDetails, &[&details]);
             }
             _ => {
                 self.network.resolve(AdapterSelection::None, None);
@@ -613,9 +614,7 @@ impl App {
                     .preferred_adapter
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "unknown".to_string());
-                self.journal.warn(format!(
-                    "network selection stale: adapter {id} is unavailable"
-                ));
+                self.journal.warn_l(Tr::NetworkSelectionStale, &[&id]);
             }
         }
     }
@@ -1136,8 +1135,9 @@ impl App {
 
     pub fn save_script(&mut self) {
         self.settings.view.script = self.script_text.clone();
-        self.persist_settings();
-        self.journal.info_l(Tr::ScriptSaved, &[]);
+        if self.persist_settings().is_none() {
+            self.journal.info_l(Tr::ScriptSaved, &[]);
+        }
     }
 
     pub fn script_protocol_note(&self) -> String {

@@ -155,6 +155,8 @@ pub enum SettingsNotice {
     },
     /// Writing the settings failed (or was refused to protect a damaged file).
     SaveFailed { path: String, error: String },
+    /// Saving would overwrite the only copy of unreadable settings.
+    SaveBlocked { path: String },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -345,8 +347,7 @@ impl Settings {
         let path = settings_path();
         let shown = path.display().to_string();
         if self.save_blocked {
-            return Err(SettingsNotice::SaveFailed { path: shown,
-                error: "the existing settings file is damaged or unreadable and could not be backed up; it is not overwritten".to_string() });
+            return Err(SettingsNotice::SaveBlocked { path: shown });
         }
         let text =
             serde_json::to_string_pretty(self).map_err(|err| SettingsNotice::SaveFailed {
@@ -1669,7 +1670,7 @@ mod tests {
             );
             let notices = vec![loaded.save().unwrap_err()];
             assert!(
-                matches!(&notices[..], [SettingsNotice::SaveFailed { .. }]),
+                matches!(&notices[..], [SettingsNotice::SaveBlocked { .. }]),
                 "a blocked save must say so: {notices:?}"
             );
             assert!(settings_path().is_dir(), "nothing was overwritten");

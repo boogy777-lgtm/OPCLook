@@ -2622,6 +2622,48 @@ fn session_kind_tracks_endpoint_and_preserves_ua_selection_on_metadata_update() 
 }
 
 #[test]
+fn failed_script_save_reports_error_without_success() {
+    let (_ctx, mut app) = tree_app();
+    app.settings.save_blocked = true;
+    app.journal.clear();
+    app.save_script();
+    let messages: Vec<_> = app
+        .journal
+        .entries()
+        .iter()
+        .map(|entry| entry.render(app.lang()))
+        .collect();
+    assert!(messages.iter().any(|message| {
+        message.contains(
+            tr(app.lang(), Tr::SettingsSaveBlocked)
+                .split("{0}")
+                .next()
+                .unwrap(),
+        )
+    }));
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message == tr(app.lang(), Tr::ScriptSaved))
+    );
+}
+
+#[test]
+fn startup_network_messages_follow_the_selected_language() {
+    let (_ctx, app) = tree_app();
+    for lang in Lang::ALL {
+        let rendered: Vec<_> = app
+            .journal
+            .entries()
+            .iter()
+            .map(|entry| entry.render(lang))
+            .collect();
+        assert!(rendered.contains(&opclook_locale::fmt(lang, Tr::NetworkCacheLoaded, &[&0])));
+        assert!(rendered.contains(&tr(lang, Tr::NetworkSelectionNone).to_string()));
+    }
+}
+
+#[test]
 fn exit_messages_include_localized_save_failure_and_shutdown_failure() {
     use opclook_contract::model::{GatewayShutdown, ShutdownOutcome};
     let (_ctx, mut app) = tree_app();
@@ -2641,7 +2683,7 @@ fn exit_messages_include_localized_save_failure_and_shutdown_failure() {
     assert_eq!(messages.len(), 2);
     assert!(
         messages[0].contains(
-            tr(app.lang(), Tr::SettingsSaveFailed)
+            tr(app.lang(), Tr::SettingsSaveBlocked)
                 .split("{0}")
                 .next()
                 .unwrap()
