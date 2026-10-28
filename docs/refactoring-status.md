@@ -169,7 +169,7 @@ future перед закрытием сессии; замена на отбра�
 | B19 | Длина ограничивается в i64 до преобразования в 32-bit usize; тест полного диапазона i32 и реальные небольшие массивы с крайними нижними границами | Запуск Windows CI |
 | B20 / LocalAlloc | Дескриптор и SID helper освобождаются guard; ключ маршрута сохраняет next hop | Запуск Windows CI и реальный UAC/маршруты |
 | COM arrays / VARIANT | `ComArray` освобождает вложенные blobs и read VARIANT, `OwnedVariant` — запись; тест счётчика cleanup при ошибке/unwind | Windows runtime и реальный DA |
-| Группа / COM status | Группа защищена до передачи сессии; status и vendor освобождаются guard | Windows runtime |
+| Группа / COM status | Guard группы хранится всю жизнь сессии и удаляет её ровно один раз при shutdown или drop; status и vendor освобождаются guard | Windows runtime |
 | WinAPI handles / tables | Guard для helper token, SID, дескриптора, процесса и IP Helper table; тест закрытия handle и тест возврата impersonation | Windows runtime, UAC и реальные маршруты; pipe connect worker может ждать до завершения процесса после timeout |
 | DNS / символы / UTF-16 | System32-only загрузка DLL с владением библиотекой; типизированные символы и общий конвертер; Windows тесты символов и Unicode | Windows runtime и сетевое обнаружение |
 | Безопасные границы | `deny(clippy::undocumented_unsafe_blocks)` в `com`, `da`, `da_variant`, `winutil`, DA route, Windows inventory, сетевом binding, Windows mDNS и helper; generated COM bindings не менялись | Независимый review инвариантов и финальный Windows CI; другие этапы и проверки плана не завершены |
@@ -189,3 +189,14 @@ backend `--tests` и helper `--tests` прошли проверку типов �
 этому этапу. Рендер PNG, 10k frame/allocation benchmark, реальные DA/UAC,
 pipe runtime, новые типы/enum, производительность и разделение модулей остаются
 открытыми. При изменении UA timeout сохранять grace-дренирование того же future.
+
+После описанной матрицы проверка формата DA VARIANT дополнена: BYREF,
+неизвестные типы элементов, неверный размер и глубина свыше 32 возвращают
+`Value::Other`; это явный отказ, не поддержка этих форматов. Заимствованный
+SAFEARRAY разблокируется guard даже при unwind. Windows регрессии на эти
+случаи прошли только typecheck и ожидают выполнения CI.
+
+Повторная Linux проверка backend lib на текущих исходниках: измерено 189 passed,
+0 failed, 0 ignored (60,42 с); текущий Windows runtime и полный exact-head CI
+ещё не выполнены. Helper явно сообщает об ошибке запуска потока и об ошибке
+возврата impersonation; guard остаётся резервом при раннем выходе.

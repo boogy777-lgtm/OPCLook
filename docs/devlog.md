@@ -220,3 +220,9 @@ safety lint расширен до изменённых платформенны�
 измерено: locale 9/9, K1 GUI 1/1, diagnostics `cargo check`; финальный CI
 текущего head и внешние DA/UAC проверки открыты. См. матрицу
 `docs/refactoring-status.md`.
+
+Этап D продолжен: group guard владеет группой до shutdown/drop; BYREF и
+неизвестные/несовместимые layout SAFEARRAY отклоняются, глубина вложенности
+ограничена 32. Это ограничения форматов, не реализованная поддержка BYREF.
+Измерено на Linux: backend lib 189 passed, 0 failed, 0 ignored. Новые Windows
+регрессии проверены типами и ожидают выполнения в CI.
