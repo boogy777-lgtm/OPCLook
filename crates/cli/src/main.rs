@@ -202,7 +202,9 @@ fn parse(args: Vec<String>) -> Result<Option<Options>, String> {
     }))
 }
 fn redact(mut text: String, endpoint: &EndpointSpec) -> String {
-    for secret in [&endpoint.user, &endpoint.password] {
+    let mut secrets = [&endpoint.user, &endpoint.password];
+    secrets.sort_by_key(|secret| std::cmp::Reverse(secret.len()));
+    for secret in secrets {
         if !secret.is_empty() {
             text = text.replace(secret, "[redacted]");
         }
@@ -671,6 +673,15 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn redaction_handles_overlapping_credentials_longest_first() {
+        let mut endpoint = EndpointSpec::ua("opc.tcp://localhost:4840");
+        endpoint.user = "secret".into();
+        endpoint.password = "secret-password".into();
+        let redacted = redact("secret-password secret".into(), &endpoint);
+        assert_eq!(redacted, "[redacted] [redacted]");
+        assert!(!redacted.contains("password"));
+    }
     #[test]
     fn output_limit_counts_json_escapes_and_never_writes_partial_record() {
         let mut bytes = Vec::new();
