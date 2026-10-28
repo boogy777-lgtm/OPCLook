@@ -118,7 +118,7 @@ impl App {
         let Some(session) = self.active_session else {
             return false;
         };
-        let Some(view) = self.sessions.iter().find(|s| s.id == session) else {
+        let Some(view) = self.session(session) else {
             return false;
         };
         let target = match self.selected_tree {

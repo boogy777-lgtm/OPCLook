@@ -560,3 +560,8 @@ View, UA and network preferences are grouped with flattened serialization preser
 ### 2026-10-28 — localized network and save diagnostics
 
 Network control messages use locale keys with technical details retained as arguments; save-blocked is typed and localized, and a failed script save does not report success. Measured: Linux GUI 219 library, 149 interactions (one Windows-only ignored), Windows i686 workspace all-target typecheck passed. Exact-head CI and Windows runtime remain open.
+
+
+### 2026-10-28 — GUI coordinator
+
+Separated event dispatch by domain, introduced WriteBatch transitions and session accessors while keeping correlation in Engine. Linux 219 library and 149 interaction tests (one Windows-only ignored) passed before the final equivalent protocol lookup simplification; Windows i686 all-target typecheck passed afterward. Exact-head CI remains open.

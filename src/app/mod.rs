@@ -87,12 +87,8 @@ pub struct App {
     pub bottom_tab: BottomTab,
     /// Session-info popup opened from the status bar indicator.
     pub status_popup: bool,
-    /// Write progress for the pending-write status indicator.
-    pub pending_writes: usize,
-    pub write_total: usize,
-    pub write_ok: usize,
-    pub write_err: usize,
-    pub last_write_summary: Option<String>,
+    /// Write progress and completion summary for the status indicator.
+    pub write_batch: WriteBatch,
     /// Active (or finished) modal CSV import job.
     pub csv_import: Option<CsvImportJob>,
     /// Active recursive «Добавить дочерние» job (one per session).
@@ -101,14 +97,45 @@ pub struct App {
     next_key: Option<ItemKey>,
     /// Monotonic id for streaming subnet scans (independent of request ids).
     next_scan: Option<ScanId>,
-    /// Outstanding `(session, request_id)` pairs. Correlated events are accepted
-    /// only while their pair is present; the pair is removed on receipt. A
-    /// session's entries are cleared whenever a new connect/disconnect lifecycle
-    /// starts, so a reply from a superseded connection cannot mutate this one.
     /// Result of the CJK font probe done at startup (A1).
     pub cjk_font: CjkFont,
     /// Lookup index over `rows` (A4); see `row_index.rs`.
     row_index: row_index::RowIndex,
+}
+
+/// GUI projection of a write batch. Request correlation remains in Engine.
+#[derive(Default)]
+pub struct WriteBatch {
+    pub pending: usize,
+    pub total: usize,
+    pub ok: usize,
+    pub errors: usize,
+    pub summary: Option<String>,
+}
+
+impl WriteBatch {
+    fn accepted(&mut self, new_batch: bool) {
+        if new_batch {
+            *self = Self::default();
+        }
+        self.pending += 1;
+        self.total += 1;
+    }
+
+    fn lost(&mut self, count: usize) {
+        let count = count.min(self.pending);
+        self.pending -= count;
+        self.errors += count;
+    }
+
+    fn completed(&mut self, success: bool) {
+        self.pending = self.pending.saturating_sub(1);
+        if success {
+            self.ok += 1;
+        } else {
+            self.errors += 1;
+        }
+    }
 }
 
 /// Application context that travels with an outstanding request and comes back
@@ -160,6 +187,18 @@ fn owner_label(lang: Lang, owner: Owner) -> String {
 }
 
 impl App {
+    pub(super) fn session(&self, id: SessionId) -> Option<&SessionView> {
+        self.sessions.iter().find(|view| view.id == id)
+    }
+
+    pub(super) fn session_mut(&mut self, id: SessionId) -> Option<&mut SessionView> {
+        self.sessions.iter_mut().find(|view| view.id == id)
+    }
+
+    pub(super) fn session_protocol(&self, id: SessionId) -> Option<Protocol> {
+        self.session(id).map(SessionView::protocol)
+    }
+
     pub fn expanded_values(&self) -> &HashSet<(ItemKey, Vec<u32>)> {
         &self.expanded_values
     }
@@ -288,11 +327,7 @@ impl App {
             last_update: None,
             bottom_tab: BottomTab::Journal,
             status_popup: false,
-            pending_writes: 0,
-            write_total: 0,
-            write_ok: 0,
-            write_err: 0,
-            last_write_summary: None,
+            write_batch: WriteBatch::default(),
             csv_import: None,
             add_children: None,
             next_session: Some(SessionId::FIRST),
@@ -756,9 +791,7 @@ impl App {
         // A11: writes whose reply can no longer arrive count as failed, or the
         // batch counters would never reach zero.
         if lost_writes > 0 {
-            let lost = lost_writes.min(self.pending_writes);
-            self.pending_writes -= lost;
-            self.write_err += lost;
+            self.write_batch.lost(lost_writes);
             self.finish_write_batch_if_done();
         }
         // A «Добавить по имени» waiting for this session can never be answered.

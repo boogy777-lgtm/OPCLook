@@ -64,11 +64,11 @@ pub(super) fn status_bar(app: &mut App, ui: &mut egui::Ui) {
                     ui.add(counts);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if app.pending_writes > 0 {
+                    if app.write_batch.pending > 0 {
                         ui.spinner();
                         ui.label(tr(lang, Tr::Writing));
                         ui.separator();
-                    } else if let Some(summary) = &app.last_write_summary {
+                    } else if let Some(summary) = &app.write_batch.summary {
                         ui.label(egui::RichText::new(summary).color(green()));
                         ui.separator();
                     }

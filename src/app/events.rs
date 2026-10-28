@@ -2,11 +2,9 @@ use super::present::{compose_server_name, localize_scan_error, operation_label};
 use super::search::{merge_ua_scan_servers, merge_ua_servers, refresh_ua_combos};
 use super::tree::{insert_children, replace_roots, set_children};
 use super::*;
-#[cfg(feature = "test-support")]
-use crate::bff::model::RequestId;
 use crate::bff::model::{
     BrowseNode, Event, EventKind, ItemInfo, ItemKey, NodeKind, Operation, Origin, Owner, Protocol,
-    ScanEnd, SessionId,
+    RequestId, ScanEnd, SessionId,
 };
 use crate::i18n::{Tr, backend_text, fmt, tr};
 use chrono::Utc;
@@ -133,7 +131,6 @@ impl App {
             Origin::Reply(id) => Some(id),
             Origin::Unsolicited => None,
         };
-        let lang = self.lang();
         let kind = match (event.kind, &ctx) {
             (
                 EventKind::Error {
@@ -156,24 +153,25 @@ impl App {
         };
         self.project_session(session);
         match kind {
-            EventKind::UaServersFound { .. }
-            | EventKind::UaNetworkFound { .. }
-            | EventKind::UaScanProgress { .. }
-            | EventKind::UaScanFound { .. }
-            | EventKind::UaScanFinished { .. }
-            | EventKind::UaEndpointsFound { .. }
-            | EventKind::Servers { .. } => {}
+            EventKind::Error { operation, message } => {
+                self.on_operation_error(session, operation, message, ctx, request_id)
+            }
+            kind @ (EventKind::Connected { .. }
+            | EventKind::Disconnected { .. }
+            | EventKind::Log { .. }) => self.on_session_event(session, kind),
+            kind => self.on_data_event(session, kind, ctx, request_id),
+        }
+    }
+
+    fn on_session_event(&mut self, session: SessionId, kind: EventKind) {
+        let lang = self.lang();
+        match kind {
             EventKind::Connected { endpoint, info } => {
                 let info = backend_text(lang, &info);
-                let is_ua = self
-                    .sessions
-                    .iter()
-                    .find(|s| s.id == session)
-                    .map(|s| s.protocol() == Protocol::OpcUa)
-                    .unwrap_or(false);
+                let is_ua = self.session_protocol(session) == Some(Protocol::OpcUa);
                 // Any other reply from the old link is now superseded.
                 self.clear_pending_requests(session);
-                if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
+                if let Some(view) = self.session_mut(session) {
                     view.state = SessionState::Connected;
                     view.info = info.clone();
                     view.display_name = compose_server_name(&endpoint);
@@ -208,6 +206,36 @@ impl App {
                     self.close_connect_dialog();
                 }
             }
+            EventKind::Disconnected { reason } => {
+                let reason = backend_text(lang, &reason);
+                // A late disconnect from the old link must not interrupt a
+                // new connection attempt.
+                let name = self
+                    .session(session)
+                    .filter(|view| view.state != SessionState::Connecting)
+                    .map(|view| view.endpoint().display_name());
+                if let Some(name) = name {
+                    self.mark_link_lost(session, Some(&reason));
+                    self.journal.info_l(Tr::ConnectedInfo, &[&name, &reason]);
+                    self.log_reconnect(session);
+                }
+            }
+            EventKind::Log { message } => {
+                self.journal.info(backend_text(lang, &message));
+            }
+            _ => {}
+        }
+    }
+
+    fn on_data_event(
+        &mut self,
+        session: SessionId,
+        kind: EventKind,
+        ctx: PendingCtx,
+        request_id: Option<RequestId>,
+    ) {
+        let lang = self.lang();
+        match kind {
             EventKind::AddItems { results } => {
                 for (key, result) in results {
                     match result {
@@ -235,7 +263,7 @@ impl App {
                 // that happens to share the NodeId. Unsolicited replies
                 // (request id 0) fall back to the first matching node.
                 let mut target: Option<u64> = None;
-                if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
+                if let Some(view) = self.session_mut(session) {
                     if node_id.is_empty() {
                         replace_roots(view, children);
                         view.root_loaded = true;
@@ -271,7 +299,7 @@ impl App {
             EventKind::Views { children } => {
                 // Seed a synthetic «Представления» root node; browsing it lists
                 // the server Views and selecting a View adopts it for browsing.
-                if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
+                if let Some(view) = self.session_mut(session) {
                     view.root_loading = false;
                     let marker_index = match view.tree.iter().position(|t| t.node.is_views_root()) {
                         Some(index) => index,
@@ -365,7 +393,7 @@ impl App {
                         row.poll_only = true;
                     }
                 }
-                if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
+                if let Some(view) = self.session_mut(session) {
                     // Read them right away, not one interval later.
                     view.last_poll = Instant::now()
                         .checked_sub(Duration::from_secs(3600))
@@ -380,17 +408,13 @@ impl App {
                     .find(|r| r.key == key)
                     .map(|r| r.display_name.clone())
                     .unwrap_or_else(|| key.to_string());
-                if self.pending_writes > 0 {
-                    self.pending_writes -= 1;
-                }
+                self.write_batch.completed(result.is_ok());
                 match result {
                     Ok(()) => {
-                        self.write_ok += 1;
                         self.journal.info_l(Tr::WrittenValue, &[&name]);
                     }
                     Err(message) => {
                         let message = backend_text(lang, &message);
-                        self.write_err += 1;
                         self.journal.error_l(Tr::WriteFailed, &[&name, &message]);
                         self.dialogs.message = Some(MessageDialog {
                             title: tr(lang, Tr::WriteError).to_string(),
@@ -401,112 +425,102 @@ impl App {
                 }
                 self.finish_write_batch_if_done();
             }
-            EventKind::Disconnected { reason } => {
-                let reason = backend_text(lang, &reason);
-                // A late disconnect from the old link must not interrupt a
-                // new connection attempt.
-                let name = self
-                    .sessions
-                    .iter()
-                    .find(|view| view.id == session)
-                    .filter(|view| view.state != SessionState::Connecting)
-                    .map(|view| view.endpoint().display_name());
-                if let Some(name) = name {
-                    self.mark_link_lost(session, Some(&reason));
-                    self.journal.info_l(Tr::ConnectedInfo, &[&name, &reason]);
-                    self.log_reconnect(session);
+            _ => {}
+        }
+    }
+
+    fn on_operation_error(
+        &mut self,
+        session: SessionId,
+        operation: Operation,
+        message: crate::bff::model::BackendMsg,
+        ctx: PendingCtx,
+        request_id: Option<RequestId>,
+    ) {
+        let lang = self.lang();
+        let message = backend_text(lang, &message);
+        self.journal
+            .error_l(Tr::ErrorOp, &[&operation_label(lang, operation), &message]);
+        match operation {
+            Operation::Connect => {
+                self.release_da_routes_for_session(session);
+                self.mark_link_lost(session, Some(&message));
+                if self.dialogs.connect.connecting == Some(session) {
+                    // The failed attempt was started from the dialog:
+                    // show the reason there and do not keep retrying in
+                    // the background (the user decides: edit, retry or
+                    // remove the half-open tab).
+                    self.dialogs.connect.connecting = None;
+                    self.dialogs.connect.error = Some(message.clone());
+                }
+                self.log_reconnect(session);
+            }
+            Operation::Browse => {
+                if let Some(view) = self.session_mut(session) {
+                    view.root_loading = false;
+                    for item in &mut view.tree {
+                        item.loading = false;
+                    }
                 }
             }
-            EventKind::Log { message } => {
-                self.journal.info(backend_text(lang, &message));
+            Operation::Read => {}
+            Operation::Test => {
+                self.mark_link_lost(session, Some(&message));
+                self.log_reconnect(session);
             }
-            EventKind::Error { operation, message } => {
-                let message = backend_text(lang, &message);
-                self.journal
-                    .error_l(Tr::ErrorOp, &[&operation_label(lang, operation), &message]);
-                match operation {
-                    Operation::Connect => {
-                        self.release_da_routes_for_session(session);
-                        self.mark_link_lost(session, Some(&message));
-                        if self.dialogs.connect.connecting == Some(session) {
-                            // The failed attempt was started from the dialog:
-                            // show the reason there and do not keep retrying in
-                            // the background (the user decides: edit, retry or
-                            // remove the half-open tab).
-                            self.dialogs.connect.connecting = None;
-                            self.dialogs.connect.error = Some(message.clone());
-                        }
-                        self.log_reconnect(session);
-                    }
-                    Operation::Browse => {
-                        if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
-                            view.root_loading = false;
-                            for item in &mut view.tree {
-                                item.loading = false;
-                            }
-                        }
-                    }
-                    Operation::Read => {}
-                    Operation::Test => {
-                        self.mark_link_lost(session, Some(&message));
-                        self.log_reconnect(session);
-                    }
-                    // Discovery operations belong to Owner::Discovery, never a session.
-                    Operation::SearchServers | Operation::SearchNetwork => {}
-                    // Operations with no extra UI state transition beyond the
-                    // journal line. Listed explicitly so a new variant forces a
-                    // decision here.
-                    Operation::ResolveBrowsePath => {
-                        // U14: the error belongs in the (still open) dialog and
-                        // frees its pending state.
-                        if request_id.is_some()
-                            && self.dialogs.add_signal.resolving
-                                == request_id.map(|id| (session, id))
+            // Discovery operations belong to Owner::Discovery, never a session.
+            Operation::SearchServers | Operation::SearchNetwork => {}
+            // Operations with no extra UI state transition beyond the
+            // journal line. Listed explicitly so a new variant forces a
+            // decision here.
+            Operation::ResolveBrowsePath => {
+                // U14: the error belongs in the (still open) dialog and
+                // frees its pending state.
+                if request_id.is_some()
+                    && self.dialogs.add_signal.resolving == request_id.map(|id| (session, id))
+                {
+                    self.dialogs.add_signal.resolving = None;
+                    self.dialogs.add_signal.error = Some(message);
+                }
+            }
+            Operation::AddItems => {
+                // The whole command failed (or never got an answer):
+                // its rows must not wait for values forever.
+                if let PendingCtx::AddKeys(keys) = &ctx {
+                    for key in keys {
+                        if let Some(row) =
+                            self.row_position(*key).and_then(|p| self.rows.get_mut(p))
                         {
-                            self.dialogs.add_signal.resolving = None;
-                            self.dialogs.add_signal.error = Some(message);
+                            row.pending = false;
+                            row.quality = RowQuality::Error(message.clone());
                         }
                     }
-                    Operation::AddItems => {
-                        // The whole command failed (or never got an answer):
-                        // its rows must not wait for values forever.
-                        if let PendingCtx::AddKeys(keys) = &ctx {
-                            for key in keys {
-                                if let Some(row) =
-                                    self.row_position(*key).and_then(|p| self.rows.get_mut(p))
-                                {
-                                    row.pending = false;
-                                    row.quality = RowQuality::Error(message.clone());
-                                }
-                            }
-                        }
-                    }
-                    Operation::Disconnect
-                    | Operation::BrowseViews
-                    | Operation::Write
-                    | Operation::RemoveItems
-                    | Operation::Add
-                    | Operation::Remove
-                    | Operation::Subscription
-                    | Operation::UaRuntime => {}
-                    Operation::Discover => {
-                        // D4: only the host whose request failed gives its
-                        // temporary route back; other searches keep theirs.
-                        match &ctx {
-                            PendingCtx::Host(host) => self.release_da_discovery_route(host),
-                            _ => self.engine.discard_discovery_operation(Operation::Discover),
-                        }
-                        let d = &mut self.dialogs.connect;
-                        if d.da_auto_pending > 0 {
-                            d.da_auto_pending -= 1;
-                        }
-                        if d.da_auto_pending == 0 {
-                            d.da_pending = false;
-                        }
-                        if d.open {
-                            d.error = Some(message);
-                        }
-                    }
+                }
+            }
+            Operation::Disconnect
+            | Operation::BrowseViews
+            | Operation::Write
+            | Operation::RemoveItems
+            | Operation::Add
+            | Operation::Remove
+            | Operation::Subscription
+            | Operation::UaRuntime => {}
+            Operation::Discover => {
+                // D4: only the host whose request failed gives its
+                // temporary route back; other searches keep theirs.
+                match &ctx {
+                    PendingCtx::Host(host) => self.release_da_discovery_route(host),
+                    _ => self.engine.discard_discovery_operation(Operation::Discover),
+                }
+                let d = &mut self.dialogs.connect;
+                if d.da_auto_pending > 0 {
+                    d.da_auto_pending -= 1;
+                }
+                if d.da_auto_pending == 0 {
+                    d.da_pending = false;
+                }
+                if d.open {
+                    d.error = Some(message);
                 }
             }
         }
@@ -742,10 +756,13 @@ impl App {
 
     /// Batch completed -> publish a compact summary in the status bar.
     pub(super) fn finish_write_batch_if_done(&mut self) {
-        if self.pending_writes == 0 && self.write_total > 0 {
+        if self.write_batch.pending == 0 && self.write_batch.total > 0 {
             let lang = self.lang();
-            let counts = [self.write_ok.to_string(), self.write_total.to_string()];
-            self.last_write_summary =
+            let counts = [
+                self.write_batch.ok.to_string(),
+                self.write_batch.total.to_string(),
+            ];
+            self.write_batch.summary =
                 Some(fmt(lang, Tr::WrittenSummary, &[&counts[0], &counts[1]]));
             self.journal
                 .info_l(Tr::WriteDoneSummary, &[&counts[0], &counts[1]]);

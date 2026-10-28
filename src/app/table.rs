@@ -7,7 +7,7 @@ use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Utc};
 
 impl App {
     pub fn add_items(&mut self, session: SessionId, items: Vec<(String, String)>) -> bool {
-        let Some(view) = self.sessions.iter().find(|s| s.id == session) else {
+        let Some(view) = self.session(session) else {
             return false;
         };
         let protocol = view.protocol();
@@ -85,7 +85,7 @@ impl App {
     }
 
     pub(super) fn register_rows(&mut self, session: SessionId) {
-        let Some(view) = self.sessions.iter().find(|s| s.id == session) else {
+        let Some(view) = self.session(session) else {
             return;
         };
         let protocol = view.protocol();
@@ -258,7 +258,7 @@ impl App {
             return Err(tr(self.lang(), Tr::NoConnection).to_string());
         };
         let session = row.session;
-        let Some(view) = self.sessions.iter().find(|s| s.id == session) else {
+        let Some(view) = self.session(session) else {
             return Ok(PendingWrites {
                 session,
                 protocol: Protocol::OpcDa,
@@ -309,7 +309,7 @@ impl App {
     }
 
     pub(super) fn perform_write(&mut self, pending: PendingWrites) {
-        let starting_new_batch = self.pending_writes == 0;
+        let starting_new_batch = self.write_batch.pending == 0;
         let mut count = 0;
         for request in pending.requests {
             let key = request.key;
@@ -322,15 +322,8 @@ impl App {
                 )
                 .is_some()
             {
-                if starting_new_batch && count == 0 {
-                    self.write_total = 0;
-                    self.write_ok = 0;
-                    self.write_err = 0;
-                    self.last_write_summary = None;
-                }
+                self.write_batch.accepted(starting_new_batch && count == 0);
                 count += 1;
-                self.pending_writes += 1;
-                self.write_total += 1;
             }
         }
         if count > 0 {

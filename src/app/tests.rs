@@ -1545,8 +1545,8 @@ fn k1_unanswered_write_completes_the_batch_as_failed() {
         Value::I64(1),
     );
     let key = app.rows[0].key;
-    app.pending_writes = 1;
-    app.write_total = 1;
+    app.write_batch.pending = 1;
+    app.write_batch.total = 1;
     app.send_with(
         crate::bff::model::SessionId::new(1).unwrap(),
         Protocol::OpcUa,
@@ -1561,9 +1561,9 @@ fn k1_unanswered_write_completes_the_batch_as_failed() {
     );
     app.age_pending_requests_for_test(crate::bff::model::SessionId::new(1).unwrap(), 3600);
     app.tick_for_test();
-    assert_eq!(app.pending_writes, 0);
-    assert_eq!(app.write_err, 1);
-    assert!(app.last_write_summary.is_some());
+    assert_eq!(app.write_batch.pending, 0);
+    assert_eq!(app.write_batch.errors, 1);
+    assert!(app.write_batch.summary.is_some());
 }
 
 #[test]
@@ -1718,11 +1718,11 @@ fn a11_overlapping_write_batches_add_up() {
     );
     start_batch(&mut app, &[a, b]);
     start_batch(&mut app, &[c]); // starts while the first batch is running
-    assert_eq!((app.pending_writes, app.write_total), (3, 3));
+    assert_eq!((app.write_batch.pending, app.write_batch.total), (3, 3));
     let ids = app.pending_request_ids_for_test(crate::bff::model::SessionId::new(1).unwrap());
     assert_eq!(ids.len(), 3);
     for (index, id) in ids.iter().enumerate() {
-        assert!(app.last_write_summary.is_none(), "not done after {index}");
+        assert!(app.write_batch.summary.is_none(), "not done after {index}");
         let key = [a, b, c][index];
         app.on_event_for_test_with_request(
             crate::bff::model::SessionId::new(1).unwrap(),
@@ -1733,10 +1733,18 @@ fn a11_overlapping_write_batches_add_up() {
             },
         );
     }
-    assert_eq!(app.pending_writes, 0);
-    assert_eq!((app.write_ok, app.write_err, app.write_total), (3, 0, 3));
+    assert_eq!(app.write_batch.pending, 0);
+    assert_eq!(
+        (
+            app.write_batch.ok,
+            app.write_batch.errors,
+            app.write_batch.total
+        ),
+        (3, 0, 3)
+    );
     assert!(
-        app.last_write_summary
+        app.write_batch
+            .summary
             .as_deref()
             .is_some_and(|s| s.contains('3'))
     );
@@ -1763,7 +1771,11 @@ fn a11_counters_restart_after_a_finished_batch() {
     );
     start_batch(&mut app, &[a]);
     assert_eq!(
-        (app.pending_writes, app.write_total, app.write_ok),
+        (
+            app.write_batch.pending,
+            app.write_batch.total,
+            app.write_batch.ok
+        ),
         (1, 1, 0)
     );
 }
@@ -1785,9 +1797,9 @@ fn a11_writes_lost_with_the_session_complete_the_batch_as_failed() {
     );
     start_batch(&mut app, &[a, b]);
     app.disconnect_session(crate::bff::model::SessionId::new(1).unwrap());
-    assert_eq!(app.pending_writes, 0, "no reply can arrive any more");
-    assert_eq!((app.write_ok, app.write_err), (0, 2));
-    assert!(app.last_write_summary.is_some());
+    assert_eq!(app.write_batch.pending, 0, "no reply can arrive any more");
+    assert_eq!((app.write_batch.ok, app.write_batch.errors), (0, 2));
+    assert!(app.write_batch.summary.is_some());
 }
 
 // ---------------------------------------------------------------------------
@@ -2218,10 +2230,10 @@ fn partial_write_then_closed_worker_finishes_batch() {
         ],
         type_label: String::new(),
     });
-    assert_eq!(app.pending_writes, 0);
-    assert_eq!(app.write_total, 1);
-    assert_eq!(app.write_err, 1);
-    assert!(app.last_write_summary.is_some());
+    assert_eq!(app.write_batch.pending, 0);
+    assert_eq!(app.write_batch.total, 1);
+    assert_eq!(app.write_batch.errors, 1);
+    assert!(app.write_batch.summary.is_some());
 }
 
 #[test]
@@ -2236,8 +2248,8 @@ fn closed_worker_marks_link_lost_and_finishes_pending_write() {
     app.sessions[0].read_in_flight = true;
     app.sessions[0].ua_mut().unwrap().subscription = SubscriptionState::Active;
     app.engine.limit_dispatch_for_test(1);
-    app.pending_writes = 1;
-    app.write_total = 1;
+    app.write_batch.pending = 1;
+    app.write_batch.total = 1;
     let request = app.send_with(
         session,
         Protocol::OpcUa,
@@ -2266,8 +2278,8 @@ fn closed_worker_marks_link_lost_and_finishes_pending_write() {
     assert_eq!(view.ua().unwrap().subscription, SubscriptionState::Inactive);
     assert_eq!(app.rows[0].quality.kind(), QualityKind::Bad);
     assert!(app.pending_request_ids_for_test(session).is_empty());
-    assert_eq!((app.pending_writes, app.write_err), (0, 1));
-    assert!(app.last_write_summary.is_some());
+    assert_eq!((app.write_batch.pending, app.write_batch.errors), (0, 1));
+    assert!(app.write_batch.summary.is_some());
 }
 
 #[test]

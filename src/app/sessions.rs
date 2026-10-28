@@ -302,7 +302,7 @@ impl App {
         // A new lifecycle begins: discard replies still in flight for the old
         // link (only the Disconnect sent below may come back).
         let (protocol, endpoint_name) = {
-            let Some(view) = self.sessions.iter().find(|s| s.id == session) else {
+            let Some(view) = self.session(session) else {
                 return;
             };
             (view.protocol(), view.endpoint().display_name())
@@ -337,7 +337,7 @@ impl App {
         }
         self.clear_pending_requests(session);
         let (protocol, endpoint_name) = {
-            let Some(view) = self.sessions.iter().find(|s| s.id == session) else {
+            let Some(view) = self.session(session) else {
                 return;
             };
             (view.protocol(), view.endpoint().display_name())
@@ -383,7 +383,7 @@ impl App {
         let Some(idx) = self.sessions.iter().position(|s| s.id == session) else {
             return;
         };
-        if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
+        if let Some(view) = self.session_mut(session) {
             view.visible = false;
         }
         if self.active_session == Some(session) {
@@ -395,7 +395,7 @@ impl App {
     /// Make a session's container visible + active (restore its tab) without
     /// reconnecting. Used when clicking a server in the left-panel server list.
     pub fn activate_container(&mut self, session: SessionId) {
-        if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
+        if let Some(view) = self.session_mut(session) {
             view.visible = true;
         }
         self.active_session = Some(session);
@@ -426,20 +426,15 @@ impl App {
     /// schedules the next attempt, a `Connected` moves to `Idle`.
     pub(super) fn attempt_auto_reconnect(&mut self, session: SessionId) {
         let Some((endpoint, attempt)) =
-            self.sessions
-                .iter()
-                .find(|s| s.id == session)
-                .and_then(|view| match view.reconnect {
-                    ReconnectState::Waiting { attempt, .. } => {
-                        Some((view.endpoint().clone(), attempt))
-                    }
-                    _ => None,
-                })
+            self.session(session).and_then(|view| match view.reconnect {
+                ReconnectState::Waiting { attempt, .. } => Some((view.endpoint().clone(), attempt)),
+                _ => None,
+            })
         else {
             return;
         };
         if attempt > RECONNECT_MAX_ATTEMPTS {
-            if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
+            if let Some(view) = self.session_mut(session) {
                 view.reconnect = ReconnectState::Exhausted;
             }
             self.journal.warn_l(Tr::AttemptsExhausted20, &[]);
@@ -454,7 +449,7 @@ impl App {
             return;
         }
         let lang = self.lang();
-        let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) else {
+        let Some(view) = self.session_mut(session) else {
             return;
         };
         let ReconnectState::Waiting { .. } = view.reconnect else {
@@ -468,7 +463,7 @@ impl App {
         if let Err(cause) = self.engine.disconnect_untracked(session, protocol) {
             let message = opclook_locale::send_error_text(self.lang(), cause).to_string();
             self.engine.manual_disconnect(session);
-            if let Some(view) = self.sessions.iter_mut().find(|view| view.id == session) {
+            if let Some(view) = self.session_mut(session) {
                 view.state = SessionState::Disconnected;
                 view.info = message.clone();
             }
@@ -483,7 +478,7 @@ impl App {
             {
                 let message = error.localized(self.lang());
                 self.engine.manual_disconnect(session);
-                if let Some(view) = self.sessions.iter_mut().find(|view| view.id == session) {
+                if let Some(view) = self.session_mut(session) {
                     view.state = SessionState::Disconnected;
                     view.info = message.clone();
                 }
@@ -495,7 +490,7 @@ impl App {
                 .is_none()
             {
                 self.engine.manual_disconnect(session);
-                if let Some(view) = self.sessions.iter_mut().find(|view| view.id == session) {
+                if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
                     view.state = SessionState::Disconnected;
                     view.info = self.status.clone();
                 }
@@ -530,16 +525,11 @@ impl App {
             return;
         }
         self.engine.resume_reconnect(session);
-        let Some(endpoint) = self
-            .sessions
-            .iter()
-            .find(|s| s.id == session)
-            .map(|s| s.endpoint().clone())
-        else {
+        let Some(endpoint) = self.session(session).map(|s| s.endpoint().clone()) else {
             return;
         };
         let lang = self.lang();
-        let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) else {
+        let Some(view) = self.session_mut(session) else {
             return;
         };
         view.state = SessionState::Connecting;
@@ -550,7 +540,7 @@ impl App {
         if let Err(cause) = self.engine.disconnect_untracked(session, protocol) {
             let message = opclook_locale::send_error_text(self.lang(), cause).to_string();
             self.engine.manual_disconnect(session);
-            if let Some(view) = self.sessions.iter_mut().find(|view| view.id == session) {
+            if let Some(view) = self.session_mut(session) {
                 view.state = SessionState::Disconnected;
                 view.info = message.clone();
             }
@@ -565,7 +555,7 @@ impl App {
             {
                 let message = error.localized(self.lang());
                 self.engine.manual_disconnect(session);
-                if let Some(view) = self.sessions.iter_mut().find(|view| view.id == session) {
+                if let Some(view) = self.session_mut(session) {
                     view.state = SessionState::Disconnected;
                     view.info = message.clone();
                 }
@@ -577,7 +567,7 @@ impl App {
                 .is_none()
             {
                 self.engine.manual_disconnect(session);
-                if let Some(view) = self.sessions.iter_mut().find(|view| view.id == session) {
+                if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
                     view.state = SessionState::Disconnected;
                     view.info = self.status.clone();
                 }
@@ -590,7 +580,7 @@ impl App {
     /// Stop the automatic reconnect loop for a session (manual reconnect is still allowed).
     pub fn stop_reconnect(&mut self, session: SessionId) {
         self.engine.stop_reconnect(session);
-        if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
+        if let Some(view) = self.session_mut(session) {
             view.reconnect = ReconnectState::Stopped;
             self.journal.info_l(Tr::AutoReconnectStoppedByUser, &[]);
         }
@@ -602,7 +592,7 @@ impl App {
         self.engine.resume_reconnect(session);
         let auto = self.settings.view.options.auto_reconnect;
         let disconnected = {
-            let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) else {
+            let Some(view) = self.session_mut(session) else {
                 return;
             };
             let disconnected = view.state == SessionState::Disconnected;
@@ -617,7 +607,7 @@ impl App {
     /// Textual reconnect status for the status bar (attempt/backoff) if any.
     pub fn reconnect_hint(&self) -> Option<String> {
         let session = self.active_session?;
-        let view = self.sessions.iter().find(|s| s.id == session)?;
+        let view = self.session(session)?;
         let lang = self.lang();
         let cap = RECONNECT_MAX_ATTEMPTS;
         if matches!(view.reconnect, ReconnectState::Exhausted) {
@@ -655,7 +645,7 @@ impl App {
     }
 
     pub(super) fn log_reconnect(&mut self, session: SessionId) {
-        let Some(view) = self.sessions.iter().find(|view| view.id == session) else {
+        let Some(view) = self.session(session) else {
             return;
         };
         match view.reconnect {

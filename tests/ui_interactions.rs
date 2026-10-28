@@ -809,8 +809,8 @@ fn pending_write_shows_status_label_then_summary() {
 
     let mut h = harness(app);
     // A write batch is in flight -> «Запись...» label is visible.
-    h.state_mut().pending_writes = 2;
-    h.state_mut().write_total = 2;
+    h.state_mut().write_batch.pending = 2;
+    h.state_mut().write_batch.total = 2;
     h.run_steps(5);
     let visible = h.get_all_by_label("Запись...").count();
     assert!(
@@ -819,10 +819,10 @@ fn pending_write_shows_status_label_then_summary() {
     );
 
     // Batch finishes -> the status bar renders the compact summary.
-    h.state_mut().pending_writes = 0;
-    h.state_mut().write_ok = 2;
-    h.state_mut().write_total = 2;
-    h.state_mut().last_write_summary = Some("Записано: 2 из 2".to_string());
+    h.state_mut().write_batch.pending = 0;
+    h.state_mut().write_batch.ok = 2;
+    h.state_mut().write_batch.total = 2;
+    h.state_mut().write_batch.summary = Some("Записано: 2 из 2".to_string());
     h.run_steps(5);
     let shown = h.get_all_by_label("Записано: 2 из 2").count();
     assert_eq!(
@@ -830,7 +830,7 @@ fn pending_write_shows_status_label_then_summary() {
         "completed-write summary should be in the status bar"
     );
     assert_eq!(
-        h.state().last_write_summary.as_deref(),
+        h.state().write_batch.summary.as_deref(),
         Some("Записано: 2 из 2")
     );
 }
@@ -2305,7 +2305,7 @@ fn enter_confirms_write_dialog() {
     h.key_press(Key::Enter);
     h.run_steps(3);
     assert!(!h.state().dialogs.write.open);
-    assert_eq!(h.state().pending_writes, 1);
+    assert_eq!(h.state().write_batch.pending, 1);
 }
 
 #[test]
@@ -2322,11 +2322,11 @@ fn enter_opens_confirmation_without_accepting_it() {
     h.key_press(Key::Enter);
     h.run_steps(3);
     assert!(h.state().dialogs.confirm.is_some());
-    assert_eq!(h.state().pending_writes, 0);
+    assert_eq!(h.state().write_batch.pending, 0);
     h.key_press(Key::Enter);
     h.run_steps(3);
     assert!(!h.state().dialogs.confirm.is_some());
-    assert_eq!(h.state().pending_writes, 1);
+    assert_eq!(h.state().write_batch.pending, 1);
 }
 
 #[test]
@@ -2343,11 +2343,11 @@ fn modified_enter_cannot_accept_new_write_confirmation() {
     h.key_press_modifiers(Modifiers::SHIFT, Key::Enter);
     h.run_steps(3);
     assert!(h.state().dialogs.confirm.is_some());
-    assert_eq!(h.state().pending_writes, 0);
+    assert_eq!(h.state().write_batch.pending, 0);
     h.key_press_modifiers(Modifiers::SHIFT, Key::Enter);
     h.run_steps(3);
     assert!(h.state().dialogs.confirm.is_some());
-    assert_eq!(h.state().pending_writes, 0);
+    assert_eq!(h.state().write_batch.pending, 0);
     h.key_press(Key::Escape);
     h.run_steps(3);
     assert!(h.state().dialogs.confirm.is_none());
@@ -2382,7 +2382,7 @@ fn k3_write_dialog_preselects_value_so_typing_replaces_it() {
     h.key_press(Key::Enter);
     h.run_steps(3);
     assert!(!h.state().dialogs.write.open);
-    assert_eq!(h.state().pending_writes, 1);
+    assert_eq!(h.state().write_batch.pending, 1);
     // The table keeps the keyboard after the dialog: the next Enter opens it again.
     assert_eq!(h.state().table_focus, Some(0));
     h.key_press(Key::Enter);

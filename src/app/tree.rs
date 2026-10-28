@@ -16,9 +16,7 @@ impl App {
         // By NodeId only the first tree item carrying it is meant; callers that
         // know the exact item use `browse_item`.
         let item_id = self
-            .sessions
-            .iter()
-            .find(|s| s.id == session)?
+            .session(session)?
             .tree
             .iter()
             .find(|t| !node_id.is_empty() && t.node.node_id == node_id)
@@ -30,9 +28,7 @@ impl App {
     /// back to this exact item even when the same NodeId occurs elsewhere.
     pub fn browse_item(&mut self, session: SessionId, item_id: u64) -> Option<RequestId> {
         let node_id = self
-            .sessions
-            .iter()
-            .find(|s| s.id == session)?
+            .session(session)?
             .tree
             .iter()
             .find(|t| t.id == item_id)?
@@ -52,7 +48,7 @@ impl App {
         node_id: String,
         item_id: Option<u64>,
     ) -> Option<RequestId> {
-        let view = self.sessions.iter_mut().find(|s| s.id == session)?;
+        let view = self.session_mut(session)?;
         if node_id.is_empty() {
             view.root_loading = true;
         } else if let Some(item) = item_id.and_then(|id| view.tree.iter_mut().find(|t| t.id == id))
@@ -81,7 +77,7 @@ impl App {
             ctx,
         );
         if request_id.is_none() {
-            if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
+            if let Some(view) = self.session_mut(session) {
                 if is_root {
                     view.root_loading = false;
                 } else if let Some(id) = item_id {
@@ -97,7 +93,7 @@ impl App {
     /// Requests the list of server Views (UA) and, on success, seeds the tree
     /// with a synthetic «Представления» root whose children are the server Views.
     pub fn browse_views(&mut self, session: SessionId) {
-        let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) else {
+        let Some(view) = self.session_mut(session) else {
             return;
         };
         let protocol = view.protocol();
@@ -108,7 +104,7 @@ impl App {
             .send(session, protocol, CommandKind::BrowseViews)
             .is_none()
         {
-            if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
+            if let Some(view) = self.session_mut(session) {
                 view.root_loading = false;
             }
         }
@@ -117,12 +113,7 @@ impl App {
     /// Sets the active server View for UA browsing. `None` returns to the
     /// default (Objects/value) view.
     pub fn set_ua_view(&mut self, session: SessionId, view_id: Option<String>) {
-        if let Some(ua) = self
-            .sessions
-            .iter_mut()
-            .find(|s| s.id == session)
-            .and_then(|view| view.ua_mut())
-        {
+        if let Some(ua) = self.session_mut(session).and_then(|view| view.ua_mut()) {
             ua.ua_view_id = view_id;
         }
     }
@@ -130,7 +121,7 @@ impl App {
     /// Selects a server View from a list and browses the root through it.
     /// `view_id = None` returns to the default view.
     pub fn view_browse(&mut self, session: SessionId, view_id: Option<String>) {
-        let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) else {
+        let Some(view) = self.session_mut(session) else {
             return;
         };
         let Some(ua) = view.ua_mut() else {
@@ -145,7 +136,7 @@ impl App {
     /// U5: a changed filter re-reads the session's tree from the root (the
     /// already loaded nodes were fetched with the previous filter).
     pub fn set_ua_browse_vars_only(&mut self, session: SessionId, only: bool) {
-        let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) else {
+        let Some(view) = self.session_mut(session) else {
             return;
         };
         let filter = if only {
@@ -167,7 +158,7 @@ impl App {
     /// Drop the loaded tree of `session` and browse the root again.
     pub fn reread_tree(&mut self, session: SessionId) {
         self.cancel_add_children(session);
-        if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
+        if let Some(view) = self.session_mut(session) {
             view.clear_tree();
             view.root_loaded = false;
         }
@@ -179,12 +170,7 @@ impl App {
 
 impl App {
     pub fn tree_item(&self, session: SessionId, id: u64) -> Option<&TreeItem> {
-        self.sessions
-            .iter()
-            .find(|s| s.id == session)?
-            .tree
-            .iter()
-            .find(|t| t.id == id)
+        self.session(session)?.tree.iter().find(|t| t.id == id)
     }
 
     /// Returns the key of the table row already subscribed to the given tree
@@ -221,7 +207,7 @@ impl App {
         let Some((session, id)) = self.selected_tree else {
             return;
         };
-        let Some(view) = self.sessions.iter().find(|s| s.id == session) else {
+        let Some(view) = self.session(session) else {
             return;
         };
         let Some(item) = view.tree.iter().find(|t| t.id == id) else {
@@ -431,7 +417,7 @@ impl App {
         let mut had_items = false;
         let mut dropped_any = false;
         {
-            let Some(view) = self.sessions.iter().find(|s| s.id == session) else {
+            let Some(view) = self.session(session) else {
                 return;
             };
             for id in &node_ids {
@@ -478,7 +464,7 @@ impl App {
             return;
         }
         let name = self.dialogs.add_signal.display_name.trim().to_string();
-        let Some(view) = self.sessions.iter().find(|s| s.id == session) else {
+        let Some(view) = self.session(session) else {
             return;
         };
         let protocol = view.protocol();
