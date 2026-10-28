@@ -44,7 +44,7 @@ pub(super) fn about_dialog(app: &mut App, ui: &mut egui::Ui) {
                     ui.horizontal(|ui| {
                         ui.label(format!(
                             "• {} ({}) — {state}",
-                            session.endpoint.display_name(),
+                            session.endpoint().display_name(),
                             session.protocol()
                         ));
                         if !session.info.is_empty() {

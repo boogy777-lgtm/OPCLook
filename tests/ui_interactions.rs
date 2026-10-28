@@ -693,7 +693,7 @@ fn push_event_with_zero_request_id_is_accepted() {
         },
     );
     assert_eq!(
-        app.sessions[0].subscription,
+        app.sessions[0].ua().unwrap().subscription,
         SubscriptionState::Active,
         "request-id 0 push must be accepted"
     );
@@ -1472,7 +1472,7 @@ fn remote_ua_connect_without_adapter_is_blocked_but_loopback_is_allowed() {
         assert_eq!(app.sessions.len(), 1, "loopback connect is always allowed");
         assert!(
             app.sessions[0]
-                .endpoint
+                .endpoint()
                 .ua_bind
                 .as_ref()
                 .is_some_and(|binding| binding.is_loopback()),
@@ -1920,7 +1920,7 @@ fn changing_adapter_does_not_rebind_active_sessions() {
         );
         app.open_tab_for_endpoint(EndpointSpec::ua("opc.tcp://192.0.2.50:4840"));
         assert_eq!(app.sessions.len(), 1);
-        let old_binding = app.sessions[0].endpoint.ua_bind.clone();
+        let old_binding = app.sessions[0].endpoint().ua_bind.clone();
         assert_eq!(
             old_binding.as_ref().map(|binding| binding.local_ip),
             Some("192.168.1.20".parse().unwrap())
@@ -1933,7 +1933,8 @@ fn changing_adapter_does_not_rebind_active_sessions() {
             None,
         );
         assert_eq!(
-            app.sessions[0].endpoint.ua_bind, old_binding,
+            app.sessions[0].endpoint().ua_bind,
+            old_binding,
             "an active session keeps its captured binding"
         );
         assert_eq!(
@@ -1984,7 +1985,7 @@ fn connect_dialog_anonymous_identity_does_not_send_credentials() {
             .sessions
             .last()
             .expect("connect creates a session container")
-            .endpoint
+            .endpoint()
             .clone();
         assert!(
             endpoint.user.is_empty(),
@@ -2029,7 +2030,7 @@ fn connect_identity_switch_preserves_buffers_and_certificate_auth() {
             .expect("enabled connect button")
             .click();
         h.run_steps(3);
-        let endpoint = &h.state().sessions.last().expect("session").endpoint;
+        let endpoint = &h.state().sessions.last().expect("session").endpoint();
         assert!(endpoint.ua_use_certificate);
         assert!(endpoint.user.is_empty());
         assert!(endpoint.password.is_empty());
@@ -2750,7 +2751,7 @@ fn ua_subscription_active_stops_periodic_read() {
         view.last_poll = std::time::Instant::now()
             .checked_sub(std::time::Duration::from_secs(60))
             .unwrap_or(std::time::Instant::now());
-        view.subscription = SubscriptionState::Inactive;
+        view.ua_mut().unwrap().subscription = SubscriptionState::Inactive;
     }
 
     // Without an active subscription a due Read is dispatched.
@@ -2785,7 +2786,7 @@ fn ua_subscription_active_stops_periodic_read() {
         "UA read must not be sent while subscription is active"
     );
     assert_eq!(
-        view.subscription,
+        view.ua().unwrap().subscription,
         SubscriptionState::Active,
         "active state must survive the tick"
     );
@@ -2803,7 +2804,7 @@ fn da_keeps_polling_unaffected_by_subscription_flag() {
         let view = app.sessions.iter_mut().find(|s| s.id == sid(1)).unwrap();
         view.root_loading = false;
         view.read_in_flight = false;
-        view.subscription = SubscriptionState::Active; // meaningless for DA, must be ignored
+        assert!(view.ua().is_none());
         view.last_poll = std::time::Instant::now()
             .checked_sub(std::time::Duration::from_secs(60))
             .unwrap_or(std::time::Instant::now());
@@ -2828,7 +2829,10 @@ fn ua_reconnect_resubscribes_rows_and_resets_subscription_flag() {
     app.seed_row(sid(1), "i=2256", "ServerStatus", Value::I64(0));
     {
         let view = app.sessions.iter_mut().find(|s| s.id == sid(1)).unwrap();
-        view.subscription = SubscriptionState::Active;
+        let ua = view.ua_mut().unwrap();
+        ua.subscription = SubscriptionState::Active;
+        ua.ua_view_id = Some("ns=1;s=view".into());
+        ua.ua_browse_filter = opcda_egui::bff::model::NodeClassFilter::Variables;
     }
     app.on_event_for_test_at(
         sid(1),
@@ -2841,10 +2845,12 @@ fn ua_reconnect_resubscribes_rows_and_resets_subscription_flag() {
     assert_eq!(view.state, SessionState::Disconnected);
 
     // Server returns: a fresh subscription must be re-established.
+    let mut endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+    endpoint.ua_session_timeout = Some(123_000);
     app.on_event_for_test_at(
         sid(1),
         EventKind::Connected {
-            endpoint: EndpointSpec::ua("opc.tcp://127.0.0.1:4840"),
+            endpoint,
             info: opcda_egui::bff::model::BackendMsg::raw("подключено"),
         },
     );
@@ -2852,10 +2858,19 @@ fn ua_reconnect_resubscribes_rows_and_resets_subscription_flag() {
     assert_eq!(view.state, SessionState::Connected);
     assert!(view.root_loading, "root must be re-browsed after reconnect");
     assert_eq!(
-        view.subscription,
+        view.ua().unwrap().subscription,
         SubscriptionState::Inactive,
         "state must reset so a new subscription is created on re-add"
     );
+    assert_eq!(
+        view.ua().unwrap().ua_view_id.as_deref(),
+        Some("ns=1;s=view")
+    );
+    assert_eq!(
+        view.ua().unwrap().ua_browse_filter,
+        opcda_egui::bff::model::NodeClassFilter::Variables
+    );
+    assert_eq!(view.ua().unwrap().ua_session_timeout_ms, 123_000);
     // Rows offered for re-add (AddItems dispatched via register_rows).
     let rows: Vec<&opcda_egui::app::Row> =
         app.rows.iter().filter(|r| r.session == sid(1)).collect();
@@ -2876,7 +2891,7 @@ fn ua_failed_subscription_falls_back_to_polling() {
     app.seed_row(sid(1), "i=2258", "CurrentTime", Value::Empty);
     {
         let view = app.sessions.iter_mut().find(|s| s.id == sid(1)).unwrap();
-        view.subscription = SubscriptionState::Active;
+        view.ua_mut().unwrap().subscription = SubscriptionState::Active;
         view.root_loading = false;
         view.read_in_flight = false;
         view.last_poll = std::time::Instant::now()
@@ -2889,7 +2904,10 @@ fn ua_failed_subscription_falls_back_to_polling() {
             state: SubscriptionState::Failed,
         },
     );
-    assert_eq!(app.sessions[0].subscription, SubscriptionState::Failed);
+    assert_eq!(
+        app.sessions[0].ua().unwrap().subscription,
+        SubscriptionState::Failed
+    );
     app.tick_for_test();
     assert!(
         app.sessions[0].read_in_flight,
@@ -2904,7 +2922,7 @@ fn server_info_popup_shows_subscription_state() {
     let mut app = App::new_test(&ctx);
     set_ru(&mut app);
     app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    app.sessions[0].subscription = SubscriptionState::Failed;
+    app.sessions[0].ua_mut().unwrap().subscription = SubscriptionState::Failed;
     app.status_popup = true;
 
     let mut h = harness(app);
@@ -3847,7 +3865,7 @@ fn open_tab_for_endpoint_creates_visible_active_session() {
         assert_eq!(app.sessions.len(), 1);
         assert!(app.sessions[0].visible, "new session tab must be visible");
         assert_eq!(app.active_session, Some(app.sessions[0].id));
-        assert_eq!(app.sessions[0].endpoint.address, "Alpha.Server");
+        assert_eq!(app.sessions[0].endpoint().address, "Alpha.Server");
     });
 }
 
@@ -3912,7 +3930,7 @@ fn close_tab_hides_view_keeps_rows_and_keeps_connection() {
         app.active_session.is_none(),
         "no visible tab remains -> no active session"
     );
-    assert_eq!(app.sessions[0].endpoint.address, "Alpha.Server");
+    assert_eq!(app.sessions[0].endpoint().address, "Alpha.Server");
 }
 
 /// Closing the active tab activates the nearest remaining visible tab.
@@ -4031,7 +4049,7 @@ fn ua_session_cap_does_not_block_da_sessions() {
         assert_eq!(app.ua_session_count(), 100);
         assert_eq!(app.sessions.len(), 101);
         assert_eq!(
-            app.sessions.last().unwrap().endpoint.protocol,
+            app.sessions.last().unwrap().endpoint().protocol,
             Protocol::OpcDa
         );
     });
@@ -5079,9 +5097,47 @@ fn double_click_da_result_connects_to_its_host() {
     h.get_by_label("Vendor.OPC — Factory @ plant-b").click();
     h.run_steps(1);
     assert_eq!(h.state().sessions.len(), 1);
-    let endpoint = &h.state().sessions[0].endpoint;
+    let endpoint = &h.state().sessions[0].endpoint();
     assert_eq!(
         (endpoint.host.as_str(), endpoint.address.as_str()),
         ("plant-b", "Vendor.OPC")
+    );
+}
+
+#[test]
+fn server_popup_shows_ua_fields_only_for_ua_sessions() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    set_ru(&mut app);
+    app.seed_session(sid(1), EndpointSpec::da("", "Server"));
+    app.status_popup = true;
+    let mut h = harness(app);
+    h.run_steps(3);
+    assert_eq!(h.query_all_by_label("Подписка:").count(), 0);
+    assert_eq!(h.query_all_by_label("Таймаут сессии (мс):").count(), 0);
+    h.state_mut()
+        .seed_session(sid(2), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    h.run_steps(3);
+    assert!(h.query_all_by_label("Подписка:").count() > 0);
+    assert!(h.query_all_by_label("Таймаут сессии (мс):").count() > 0);
+}
+
+#[test]
+fn browse_filter_control_is_ua_only_and_changes_ua_filter() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    set_ru(&mut app);
+    app.seed_session(sid(1), EndpointSpec::da("", "Server"));
+    let mut h = harness(app);
+    h.run_steps(3);
+    assert_eq!(h.query_all_by_label("Только переменные").count(), 0);
+    h.state_mut()
+        .seed_session(sid(2), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    h.run_steps(3);
+    h.get_by_label("Только переменные").click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().sessions[1].ua().unwrap().ua_browse_filter,
+        opcda_egui::bff::model::NodeClassFilter::Variables
     );
 }

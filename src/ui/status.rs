@@ -1,7 +1,7 @@
 use super::colors::{green, red, yellow};
 use super::truncate_text;
 use crate::app::{App, ReconnectState, SessionState};
-use crate::bff::model::{Protocol, SubscriptionState};
+use crate::bff::model::SubscriptionState;
 use crate::constants::{RECONNECT_MAX_ATTEMPTS, STATUS_BAR_HEIGHT, TRUNCATE_STATUS_NAME};
 use crate::i18n::{Lang, Tr, fmt, tr};
 
@@ -24,14 +24,14 @@ pub(super) fn status_bar(app: &mut App, ui: &mut egui::Ui) {
                     };
                     ui.colored_label(color, "●");
                     let truncated =
-                        truncate_text(&session.endpoint.display_name(), TRUNCATE_STATUS_NAME);
+                        truncate_text(&session.endpoint().display_name(), TRUNCATE_STATUS_NAME);
                     let indicator = egui::Button::new(
                         egui::RichText::new(format!("{truncated}: {text}")).color(color),
                     )
                     .frame(false);
                     if ui
                         .add(indicator)
-                        .on_hover_text(session.endpoint.display_name())
+                        .on_hover_text(session.endpoint().display_name())
                         .clicked()
                     {
                         app.status_popup = !app.status_popup;
@@ -174,11 +174,11 @@ pub(super) fn status_popup(app: &mut App, ui: &mut egui::Ui) {
                     ui.label(protocol.to_string());
                     ui.end_row();
                     ui.label(egui::RichText::new(tr(lang, Tr::EndpointLabel)).strong());
-                    ui.label(&session.endpoint.address);
+                    ui.label(&session.endpoint().address);
                     ui.end_row();
-                    if protocol == Protocol::OpcUa {
+                    if let Some(ua) = session.ua() {
                         ui.label(egui::RichText::new(tr(lang, Tr::SessionTimeoutLabel)).strong());
-                        ui.label(session.ua_session_timeout_ms.to_string());
+                        ui.label(ua.ua_session_timeout_ms.to_string());
                         ui.end_row();
                     }
                     ui.label(egui::RichText::new(tr(lang, Tr::StateLabel)).strong());
@@ -197,9 +197,9 @@ pub(super) fn status_popup(app: &mut App, ui: &mut egui::Ui) {
                     ui.label(egui::RichText::new(tr(lang, Tr::SubscribedLabel)).strong());
                     ui.label(subscribed.to_string());
                     ui.end_row();
-                    if protocol == Protocol::OpcUa {
+                    if let Some(ua) = session.ua() {
                         ui.label(egui::RichText::new(tr(lang, Tr::SubscriptionLabel)).strong());
-                        ui.label(subscription_state_text(lang, session.subscription));
+                        ui.label(subscription_state_text(lang, ua.subscription));
                         ui.end_row();
                     }
                     ui.label(egui::RichText::new(tr(lang, Tr::SelectedLabel)).strong());

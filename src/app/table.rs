@@ -11,7 +11,7 @@ impl App {
             return false;
         };
         let protocol = view.protocol();
-        let server_label = view.endpoint.display_name();
+        let server_label = view.endpoint().display_name();
         let mut specs = Vec::new();
         let mut added = 0usize;
         let mut exhausted = false;

@@ -148,3 +148,9 @@ runtime, физические DA/UAC и финальный exact-head CI ост�
 
 CSV dialog читает job без checked `expect`; регрессия отмены и завершения и
 Windows GUI typecheck прошли. Остальные ограничения B3 сохраняются.
+
+**2026-10-28, подэтап B4:** DA и UA представлены `SessionKind`, UA-поля
+доступны только в UA-варианте, endpoint обновляется согласованно с видом.
+Проверки и ограничения — в `docs/refactoring-status.md`; остальные B/E/F/G/H,
+PNG, измеренный 10k baseline, Windows runtime, физические DA/UAC и финальный
+exact-head CI остаются открыты.

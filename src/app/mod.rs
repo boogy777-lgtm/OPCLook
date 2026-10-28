@@ -639,7 +639,9 @@ impl App {
                 view.info = message.clone();
                 view.read_in_flight = false;
                 view.root_loading = false;
-                view.subscription = SubscriptionState::Inactive;
+                if let Some(ua) = view.ua_mut() {
+                    ua.subscription = SubscriptionState::Inactive;
+                }
                 for item in &mut view.tree {
                     item.loading = false;
                 }
@@ -737,7 +739,9 @@ impl App {
         if let Some(view) = self.sessions.iter_mut().find(|view| view.id == id) {
             view.state = runtime.state;
             view.reconnect = runtime.reconnect;
-            view.subscription = runtime.subscription;
+            if let Some(ua) = view.ua_mut() {
+                ua.subscription = runtime.subscription;
+            }
             view.read_in_flight = runtime.read_in_flight;
             view.last_poll = runtime.last_poll;
             view.last_test = runtime.last_test;
@@ -747,10 +751,12 @@ impl App {
     fn sync_fixture_sessions(&mut self) {
         for view in &self.sessions {
             let mut runtime =
-                opclook_engine::SessionRuntime::new(view.endpoint.clone(), Instant::now());
+                opclook_engine::SessionRuntime::new(view.endpoint().clone(), Instant::now());
             runtime.state = view.state;
             runtime.reconnect = view.reconnect;
-            runtime.subscription = view.subscription;
+            if let Some(ua) = view.ua() {
+                runtime.subscription = ua.subscription;
+            }
             runtime.read_in_flight = view.read_in_flight;
             runtime.last_poll = view.last_poll;
             runtime.last_test = view.last_test;
@@ -767,26 +773,13 @@ impl App {
     /// Test-only seeding: append a connected session view.
     #[cfg(feature = "test-support")]
     pub fn seed_session(&mut self, id: SessionId, endpoint: EndpointSpec) {
-        self.sessions.push(SessionView {
-            id,
-            display_name: compose_server_name(&endpoint),
-            endpoint,
-            state: SessionState::Connected,
-            visible: true,
-            info: tr(Lang::Ru, Tr::Ready).to_string(),
-            tree: Vec::new(),
-            next_tree_id: 1,
-            root_loaded: true,
-            root_loading: false,
-            read_in_flight: false,
-            last_poll: Instant::now(),
-            last_test: Instant::now(),
-            reconnect: ReconnectState::Idle,
-            ua_view_id: None,
-            ua_browse_filter: crate::bff::model::NodeClassFilter::All,
-            ua_session_timeout_ms: crate::settings::default_session_timeout(),
-            subscription: SubscriptionState::Inactive,
-        });
+        let mut view = SessionView::new(id, endpoint, Lang::Ru);
+        view.state = SessionState::Connected;
+        view.info = tr(Lang::Ru, Tr::Ready).to_string();
+        view.root_loaded = true;
+        view.last_poll = Instant::now();
+        view.last_test = Instant::now();
+        self.sessions.push(view);
         self.active_session = Some(id);
         self.selected_tree = None;
         self.sync_fixture_sessions();
@@ -831,7 +824,7 @@ impl App {
             .sessions
             .iter()
             .find(|s| s.id == session)
-            .map(|s| s.endpoint.display_name())
+            .map(|s| s.endpoint().display_name())
             .unwrap_or_default();
         let key = self.next_key.expect("test row IDs exhausted");
         self.next_key = key.successor();
@@ -884,7 +877,11 @@ impl App {
             .map(|s| {
                 (
                     s.id,
-                    format!("{} ({})", s.endpoint.display_name(), s.endpoint.protocol),
+                    format!(
+                        "{} ({})",
+                        s.endpoint().display_name(),
+                        s.endpoint().protocol
+                    ),
                 )
             })
             .collect()

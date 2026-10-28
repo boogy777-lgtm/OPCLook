@@ -124,8 +124,8 @@ pub(super) fn resolve_csv_session(app: &App, server: &str) -> CsvServer {
     }
     let names = |s: &crate::app::SessionView| {
         [
-            s.endpoint.display_name(),
-            s.endpoint.address.clone(),
+            s.endpoint().display_name(),
+            s.endpoint().address.clone(),
             s.display_name.clone(),
         ]
     };

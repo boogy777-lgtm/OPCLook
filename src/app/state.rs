@@ -79,9 +79,47 @@ pub struct TreeItem {
     pub loading: bool,
 }
 
+/// State that exists only for UA sessions.
+pub struct UaSessionView {
+    /// Selected server View; None browses the default view.
+    pub ua_view_id: Option<String>,
+    /// Restriction applied to subsequent browse requests.
+    pub ua_browse_filter: NodeClassFilter,
+    /// Requested timeout; the server-revised value is not exposed by async-opcua.
+    pub ua_session_timeout_ms: u32,
+    /// Projected from Engine; only Active suppresses normal polling.
+    pub subscription: SubscriptionState,
+}
+
+impl Default for UaSessionView {
+    fn default() -> Self {
+        Self {
+            ua_view_id: None,
+            ua_browse_filter: NodeClassFilter::All,
+            ua_session_timeout_ms: crate::settings::default_session_timeout(),
+            subscription: SubscriptionState::Inactive,
+        }
+    }
+}
+
+pub enum SessionKind {
+    Da,
+    Ua(UaSessionView),
+}
+
+impl SessionKind {
+    fn for_protocol(protocol: Protocol) -> Self {
+        match protocol {
+            Protocol::OpcDa => Self::Da,
+            Protocol::OpcUa => Self::Ua(UaSessionView::default()),
+        }
+    }
+}
+
 pub struct SessionView {
     pub id: SessionId,
-    pub endpoint: EndpointSpec,
+    endpoint: EndpointSpec,
+    kind: SessionKind,
     /// Human-readable server name shown in the servers list and tab strip
     /// (OPC UA host:port or the advertised application name when known; for
     /// DA the ProgID/description). Refreshed on connect when available.
@@ -102,18 +140,6 @@ pub struct SessionView {
     pub last_test: Instant,
     /// Automatic-reconnect state (Idle / Waiting / Stopped / Exhausted).
     pub reconnect: ReconnectState,
-    /// UA-only: the selected server View (NodeId text) to browse through.
-    /// `None` browses the default view.
-    pub ua_view_id: Option<String>,
-    /// UA-only: restrict future browses to Variable nodes.
-    pub ua_browse_filter: NodeClassFilter,
-    /// UA-only: requested session timeout in ms (displayed in the status popup;
-    /// the revised server value is not exposed by async-opcua, so we show the
-    /// requested one).
-    pub ua_session_timeout_ms: u32,
-    /// UA-only: push-subscription state. Only `Active` skips the periodic Read;
-    /// `Inactive`/`Failed` keep polling. Meaningless for DA sessions.
-    pub subscription: SubscriptionState,
 }
 
 impl SessionView {
@@ -122,6 +148,7 @@ impl SessionView {
         let display_name = compose_server_name(&endpoint);
         Self {
             id,
+            kind: SessionKind::for_protocol(endpoint.protocol),
             endpoint,
             display_name,
             state: SessionState::Connecting,
@@ -135,15 +162,40 @@ impl SessionView {
             last_poll: now.checked_sub(Duration::from_secs(10)).unwrap_or(now),
             last_test: now,
             reconnect: ReconnectState::Idle,
-            ua_view_id: None,
-            ua_browse_filter: NodeClassFilter::All,
-            ua_session_timeout_ms: crate::settings::default_session_timeout(),
-            subscription: SubscriptionState::Inactive,
         }
     }
 
     pub fn protocol(&self) -> Protocol {
-        self.endpoint.protocol
+        match self.kind {
+            SessionKind::Da => Protocol::OpcDa,
+            SessionKind::Ua(_) => Protocol::OpcUa,
+        }
+    }
+
+    pub fn endpoint(&self) -> &EndpointSpec {
+        &self.endpoint
+    }
+
+    /// Keep UA selection on metadata changes; reset it when protocol changes.
+    pub fn update_endpoint(&mut self, endpoint: EndpointSpec) {
+        if self.protocol() != endpoint.protocol {
+            self.kind = SessionKind::for_protocol(endpoint.protocol);
+        }
+        self.endpoint = endpoint;
+    }
+
+    pub fn ua(&self) -> Option<&UaSessionView> {
+        match &self.kind {
+            SessionKind::Ua(ua) => Some(ua),
+            SessionKind::Da => None,
+        }
+    }
+
+    pub fn ua_mut(&mut self) -> Option<&mut UaSessionView> {
+        match &mut self.kind {
+            SessionKind::Ua(ua) => Some(ua),
+            SessionKind::Da => None,
+        }
     }
 }
 

@@ -6,7 +6,7 @@ use super::*;
 use crate::bff::model::RequestId;
 use crate::bff::model::{
     BrowseNode, Event, EventKind, ItemInfo, ItemKey, NodeKind, Operation, Origin, Owner, Protocol,
-    ScanEnd, SessionId, SubscriptionState,
+    ScanEnd, SessionId,
 };
 use crate::i18n::{Tr, backend_text, fmt, tr};
 use chrono::Utc;
@@ -172,9 +172,8 @@ impl App {
                     view.read_in_flight = false;
                     view.tree.clear();
                     view.next_tree_id = 1;
-                    view.subscription = SubscriptionState::Inactive;
-                    if is_ua {
-                        view.ua_session_timeout_ms = endpoint
+                    if let Some(ua) = view.ua_mut() {
+                        ua.ua_session_timeout_ms = endpoint
                             .ua_session_timeout
                             .unwrap_or_else(crate::settings::default_session_timeout);
                     }
@@ -357,16 +356,7 @@ impl App {
                         .unwrap_or_else(Instant::now);
                 }
             }
-            EventKind::SubscriptionState { state } => {
-                if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
-                    view.subscription = state;
-                    if state == SubscriptionState::Active {
-                        // The push subscription is live; clear a stale in-flight
-                        // poll so the next tick does not issue a redundant Read.
-                        view.read_in_flight = false;
-                    }
-                }
-            }
+            EventKind::SubscriptionState { .. } => {} // Already projected from Engine.
             EventKind::Wrote { key, result } => {
                 let name = self
                     .rows
@@ -404,7 +394,7 @@ impl App {
                     if view.state != SessionState::Connecting {
                         view.state = SessionState::Disconnected;
                         view.info = reason.clone();
-                        lost = Some(view.endpoint.display_name());
+                        lost = Some(view.endpoint().display_name());
                     }
                 }
                 if let Some(name) = lost {

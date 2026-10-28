@@ -84,26 +84,26 @@ impl App {
         if let Some(id) = self
             .sessions
             .iter()
-            .find(|s| Self::dedup_key(&s.endpoint) == key)
+            .find(|s| Self::dedup_key(s.endpoint()) == key)
             .map(|s| s.id)
         {
             let mut reconfigure = false;
             if let Some(view) = self.sessions.iter_mut().find(|s| s.id == id) {
                 view.visible = true;
                 if endpoint.protocol == Protocol::OpcUa {
-                    reconfigure = view.endpoint.user != endpoint.user
-                        || view.endpoint.password != endpoint.password
-                        || view.endpoint.ua_use_certificate != endpoint.ua_use_certificate
-                        || view.endpoint.ua_security_policy != endpoint.ua_security_policy
-                        || view.endpoint.ua_security_mode != endpoint.ua_security_mode
-                        || view.endpoint.ua_trust_server_cert != endpoint.ua_trust_server_cert
-                        || view.endpoint.ua_session_timeout != endpoint.ua_session_timeout;
+                    reconfigure = view.endpoint().user != endpoint.user
+                        || view.endpoint().password != endpoint.password
+                        || view.endpoint().ua_use_certificate != endpoint.ua_use_certificate
+                        || view.endpoint().ua_security_policy != endpoint.ua_security_policy
+                        || view.endpoint().ua_security_mode != endpoint.ua_security_mode
+                        || view.endpoint().ua_trust_server_cert != endpoint.ua_trust_server_cert
+                        || view.endpoint().ua_session_timeout != endpoint.ua_session_timeout;
                     if reconfigure {
                         let mut updated = endpoint;
                         // Existing sessions keep their selected NIC until
                         // explicitly removed; reauthentication does not rebind.
-                        updated.ua_bind = view.endpoint.ua_bind.clone();
-                        view.endpoint = updated;
+                        updated.ua_bind = view.endpoint().ua_bind.clone();
+                        view.update_endpoint(updated);
                     }
                 }
             }
@@ -245,7 +245,7 @@ impl App {
         let was_disconnected = self
             .sessions
             .iter()
-            .find(|s| Self::dedup_key(&s.endpoint) == key)
+            .find(|s| Self::dedup_key(s.endpoint()) == key)
             .is_some_and(|s| s.state == SessionState::Disconnected);
         if !self.open_tab_for_endpoint(endpoint) {
             return false;
@@ -306,7 +306,7 @@ impl App {
             let Some(view) = self.sessions.iter().find(|s| s.id == session) else {
                 return;
             };
-            (view.protocol(), view.endpoint.display_name())
+            (view.protocol(), view.endpoint().display_name())
         };
         self.engine.manual_disconnect(session);
         if self
@@ -350,7 +350,7 @@ impl App {
             let Some(view) = self.sessions.iter().find(|s| s.id == session) else {
                 return;
             };
-            (view.protocol(), view.endpoint.display_name())
+            (view.protocol(), view.endpoint().display_name())
         };
         if self
             .send(session, protocol, CommandKind::Disconnect)
@@ -440,7 +440,7 @@ impl App {
                 .find(|s| s.id == session)
                 .and_then(|view| match view.reconnect {
                     ReconnectState::Waiting { attempt, .. } => {
-                        Some((view.endpoint.clone(), attempt))
+                        Some((view.endpoint().clone(), attempt))
                     }
                     _ => None,
                 })
@@ -542,7 +542,7 @@ impl App {
             .sessions
             .iter()
             .find(|s| s.id == session)
-            .map(|s| s.endpoint.clone())
+            .map(|s| s.endpoint().clone())
         else {
             return;
         };
@@ -680,7 +680,7 @@ impl App {
                 Tr::AttemptsExhaustedFor,
                 &[
                     &RECONNECT_MAX_ATTEMPTS.to_string(),
-                    &view.endpoint.display_name(),
+                    &view.endpoint().display_name(),
                 ],
             ),
             _ => {}
@@ -702,7 +702,7 @@ impl App {
             opclook_engine::ReconnectScheduled::Exhausted => {
                 self.journal.warn_l(
                     Tr::AttemptsExhaustedFor,
-                    &[&cap.to_string(), &view.endpoint.display_name()],
+                    &[&cap.to_string(), &view.endpoint().display_name()],
                 );
                 view.reconnect = ReconnectState::Exhausted;
                 return;

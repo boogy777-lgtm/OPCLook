@@ -474,3 +474,23 @@ Engine 22/22, contract 27/27 + 3 doctest, CLI 6/6 + 2/2 live sample.
 CSV dialog читает snapshot без checked `expect`; Linux interaction отмены и
 завершения 1/1 и Windows i686 GUI all-targets typecheck с test-only пропуском
 ресурсов прошли. Предыдущие ограничения сохраняются.
+
+## Подэтап B4: тип состояния сессии (2026-10-28)
+
+`SessionKind::Da` и `SessionKind::Ua(UaSessionView)` отделяют выбранный View,
+фильтр Browse, запрошенный timeout и состояние подписки от общего дерева и
+планирования. Protocol определяется видом сессии; endpoint закрыт для прямой
+мутации, согласованное обновление сохраняет UA View и фильтр при том же
+протоколе и создаёт новое UA состояние при смене протокола. Engine остаётся
+источником состояния чтения и подписки; unsolicited Values и Read Error не
+снимают ожидающий Read. Существуют headless проверки DA/UA управления, опроса,
+подписки, reconnect и endpoint dedup; добавлены проверки переходов типа,
+отображения UA-полей, изменения фильтра и сохранения View/filter и timeout при
+reconnect.
+
+Измерено на Linux: GUI unit 206/206, UI interaction 148/148 (1 Windows-only
+ignored), Linux all-targets typecheck с test-support; fmt. Windows i686
+workspace all-targets — только typecheck с test-only пропуском ресурсов и
+manifest. PNG не проверен, Windows runtime, физические DA/UAC и финальный
+exact-head CI остаются открыты. Это только SessionKind: helper/IPC/journal и
+прочие B/E/F/G/H, а также 10k frame/allocation baseline ещё не завершены.

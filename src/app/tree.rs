@@ -60,16 +60,11 @@ impl App {
             item.loading = true;
         }
         let protocol = view.protocol();
-        let filter = if protocol == Protocol::OpcUa {
-            view.ua_browse_filter
-        } else {
-            crate::bff::model::NodeClassFilter::All
-        };
-        let view_id = if protocol == Protocol::OpcUa {
-            view.ua_view_id.clone()
-        } else {
-            None
-        };
+        let (filter, view_id) = view
+            .ua()
+            .map_or((crate::bff::model::NodeClassFilter::All, None), |ua| {
+                (ua.ua_browse_filter, ua.ua_view_id.clone())
+            });
         let ctx = match item_id {
             Some(id) if !node_id.is_empty() => PendingCtx::TreeItem(id),
             _ => PendingCtx::None,
@@ -122,8 +117,13 @@ impl App {
     /// Sets the active server View for UA browsing. `None` returns to the
     /// default (Objects/value) view.
     pub fn set_ua_view(&mut self, session: SessionId, view_id: Option<String>) {
-        if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
-            view.ua_view_id = view_id;
+        if let Some(ua) = self
+            .sessions
+            .iter_mut()
+            .find(|s| s.id == session)
+            .and_then(|view| view.ua_mut())
+        {
+            ua.ua_view_id = view_id;
         }
     }
 
@@ -133,11 +133,10 @@ impl App {
         let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) else {
             return;
         };
-        let protocol = view.protocol();
-        if protocol != Protocol::OpcUa {
+        let Some(ua) = view.ua_mut() else {
             return;
-        }
-        view.ua_view_id = view_id;
+        };
+        ua.ua_view_id = view_id;
         self.browse(session, String::new());
     }
 
@@ -154,9 +153,12 @@ impl App {
         } else {
             crate::bff::model::NodeClassFilter::All
         };
-        let changed = view.ua_browse_filter != filter;
-        view.ua_browse_filter = filter;
-        let live = view.state == SessionState::Connected && view.protocol() == Protocol::OpcUa;
+        let live = view.state == SessionState::Connected;
+        let Some(ua) = view.ua_mut() else {
+            return;
+        };
+        let changed = ua.ua_browse_filter != filter;
+        ua.ua_browse_filter = filter;
         if changed && live {
             self.reread_tree(session);
         }

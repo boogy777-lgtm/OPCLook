@@ -405,3 +405,14 @@ CSV dialog больше не использует checked `expect`: состоя
 одним snapshot через `let Some`. Linux interaction отмены и завершения 1/1,
 Windows i686 GUI all-targets typecheck с test-only пропуском ресурсов и fmt
 прошли; ограничения предыдущей записи сохраняются.
+
+### 2026-10-28 — B4: SessionKind
+
+DA больше не содержит UA View/filter/timeout/subscription; UI получает состояние
+подписки и Read из Engine. Endpoint закрыт от прямой мутации, обновление
+сохраняет UA выбор для того же протокола, а при смене инициализирует новый
+вариант. Тестовая фикстура сохраняет прежнее время последнего опроса.
+Измерено: Linux GUI unit 206 passed, UI interaction 148 passed и 1 ignored,
+Linux all-targets с test-support и Windows i686 workspace all-targets typecheck
+(test-only пропуск ресурсов/manifest); fmt. Windows runtime, DA/UAC, PNG,
+финальный exact-head CI, 10k baseline и прочие пункты B/E/F/G/H открыты.

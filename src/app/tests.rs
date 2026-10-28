@@ -945,7 +945,7 @@ fn u5_toggling_vars_only_rereads_the_tree_from_the_root() {
     app.set_ua_browse_vars_only(crate::bff::model::SessionId::new(1).unwrap(), true);
     let view = &app.sessions[0];
     assert_eq!(
-        view.ua_browse_filter,
+        view.ua().unwrap().ua_browse_filter,
         crate::bff::model::NodeClassFilter::Variables
     );
     assert!(view.tree.is_empty(), "stale tree dropped");
@@ -2498,4 +2498,34 @@ fn new_da_discovery_keeps_independent_ua_search_pending() {
         },
     );
     assert_eq!(app.dialogs.connect.ua_search, UaSearch::Idle);
+}
+
+#[test]
+fn session_kind_tracks_endpoint_and_preserves_ua_selection_on_metadata_update() {
+    let id = crate::bff::model::SessionId::new(1).unwrap();
+    let mut view = SessionView::new(id, EndpointSpec::ua("opc.tcp://localhost:4840"), Lang::Ru);
+    let ua = view.ua_mut().unwrap();
+    ua.ua_view_id = Some("ns=1;s=view".into());
+    ua.ua_browse_filter = crate::bff::model::NodeClassFilter::Variables;
+    let mut updated = view.endpoint().clone();
+    updated.user = "user".into();
+    view.update_endpoint(updated);
+    assert_eq!(
+        view.ua().unwrap().ua_view_id.as_deref(),
+        Some("ns=1;s=view")
+    );
+    assert_eq!(
+        view.ua().unwrap().ua_browse_filter,
+        crate::bff::model::NodeClassFilter::Variables
+    );
+    view.update_endpoint(EndpointSpec::da("", "Server"));
+    assert_eq!(view.protocol(), Protocol::OpcDa);
+    assert_eq!(view.endpoint().protocol, view.protocol());
+    assert!(view.ua().is_none());
+    view.update_endpoint(EndpointSpec::ua("opc.tcp://localhost:4840"));
+    assert_eq!(view.endpoint().protocol, view.protocol());
+    let ua = view.ua().unwrap();
+    assert_eq!(ua.ua_view_id, None);
+    assert_eq!(ua.ua_browse_filter, crate::bff::model::NodeClassFilter::All);
+    assert_eq!(ua.subscription, SubscriptionState::Inactive);
 }

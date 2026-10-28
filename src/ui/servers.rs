@@ -45,7 +45,7 @@ pub(super) fn session_tab_strip(app: &mut App, ui: &mut egui::Ui) {
             // V2: endpoints of one server differ by security only, so an
             // explicit choice is part of the tab (a padlock), of its tooltip
             // and of its accessible name.
-            match security_suffix(&s.endpoint, lang) {
+            match security_suffix(s.endpoint(), lang) {
                 Some((short, long)) => (
                     s.id,
                     s.display_name.clone(),
@@ -325,7 +325,7 @@ pub(super) fn request_remove_session(app: &mut App, session: SessionId) {
         .sessions
         .iter()
         .find(|s| s.id == session)
-        .map(|s| s.endpoint.display_name())
+        .map(|s| s.endpoint().display_name())
         .unwrap_or_else(|| "?".to_string());
     app.request_confirm(
         tr(app.lang(), Tr::RemoveFromListConfirmTitle).to_string(),

@@ -105,7 +105,7 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                 .iter()
                 .map(|s| {
                     // V2: one server's endpoints differ by security only.
-                    let name = match security_suffix(&s.endpoint, lang) {
+                    let name = match security_suffix(s.endpoint(), lang) {
                         Some((short, _)) => format!("{} · {short}", s.display_name),
                         None => s.display_name.clone(),
                     };
@@ -343,7 +343,9 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                     .iter()
                     .find(|s| s.id == session_id)
                     .is_some_and(|s| {
-                        s.ua_browse_filter == crate::bff::model::NodeClassFilter::Variables
+                        s.ua().is_some_and(|ua| {
+                            ua.ua_browse_filter == crate::bff::model::NodeClassFilter::Variables
+                        })
                     });
                 if ui.checkbox(&mut only, tr(lang, Tr::OnlyVars)).changed() {
                     // U5: the filter applies to what is loaded, so the

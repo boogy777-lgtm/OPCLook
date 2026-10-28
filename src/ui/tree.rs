@@ -78,7 +78,7 @@ pub(super) fn request_disconnect(app: &mut App, session: SessionId) {
         .sessions
         .iter()
         .find(|s| s.id == session)
-        .map(|s| s.endpoint.display_name())
+        .map(|s| s.endpoint().display_name())
         .unwrap_or_else(|| "?".to_string());
     let live = app
         .sessions
