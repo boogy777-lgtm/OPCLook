@@ -1,7 +1,7 @@
 use super::present::compose_server_name;
 use crate::bff::model::{
     BrowseNode, EndpointSpec, ItemKey, NodeClassFilter, Protocol, Quality, QualityKind, RequestId,
-    SessionId, SubscriptionState, Value,
+    SessionId, SubscriptionState, Value, VarType,
 };
 use crate::i18n::{Lang, Tr, tr};
 use chrono::{DateTime, Local, Utc};
@@ -175,8 +175,8 @@ pub struct Row {
     pub display_name: String,
     pub server_label: String,
     pub data_type: Option<String>,
-    pub canonical_vt: Option<u16>,
-    pub write_type: Option<u16>,
+    pub canonical_vt: Option<VarType>,
+    pub write_type: Option<VarType>,
     pub writable: bool,
     pub value: Value,
     pub quality: RowQuality,
@@ -227,7 +227,7 @@ pub enum WriteKind {
 #[derive(Clone, Copy)]
 pub struct WriteTypeChoice {
     pub label: &'static str,
-    pub vt: Option<u16>,
+    pub vt: Option<VarType>,
     pub kind: WriteKind,
 }
 
@@ -241,47 +241,47 @@ pub fn write_type_choices(protocol: Protocol) -> Vec<WriteTypeChoice> {
             },
             WriteTypeChoice {
                 label: "VT_BOOL",
-                vt: Some(11),
+                vt: Some(VarType::BOOL),
                 kind: WriteKind::Bool,
             },
             WriteTypeChoice {
                 label: "VT_I2",
-                vt: Some(2),
+                vt: Some(VarType::I2),
                 kind: WriteKind::I64,
             },
             WriteTypeChoice {
                 label: "VT_I4",
-                vt: Some(3),
+                vt: Some(VarType::I4),
                 kind: WriteKind::I64,
             },
             WriteTypeChoice {
                 label: "VT_R4",
-                vt: Some(4),
+                vt: Some(VarType::R4),
                 kind: WriteKind::F64,
             },
             WriteTypeChoice {
                 label: "VT_R8",
-                vt: Some(5),
+                vt: Some(VarType::R8),
                 kind: WriteKind::F64,
             },
             WriteTypeChoice {
                 label: "VT_BSTR",
-                vt: Some(8),
+                vt: Some(VarType::BSTR),
                 kind: WriteKind::Str,
             },
             WriteTypeChoice {
                 label: "VT_DATE",
-                vt: Some(7),
+                vt: Some(VarType::DATE),
                 kind: WriteKind::DateTime,
             },
             WriteTypeChoice {
                 label: "VT_I8",
-                vt: Some(20),
+                vt: Some(VarType::I8),
                 kind: WriteKind::I64,
             },
             WriteTypeChoice {
                 label: "VT_UI8",
-                vt: Some(21),
+                vt: Some(VarType::UI8),
                 kind: WriteKind::U64,
             },
         ],

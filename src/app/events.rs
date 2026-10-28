@@ -720,7 +720,7 @@ impl App {
                 .map(|s| s.protocol() == Protocol::OpcUa)
                 .unwrap_or(false);
             if !is_ua {
-                row.canonical_vt = info.type_id;
+                row.canonical_vt = info.type_id.map(crate::bff::model::VarType);
             }
             row.writable = info.writable;
             row.pending = false;

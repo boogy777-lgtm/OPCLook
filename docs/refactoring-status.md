@@ -262,3 +262,9 @@ Settings хранит выбранный AdapterId и IpAddr в типизиро
 settings 46/46 и network-tab interactions 5 passed / 1 Windows-only ignored;
 Windows GUI all-targets typecheck с test-only отключением ресурсов прошёл.
 Реальный Windows inventory/маршруты и остальные пункты A/C открыты.
+
+VarType с именованными VT-константами проходит из GUI через WriteRequest к DA;
+неизвестные/модифицированные u16 сохраняются, UA type_id не смешивается с VT.
+Linux backend VT test 1/1, GUI K3 interaction 1/1 и all-targets check прошли;
+Windows workspace all-targets typecheck с test-only флагами прошёл без runtime.
+На Windows фактические VARIANT и полный gate ещё требуют CI.

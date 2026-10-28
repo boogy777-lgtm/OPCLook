@@ -1,30 +1,45 @@
 //! Platform-neutral VARIANT type names (shared by the COM layer and the UI).
 
-pub fn vt_name(vt: u16) -> &'static str {
+use opclook_contract::model::VarType;
+
+pub fn vt_name(vt: VarType) -> &'static str {
     match vt {
-        0 => "VT_EMPTY",
-        1 => "VT_NULL",
-        2 => "VT_I2",
-        3 => "VT_I4",
-        4 => "VT_R4",
-        5 => "VT_R8",
-        6 => "VT_CY",
-        7 => "VT_DATE",
-        8 => "VT_BSTR",
-        9 => "VT_DISPATCH",
-        10 => "VT_ERROR",
-        11 => "VT_BOOL",
-        12 => "VT_VARIANT",
-        13 => "VT_UNKNOWN",
-        14 => "VT_DECIMAL",
-        16 => "VT_I1",
-        17 => "VT_UI1",
-        18 => "VT_UI2",
-        19 => "VT_UI4",
-        20 => "VT_I8",
-        21 => "VT_UI8",
-        22 => "VT_INT",
-        23 => "VT_UINT",
+        VarType::EMPTY => "VT_EMPTY",
+        VarType::NULL => "VT_NULL",
+        VarType::I2 => "VT_I2",
+        VarType::I4 => "VT_I4",
+        VarType::R4 => "VT_R4",
+        VarType::R8 => "VT_R8",
+        VarType::CY => "VT_CY",
+        VarType::DATE => "VT_DATE",
+        VarType::BSTR => "VT_BSTR",
+        VarType::DISPATCH => "VT_DISPATCH",
+        VarType::ERROR => "VT_ERROR",
+        VarType::BOOL => "VT_BOOL",
+        VarType::VARIANT => "VT_VARIANT",
+        VarType::UNKNOWN => "VT_UNKNOWN",
+        VarType::DECIMAL => "VT_DECIMAL",
+        VarType::I1 => "VT_I1",
+        VarType::UI1 => "VT_UI1",
+        VarType::UI2 => "VT_UI2",
+        VarType::UI4 => "VT_UI4",
+        VarType::I8 => "VT_I8",
+        VarType::UI8 => "VT_UI8",
+        VarType::INT => "VT_INT",
+        VarType::UINT => "VT_UINT",
         _ => "VT_UNKNOWN",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vt_names_match_typed_values_and_keep_unknown() {
+        assert_eq!(vt_name(VarType::BOOL), "VT_BOOL");
+        assert_eq!(vt_name(VarType::I4), "VT_I4");
+        assert_eq!(vt_name(VarType::UI8), "VT_UI8");
+        assert_eq!(vt_name(VarType(0xffff)), "VT_UNKNOWN");
     }
 }

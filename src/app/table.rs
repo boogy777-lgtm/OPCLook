@@ -1,5 +1,7 @@
 use super::*;
-use crate::bff::model::{CommandKind, ItemKey, ItemSpec, Protocol, SessionId, Value, WriteRequest};
+use crate::bff::model::{
+    CommandKind, ItemKey, ItemSpec, Protocol, SessionId, Value, VarType, WriteRequest,
+};
 use crate::i18n::{Tr, fmt, tr};
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Utc};
 
@@ -440,7 +442,7 @@ impl App {
 fn parse_value(
     text: &str,
     kind: WriteKind,
-    canonical_vt: Option<u16>,
+    canonical_vt: Option<VarType>,
     ua_type: Option<&str>,
     protocol: Protocol,
     lang: Lang,
@@ -483,19 +485,25 @@ fn parse_value(
 
 pub(super) fn infer_kind(
     text: &str,
-    canonical_vt: Option<u16>,
+    canonical_vt: Option<VarType>,
     ua_type: Option<&str>,
     protocol: Protocol,
 ) -> WriteKind {
     if protocol == Protocol::OpcDa {
         if let Some(vt) = canonical_vt {
             match vt {
-                11 => return WriteKind::Bool,
-                2 | 3 | 16 | 20 | 22 => return WriteKind::I64,
-                17 | 18 | 19 | 21 | 23 => return WriteKind::U64,
-                4 | 5 | 6 => return WriteKind::F64,
-                7 => return WriteKind::DateTime,
-                8 | 12 | 30 | 31 => return WriteKind::Str,
+                VarType::BOOL => return WriteKind::Bool,
+                VarType::I2 | VarType::I4 | VarType::I1 | VarType::I8 | VarType::INT => {
+                    return WriteKind::I64;
+                }
+                VarType::UI1 | VarType::UI2 | VarType::UI4 | VarType::UI8 | VarType::UINT => {
+                    return WriteKind::U64;
+                }
+                VarType::R4 | VarType::R8 | VarType::CY => return WriteKind::F64,
+                VarType::DATE => return WriteKind::DateTime,
+                VarType::BSTR | VarType::VARIANT | VarType::LPSTR | VarType::LPWSTR => {
+                    return WriteKind::Str;
+                }
                 _ => {}
             }
         }

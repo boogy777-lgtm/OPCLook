@@ -269,3 +269,7 @@ Settings хранит типизированный Lang и сохраняет с
 раз при загрузке. Невалидные значения остаются unselected; stale GUID не
 удаляется автоматически. Linux settings 46/46, network-tab 5 passed / 1
 Windows-only ignored; Windows проверен по типам.
+
+DA VarType отделён от UA типов и использует именованные константы в GUI,
+контракте и VT-таблице backend. Проверены Linux VT 1/1, K3 UI 1/1 и Windows
+typecheck; реальный COM runtime остаётся открытым.

@@ -9,7 +9,7 @@ use super::da_variant::{
 };
 use super::model::{
     BackendMsg, BrowseNode, Command, CommandKind, DataValue, Event, EventKind, ItemInfo, ItemKey,
-    ItemSpec, NodeKind, Operation, Quality, ServerEntry, SessionId,
+    ItemSpec, NodeKind, Operation, Quality, ServerEntry, SessionId, VarType,
 };
 use crate::opc::bindings::comn::{IOPCServerList, IOPCServerList2};
 use crate::opc::bindings::da::{
@@ -683,7 +683,7 @@ impl DaSession {
             out.push((
                 item.key,
                 Ok(ItemInfo {
-                    data_type: Some(vt_name(canonical_vt).to_string()),
+                    data_type: Some(vt_name(VarType(canonical_vt)).to_string()),
                     type_id: Some(canonical_vt),
                     writable,
                 }),
@@ -805,7 +805,10 @@ impl DaSession {
             .items
             .get(&request.key)
             .ok_or(BackendMsg::SignalNotSubscribed)?;
-        let variant = OwnedVariant(variant_from_value(&request.value, request.type_hint)?);
+        let variant = OwnedVariant(variant_from_value(
+            &request.value,
+            request.type_hint.map(|vt| vt.0),
+        )?);
         let handles = [slot.server_handle];
         let mut errors: *mut HRESULT = std::ptr::null_mut();
         // SAFETY: handle, VARIANT, and output pointer remain live for Write.

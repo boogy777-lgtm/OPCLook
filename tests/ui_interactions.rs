@@ -2234,7 +2234,7 @@ fn k3_write_error_reselects_the_value() {
     let mut app = App::new_test(&ctx);
     app.settings.options.confirm_write = false;
     let key = seed_writable_table(&mut app, &[("a", "SigA", 42)])[0];
-    app.rows[0].canonical_vt = Some(3); // VT_I4: text is not accepted
+    app.rows[0].canonical_vt = Some(opcda_egui::bff::model::VarType::I4); // VT_I4: text is not accepted
     let mut h = harness(app);
     h.state_mut().open_write_dialog(vec![key]);
     h.run_steps(3);

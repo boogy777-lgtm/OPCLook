@@ -1262,12 +1262,44 @@ pub struct ItemSpec {
     pub item_id: String,
 }
 
+/// OPC DA VARIANT type, including any modifier bits returned by a server.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct VarType(pub u16);
+
+impl VarType {
+    pub const EMPTY: Self = Self(0);
+    pub const NULL: Self = Self(1);
+    pub const I2: Self = Self(2);
+    pub const I4: Self = Self(3);
+    pub const R4: Self = Self(4);
+    pub const R8: Self = Self(5);
+    pub const CY: Self = Self(6);
+    pub const DATE: Self = Self(7);
+    pub const BSTR: Self = Self(8);
+    pub const DISPATCH: Self = Self(9);
+    pub const ERROR: Self = Self(10);
+    pub const BOOL: Self = Self(11);
+    pub const VARIANT: Self = Self(12);
+    pub const UNKNOWN: Self = Self(13);
+    pub const DECIMAL: Self = Self(14);
+    pub const I1: Self = Self(16);
+    pub const UI1: Self = Self(17);
+    pub const UI2: Self = Self(18);
+    pub const UI4: Self = Self(19);
+    pub const I8: Self = Self(20);
+    pub const UI8: Self = Self(21);
+    pub const INT: Self = Self(22);
+    pub const UINT: Self = Self(23);
+    pub const LPSTR: Self = Self(30);
+    pub const LPWSTR: Self = Self(31);
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct WriteRequest {
     pub key: ItemKey,
     pub value: Value,
-    /// OPC DA VT_* constant or UA built-in type id as text.
-    pub type_hint: Option<u16>,
+    /// Optional OPC DA VARIANT type; UA writes do not use this hint.
+    pub type_hint: Option<VarType>,
 }
 
 #[derive(Clone, Debug)]
