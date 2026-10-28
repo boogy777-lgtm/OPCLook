@@ -65,6 +65,7 @@ fn parse_csv_rows(text: &str) -> CsvParseResult {
     let mut chars = text.chars().peekable();
     let mut fields = Vec::new();
     let mut field = String::new();
+    let mut field_started = false;
     let mut line = 1usize;
     let mut start = 1usize;
     let mut quoted = false;
@@ -77,25 +78,37 @@ fn parse_csv_rows(text: &str) -> CsvParseResult {
             match c {
                 Some('"') if chars.peek() == Some(&'"') => {
                     chars.next();
-                    field.push('"');
+                    if fields.len() < 3 {
+                        field.push('"');
+                    }
                 }
                 Some('"') => {
                     quoted = false;
                     closed = true;
                 }
                 Some('\r') => {
-                    field.push('\r');
+                    if fields.len() < 3 {
+                        field.push('\r');
+                    }
                     if chars.peek() == Some(&'\n') {
                         chars.next();
-                        field.push('\n');
+                        if fields.len() < 3 {
+                            field.push('\n');
+                        }
                     }
                     line = line.saturating_add(1);
                 }
                 Some('\n') => {
-                    field.push('\n');
+                    if fields.len() < 3 {
+                        field.push('\n');
+                    }
                     line = line.saturating_add(1);
                 }
-                Some(ch) => field.push(ch),
+                Some(ch) => {
+                    if fields.len() < 3 {
+                        field.push(ch);
+                    }
+                }
                 None => {
                     malformed = true;
                     quoted = false;
@@ -106,20 +119,30 @@ fn parse_csv_rows(text: &str) -> CsvParseResult {
             }
         }
         match c {
-            Some('"') if field.is_empty() && !closed => quoted = true,
+            Some('"') if !field_started && !closed => {
+                quoted = true;
+                field_started = true;
+            }
             Some('"') => {
                 malformed = true;
-                field.push('"');
+                if fields.len() < 3 {
+                    field.push('"');
+                }
             }
             Some(';') => {
-                fields.push(std::mem::take(&mut field));
+                if fields.len() < 3 {
+                    fields.push(std::mem::take(&mut field));
+                }
+                field_started = false;
                 closed = false;
             }
             Some('\r' | '\n') | None => {
                 if c == Some('\r') && chars.peek() == Some(&'\n') {
                     chars.next();
                 }
-                fields.push(std::mem::take(&mut field));
+                if fields.len() < 3 {
+                    fields.push(std::mem::take(&mut field));
+                }
                 let blank = fields.len() == 1
                     && fields.first().is_some_and(|f| f.trim().is_empty())
                     && !malformed;
@@ -135,22 +158,23 @@ fn parse_csv_rows(text: &str) -> CsvParseResult {
                     if malformed {
                         result.issue(start, CsvIssueKind::MalformedQuote);
                     } else if !header {
-                        if fields.len() < 2 {
-                            result.issue(start, CsvIssueKind::MissingFields);
-                        } else if fields[1].trim().is_empty() {
-                            result.issue(start, CsvIssueKind::EmptyItem);
-                        } else {
-                            let item_id = fields[1].trim().to_owned();
-                            result.rows.push(CsvImportRow {
-                                line: start,
-                                server: fields[0].trim().to_owned(),
-                                name: fields.get(2).cloned().unwrap_or_else(|| item_id.clone()),
-                                item_id,
-                            });
+                        match (fields.first(), fields.get(1)) {
+                            (Some(server), Some(item)) if !item.trim().is_empty() => {
+                                let item_id = item.trim().to_owned();
+                                result.rows.push(CsvImportRow {
+                                    line: start,
+                                    server: server.trim().to_owned(),
+                                    name: fields.get(2).cloned().unwrap_or_else(|| item_id.clone()),
+                                    item_id,
+                                });
+                            }
+                            (_, Some(_)) => result.issue(start, CsvIssueKind::EmptyItem),
+                            _ => result.issue(start, CsvIssueKind::MissingFields),
                         }
                     }
                 }
                 fields.clear();
+                field_started = false;
                 malformed = false;
                 closed = false;
                 if c.is_none() {
@@ -163,7 +187,10 @@ fn parse_csv_rows(text: &str) -> CsvParseResult {
                 if closed {
                     malformed = true;
                 }
-                field.push(ch);
+                field_started = true;
+                if fields.len() < 3 {
+                    field.push(ch);
+                }
             }
         }
     }
@@ -473,6 +500,21 @@ mod tests {
         let parsed = parse_csv_rows(&"missing\n".repeat(MAX_CSV_ISSUES + 7));
         assert_eq!(parsed.issues.len(), MAX_CSV_ISSUES);
         assert_eq!(parsed.omitted, 7);
+    }
+
+    #[test]
+    fn extra_columns_are_discarded_but_quotes_are_validated() {
+        let input = format!("A;tag;name;{}\nB;id;ok;bad\"quote", ";".repeat(100_000));
+        let parsed = parse_csv_rows(&input);
+        assert_eq!(parsed.rows.len(), 1);
+        assert_eq!(parsed.rows[0].name, "name");
+        assert_eq!(
+            parsed.issues,
+            vec![CsvIssue {
+                line: 2,
+                kind: CsvIssueKind::MalformedQuote
+            }]
+        );
     }
 
     #[test]

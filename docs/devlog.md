@@ -479,3 +479,6 @@ item IDs are reported with physical record start lines; reports are capped at
 Unresolved sessions also include the source line. RU/EN/ZH messages cover both
 modal and synchronous imports. Linux targeted CSV tests and Windows i686
 all-targets typecheck are used; Windows runtime remains unverified.
+CSV follow-up: retain at most three import columns while still validating
+quoting in discarded columns; tested a 100,000-delimiter row (measured test
+input). Linux CSV tests 11/11 and Windows i686 all-targets typecheck passed.
