@@ -953,8 +953,9 @@ fn ua_scan_events_ignore_stale_scan_ids() {
     app.open_connect_dialog();
     {
         let d = &mut app.dialogs.connect;
-        d.ua_scan_id = ScanId::new(2);
-        d.ua_subnet_searching = true;
+        d.ua_search = opcda_egui::app::UaSearch::Subnet {
+            scan_id: ScanId::new(2).unwrap(),
+        };
         d.ua_scan_total = 10;
     }
     app.on_event_for_test(EventKind::UaScanProgress {
@@ -969,13 +970,12 @@ fn ua_scan_events_ignore_stale_scan_ids() {
     });
     app.on_event_for_test(EventKind::UaScanFinished {
         scan_id: ScanId::new(1).unwrap(),
-        cancelled: false,
         found: 3,
-        error: None,
+        end: opcda_egui::bff::model::ScanEnd::Completed,
     });
     let d = &app.dialogs.connect;
-    assert_eq!(d.ua_scan_id, ScanId::new(2));
-    assert!(d.ua_subnet_searching);
+    assert_eq!(d.ua_search.scan_id(), ScanId::new(2));
+    assert!(d.ua_search.scan_id().is_some());
     assert_eq!(d.ua_scan_checked, 0);
     assert_eq!(d.ua_scan_total, 10);
     assert!(d.ua_scan_servers.is_empty());
@@ -993,13 +993,12 @@ fn ua_scan_events_ignore_stale_scan_ids() {
     });
     app.on_event_for_test(EventKind::UaScanFinished {
         scan_id: ScanId::new(2).unwrap(),
-        cancelled: false,
         found: 1,
-        error: None,
+        end: opcda_egui::bff::model::ScanEnd::Completed,
     });
     let d = &app.dialogs.connect;
-    assert_eq!(d.ua_scan_id, None);
-    assert!(!d.ua_subnet_searching);
+    assert_eq!(d.ua_search.scan_id(), None);
+    assert!(!d.ua_search.scan_id().is_some());
     assert_eq!(d.ua_scan_checked, 10);
     assert_eq!(d.ua_scan_found, 1);
     assert_eq!(d.ua_search_results.len(), 1);
@@ -1019,9 +1018,9 @@ fn ua_subnet_scan_requires_confirmation_for_large_subnet() {
     app.start_ua_subnet_scan();
     {
         let d = &app.dialogs.connect;
-        assert!(!d.ua_subnet_searching);
-        assert_eq!(d.ua_scan_id, None);
-        assert_eq!(d.ua_scan_confirm, Some(8190));
+        assert!(!d.ua_search.scan_id().is_some());
+        assert_eq!(d.ua_search.scan_id(), None);
+        assert_eq!(d.ua_search.confirmation_count(), Some(8190));
         assert!(
             d.ua_scan_error.as_deref().unwrap_or("").contains("Подсеть"),
             "localized confirmation prompt expected"
@@ -1030,14 +1029,14 @@ fn ua_subnet_scan_requires_confirmation_for_large_subnet() {
     app.confirm_ua_subnet_scan();
     {
         let d = &app.dialogs.connect;
-        assert!(d.ua_subnet_searching);
-        assert!(d.ua_scan_id.is_some());
-        assert_eq!(d.ua_scan_confirm, None);
+        assert!(d.ua_search.scan_id().is_some());
+        assert!(d.ua_search.scan_id().is_some());
+        assert_eq!(d.ua_search.confirmation_count(), None);
         assert_eq!(d.ua_search_results.len(), 0);
     }
     app.cancel_ua_subnet_scan();
-    assert!(!app.dialogs.connect.ua_subnet_searching);
-    assert_eq!(app.dialogs.connect.ua_scan_id, None);
+    assert!(!app.dialogs.connect.ua_search.scan_id().is_some());
+    assert_eq!(app.dialogs.connect.ua_search.scan_id(), None);
 }
 
 /// Scan/cancel commands are streaming: they must not reserve request-id slots.
@@ -1050,7 +1049,7 @@ fn ua_subnet_scan_commands_are_not_pending_requests() {
     app.network.lease = Some(lease_with_subnet("10.0.0.5", 30));
     let before = app.pending_request_ids_for_test(opcda_egui::bff::model::Owner::Discovery);
     app.start_ua_subnet_scan();
-    assert!(app.dialogs.connect.ua_subnet_searching);
+    assert!(app.dialogs.connect.ua_search.scan_id().is_some());
     assert_eq!(
         app.pending_request_ids_for_test(opcda_egui::bff::model::Owner::Discovery),
         before
@@ -1062,12 +1061,23 @@ fn ua_subnet_scan_commands_are_not_pending_requests() {
     );
 }
 
+fn start_recorded_ua_host(app: &mut App) -> opcda_egui::bff::model::RequestId {
+    app.record_dispatches_for_test();
+    app.dialogs.connect.ua_search_host = "127.0.0.1".into();
+    app.search_ua_servers();
+    let opcda_egui::app::UaSearch::SingleHost { request } = app.dialogs.connect.ua_search else {
+        panic!("host search")
+    };
+    request
+}
+
 /// UaServersFound populates the connect dialog's search results state.
 #[test]
 fn ua_servers_found_populates_results_state() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
+    let request = start_recorded_ua_host(&mut app);
     let servers = vec![opcda_egui::bff::model::UaServerInfo {
         application_name: "CODESYS".to_string(),
         application_uri: "urn:test".to_string(),
@@ -1077,13 +1087,17 @@ fn ua_servers_found_populates_results_state() {
             security_mode: opcda_egui::bff::model::AdvertisedMode::from_wire("None"),
         }],
     }];
-    app.on_event_for_test(opcda_egui::bff::model::EventKind::UaServersFound {
-        host: "127.0.0.1".to_string(),
-        port: 4840,
-        servers,
-    });
+    app.on_event_for_test_with_request(
+        opcda_egui::bff::model::Owner::Discovery,
+        request,
+        opcda_egui::bff::model::EventKind::UaServersFound {
+            host: "127.0.0.1".to_string(),
+            port: 4840,
+            servers,
+        },
+    );
     assert_eq!(app.dialogs.connect.ua_search_results.len(), 1);
-    assert!(!app.dialogs.connect.ua_searching);
+    assert!(!app.dialogs.connect.ua_search.host_searching());
     assert_eq!(
         app.dialogs.connect.ua_search_results[0]
             .endpoints
@@ -1102,25 +1116,30 @@ fn ua_discovery_reply_arrives_on_network_pane() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
+    let request = start_recorded_ua_host(&mut app);
     let mut h = harness(app);
     h.run_steps(3);
     h.get_by_label("OPC UA").click();
     h.run_steps(3);
     h.get_by_label("Сетевые настройки").click();
     h.run_steps(3);
-    h.state_mut().on_event_for_test(EventKind::UaServersFound {
-        host: "127.0.0.1".into(),
-        port: 4840,
-        servers: vec![UaServerInfo {
-            application_name: "Sample".into(),
-            application_uri: "urn:sample".into(),
-            endpoints: vec![UaEndpointInfo {
-                url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
-                security_policy: AdvertisedPolicy::from_wire("None"),
-                security_mode: AdvertisedMode::from_wire("None"),
+    h.state_mut().on_event_for_test_with_request(
+        opcda_egui::bff::model::Owner::Discovery,
+        request,
+        EventKind::UaServersFound {
+            host: "127.0.0.1".into(),
+            port: 4840,
+            servers: vec![UaServerInfo {
+                application_name: "Sample".into(),
+                application_uri: "urn:sample".into(),
+                endpoints: vec![UaEndpointInfo {
+                    url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
+                    security_policy: AdvertisedPolicy::from_wire("None"),
+                    security_mode: AdvertisedMode::from_wire("None"),
+                }],
             }],
-        }],
-    });
+        },
+    );
     assert!(matches!(
         h.state().dialogs.connect.pane,
         ConnectPane::Network { .. }
@@ -1157,19 +1176,24 @@ fn connect_dialog_reopen_keeps_discovered_servers() {
 
     // A completed single-host UA search populates the result list as well as the
     // security-combo endpoint source.
-    app.on_event_for_test(EventKind::UaServersFound {
-        host: "127.0.0.1".to_string(),
-        port: 4840,
-        servers: vec![UaServerInfo {
-            application_name: "CODESYS".to_string(),
-            application_uri: "urn:test".to_string(),
-            endpoints: vec![UaEndpointInfo {
-                url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
-                security_policy: opcda_egui::bff::model::AdvertisedPolicy::from_wire("None"),
-                security_mode: opcda_egui::bff::model::AdvertisedMode::from_wire("None"),
+    let request = start_recorded_ua_host(&mut app);
+    app.on_event_for_test_with_request(
+        opcda_egui::bff::model::Owner::Discovery,
+        request,
+        EventKind::UaServersFound {
+            host: "127.0.0.1".to_string(),
+            port: 4840,
+            servers: vec![UaServerInfo {
+                application_name: "CODESYS".to_string(),
+                application_uri: "urn:test".to_string(),
+                endpoints: vec![UaEndpointInfo {
+                    url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
+                    security_policy: opcda_egui::bff::model::AdvertisedPolicy::from_wire("None"),
+                    security_mode: opcda_egui::bff::model::AdvertisedMode::from_wire("None"),
+                }],
             }],
-        }],
-    });
+        },
+    );
     assert_eq!(app.dialogs.connect.ua_search_results.len(), 1);
     assert_eq!(app.dialogs.connect.ua_discovered_endpoints.len(), 1);
 
@@ -1212,7 +1236,12 @@ fn connect_dialog_reopen_keeps_merged_subnet_scan_results() {
     app.network.loaded = true;
     app.network.lease = Some(lease_with_subnet("10.0.0.5", 30));
     app.start_ua_subnet_scan();
-    let scan_id = app.dialogs.connect.ua_scan_id.expect("subnet scan id");
+    let scan_id = app
+        .dialogs
+        .connect
+        .ua_search
+        .scan_id()
+        .expect("subnet scan id");
     app.on_event_for_test(EventKind::UaScanFound {
         scan_id,
         servers: vec![scan_server()],
@@ -1234,7 +1263,7 @@ fn connect_dialog_reopen_keeps_merged_subnet_scan_results() {
         "merged subnet-scan results must survive a reopen"
     );
     assert_eq!(app.dialogs.connect.ua_discovered_endpoints.len(), 1);
-    assert!(!app.dialogs.connect.ua_subnet_searching);
+    assert!(!app.dialogs.connect.ua_search.scan_id().is_some());
 }
 
 /// UA connect dialog renders the security controls with the Auto defaults.
@@ -1289,7 +1318,7 @@ fn u15_connect_dialog_has_an_lds_host_field_used_by_the_lds_search() {
         h.get_by_label("Поиск через LDS/mDNS").click();
         h.run_steps(5);
         let state = h.state();
-        assert!(state.dialogs.connect.ua_network_searching);
+        assert!(state.dialogs.connect.ua_search.network_searching());
         assert!(state.dialogs.connect.error.is_none());
         assert_eq!(state.settings.ua_lds_host, "127.0.0.1:48690");
         assert_eq!(
@@ -1315,7 +1344,7 @@ fn u15_connect_dialog_rejects_a_malformed_lds_host() {
         h.run_steps(2);
         h.get_by_label("Поиск через LDS/mDNS").click();
         h.run_steps(5);
-        assert!(!h.state().dialogs.connect.ua_network_searching);
+        assert!(!h.state().dialogs.connect.ua_search.network_searching());
         assert!(h.state().dialogs.connect.error.is_some());
         assert!(h.query_all_by_label_contains("LDS-хост:").count() >= 1);
         assert_eq!(h.state().settings.ua_lds_host, "");
@@ -1410,7 +1439,7 @@ fn remote_ua_search_without_adapter_is_blocked() {
     app.dialogs.connect.ua_search_host = "192.0.2.10".to_string();
     app.dialogs.connect.ua_search_port = "4840".to_string();
     app.search_ua_servers();
-    assert!(!app.dialogs.connect.ua_searching);
+    assert!(!app.dialogs.connect.ua_search.host_searching());
     assert!(
         app.dialogs
             .connect
@@ -1503,16 +1532,19 @@ fn connect_dialog_ua_tab_does_not_autostart_search() {
     h.run_steps(5);
 
     let d = &h.state().dialogs.connect;
-    assert!(!d.ua_searching, "UA host search must not start on tab open");
     assert!(
-        !d.ua_network_searching,
+        !d.ua_search.host_searching(),
+        "UA host search must not start on tab open"
+    );
+    assert!(
+        !d.ua_search.network_searching(),
         "LDS/mDNS search must not start on tab open"
     );
     assert!(
-        !d.ua_subnet_searching,
+        !d.ua_search.scan_id().is_some(),
         "subnet scan must not start on tab open"
     );
-    assert_eq!(d.ua_auto_pending, 0);
+    assert_eq!(d.ua_search.auto_pending_count(), 0);
 }
 
 /// Clicking the already active UA tab is not a "leave UA" action and must not
@@ -1523,7 +1555,9 @@ fn connect_dialog_active_ua_tab_keeps_scan() {
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
     app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
-    app.dialogs.connect.ua_subnet_searching = true;
+    app.dialogs.connect.ua_search = opcda_egui::app::UaSearch::Subnet {
+        scan_id: ScanId::new(1).unwrap(),
+    };
     let mut h = harness(app);
     h.run_steps(5);
 
@@ -1531,7 +1565,7 @@ fn connect_dialog_active_ua_tab_keeps_scan() {
     h.run_steps(2);
 
     assert!(
-        h.state().dialogs.connect.ua_subnet_searching,
+        h.state().dialogs.connect.ua_search.scan_id().is_some(),
         "active UA tab click must not cancel the scan"
     );
 }
@@ -3158,33 +3192,50 @@ fn connect_dialog_ua_empty_host_without_adapter_searches_loopback_only() {
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
     app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
+    app.record_dispatches_for_test();
     app.search_ua_all();
+    let opcda_egui::app::UaSearch::Auto {
+        pending: opcda_egui::app::AutoPending::Host(request),
+    } = app.dialogs.connect.ua_search
+    else {
+        panic!("host auto search")
+    };
     let d = &app.dialogs.connect;
-    assert_eq!(d.ua_searching, true, "combined UA search must be running");
+    assert_eq!(
+        d.ua_search.host_searching(),
+        true,
+        "combined UA search must be running"
+    );
     assert!(
-        !d.ua_network_searching,
+        !d.ua_search.network_searching(),
         "LDS/mDNS must not run without a selected adapter"
     );
-    assert_eq!(d.ua_auto_pending, 1, "one loopback request");
+    assert_eq!(d.ua_search.auto_pending_count(), 1, "one loopback request");
     let hosts = [("127.0.0.1".to_string(), 4840)];
     for (h_name, p) in hosts {
-        app.on_event_for_test(EventKind::UaServersFound {
-            host: h_name.clone(),
-            port: p,
-            servers: vec![opcda_egui::bff::model::UaServerInfo {
-                application_name: "SRV".to_string(),
-                application_uri: format!("urn:srv-{h_name}"),
-                endpoints: vec![opcda_egui::bff::model::UaEndpointInfo {
-                    url: format!("opc.tcp://{h_name}:{p}").parse().unwrap(),
-                    security_policy: opcda_egui::bff::model::AdvertisedPolicy::from_wire("None"),
-                    security_mode: opcda_egui::bff::model::AdvertisedMode::from_wire("None"),
+        app.on_event_for_test_with_request(
+            opcda_egui::bff::model::Owner::Discovery,
+            request,
+            EventKind::UaServersFound {
+                host: h_name.clone(),
+                port: p,
+                servers: vec![opcda_egui::bff::model::UaServerInfo {
+                    application_name: "SRV".to_string(),
+                    application_uri: format!("urn:srv-{h_name}"),
+                    endpoints: vec![opcda_egui::bff::model::UaEndpointInfo {
+                        url: format!("opc.tcp://{h_name}:{p}").parse().unwrap(),
+                        security_policy: opcda_egui::bff::model::AdvertisedPolicy::from_wire(
+                            "None",
+                        ),
+                        security_mode: opcda_egui::bff::model::AdvertisedMode::from_wire("None"),
+                    }],
                 }],
-            }],
-        });
+            },
+        );
     }
-    assert!(!app.dialogs.connect.ua_searching);
-    assert!(!app.dialogs.connect.ua_network_searching);
-    assert_eq!(app.dialogs.connect.ua_auto_pending, 0);
+    assert!(!app.dialogs.connect.ua_search.host_searching());
+    assert!(!app.dialogs.connect.ua_search.network_searching());
+    assert_eq!(app.dialogs.connect.ua_search.auto_pending_count(), 0);
     assert!(
         app.dialogs.connect.ua_search_results.len() == 1,
         "the loopback result must be in the list"
@@ -4825,4 +4876,92 @@ fn da_preparation_failure_is_rendered_by_real_update_frames() {
 
 fn sid(raw: u64) -> opcda_egui::bff::model::SessionId {
     opcda_egui::bff::model::SessionId::new(raw).unwrap()
+}
+
+#[test]
+fn scan_terminal_outcomes_keep_partial_results_and_progress() {
+    use opcda_egui::app::UaSearch;
+    use opcda_egui::bff::model::{BackendMsg, ScanEnd};
+    for end in [
+        ScanEnd::Cancelled,
+        ScanEnd::Failed(BackendMsg::raw("scan failed")),
+    ] {
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        app.open_connect_dialog();
+        let scan_id = ScanId::new(42).unwrap();
+        app.dialogs.connect.ua_search = UaSearch::Subnet { scan_id };
+        app.on_event_for_test(EventKind::UaScanProgress {
+            scan_id,
+            total: 10,
+            checked: 3,
+            found: 1,
+        });
+        app.on_event_for_test(EventKind::UaScanFound {
+            scan_id,
+            servers: vec![scan_server()],
+        });
+        let failed = matches!(end, ScanEnd::Failed(_));
+        app.on_event_for_test(EventKind::UaScanFinished {
+            scan_id,
+            found: 1,
+            end,
+        });
+        let d = &app.dialogs.connect;
+        assert_eq!(d.ua_search, UaSearch::Idle);
+        assert_eq!(d.ua_scan_checked, 3);
+        assert_eq!(d.ua_scan_found, 1);
+        assert_eq!(d.ua_search_results.len(), 1);
+        assert_eq!(d.ua_scan_error.is_some(), failed);
+    }
+}
+
+#[test]
+fn large_subnet_confirmation_ui_starts_only_after_yes_and_can_stop() {
+    use opcda_egui::app::{ConnectPane, UaSearch};
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.dialogs.connect.pane = ConnectPane::Ua;
+    app.network.loaded = true;
+    app.network.lease = Some(lease_with_subnet("10.0.0.5", 19));
+    app.record_dispatches_for_test();
+    let mut h = harness(app);
+    h.run_steps(4);
+    h.get_by_label("Поиск в сети").click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().dialogs.connect.ua_search,
+        UaSearch::ConfirmSubnet { count: 8190 }
+    );
+    assert!(
+        !h.state()
+            .dispatched_for_test()
+            .iter()
+            .any(|command| matches!(command.kind, CommandKind::ScanUaNetwork { .. }))
+    );
+    h.get_by_label("Да").click();
+    h.run_steps(3);
+    assert!(matches!(
+        h.state().dialogs.connect.ua_search,
+        UaSearch::Subnet { .. }
+    ));
+    assert!(
+        h.state()
+            .dispatched_for_test()
+            .iter()
+            .any(|command| matches!(
+                command.kind,
+                CommandKind::ScanUaNetwork { subnet: None, .. }
+            ))
+    );
+    h.get_by_label("Остановить").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialogs.connect.ua_search, UaSearch::Idle);
+    assert!(
+        h.state()
+            .dispatched_for_test()
+            .iter()
+            .any(|command| matches!(command.kind, CommandKind::CancelUaScan { .. }))
+    );
 }

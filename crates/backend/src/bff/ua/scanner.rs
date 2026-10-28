@@ -1,5 +1,7 @@
 use super::discovery::build_discovery_client;
-use crate::bff::model::{BackendMsg, Event, EventKind, ScanId, UaEndpointInfo, UaServerInfo};
+use crate::bff::model::{
+    BackendMsg, Event, EventKind, ScanEnd, ScanId, UaEndpointInfo, UaServerInfo,
+};
 use crate::bff::net::{BoundConnectorBuilder, NetworkBinding, endpoint_url_for, tcp_probe};
 use crate::constants::{
     DEFAULT_UA_PORT, SCAN_ADDRESS_TIMEOUT, SCAN_CONFIRM_THRESHOLD, SCAN_PARALLELISM,
@@ -203,9 +205,8 @@ pub(super) async fn run_scan_job(
             send_scan_finished(
                 tx,
                 scan_id,
-                false,
                 0,
-                Some(BackendMsg::raw(format!(
+                ScanEnd::Failed(BackendMsg::raw(format!(
                     "{SCAN_SUBNET_TOO_LARGE}:{}",
                     subnet.usable_count()
                 ))),
@@ -221,7 +222,7 @@ pub(super) async fn run_scan_job(
     let client = match build_discovery_client() {
         Ok(client) => Arc::new(client),
         Err(message) => {
-            send_scan_finished(tx, scan_id, false, 0, Some(message));
+            send_scan_finished(tx, scan_id, 0, ScanEnd::Failed(message));
             return;
         }
     };
@@ -287,7 +288,16 @@ pub(super) async fn run_scan_job(
         send_scan_progress(tx, scan_id, total, checked, found);
     }
 
-    send_scan_finished(tx, scan_id, cancel.load(Ordering::Relaxed), found, None);
+    send_scan_finished(
+        tx,
+        scan_id,
+        found,
+        if cancel.load(Ordering::Relaxed) {
+            ScanEnd::Cancelled
+        } else {
+            ScanEnd::Completed
+        },
+    );
 }
 
 /// TCP precheck followed by a bound UA `GetEndpoints` handshake. An open TCP
@@ -471,20 +481,13 @@ fn send_scan_progress(
     );
 }
 
-fn send_scan_finished(
-    tx: &Sender<Event>,
-    scan_id: ScanId,
-    cancelled: bool,
-    found: usize,
-    error: Option<BackendMsg>,
-) {
+fn send_scan_finished(tx: &Sender<Event>, scan_id: ScanId, found: usize, end: ScanEnd) {
     send_scan_event(
         tx,
         EventKind::UaScanFinished {
             scan_id,
-            cancelled,
             found,
-            error,
+            end,
         },
     );
 }

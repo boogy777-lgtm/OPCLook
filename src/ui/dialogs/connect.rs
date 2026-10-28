@@ -78,8 +78,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                         .selectable_label(dialog.pane == ConnectPane::Da, tr(lang, Tr::DaTab))
                         .clicked()
                     {
-                        let scan_active =
-                            dialog.ua_subnet_searching || dialog.ua_scan_confirm.is_some();
+                        let scan_active = dialog.ua_search.subnet_active();
                         dialog.pane = ConnectPane::Da;
                         if scan_active {
                             app_subnet_cancel = true;
@@ -95,7 +94,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                         // Clicking the already active UA tab must not stop its
                         // scan; leaving UA (or a protocol switch) does.
                         if (leaving_network || previous_protocol != Protocol::OpcUa)
-                            && (dialog.ua_subnet_searching || dialog.ua_scan_confirm.is_some())
+                            && (dialog.ua_search.subnet_active())
                         {
                             app_subnet_cancel = true;
                         }
@@ -110,7 +109,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                         dialog.pane = ConnectPane::Network {
                             previous: dialog.pane.protocol(),
                         };
-                        if dialog.ua_subnet_searching || dialog.ua_scan_confirm.is_some() {
+                        if dialog.ua_search.subnet_active() {
                             app_subnet_cancel = true;
                         }
                     }
@@ -119,10 +118,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
 
                 let is_network = matches!(dialog.pane, ConnectPane::Network { .. });
                 let is_da = dialog.pane == ConnectPane::Da;
-                let ua_busy = dialog.ua_searching
-                    || dialog.ua_network_searching
-                    || dialog.ua_subnet_searching
-                    || dialog.ua_scan_confirm.is_some();
+                let ua_busy = dialog.ua_search.busy();
 
                 if is_network {
                     network_settings_view(
@@ -222,7 +218,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                         dialog.da_manual = server.id.clone();
                                     }
                                 }
-                            } else if dialog.ua_searching {
+                            } else if dialog.ua_search.host_searching() {
                                 ui.horizontal(|ui| {
                                     ui.spinner();
                                     ui.label(tr(lang, Tr::SearchingUa));
@@ -344,7 +340,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                         });
                         ui.horizontal(|ui| {
                             // «Поиск через LDS/mDNS» (`FindServersOnNetwork` + DNS-SD).
-                            let net_searching = dialog.ua_network_searching;
+                            let net_searching = dialog.ua_search.network_searching();
                             if ui
                                 .add_enabled(
                                     !ua_busy,
@@ -371,7 +367,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                     }
 
                     if !is_da {
-                        if dialog.ua_subnet_searching {
+                        if dialog.ua_search.scan_id().is_some() {
                             ui.horizontal(|ui| {
                                 ui.spinner();
                                 if dialog.ua_scan_total == 0 {
@@ -392,7 +388,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                 }
                             });
                         }
-                        if let Some(count) = dialog.ua_scan_confirm {
+                        if let Some(count) = dialog.ua_search.confirmation_count() {
                             ui.horizontal(|ui| {
                                 ui.colored_label(
                                     yellow(),
@@ -413,7 +409,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                 }
                             });
                         }
-                        if dialog.ua_scan_confirm.is_none() {
+                        if dialog.ua_search.confirmation_count().is_none() {
                             if let Some(error) = &dialog.ua_scan_error {
                                 ui.colored_label(red(), error);
                             }

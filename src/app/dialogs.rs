@@ -35,6 +35,67 @@ pub enum UaIdentity {
     Certificate,
 }
 
+/// The active UA discovery operation. A combined search always has at least
+/// one outstanding request; each request is correlated independently.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UaSearch {
+    Idle,
+    SingleHost { request: RequestId },
+    Network { request: RequestId },
+    Auto { pending: AutoPending },
+    ConfirmSubnet { count: u64 },
+    Subnet { scan_id: ScanId },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AutoPending {
+    Host(RequestId),
+    Network(RequestId),
+    Both { host: RequestId, network: RequestId },
+}
+
+impl UaSearch {
+    pub fn busy(&self) -> bool {
+        !matches!(self, Self::Idle)
+    }
+    pub fn host_searching(&self) -> bool {
+        matches!(self, Self::SingleHost { .. } | Self::Auto { .. })
+    }
+    pub fn network_searching(&self) -> bool {
+        matches!(
+            self,
+            Self::Network { .. }
+                | Self::Auto {
+                    pending: AutoPending::Network(_) | AutoPending::Both { .. }
+                }
+        )
+    }
+    pub fn scan_id(&self) -> Option<ScanId> {
+        match self {
+            Self::Subnet { scan_id } => Some(*scan_id),
+            _ => None,
+        }
+    }
+    pub fn auto_pending_count(&self) -> usize {
+        match self {
+            Self::Auto {
+                pending: AutoPending::Both { .. },
+            } => 2,
+            Self::Auto { .. } => 1,
+            _ => 0,
+        }
+    }
+    pub fn subnet_active(&self) -> bool {
+        matches!(self, Self::Subnet { .. } | Self::ConfirmSubnet { .. })
+    }
+    pub fn confirmation_count(&self) -> Option<u64> {
+        match self {
+            Self::ConfirmSubnet { count } => Some(*count),
+            _ => None,
+        }
+    }
+}
+
 pub struct ConnectDialog {
     pub open: bool,
     pub pane: ConnectPane,
@@ -55,7 +116,7 @@ pub struct ConnectDialog {
     pub ua_search_port: String,
     /// Optional LDS host (`host[:port]`) for the LDS/mDNS search.
     pub ua_lds_host: String,
-    pub ua_searching: bool,
+    pub ua_search: UaSearch,
     pub ua_search_results: Vec<crate::bff::model::UaServerInfo>,
     /// Changes the collapse-state identity when a new search begins.
     pub ua_result_epoch: u64,
@@ -74,25 +135,15 @@ pub struct ConnectDialog {
     /// UA: requested session timeout in milliseconds (range 5000..=3600000).
     pub ua_session_timeout: u32,
     /// OPC UA network discovery state (mDNS/LDS `FindServersOnNetwork`).
-    pub ua_network_searching: bool,
     pub ua_network_results: Vec<crate::bff::model::UaNetworkInfo>,
-    /// OPC UA subnet scan (N+1) state. `ua_scan_id` is the id of the only scan
-    /// whose streaming events are accepted; events from older scans are ignored.
-    pub ua_subnet_searching: bool,
-    pub ua_scan_id: Option<ScanId>,
+    /// Last subnet scan report, retained after completion or cancellation.
     pub ua_scan_checked: usize,
     pub ua_scan_total: usize,
     pub ua_scan_found: usize,
     pub ua_scan_error: Option<String>,
-    /// Pending explicit confirmation for an over-large subnet (address count).
-    pub ua_scan_confirm: Option<u64>,
     /// Servers accumulated by the running scan, merged into
     /// `ua_search_results` on completion or cancellation.
     pub ua_scan_servers: Vec<crate::bff::model::UaServerInfo>,
-    /// Outstanding sub-searches of a combined "empty host" UA auto-search
-    /// (network + local hosts). When it drops to zero the partial server lists
-    /// are merged into `ua_search_results`. Zero means no combined search runs.
-    pub ua_auto_pending: usize,
     /// Outstanding sub-searches of the DA auto-discovery (local + known remote
     /// hosts). When it drops to zero the merged list is complete.
     pub da_auto_pending: usize,
@@ -121,7 +172,7 @@ impl Default for ConnectDialog {
             ua_search_host: String::new(),
             ua_search_port: String::new(),
             ua_lds_host: String::new(),
-            ua_searching: false,
+            ua_search: UaSearch::Idle,
             ua_search_results: Vec::new(),
             ua_result_epoch: 0,
             focus_pending: false,
@@ -131,17 +182,12 @@ impl Default for ConnectDialog {
             ua_trust_server_cert: crate::settings::default_trust_server_cert(),
             ua_identity: UaIdentity::Anonymous,
             ua_session_timeout: crate::settings::default_session_timeout(),
-            ua_network_searching: false,
             ua_network_results: Vec::new(),
-            ua_subnet_searching: false,
-            ua_scan_id: None,
             ua_scan_checked: 0,
             ua_scan_total: 0,
             ua_scan_found: 0,
             ua_scan_error: None,
-            ua_scan_confirm: None,
             ua_scan_servers: Vec::new(),
-            ua_auto_pending: 0,
             da_auto_pending: 0,
             connecting: None,
         }

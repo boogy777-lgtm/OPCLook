@@ -788,6 +788,21 @@ impl<C> Engine<C> {
         self.discovery_routes.remove(&request);
         self.requests.remove(&(session, request));
     }
+    /// Discard only one family of requests for an owner. Other discovery
+    /// operations can continue independently under the same owner.
+    pub fn discard_discovery_operation(&mut self, operation: Operation) {
+        let owner = Owner::Discovery;
+        let ids: Vec<_> = self
+            .requests
+            .iter()
+            .filter_map(|(&(request_owner, id), pending)| {
+                (request_owner == owner && pending.operation == operation).then_some(id)
+            })
+            .collect();
+        for id in ids {
+            self.discard_pending(owner, id);
+        }
+    }
     pub fn invalidate_session_requests(&mut self, owner: impl Into<Owner>) -> Vec<Operation> {
         let owner = owner.into();
         self.deferred_routes.retain(|item| item.owner != owner);

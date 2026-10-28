@@ -859,17 +859,15 @@ fn over_large_subnet_is_rejected_with_the_error_token() {
     match &events[0] {
         EventKind::UaScanFinished {
             scan_id,
-            cancelled,
             found,
-            error,
+            end,
         } => {
             assert_eq!(scan_id.get(), 9);
-            assert!(!cancelled);
             assert_eq!(*found, 0);
-            let error = error
-                .as_ref()
-                .map(|msg| backend_text(Lang::En, msg))
-                .expect("error token");
+            let crate::bff::model::ScanEnd::Failed(message) = end else {
+                panic!("expected failure")
+            };
+            let error = backend_text(Lang::En, message);
             assert!(
                 error.starts_with(SCAN_SUBNET_TOO_LARGE),
                 "unexpected error: {error}"
@@ -911,9 +909,8 @@ fn cancelled_scan_finishes_without_checking_addresses() {
         events.last(),
         Some(EventKind::UaScanFinished {
             scan_id,
-            cancelled: true,
             found: 0,
-            error: None
+            end: crate::bff::model::ScanEnd::Cancelled
         }) if scan_id.get() == 10
     ));
 }
@@ -966,9 +963,8 @@ fn loopback_tcp_without_opc_ua_is_not_a_scan_result() {
             events.last(),
             Some(EventKind::UaScanFinished {
                 scan_id,
-                cancelled: false,
                 found: 0,
-                error: None
+                end: crate::bff::model::ScanEnd::Completed
             }) if scan_id.get() == 11
         ));
         assert!(

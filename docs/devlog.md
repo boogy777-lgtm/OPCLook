@@ -358,3 +358,22 @@ all-targets typecheck с test-only флагами, fmt и CLI boundary на об
 повторном прогоне. Test recorder теперь удерживает отправленный Browse pending
 и проверяет единственную команду Browse и отсутствие Read; отдельный тест
 прошёл, production scheduling не менялся.
+
+**2026-10-28 — подэтап B2.** UA discovery хранит SingleHost/Network с
+RequestId, Auto с непустым Host/Network/Both, отдельное ожидание подтверждения
+большой подсети и активный Subnet со ScanId. Новый поиск снимает только свои
+pending запросы; DA discovery отдельно отменяет только Discover, сохраняя даже
+поставленный в очередь UA timeout. Ошибки и timeout отдельных шагов завершают
+Auto без потери частичных результатов. ScanEnd выражает Completed, Cancelled
+или Failed; для отмены и ошибки сохраняется реально полученный progress.
+Headless тесты покрывают клики подтверждения и остановки, stale events, оба
+направления изоляции, отказ отправки, timeout и три исхода scan. Linux backend
+UA tests 62/62, contract 26/26 + 3 doctest, CLI 6/6 + live sample 2/2 прошли.
+PNG, Windows runtime и финальный exact-head CI не проверены; остальные B/E/F/G/H
+и baseline 10k открыты.
+Измерено после финальных изменений: Linux GUI unit 204/204, UI interactions
+143/143 (1 Windows-only ignored), Engine 22/22; Linux all-targets, diagnostics
+bins и boundary для Linux/Windows targets прошли. Windows i686 workspace
+all-targets и diagnostics bins прошли только typecheck с test-only пропуском
+ресурсов/manifest; standalone backend/CLI all-targets typecheck без пропусков
+прошёл. `cargo fmt --all -- --check` прошёл.

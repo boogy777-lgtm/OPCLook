@@ -434,3 +434,19 @@ Windows runtime, реальный DA/UAC и финальный exact-head CI о�
 В повторных прогонах `read_tick_is_suppressed_while_root_loading` выявлена
 гонка ответа DA stub: теперь test recorder удерживает реальный Browse pending
 и проверяет ровно один Browse без Read. Production scheduling не изменён.
+
+## Подэтап B2: UA discovery и завершение сканирования (2026-10-28)
+
+| Пункт | Состояние и проверка |
+|---|---|
+| UaSearch | Idle, SingleHost, Network, Auto с непустым Host/Network/Both, ConfirmSubnet и Subnet с ненулевым ScanId. Результаты и последний progress/error остаются отдельно. Только коррелированный ответ снимает соответствующий запрос; частичный отказ и timeout освобождают состояние |
+| Изоляция | Новые DA и UA поиски снимают только свои запросы; регрессии проверяют оба направления, включая уже поставленный в очередь UA timeout и устаревший ответ |
+| ScanEnd | Completed/Cancelled/Failed с отдельным found исключают противоречивые исходы; частичные результаты и фактический progress сохраняются при отмене/ошибке. Проверены stale ScanId и UI подтверждения большой подсети до отправки Scan |
+
+Измерено: Linux GUI unit и headless UI, Engine, backend UA scanner/tests,
+contract, CLI unit и live sample; точные количества записаны в devlog. Windows
+workspace i686 — только typecheck с test-only пропуском ресурсов и manifest,
+standalone backend/CLI — typecheck без этих флагов. PNG, Windows runtime,
+физические DA/UAC и финальный exact-head CI остаются открыты. Это лишь подэтап
+B2: остальные состояния B, E/F/G/H и измеренный 10k frame/allocation baseline
+не завершены.

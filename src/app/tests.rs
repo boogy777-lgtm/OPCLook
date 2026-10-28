@@ -542,13 +542,23 @@ fn standalone_lds_results_become_visible() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.on_event_for_test(EventKind::UaNetworkFound {
-        servers: vec![UaNetworkInfo {
-            application_name: "Simulator".to_string(),
-            application_uri: "urn:sim".to_string(),
-            discovery_urls: vec!["opc.tcp://127.0.0.1:4840".parse().unwrap()],
-        }],
-    });
+    app.record_dispatches_for_test();
+    app.dialogs.connect.ua_lds_host = "127.0.0.1".into();
+    app.search_ua_network();
+    let UaSearch::Network { request } = app.dialogs.connect.ua_search else {
+        panic!("network search")
+    };
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        request,
+        EventKind::UaNetworkFound {
+            servers: vec![UaNetworkInfo {
+                application_name: "Simulator".to_string(),
+                application_uri: "urn:sim".to_string(),
+                discovery_urls: vec!["opc.tcp://127.0.0.1:4840".parse().unwrap()],
+            }],
+        },
+    );
     assert_eq!(app.dialogs.connect.ua_search_results.len(), 1);
     assert_eq!(
         app.dialogs.connect.ua_search_results[0].application_uri,
@@ -582,29 +592,53 @@ fn security_validation_applies_to_selected_url_only() {
     assert!(app.validate_ua_security());
 }
 
+fn start_recorded_auto(app: &mut App) -> (RequestId, RequestId) {
+    app.record_dispatches_for_test();
+    app.dialogs.connect.ua_lds_host = "127.0.0.1:4850".into();
+    app.search_ua_all();
+    match app.dialogs.connect.ua_search {
+        UaSearch::Auto {
+            pending: AutoPending::Both { host, network },
+        } => (host, network),
+        ref other => panic!("expected two requests, got {other:?}"),
+    }
+}
+
 #[test]
 fn combined_ua_search_preserves_security_variants_at_same_url() {
     use crate::bff::model::{UaEndpointInfo, UaServerInfo};
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.dialogs.connect.ua_auto_pending = 2;
-    for (policy, mode) in [("None", "None"), ("Basic256Sha256", "SignAndEncrypt")] {
-        app.on_event_for_test(EventKind::UaServersFound {
-            host: "localhost".to_string(),
-            port: 4840,
-            servers: vec![UaServerInfo {
-                application_name: "Simulator".to_string(),
-                application_uri: "urn:sim".to_string(),
-                endpoints: vec![UaEndpointInfo {
-                    url: "opc.tcp://localhost:4840".parse().unwrap(),
-                    security_policy: crate::bff::model::AdvertisedPolicy::from_wire(policy),
-                    security_mode: crate::bff::model::AdvertisedMode::from_wire(mode),
-                }],
+    let (host, network) = start_recorded_auto(&mut app);
+    let servers = [("None", "None"), ("Basic256Sha256", "SignAndEncrypt")]
+        .into_iter()
+        .map(|(policy, mode)| UaServerInfo {
+            application_name: "Simulator".into(),
+            application_uri: "urn:sim".into(),
+            endpoints: vec![UaEndpointInfo {
+                url: "opc.tcp://localhost:4840".parse().unwrap(),
+                security_policy: crate::bff::model::AdvertisedPolicy::from_wire(policy),
+                security_mode: crate::bff::model::AdvertisedMode::from_wire(mode),
             }],
-        });
-    }
+        })
+        .collect();
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        host,
+        EventKind::UaServersFound {
+            host: "localhost".into(),
+            port: 4840,
+            servers,
+        },
+    );
     assert_eq!(app.dialogs.connect.ua_search_results.len(), 1);
+    assert_eq!(app.dialogs.connect.ua_search_results[0].endpoints.len(), 2);
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        network,
+        EventKind::UaNetworkFound { servers: vec![] },
+    );
     assert_eq!(app.dialogs.connect.ua_search_results[0].endpoints.len(), 2);
 }
 
@@ -614,27 +648,26 @@ fn combined_ua_search_shows_a_loopback_server_once_while_running() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    // LDS/mDNS + loopback; LDS has not answered yet. (An older build also asked
-    // `localhost`; a late reply for either spelling must still merge.)
-    app.dialogs.connect.ua_auto_pending = 3;
-    app.dialogs.connect.ua_searching = true;
-    for host in ["127.0.0.1", "localhost"] {
-        app.on_event_for_test(EventKind::UaServersFound {
-            host: host.to_string(),
+    let (host, _) = start_recorded_auto(&mut app);
+    let server = UaServerInfo {
+        application_name: "Simulator".into(),
+        application_uri: "urn:sim".into(),
+        endpoints: vec![UaEndpointInfo {
+            url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
+            security_policy: crate::bff::model::AdvertisedPolicy::from_wire("None"),
+            security_mode: crate::bff::model::AdvertisedMode::from_wire("None"),
+        }],
+    };
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        host,
+        EventKind::UaServersFound {
+            host: "127.0.0.1".into(),
             port: 4840,
-            servers: vec![UaServerInfo {
-                application_name: "Simulator".to_string(),
-                application_uri: "urn:sim".to_string(),
-                endpoints: vec![UaEndpointInfo {
-                    url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
-                    security_policy: crate::bff::model::AdvertisedPolicy::from_wire("None"),
-                    security_mode: crate::bff::model::AdvertisedMode::from_wire("None"),
-                }],
-            }],
-        });
-    }
-    // Still searching (LDS pending), yet the visible list is already merged.
-    assert_eq!(app.dialogs.connect.ua_auto_pending, 1);
+            servers: vec![server.clone(), server],
+        },
+    );
+    assert_eq!(app.dialogs.connect.ua_search.auto_pending_count(), 1);
     assert_eq!(app.dialogs.connect.ua_search_results.len(), 1);
     assert_eq!(app.dialogs.connect.ua_search_results[0].endpoints.len(), 1);
 }
@@ -645,37 +678,42 @@ fn lds_urls_merge_into_host_result_instead_of_being_dropped() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.dialogs.connect.ua_auto_pending = 2;
-    app.on_event_for_test(EventKind::UaServersFound {
-        host: "127.0.0.1".to_string(),
-        port: 4840,
-        servers: vec![UaServerInfo {
-            application_name: "Simulator".to_string(),
-            application_uri: "urn:sim".to_string(),
-            endpoints: vec![UaEndpointInfo {
-                url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
-                security_policy: crate::bff::model::AdvertisedPolicy::from_wire("None"),
-                security_mode: crate::bff::model::AdvertisedMode::from_wire("None"),
+    let (host, network) = start_recorded_auto(&mut app);
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        host,
+        EventKind::UaServersFound {
+            host: "127.0.0.1".into(),
+            port: 4840,
+            servers: vec![UaServerInfo {
+                application_name: "Simulator".into(),
+                application_uri: "urn:sim".into(),
+                endpoints: vec![UaEndpointInfo {
+                    url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
+                    security_policy: crate::bff::model::AdvertisedPolicy::from_wire("None"),
+                    security_mode: crate::bff::model::AdvertisedMode::from_wire("None"),
+                }],
             }],
-        }],
-    });
-    app.on_event_for_test(EventKind::UaNetworkFound {
-        servers: vec![
-            // Same server (same URI) advertised on the LAN address.
-            UaNetworkInfo {
-                application_name: "Simulator".to_string(),
-                application_uri: "urn:sim".to_string(),
-                discovery_urls: vec!["opc.tcp://10.0.0.5:4840".parse().unwrap()],
-            },
-            // LDS record without URI for the loopback URL: merged by URL,
-            // its name must not become a fake application URI.
-            UaNetworkInfo {
-                application_name: "Simulator (LDS)".to_string(),
-                application_uri: String::new(),
-                discovery_urls: vec!["opc.tcp://127.0.0.1:4840/".parse().unwrap()],
-            },
-        ],
-    });
+        },
+    );
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        network,
+        EventKind::UaNetworkFound {
+            servers: vec![
+                UaNetworkInfo {
+                    application_name: "Simulator".into(),
+                    application_uri: "urn:sim".into(),
+                    discovery_urls: vec!["opc.tcp://10.0.0.5:4840".parse().unwrap()],
+                },
+                UaNetworkInfo {
+                    application_name: "Simulator (LDS)".into(),
+                    application_uri: String::new(),
+                    discovery_urls: vec!["opc.tcp://127.0.0.1:4840/".parse().unwrap()],
+                },
+            ],
+        },
+    );
     let results = &app.dialogs.connect.ua_search_results;
     assert_eq!(results.len(), 1, "one server, not three rows: {results:?}");
     assert_eq!(results[0].application_uri, "urn:sim");
@@ -683,8 +721,7 @@ fn lds_urls_merge_into_host_result_instead_of_being_dropped() {
         results[0]
             .endpoints
             .iter()
-            .any(|e| e.url.as_str() == "opc.tcp://10.0.0.5:4840"),
-        "the LAN URL reported only by LDS/mDNS must be kept"
+            .any(|e| e.url.as_str() == "opc.tcp://10.0.0.5:4840")
     );
 }
 
@@ -1945,18 +1982,18 @@ fn u15_the_combined_search_counts_one_pending_step_per_request() {
     app.open_connect_dialog();
     app.search_ua_all();
     let d = &app.dialogs.connect;
-    assert!(d.ua_searching);
-    assert!(!d.ua_network_searching, "no adapter, no LDS host");
-    assert_eq!(d.ua_auto_pending, 1);
+    assert!(d.ua_search.host_searching());
+    assert!(!d.ua_search.network_searching(), "no adapter, no LDS host");
+    assert_eq!(d.ua_search.auto_pending_count(), 1);
 
     app.dialogs.connect.ua_lds_host = "127.0.0.1:4850".to_string();
     app.search_ua_all();
     let d = &app.dialogs.connect;
     assert!(
-        d.ua_network_searching,
+        d.ua_search.network_searching(),
         "a named LDS is asked without an adapter"
     );
-    assert_eq!(d.ua_auto_pending, 2);
+    assert_eq!(d.ua_search.auto_pending_count(), 2);
 }
 
 #[test]
@@ -1966,7 +2003,7 @@ fn u15_the_lds_host_is_remembered_and_restored() {
     app.open_connect_dialog();
     app.dialogs.connect.ua_lds_host = " localhost:4850 ".to_string();
     app.search_ua_network();
-    assert!(app.dialogs.connect.ua_network_searching);
+    assert!(app.dialogs.connect.ua_search.network_searching());
     assert!(app.dialogs.connect.error.is_none());
     assert_eq!(app.settings.ua_lds_host, "localhost:4850");
 
@@ -1990,7 +2027,7 @@ fn u15_a_remote_lds_host_needs_an_adapter_and_a_bad_text_is_reported() {
 
     app.dialogs.connect.ua_lds_host = "lds.plant.local".to_string();
     app.search_ua_network();
-    assert!(!app.dialogs.connect.ua_network_searching);
+    assert!(!app.dialogs.connect.ua_search.network_searching());
     assert_eq!(
         app.dialogs.connect.error.as_deref(),
         Some("Select a network adapter")
@@ -1998,7 +2035,7 @@ fn u15_a_remote_lds_host_needs_an_adapter_and_a_bad_text_is_reported() {
 
     app.dialogs.connect.ua_lds_host = "host:0".to_string();
     app.search_ua_network();
-    assert!(!app.dialogs.connect.ua_network_searching);
+    assert!(!app.dialogs.connect.ua_search.network_searching());
     let error = app.dialogs.connect.error.clone().unwrap_or_default();
     assert!(error.contains("LDS host"), "{error}");
     assert_eq!(
@@ -2194,7 +2231,7 @@ fn exhausted_request_does_not_leave_browse_add_or_search_waiting() {
     assert!(!app.rows.iter().any(|row| row.item_id == "ns=2;s=Rejected"));
     app.dialogs.connect.ua_search_host = "localhost".into();
     app.search_ua_servers();
-    assert!(!app.dialogs.connect.ua_searching);
+    assert!(!app.dialogs.connect.ua_search.host_searching());
     assert!(app.dialogs.connect.error.is_some());
 }
 
@@ -2242,4 +2279,218 @@ fn unsolicited_values_and_read_error_do_not_clear_pending_read_in_ui() {
     assert!(app.engine.has_pending(session, request));
     app.on_event_for_test_with_request(session, request, EventKind::Values { values: vec![] });
     assert!(!app.sessions[0].read_in_flight);
+}
+
+#[test]
+fn ua_search_replacement_preserves_independent_da_pending_and_rejects_stale_reply() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.record_dispatches_for_test();
+    let da = app
+        .send(
+            Owner::Discovery,
+            Protocol::OpcDa,
+            CommandKind::Discover {
+                host: String::new(),
+            },
+        )
+        .unwrap();
+    app.dialogs.connect.ua_search_host = "localhost".into();
+    app.search_ua_servers();
+    let UaSearch::SingleHost { request: old } = app.dialogs.connect.ua_search else {
+        panic!("single search")
+    };
+    app.search_ua_servers();
+    let UaSearch::SingleHost { request: current } = app.dialogs.connect.ua_search else {
+        panic!("replacement search")
+    };
+    let pending = app.pending_request_ids_for_test(Owner::Discovery);
+    assert!(pending.contains(&da));
+    assert!(pending.contains(&current));
+    assert!(!pending.contains(&old));
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        old,
+        EventKind::UaServersFound {
+            host: "localhost".into(),
+            port: 4840,
+            servers: vec![crate::bff::model::UaServerInfo {
+                application_name: "stale".into(),
+                application_uri: "urn:stale".into(),
+                endpoints: vec![],
+            }],
+        },
+    );
+    assert!(app.dialogs.connect.ua_search_results.is_empty());
+    assert_eq!(
+        app.dialogs.connect.ua_search,
+        UaSearch::SingleHost { request: current }
+    );
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        current,
+        EventKind::UaServersFound {
+            host: "localhost".into(),
+            port: 4840,
+            servers: vec![],
+        },
+    );
+    assert_eq!(app.dialogs.connect.ua_search, UaSearch::Idle);
+    assert!(
+        app.pending_request_ids_for_test(Owner::Discovery)
+            .contains(&da)
+    );
+}
+
+#[test]
+fn ua_auto_partial_dispatch_failure_finishes_after_accepted_reply() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.engine.limit_dispatch_for_test(1);
+    app.dialogs.connect.ua_lds_host = "localhost".into();
+    app.search_ua_all();
+    let UaSearch::Auto {
+        pending: AutoPending::Network(request),
+    } = app.dialogs.connect.ua_search
+    else {
+        panic!("accepted network request")
+    };
+    assert!(app.dialogs.connect.error.is_some());
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        request,
+        EventKind::UaNetworkFound { servers: vec![] },
+    );
+    assert_eq!(app.dialogs.connect.ua_search, UaSearch::Idle);
+}
+
+#[test]
+fn ua_auto_timeout_and_single_network_error_clear_search() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.record_dispatches_for_test();
+    app.search_ua_all();
+    app.age_pending_requests_for_test(Owner::Discovery, 3600);
+    app.tick_for_test();
+    assert_eq!(app.dialogs.connect.ua_search, UaSearch::Idle);
+    assert!(app.dialogs.connect.error.is_some());
+    app.dialogs.connect.ua_lds_host = "localhost".into();
+    app.search_ua_network();
+    let UaSearch::Network { request } = app.dialogs.connect.ua_search else {
+        panic!("network request")
+    };
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        request,
+        EventKind::Error {
+            operation: Operation::SearchNetwork,
+            message: BackendMsg::raw("failed"),
+        },
+    );
+    assert_eq!(app.dialogs.connect.ua_search, UaSearch::Idle);
+    assert!(app.dialogs.connect.error.is_some());
+}
+
+#[test]
+fn ua_auto_failure_keeps_partial_results_and_single_error_clears_spinner() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    let (host, network) = start_recorded_auto(&mut app);
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        host,
+        EventKind::UaServersFound {
+            host: "localhost".into(),
+            port: 4840,
+            servers: vec![crate::bff::model::UaServerInfo {
+                application_name: "partial".into(),
+                application_uri: "urn:partial".into(),
+                endpoints: vec![],
+            }],
+        },
+    );
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        network,
+        EventKind::Error {
+            operation: Operation::SearchNetwork,
+            message: BackendMsg::raw("network failed"),
+        },
+    );
+    assert_eq!(app.dialogs.connect.ua_search, UaSearch::Idle);
+    assert_eq!(app.dialogs.connect.ua_search_results.len(), 1);
+    assert!(app.dialogs.connect.error.is_some());
+    app.dialogs.connect.ua_search_host = "localhost".into();
+    app.search_ua_servers();
+    let UaSearch::SingleHost { request } = app.dialogs.connect.ua_search else {
+        panic!("host request")
+    };
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        request,
+        EventKind::Error {
+            operation: Operation::SearchServers,
+            message: BackendMsg::raw("host failed"),
+        },
+    );
+    assert_eq!(app.dialogs.connect.ua_search, UaSearch::Idle);
+    assert!(app.dialogs.connect.error.is_some());
+}
+
+#[test]
+fn new_da_discovery_keeps_queued_ua_timeout() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.record_dispatches_for_test();
+    app.dialogs.connect.ua_search_host = "localhost".into();
+    app.search_ua_servers();
+    app.age_pending_requests_for_test(Owner::Discovery, 3600);
+    app.engine
+        .expire_requests(Instant::now(), app.settings.options.operation_timeout_secs);
+    app.restart_da_discovery(String::new());
+    app.on_event_for_test(EventKind::Error {
+        operation: Operation::Discover,
+        message: BackendMsg::raw("DA failed"),
+    });
+    app.dialogs.connect.error = None;
+    app.tick_for_test();
+    assert_eq!(app.dialogs.connect.ua_search, UaSearch::Idle);
+    assert!(app.dialogs.connect.error.is_some());
+}
+
+#[test]
+fn new_da_discovery_keeps_independent_ua_search_pending() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.record_dispatches_for_test();
+    app.dialogs.connect.ua_search_host = "localhost".into();
+    app.search_ua_servers();
+    let UaSearch::SingleHost { request } = app.dialogs.connect.ua_search else {
+        panic!("UA host request")
+    };
+    app.restart_da_discovery(String::new());
+    assert!(
+        app.pending_request_ids_for_test(Owner::Discovery)
+            .contains(&request)
+    );
+    assert_eq!(
+        app.dialogs.connect.ua_search,
+        UaSearch::SingleHost { request }
+    );
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        request,
+        EventKind::UaServersFound {
+            host: "localhost".into(),
+            port: 4840,
+            servers: vec![],
+        },
+    );
+    assert_eq!(app.dialogs.connect.ua_search, UaSearch::Idle);
 }

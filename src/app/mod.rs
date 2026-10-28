@@ -37,8 +37,9 @@ mod view;
 mod tests;
 
 pub use dialogs::{
-    AboutDialog, AddSignalDialog, ColumnsDialog, ConfirmAction, ConfirmRequest, ConnectDialog,
-    ConnectPane, Dialogs, MessageDialog, OptionsDialog, PendingWrites, UaIdentity, WriteDialog,
+    AboutDialog, AddSignalDialog, AutoPending, ColumnsDialog, ConfirmAction, ConfirmRequest,
+    ConnectDialog, ConnectPane, Dialogs, MessageDialog, OptionsDialog, PendingWrites, UaIdentity,
+    UaSearch, WriteDialog,
 };
 pub use present::{CJK_FONT_ENV, compose_server_name, install_fonts};
 pub use state::{
@@ -973,11 +974,10 @@ impl App {
         d.ua_search_port.clear();
         d.ua_lds_host = self.settings.ua_lds_host.clone();
         d.ua_url.clear();
-        d.ua_searching = false;
+        d.ua_search = UaSearch::Idle;
         // Reuse discovered UA results across popup visits. A new search
         // explicitly replaces them; closing the popup does not.
         d.da_selected = None;
-        d.ua_auto_pending = 0;
         d.da_auto_pending = 0;
         d.focus_pending = true;
         d.ua_user.clear();
@@ -989,14 +989,10 @@ impl App {
         d.ua_trust_server_cert = crate::settings::default_trust_server_cert();
         d.ua_identity = UaIdentity::Anonymous;
         d.ua_session_timeout = self.settings.ua_session_timeout_ms;
-        d.ua_network_searching = false;
-        d.ua_subnet_searching = false;
-        d.ua_scan_id = None;
         d.ua_scan_checked = 0;
         d.ua_scan_total = 0;
         d.ua_scan_found = 0;
         d.ua_scan_error = None;
-        d.ua_scan_confirm = None;
         // Reopening a populated list must not restart network discovery.
         if d.da_servers.is_empty() {
             self.discover_da_all();
@@ -1026,12 +1022,9 @@ impl App {
         }
         let d = &mut self.dialogs.connect;
         d.open = false;
-        d.ua_searching = false;
-        d.ua_network_searching = false;
-        d.ua_auto_pending = 0;
+        d.ua_search = UaSearch::Idle;
         d.da_auto_pending = 0;
         d.da_pending = false;
-        d.ua_scan_confirm = None;
     }
 
     pub fn open_options_dialog(&mut self) {

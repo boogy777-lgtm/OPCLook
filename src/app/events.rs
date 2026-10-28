@@ -6,7 +6,7 @@ use super::*;
 use crate::bff::model::RequestId;
 use crate::bff::model::{
     BrowseNode, Event, EventKind, ItemInfo, ItemKey, NodeKind, Operation, Origin, Owner, Protocol,
-    SessionId, SubscriptionState,
+    ScanEnd, SessionId, SubscriptionState,
 };
 use crate::i18n::{Tr, backend_text, fmt, tr};
 use chrono::Utc;
@@ -139,7 +139,7 @@ impl App {
         let session = match owner {
             Owner::Session(session) => session,
             Owner::Discovery => {
-                self.on_discovery_event(kind, ctx);
+                self.on_discovery_event(kind, ctx, request_id);
                 return;
             }
         };
@@ -461,28 +461,8 @@ impl App {
                         self.mark_session_rows_stale(session);
                         self.log_reconnect(session);
                     }
-                    Operation::SearchServers => {
-                        if self.dialogs.connect.open {
-                            if self.dialogs.connect.ua_auto_pending > 0 {
-                                // A combined auto-search is running: don't finish
-                                // it early, just fold this (failed) host step in.
-                                self.ua_auto_step_done(|_| {});
-                            } else {
-                                self.dialogs.connect.ua_searching = false;
-                                self.dialogs.connect.error = Some(message);
-                            }
-                        }
-                    }
-                    Operation::SearchNetwork => {
-                        if self.dialogs.connect.open {
-                            if self.dialogs.connect.ua_auto_pending > 0 {
-                                self.ua_auto_step_done(|_| {});
-                            } else {
-                                self.dialogs.connect.ua_network_searching = false;
-                                self.dialogs.connect.error = Some(message);
-                            }
-                        }
-                    }
+                    // Discovery operations belong to Owner::Discovery, never a session.
+                    Operation::SearchServers | Operation::SearchNetwork => {}
                     // Operations with no extra UI state transition beyond the
                     // journal line. Listed explicitly so a new variant forces a
                     // decision here.
@@ -524,7 +504,7 @@ impl App {
                         // temporary route back; other searches keep theirs.
                         match &ctx {
                             PendingCtx::Host(host) => self.release_da_discovery_route(host),
-                            _ => self.release_da_discovery_routes(),
+                            _ => self.engine.discard_discovery_operation(Operation::Discover),
                         }
                         let d = &mut self.dialogs.connect;
                         if d.da_auto_pending > 0 {
@@ -542,7 +522,12 @@ impl App {
         }
     }
 
-    fn on_discovery_event(&mut self, kind: EventKind, ctx: PendingCtx) {
+    fn on_discovery_event(
+        &mut self,
+        kind: EventKind,
+        ctx: PendingCtx,
+        request_id: Option<RequestId>,
+    ) {
         let lang = self.lang();
         match kind {
             EventKind::UaServersFound {
@@ -553,17 +538,17 @@ impl App {
                 if !self.dialogs.connect.open {
                     return;
                 }
-                if self.dialogs.connect.ua_auto_pending > 0 {
-                    // A combined auto-search is running: merge this host's
-                    // result right away (127.0.0.1 and localhost usually return
-                    // the same server; the visible tree must not show it twice
-                    // while the remaining sub-searches are still running).
-                    self.ua_auto_step_done(|d| {
-                        merge_ua_servers(d, servers);
-                    });
+                let Some(request) = request_id else {
+                    return;
+                };
+                if self.ua_auto_step_done(request, |d| merge_ua_servers(d, servers.clone())) {
                     return;
                 }
-                self.dialogs.connect.ua_searching = false;
+                if !matches!(self.dialogs.connect.ua_search, UaSearch::SingleHost { request: active } if active == request)
+                {
+                    return;
+                }
+                self.dialogs.connect.ua_search = UaSearch::Idle;
                 self.dialogs.connect.ua_search_results = servers.clone();
                 refresh_ua_combos(&mut self.dialogs.connect);
                 self.journal
@@ -573,15 +558,18 @@ impl App {
                 if !self.dialogs.connect.open {
                     return;
                 }
-                if self.dialogs.connect.ua_auto_pending > 0 {
-                    // Part of the combined auto-search: keep the raw network list
-                    // for the final merge.
-                    self.ua_auto_step_done(|d| {
-                        d.ua_network_results.extend(servers);
-                    });
+                let Some(request) = request_id else {
+                    return;
+                };
+                if self.ua_auto_step_done(request, |d| d.ua_network_results.extend(servers.clone()))
+                {
                     return;
                 }
-                self.dialogs.connect.ua_network_searching = false;
+                if !matches!(self.dialogs.connect.ua_search, UaSearch::Network { request: active } if active == request)
+                {
+                    return;
+                }
+                self.dialogs.connect.ua_search = UaSearch::Idle;
                 let count = servers.len();
                 self.dialogs.connect.ua_network_results = servers;
                 // The standalone LDS/mDNS action must publish its results to
@@ -605,10 +593,9 @@ impl App {
                     return;
                 }
                 let d = &mut self.dialogs.connect;
-                if d.ua_scan_id != Some(scan_id) {
+                if d.ua_search.scan_id() != Some(scan_id) {
                     return;
                 }
-                d.ua_subnet_searching = true;
                 d.ua_scan_total = total;
                 d.ua_scan_checked = checked;
                 d.ua_scan_found = found;
@@ -618,7 +605,7 @@ impl App {
                     return;
                 }
                 let d = &mut self.dialogs.connect;
-                if d.ua_scan_id != Some(scan_id) {
+                if d.ua_search.scan_id() != Some(scan_id) {
                     return;
                 }
                 d.ua_scan_servers.extend(servers);
@@ -627,35 +614,40 @@ impl App {
             }
             EventKind::UaScanFinished {
                 scan_id,
-                cancelled,
                 found,
-                error,
+                end,
             } => {
                 if !self.dialogs.connect.open {
                     return;
                 }
                 let d = &mut self.dialogs.connect;
-                if d.ua_scan_id != Some(scan_id) {
+                if d.ua_search.scan_id() != Some(scan_id) {
                     return;
                 }
-                d.ua_scan_id = None;
-                d.ua_subnet_searching = false;
+                d.ua_search = UaSearch::Idle;
                 d.ua_scan_found = found;
-                d.ua_scan_checked = d.ua_scan_total;
-                d.ua_scan_confirm = None;
+                if matches!(end, ScanEnd::Completed) {
+                    d.ua_scan_checked = d.ua_scan_total;
+                }
                 merge_ua_scan_servers(d);
-                if let Some(error) = error {
-                    d.ua_scan_error = Some(localize_scan_error(lang, &backend_text(lang, &error)));
-                } else if cancelled {
-                    d.ua_scan_error = None;
-                    self.journal
-                        .info_l(Tr::ServersFoundUa, &[&found.to_string()]);
-                } else if found == 0 {
-                    d.ua_scan_error = Some(tr(lang, Tr::UaScanNoResults).to_string());
-                } else {
-                    d.ua_scan_error = None;
-                    self.journal
-                        .info_l(Tr::ServersFoundUa, &[&found.to_string()]);
+                match end {
+                    ScanEnd::Failed(error) => {
+                        d.ua_scan_error =
+                            Some(localize_scan_error(lang, &backend_text(lang, &error)))
+                    }
+                    ScanEnd::Cancelled => {
+                        d.ua_scan_error = None;
+                        self.journal
+                            .info_l(Tr::ServersFoundUa, &[&found.to_string()]);
+                    }
+                    ScanEnd::Completed if found == 0 => {
+                        d.ua_scan_error = Some(tr(lang, Tr::UaScanNoResults).to_string())
+                    }
+                    ScanEnd::Completed => {
+                        d.ua_scan_error = None;
+                        self.journal
+                            .info_l(Tr::ServersFoundUa, &[&found.to_string()]);
+                    }
                 }
             }
             EventKind::UaEndpointsFound { endpoints, .. } => {
@@ -729,30 +721,25 @@ impl App {
                 self.journal
                     .error_l(Tr::ErrorOp, &[&operation_label(lang, operation), &message]);
                 match operation {
-                    Operation::SearchServers => {
+                    Operation::SearchServers | Operation::SearchNetwork => {
                         if self.dialogs.connect.open {
-                            if self.dialogs.connect.ua_auto_pending > 0 {
-                                self.ua_auto_step_done(|_| {});
-                            } else {
-                                self.dialogs.connect.ua_searching = false;
-                                self.dialogs.connect.error = Some(message);
-                            }
-                        }
-                    }
-                    Operation::SearchNetwork => {
-                        if self.dialogs.connect.open {
-                            if self.dialogs.connect.ua_auto_pending > 0 {
-                                self.ua_auto_step_done(|_| {});
-                            } else {
-                                self.dialogs.connect.ua_network_searching = false;
-                                self.dialogs.connect.error = Some(message);
+                            if let Some(request) = request_id {
+                                let auto = self.ua_auto_step_done(request, |_| {});
+                                let active = matches!(self.dialogs.connect.ua_search,
+                                    UaSearch::SingleHost { request: id } | UaSearch::Network { request: id } if id == request);
+                                if active {
+                                    self.dialogs.connect.ua_search = UaSearch::Idle;
+                                }
+                                if auto || active {
+                                    self.dialogs.connect.error = Some(message);
+                                }
                             }
                         }
                     }
                     Operation::Discover => {
                         match &ctx {
                             PendingCtx::Host(host) => self.release_da_discovery_route(host),
-                            _ => self.release_da_discovery_routes(),
+                            _ => self.engine.discard_discovery_operation(Operation::Discover),
                         }
                         let d = &mut self.dialogs.connect;
                         d.da_auto_pending = d.da_auto_pending.saturating_sub(1);

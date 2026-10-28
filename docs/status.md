@@ -131,3 +131,11 @@ Linux all-targets и Windows i686 workspace all-targets typecheck прошли; 
 проверка использовала test-only пропуск ресурсов и helper manifest. Матрица и
 ограничения — в `docs/refactoring-status.md`. Остальные B/E/F/G/H, PNG, 10k
 baseline, Windows runtime, физические DA/UAC и финальный exact-head CI открыты.
+
+**2026-10-28, подэтап B2:** UA discovery и фаза подтверждения/выполнения
+подсети представлены enum, ожидающие Auto запросы непусты и коррелированы;
+исход ScanEnd исключает сочетание отмены и ошибки. DA и UA discovery не
+сбрасывают запросы друг друга. Проверки и открытые ограничения — в
+`docs/refactoring-status.md` и `docs/devlog.md`. Остальные пункты B/E/F/G/H,
+PNG, измеренный 10k baseline, Windows runtime, реальный DA/UAC и финальный CI
+остаются открыты.

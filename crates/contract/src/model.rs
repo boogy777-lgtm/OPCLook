@@ -1689,6 +1689,14 @@ pub struct Event {
     pub kind: EventKind,
 }
 
+/// Terminal outcome of a subnet scan. Partial discoveries are reported separately.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScanEnd {
+    Completed,
+    Cancelled,
+    Failed(BackendMsg),
+}
+
 #[derive(Clone, Debug)]
 pub enum EventKind {
     Servers {
@@ -1715,14 +1723,11 @@ pub enum EventKind {
         scan_id: ScanId,
         servers: Vec<UaServerInfo>,
     },
-    /// Terminal event of a subnet scan. `cancelled` distinguishes a user stop
-    /// from a completed run; `error` carries a technical detail when the scan
-    /// could not run at all (for example a subnet above the confirmation cap).
+    /// Terminal event of a subnet scan; `found` includes partial results.
     UaScanFinished {
         scan_id: ScanId,
-        cancelled: bool,
         found: usize,
-        error: Option<BackendMsg>,
+        end: ScanEnd,
     },
     UaEndpointsFound {
         url: String,

@@ -31,11 +31,11 @@ impl App {
         }
     }
 
-    /// Start a direct DA host search, invalidating all previous popup
-    /// discovery requests. Used by the Search button and host-field Enter.
+    /// Start a direct DA host search, superseding previous DA discovery only.
+    /// Used by the Search button and host-field Enter.
     pub fn restart_da_discovery(&mut self, host: String) {
-        self.engine.invalidate_session_requests(Owner::Discovery);
-        self.release_da_discovery_routes();
+        self.engine
+            .discard_discovery_operation(crate::bff::model::Operation::Discover);
         let d = &mut self.dialogs.connect;
         d.da_pending = false;
         d.da_auto_pending = 0;
@@ -50,10 +50,9 @@ impl App {
     /// DA host from settings/history (best effort). Results are merged as the
     /// per-host `Servers` events arrive.
     pub fn discover_da_all(&mut self) {
-        // A new user search owns a new set of request IDs and result rows.
-        // Late replies from the previous search may not overwrite them.
-        self.engine.invalidate_session_requests(Owner::Discovery);
-        self.release_da_discovery_routes();
+        // A new DA search supersedes only DA discovery, not UA requests.
+        self.engine
+            .discard_discovery_operation(crate::bff::model::Operation::Discover);
         // Without an explicitly selected adapter only this computer is
         // discovered; remote search/connect is an explicit error instead of a
         // silent fallback to the default route.
@@ -82,10 +81,40 @@ impl App {
         }
     }
 
+    /// A new discovery owns fresh request IDs and cannot accept old replies.
+    fn begin_ua_search(&mut self) {
+        let active = std::mem::replace(&mut self.dialogs.connect.ua_search, UaSearch::Idle);
+        match active {
+            UaSearch::SingleHost { request } | UaSearch::Network { request } => {
+                self.engine.discard_pending(Owner::Discovery, request)
+            }
+            UaSearch::Auto {
+                pending: AutoPending::Host(request) | AutoPending::Network(request),
+            } => self.engine.discard_pending(Owner::Discovery, request),
+            UaSearch::Auto {
+                pending: AutoPending::Both { host, network },
+            } => {
+                self.engine.discard_pending(Owner::Discovery, host);
+                self.engine.discard_pending(Owner::Discovery, network);
+            }
+            UaSearch::Subnet { scan_id } => {
+                merge_ua_scan_servers(&mut self.dialogs.connect);
+                self.send(
+                    Owner::Discovery,
+                    Protocol::OpcUa,
+                    CommandKind::CancelUaScan { scan_id },
+                );
+            }
+            UaSearch::ConfirmSubnet { .. } => self.dialogs.connect.ua_scan_error = None,
+            UaSearch::Idle => {}
+        }
+    }
+
     /// Search for OPC UA servers on the dialog's host:port fields. An empty
     /// host means "this computer + local network" -> a combined search that
     /// merges mDNS/LDS and the local UA discovery endpoints.
     pub fn search_ua_servers(&mut self) {
+        self.begin_ua_search();
         let host = self.dialogs.connect.ua_search_host.trim().to_string();
         if host.is_empty() {
             self.search_ua_all();
@@ -98,29 +127,24 @@ impl App {
         let Some(bind) = self.search_binding(&host) else {
             self.dialogs.connect.error =
                 Some(tr(self.lang(), Tr::SelectAdapterRequired).to_string());
-            self.dialogs.connect.ua_searching = false;
             return;
         };
-        self.dialogs.connect.ua_searching = true;
         self.dialogs.connect.ua_search_results.clear();
         self.dialogs.connect.ua_result_epoch = self.dialogs.connect.ua_result_epoch.wrapping_add(1);
         self.dialogs.connect.error = None;
         self.journal
             .info_l(Tr::SearchingUaHost, &[&host, &port.to_string()]);
-        if self
-            .send(
-                Owner::Discovery,
-                Protocol::OpcUa,
-                CommandKind::SearchUaServers {
-                    host,
-                    port,
-                    bind: Some(bind),
-                },
-            )
-            .is_none()
-        {
-            self.dialogs.connect.ua_searching = false;
-            self.dialogs.connect.error = Some(self.status.clone());
+        match self.send(
+            Owner::Discovery,
+            Protocol::OpcUa,
+            CommandKind::SearchUaServers {
+                host,
+                port,
+                bind: Some(bind),
+            },
+        ) {
+            Some(request) => self.dialogs.connect.ua_search = UaSearch::SingleHost { request },
+            None => self.dialogs.connect.error = Some(self.status.clone()),
         }
     }
 
@@ -130,30 +154,39 @@ impl App {
     /// Partial results accumulate and are merged when all sub-searches
     /// complete.
     pub fn search_ua_all(&mut self) {
+        self.begin_ua_search();
         let Ok(lds) = self.lds_target_from_dialog() else {
-            self.dialogs.connect.ua_searching = false;
-            self.dialogs.connect.ua_network_searching = false;
             return;
         };
         let bind = self.current_network_binding();
-        // An explicitly named LDS is asked even when no adapter is chosen.
-        let network = bind.is_some() || lds.is_some();
         let d = &mut self.dialogs.connect;
-        d.ua_searching = true;
-        d.ua_network_searching = network;
         d.error = None;
         d.ua_search_results.clear();
         d.ua_result_epoch = d.ua_result_epoch.wrapping_add(1);
         d.ua_network_results.clear();
         d.ua_discovered_endpoints.clear();
-        let commands = ua_all_commands(bind, lds);
-        d.ua_auto_pending = commands.len();
-        for kind in commands {
-            if self.send(Owner::Discovery, Protocol::OpcUa, kind).is_none() {
-                self.ua_auto_step_done(|_| {});
-                self.dialogs.connect.error = Some(self.status.clone());
+        let mut host = None;
+        let mut network = None;
+        for kind in ua_all_commands(bind, lds) {
+            let is_network = matches!(kind, CommandKind::SearchUaNetwork { .. });
+            match self.send(Owner::Discovery, Protocol::OpcUa, kind) {
+                Some(request) if is_network => network = Some(request),
+                Some(request) => host = Some(request),
+                None => self.dialogs.connect.error = Some(self.status.clone()),
             }
         }
+        self.dialogs.connect.ua_search = match (host, network) {
+            (Some(host), Some(network)) => UaSearch::Auto {
+                pending: AutoPending::Both { host, network },
+            },
+            (Some(id), None) => UaSearch::Auto {
+                pending: AutoPending::Host(id),
+            },
+            (None, Some(id)) => UaSearch::Auto {
+                pending: AutoPending::Network(id),
+            },
+            (None, None) => UaSearch::Idle,
+        };
     }
 
     /// The dialog's optional LDS host as a search target. `Ok(None)` when the
@@ -182,17 +215,34 @@ impl App {
         Ok(Some(LdsTarget { host, port, bind }))
     }
 
-    /// Fold one completed sub-search into the combined UA auto-search. Called
-    /// from the event handlers while `ua_auto_pending > 0`.
-    pub(super) fn ua_auto_step_done(&mut self, update: impl FnOnce(&mut ConnectDialog)) {
-        update(&mut self.dialogs.connect);
+    /// Consume one correlated auto-search reply, exactly once.
+    pub(super) fn ua_auto_step_done(
+        &mut self,
+        request: RequestId,
+        update: impl FnOnce(&mut ConnectDialog),
+    ) -> bool {
+        let next = match &self.dialogs.connect.ua_search {
+            UaSearch::Auto {
+                pending: AutoPending::Both { host, network },
+            } if *host == request => Some(AutoPending::Network(*network)),
+            UaSearch::Auto {
+                pending: AutoPending::Both { host, network },
+            } if *network == request => Some(AutoPending::Host(*host)),
+            UaSearch::Auto {
+                pending: AutoPending::Host(id) | AutoPending::Network(id),
+            } if *id == request => None,
+            _ => return false,
+        };
         let d = &mut self.dialogs.connect;
-        d.ua_auto_pending = d.ua_auto_pending.saturating_sub(1);
-        if d.ua_auto_pending == 0 {
-            d.ua_searching = false;
-            d.ua_network_searching = false;
-            merge_ua_results(d);
-        }
+        update(d);
+        d.ua_search = match next {
+            Some(pending) => UaSearch::Auto { pending },
+            None => {
+                merge_ua_results(d);
+                UaSearch::Idle
+            }
+        };
+        true
     }
 
     /// Request `GetEndpoints` discovery for the current dialog URL so the
@@ -278,18 +328,16 @@ impl App {
     /// With an "LDS host" in the dialog that host's LDS is asked (and mDNS when
     /// an adapter is chosen); without one, this computer's own LDS and mDNS.
     pub fn search_ua_network(&mut self) {
+        self.begin_ua_search();
         let Ok(lds) = self.lds_target_from_dialog() else {
-            self.dialogs.connect.ua_network_searching = false;
             return;
         };
         let bind = self.current_network_binding();
         if bind.is_none() && lds.is_none() {
             let message = tr(self.lang(), Tr::SelectAdapterRequired).to_string();
-            self.dialogs.connect.ua_network_searching = false;
             self.dialogs.connect.error = Some(message);
             return;
         }
-        self.dialogs.connect.ua_network_searching = true;
         self.dialogs.connect.ua_result_epoch = self.dialogs.connect.ua_result_epoch.wrapping_add(1);
         self.dialogs.connect.error = None;
         match &lds {
@@ -299,16 +347,13 @@ impl App {
             }
             None => self.journal.info_l(Tr::SearchingUaNetwork, &[]),
         }
-        if self
-            .send(
-                Owner::Discovery,
-                Protocol::OpcUa,
-                CommandKind::SearchUaNetwork { bind, lds },
-            )
-            .is_none()
-        {
-            self.dialogs.connect.ua_network_searching = false;
-            self.dialogs.connect.error = Some(self.status.clone());
+        match self.send(
+            Owner::Discovery,
+            Protocol::OpcUa,
+            CommandKind::SearchUaNetwork { bind, lds },
+        ) {
+            Some(request) => self.dialogs.connect.ua_search = UaSearch::Network { request },
+            None => self.dialogs.connect.error = Some(self.status.clone()),
         }
     }
 
@@ -318,11 +363,8 @@ impl App {
         let lang = self.lang();
         // A new scan supersedes a running one; its events are ignored once the
         // new scan id replaces the old one.
-        if self.dialogs.connect.ua_subnet_searching || self.dialogs.connect.ua_scan_id.is_some() {
-            self.cancel_ua_subnet_scan();
-        }
+        self.begin_ua_search();
         let Some(lease) = self.network.lease.clone() else {
-            self.dialogs.connect.ua_scan_confirm = None;
             self.dialogs.connect.error = Some(tr(lang, Tr::SelectAdapterRequired).to_string());
             return;
         };
@@ -337,9 +379,7 @@ impl App {
             if subnet.needs_confirmation() {
                 let count = subnet.usable_count();
                 let d = &mut self.dialogs.connect;
-                d.ua_subnet_searching = false;
-                d.ua_scan_id = None;
-                d.ua_scan_confirm = Some(count);
+                d.ua_search = UaSearch::ConfirmSubnet { count };
                 d.ua_scan_total = 0;
                 d.ua_scan_checked = 0;
                 d.ua_scan_found = 0;
@@ -362,9 +402,13 @@ impl App {
     /// confirmation explicitly narrows the run to loopback + the local address
     /// (the prompt says exactly that).
     pub fn confirm_ua_subnet_scan(&mut self) {
-        let Some(_) = self.dialogs.connect.ua_scan_confirm.take() else {
+        if !matches!(
+            self.dialogs.connect.ua_search,
+            UaSearch::ConfirmSubnet { .. }
+        ) {
             return;
-        };
+        }
+        self.dialogs.connect.ua_search = UaSearch::Idle;
         let lang = self.lang();
         let Some(lease) = self.network.lease.clone() else {
             self.dialogs.connect.error = Some(tr(lang, Tr::SelectAdapterRequired).to_string());
@@ -384,19 +428,16 @@ impl App {
         let binding = lease.network_binding();
         let local_ip = lease.local_ip();
         let d = &mut self.dialogs.connect;
-        d.ua_scan_id = Some(scan_id);
-        d.ua_subnet_searching = true;
+        d.ua_search = UaSearch::Subnet { scan_id };
         d.ua_scan_checked = 0;
         d.ua_scan_total = 0;
         d.ua_scan_found = 0;
         d.ua_scan_error = None;
-        d.ua_scan_confirm = None;
         d.ua_scan_servers.clear();
         d.ua_search_results.clear();
         d.ua_result_epoch = d.ua_result_epoch.wrapping_add(1);
         d.ua_network_results.clear();
         d.ua_discovered_endpoints.clear();
-        d.ua_auto_pending = 0;
         d.error = None;
         self.journal.info_l(Tr::SearchingUaSubnet, &[]);
         if self
@@ -412,8 +453,7 @@ impl App {
             )
             .is_none()
         {
-            self.dialogs.connect.ua_scan_id = None;
-            self.dialogs.connect.ua_subnet_searching = false;
+            self.dialogs.connect.ua_search = UaSearch::Idle;
             self.dialogs.connect.ua_scan_error = Some(self.status.clone());
         }
     }
@@ -421,9 +461,14 @@ impl App {
     /// Stop the running subnet scan, keeping the partial results already
     /// received and dropping the spinner immediately.
     pub fn cancel_ua_subnet_scan(&mut self) {
-        let pending_confirm = self.dialogs.connect.ua_scan_confirm.take().is_some();
-        let scan_id = self.dialogs.connect.ua_scan_id.take();
-        self.dialogs.connect.ua_subnet_searching = false;
+        let pending_confirm = matches!(
+            self.dialogs.connect.ua_search,
+            UaSearch::ConfirmSubnet { .. }
+        );
+        let scan_id = self.dialogs.connect.ua_search.scan_id();
+        if self.dialogs.connect.ua_search.subnet_active() {
+            self.dialogs.connect.ua_search = UaSearch::Idle;
+        }
         merge_ua_scan_servers(&mut self.dialogs.connect);
         if pending_confirm {
             self.dialogs.connect.ua_scan_error = None;
@@ -556,7 +601,6 @@ pub(super) fn merge_ua_results(dialog: &mut ConnectDialog) {
         merge_ua_server(dialog, server);
     }
     dialog.ua_network_results.clear();
-    dialog.ua_auto_pending = 0;
     refresh_ua_combos(dialog);
 }
 
@@ -671,14 +715,16 @@ mod scan_id_tests {
         assert!(ScanId::new(0).is_none());
         app.next_scan = ScanId::new(u64::MAX);
         app.launch_ua_subnet_scan(&lease, None);
-        assert_eq!(app.dialogs.connect.ua_scan_id, ScanId::new(u64::MAX));
+        assert_eq!(
+            app.dialogs.connect.ua_search.scan_id(),
+            ScanId::new(u64::MAX)
+        );
         assert!(app.next_scan.is_none());
-        app.dialogs.connect.ua_scan_id = None;
-        app.dialogs.connect.ua_subnet_searching = false;
+        app.dialogs.connect.ua_search = UaSearch::Idle;
         let before = app.journal.entries().len();
         app.launch_ua_subnet_scan(&lease, None);
-        assert!(app.dialogs.connect.ua_scan_id.is_none());
-        assert!(!app.dialogs.connect.ua_subnet_searching);
+        assert!(app.dialogs.connect.ua_search.scan_id().is_none());
+        assert!(!app.dialogs.connect.ua_search.subnet_active());
         assert_eq!(
             app.dialogs.connect.ua_scan_error.as_deref(),
             Some(tr(app.lang(), Tr::ScanIdsExhausted))
