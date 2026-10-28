@@ -90,3 +90,9 @@ pub const BROWSE_MAX_REFERENCES_PER_NODE: u32 = 100;
 /// values (with timestamps) fit in a single 64 KiB chunk on CODESYS, so the
 /// response cannot hit the server's 5-chunk limit.
 pub const READ_MAX_ITEMS_PER_CALL: usize = 100;
+
+// DA helper protocol and lease settings used by the platform service.
+pub const DA_ROUTE_LIFETIME_SECS: u32 = 3600;
+pub const DA_HELPER_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+pub const DA_HELPER_PROTOCOL_VERSION: u32 = 2;
+pub const DA_HELPER_EXE_ENV: &str = "OPCDA_NETHELPER_EXE";

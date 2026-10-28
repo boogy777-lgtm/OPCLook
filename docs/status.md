@@ -3,7 +3,7 @@
 **2026-10-28, ветка refactor/layers-headless:** первый этап проверки
 `docs/refactoring-plan.md` выполнен частично; статусы B1–B20, оставшиеся
 проверки и RAII перечислены в `docs/refactoring-status.md`. Перенос слоёв и
-headless CLI в работе; полный гейт ещё не завершён. Windows runtime/UAC/DA не проверены.
+headless CLI в работе; полный гейт ещё не завершён. GitHub Linux и Windows CI для `2a6d017` прошли, Windows runtime/UAC/DA не проверены.
 
 **Текущая работа:** пункты аудита `docs/audit-2026-10-27.md` закрыты и сведены
 в `main` (PR #3, PR #4); статус каждого пункта — в таблице аудита,

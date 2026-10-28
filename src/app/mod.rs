@@ -6,7 +6,9 @@ use crate::bff::net::NetworkBinding;
 
 #[cfg(feature = "test-support")]
 use crate::bff::model::{EndpointSpec, RequestId};
-use crate::da_route::{DaRouteError, DaRouteManager, PreparedRoutes};
+use crate::da_route::{
+    DaRouteError, DaRouteManager, LocalizedDaRouteError, LocalizedDaRouteStatus, PreparedRoutes,
+};
 use crate::i18n::{Lang, Tr, tr};
 use crate::journal::Journal;
 use crate::net::{

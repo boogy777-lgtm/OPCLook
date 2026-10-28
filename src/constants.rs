@@ -6,19 +6,8 @@ pub use opclook_engine::constants::*;
 // DA route steering
 // ---------------------------------------------------------------------------
 
-/// Lifetime of a temporary host route created by `opcda-nethelper`. The helper
-/// also deletes its routes when the pipe closes; the lifetime is only the
-/// crash-safety net.
-pub const DA_ROUTE_LIFETIME_SECS: u32 = 3600;
 /// How often owned DA host routes are refreshed before their finite lifetime.
 pub const DA_ROUTE_REFRESH_SECS: u64 = 1800;
-/// How long the app waits for a freshly launched helper/UAC prompt before it
-/// asks the user to retry. Never blocks on the UAC prompt itself.
-pub const DA_HELPER_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
-/// Protocol version of the app <-> helper named-pipe messages.
-pub const DA_HELPER_PROTOCOL_VERSION: u32 = 2;
-/// Environment variable used by tests/manual runs to point at a helper exe.
-pub const DA_HELPER_EXE_ENV: &str = "OPCDA_NETHELPER_EXE";
 
 // ---------------------------------------------------------------------------
 // UI layout / sizing
