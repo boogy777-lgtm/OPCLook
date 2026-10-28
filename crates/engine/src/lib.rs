@@ -151,6 +151,7 @@ pub struct Engine<C> {
     gateway: Gateway,
     next: Option<u64>,
     requests: HashMap<(u64, u64), PendingRequest<C>>,
+    pending_adds: HashMap<(u64, u64), HashMap<ItemKey, bool>>,
     sessions: HashMap<SessionId, SessionRuntime>,
     auto_reconnect: bool,
     route_service: Option<RouteService>,
@@ -167,6 +168,7 @@ impl<C> Default for Engine<C> {
             gateway: Gateway::new(),
             next: Some(1),
             requests: HashMap::new(),
+            pending_adds: HashMap::new(),
             sessions: HashMap::new(),
             auto_reconnect: false,
             route_service: None,
@@ -223,6 +225,7 @@ impl<C> Engine<C> {
         if let CommandKind::Connect { endpoint } = &kind {
             self.cancel_da_routes(session);
             self.requests.retain(|(sid, _), _| *sid != session);
+            self.pending_adds.retain(|(sid, _), _| *sid != session);
             let view = self
                 .sessions
                 .entry(session)
@@ -338,6 +341,7 @@ impl<C> Engine<C> {
             .into_iter()
             .filter_map(|key| self.requests.remove(&key).map(|pending| pending.operation))
             .collect();
+        self.pending_adds.retain(|(sid, _), _| *sid != session);
         self.invalidated
             .entry(session)
             .or_default()
@@ -420,6 +424,7 @@ impl<C> Engine<C> {
             self.cancel_da_routes(session);
             self.timeout_queued.retain(|(id, _)| *id != session);
             self.requests.retain(|(id, _), _| *id != session);
+            self.pending_adds.retain(|(id, _), _| *id != session);
         }
         let id = self.next.ok_or(DispatchError::Exhausted)?;
         self.next = id.checked_add(1);
@@ -468,10 +473,20 @@ impl<C> Engine<C> {
             view.state = SessionState::Connecting;
             view.read_in_flight = false;
         }
-        if let Some(view) = self.sessions.get_mut(&session) {
-            for key in added {
-                view.items.insert(key, false);
+        if !added.is_empty() {
+            self.pending_adds.insert(
+                (session, id),
+                added.into_iter().map(|key| (key, false)).collect(),
+            );
+        }
+        for (&(sid, _), pending) in &mut self.pending_adds {
+            if sid == session {
+                for key in &removed {
+                    pending.remove(key);
+                }
             }
+        }
+        if let Some(view) = self.sessions.get_mut(&session) {
             for key in removed {
                 view.items.remove(&key);
             }
@@ -516,6 +531,36 @@ impl<C> Engine<C> {
                 .is_some_and(|view| view.state != SessionState::Connecting);
         if failed_connect || disconnected {
             self.session_routes.remove(&event.session);
+        }
+        let additions = if event.request_id == 0 {
+            None
+        } else {
+            self.pending_adds.remove(&(event.session, event.request_id))
+        };
+        if let EventKind::PollOnly { keys } = &event.kind {
+            for (&(sid, _), additions) in &mut self.pending_adds {
+                if sid == event.session {
+                    for key in keys {
+                        if let Some(flag) = additions.get_mut(key) {
+                            *flag = true;
+                        }
+                    }
+                }
+            }
+        }
+        if let (Some(additions), EventKind::AddItems { results }) = (additions, &event.kind)
+            && let Some(view) = self.sessions.get_mut(&event.session)
+        {
+            for (key, result) in results {
+                if result.is_ok()
+                    && let Some(&poll_only) = additions.get(key)
+                {
+                    view.items
+                        .entry(*key)
+                        .and_modify(|flag| *flag |= poll_only)
+                        .or_insert(poll_only);
+                }
+            }
         }
         let correlated_read = pending
             .as_ref()
@@ -659,6 +704,7 @@ impl<C> Engine<C> {
     }
     pub fn discard_pending(&mut self, session: SessionId, request: u64) {
         self.timeout_queued.remove(&(session, request));
+        self.pending_adds.remove(&(session, request));
         self.deferred_routes
             .retain(|item| !(item.session == session && item.request_id == request));
         self.discovery_routes.remove(&request);
@@ -667,6 +713,7 @@ impl<C> Engine<C> {
     pub fn invalidate_session_requests(&mut self, session: SessionId) -> Vec<Operation> {
         self.deferred_routes.retain(|item| item.session != session);
         self.timeout_queued.retain(|(sid, _)| *sid != session);
+        self.pending_adds.retain(|(sid, _), _| *sid != session);
         if session == 0 {
             self.discovery_routes.clear();
         }
@@ -779,6 +826,7 @@ impl<C> Engine<C> {
     pub fn remove_session(&mut self, id: SessionId) {
         self.cancel_da_routes(id);
         self.invalidated.remove(&id);
+        self.pending_adds.retain(|(sid, _), _| *sid != id);
         self.sessions.remove(&id);
     }
     pub fn manual_disconnect(&mut self, id: SessionId) {
@@ -816,9 +864,18 @@ impl<C> Engine<C> {
     }
     pub fn try_recv(&mut self) -> Option<Event> {
         self.pump_da_routes();
-        self.route_events
+        let mut event = self
+            .route_events
             .pop_front()
-            .or_else(|| self.gateway.try_recv())
+            .or_else(|| self.gateway.try_recv())?;
+        // The request identity is authoritative when a worker reports a
+        // legacy operation label for a correlated failure.
+        if let EventKind::Error { operation, .. } = &mut event.kind
+            && let Some(pending) = self.requests.get(&(event.session, event.request_id))
+        {
+            *operation = pending.operation;
+        }
+        Some(event)
     }
     pub fn shutdown(&mut self) {
         self.deferred_routes.clear();
@@ -826,6 +883,7 @@ impl<C> Engine<C> {
         self.discovery_routes.clear();
         self.route_events.clear();
         self.invalidated.clear();
+        self.pending_adds.clear();
         self.timeout_queued.clear();
         self.route_service = None;
         self.gateway.shutdown();
@@ -1118,6 +1176,133 @@ mod tests {
                 })
                 .is_err()
         );
+    }
+    fn pending_add_engine() -> Engine<()> {
+        let mut engine = Engine::<()>::default();
+        let mut view =
+            SessionRuntime::new(EndpointSpec::ua("opc.tcp://127.0.0.1:4840"), Instant::now());
+        view.state = SessionState::Connected;
+        view.subscription = SubscriptionState::Active;
+        view.items.insert(1, false);
+        engine.sessions.insert(1, view);
+        engine.requests.insert(
+            (1, 9),
+            PendingRequest {
+                operation: Operation::AddItems,
+                sent: Instant::now() - Duration::from_secs(100),
+                ctx: (),
+            },
+        );
+        engine
+            .pending_adds
+            .insert((1, 9), [(2, false), (3, false)].into_iter().collect());
+        engine
+    }
+    #[test]
+    fn add_results_install_only_confirmed_keys_and_preserve_early_poll_only() {
+        let mut engine = pending_add_engine();
+        engine
+            .accept(&Event {
+                request_id: 0,
+                session: 1,
+                kind: EventKind::PollOnly { keys: vec![2, 3] },
+            })
+            .unwrap();
+        let info = opclook_contract::model::ItemInfo {
+            data_type: None,
+            type_id: None,
+            writable: false,
+        };
+        engine
+            .accept(&Event {
+                request_id: 9,
+                session: 1,
+                kind: EventKind::AddItems {
+                    results: vec![(2, Ok(info)), (3, Err(BackendMsg::raw("rejected")))],
+                },
+            })
+            .unwrap();
+        assert_eq!(engine.session(1).unwrap().items.get(&1), Some(&false));
+        assert_eq!(engine.session(1).unwrap().items.get(&2), Some(&true));
+        assert!(!engine.session(1).unwrap().items.contains_key(&3));
+        let due = engine.due(Instant::now(), Duration::from_secs(1), None);
+        assert!(matches!(due.as_slice(), [Due::Read { keys, .. }] if keys == &vec![2]));
+    }
+    #[test]
+    fn removing_a_key_before_add_reply_does_not_reinstall_it() {
+        let mut engine = pending_add_engine();
+        engine
+            .send(
+                1,
+                Protocol::OpcUa,
+                CommandKind::RemoveItems { keys: vec![2] },
+                (),
+            )
+            .unwrap();
+        let info = opclook_contract::model::ItemInfo {
+            data_type: None,
+            type_id: None,
+            writable: false,
+        };
+        engine
+            .accept(&Event {
+                request_id: 9,
+                session: 1,
+                kind: EventKind::AddItems {
+                    results: vec![(2, Ok(info))],
+                },
+            })
+            .unwrap();
+        assert!(!engine.session(1).unwrap().items.contains_key(&2));
+    }
+    #[test]
+    fn legacy_add_error_uses_correlated_operation_identity() {
+        let mut engine = pending_add_engine();
+        engine.route_events.push_back(Event {
+            request_id: 9,
+            session: 1,
+            kind: EventKind::Error {
+                operation: Operation::Add,
+                message: BackendMsg::raw("failed"),
+            },
+        });
+        let event = engine.try_recv().unwrap();
+        assert!(matches!(
+            event.kind,
+            EventKind::Error {
+                operation: Operation::AddItems,
+                ..
+            }
+        ));
+        engine.accept(&event).unwrap();
+        assert!(engine.pending_adds.is_empty());
+    }
+    #[test]
+    fn failed_or_expired_add_never_installs_requested_items() {
+        for timeout in [false, true] {
+            let mut engine = pending_add_engine();
+            let event = if timeout {
+                engine.expire_requests(Instant::now(), 1);
+                engine.route_events.pop_front().unwrap()
+            } else {
+                Event {
+                    request_id: 9,
+                    session: 1,
+                    kind: EventKind::Error {
+                        operation: Operation::Add,
+                        message: BackendMsg::raw("failed"),
+                    },
+                }
+            };
+            engine.accept(&event).unwrap();
+            assert_eq!(engine.session(1).unwrap().items.len(), 1);
+            assert!(engine.pending_adds.is_empty());
+            assert!(
+                engine
+                    .due(Instant::now(), Duration::from_secs(1), None)
+                    .is_empty()
+            );
+        }
     }
     #[test]
     fn duplicate_disconnect_does_not_advance_retry_but_failed_attempt_does() {
