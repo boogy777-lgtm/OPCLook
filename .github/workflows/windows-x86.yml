@@ -27,7 +27,11 @@ jobs:
           cargo build --target i686-pc-windows-msvc -p opcda-egui -p opclook-cli
           cargo build --target i686-pc-windows-msvc -p opclook-cli
           python scripts/check-cli-boundary.py i686-pc-windows-msvc
+      - name: Isolate Windows COM and VARIANT tests
+        shell: bash
+        run: bash scripts/ci-isolate-windows-com.sh
       - name: Shared crate and CLI tests
+        if: ${{ success() || failure() }}
         shell: bash
         run: scripts/ci-test.sh "Shared crate or CLI tests failed" -p opclook-engine -p opclook-backend -p opclook-contract -p opclook-locale -p opclook-cli --target i686-pc-windows-msvc -- --skip loopback_tcp_without_opc_ua_is_not_a_scan_result
       # OPC UA network probing is environment/timing-sensitive in hosted CI.
