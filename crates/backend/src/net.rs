@@ -826,6 +826,7 @@ pub fn inventory_adapters() -> Result<Vec<AdapterInfo>, NetError> {
 
 #[cfg(windows)]
 mod windows_inventory {
+    #![deny(clippy::undocumented_unsafe_blocks)]
     use super::*;
     use std::mem::size_of;
     use windows::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_NO_DATA, ERROR_SUCCESS};
@@ -851,6 +852,7 @@ mod windows_inventory {
             | GAA_FLAG_SKIP_MULTICAST
             | GAA_FLAG_SKIP_DNS_SERVER;
         let mut size = 0u32;
+        // SAFETY: the null buffer requests only the size in writable storage.
         let first = unsafe { GetAdaptersAddresses(0, flags, None, None, &mut size) };
         if first != ERROR_SUCCESS.0 && first != ERROR_BUFFER_OVERFLOW.0 {
             return Err(NetError::Inventory(format!(
@@ -864,6 +866,7 @@ mod windows_inventory {
         let count = (size as usize + item - 1) / item;
         let mut buffer = vec![IP_ADAPTER_ADDRESSES_LH::default(); count];
         let mut size = (buffer.len() * item) as u32;
+        // SAFETY: buffer is suitably aligned and contains size writable bytes.
         let result =
             unsafe { GetAdaptersAddresses(0, flags, None, Some(buffer.as_mut_ptr()), &mut size) };
         if result == ERROR_NO_DATA.0 {
@@ -878,7 +881,9 @@ mod windows_inventory {
         let mut adapters = Vec::new();
         let mut current = buffer.as_ptr();
         while !current.is_null() {
+            // SAFETY: the successful API call returned this live linked entry.
             let raw = unsafe { &*current };
+            // SAFETY: all nested pointers refer to the live API output buffer.
             adapters.push(unsafe { from_raw_adapter(raw) });
             current = raw.Next;
         }
@@ -892,12 +897,16 @@ mod windows_inventory {
     }
 
     unsafe fn from_raw_adapter(raw: &IP_ADAPTER_ADDRESSES_LH) -> AdapterInfo {
+        // SAFETY: adapter names are nullable terminated strings in the API buffer.
         let name = unsafe { crate::winutil::wide_to_string(raw.FriendlyName) };
+        // SAFETY: the description is a nullable terminated API string.
         let description = unsafe { crate::winutil::wide_to_string(raw.Description) };
         let mut addresses = Vec::new();
         let mut unicast = raw.FirstUnicastAddress;
         while !unicast.is_null() {
+            // SAFETY: the API supplies this linked unicast entry in its live buffer.
             let entry = unsafe { &*unicast };
+            // SAFETY: this socket address belongs to the live API output buffer.
             if let Some((ip, scope_id)) = unsafe { socket_ip(entry.Address) } {
                 addresses.push(AdapterAddress {
                     ip,
@@ -910,14 +919,18 @@ mod windows_inventory {
         let mut gateways = Vec::new();
         let mut gateway = raw.FirstGatewayAddress;
         while !gateway.is_null() {
+            // SAFETY: the API supplies this linked gateway entry in its live buffer.
             let entry = unsafe { &*gateway };
+            // SAFETY: the address belongs to the live API output buffer.
             if let Some((ip, _)) = unsafe { socket_ip(entry.Address) } {
                 gateways.push(ip);
             }
             gateway = entry.Next;
         }
+        // SAFETY: GetAdaptersAddresses initialized the adapter index union.
         let if_index = unsafe { raw.Anonymous1.Anonymous.IfIndex };
         let ipv6_if_index = raw.Ipv6IfIndex;
+        // SAFETY: the initialized LUID union is read as its integer representation.
         let luid = unsafe { raw.Luid.Value };
         let state = map_oper_status(raw.OperStatus);
         let is_loopback = raw.IfType == IF_TYPE_SOFTWARE_LOOPBACK
@@ -929,10 +942,15 @@ mod windows_inventory {
         // identity. It can be shared by several adapters (and produced the
         // duplicate-GUID cache that hid every adapter). `AdapterName` is the
         // adapter connection GUID, which is stable and unique.
-        let id = unsafe { raw.AdapterName.to_string() }
-            .ok()
-            .and_then(|name| AdapterId::parse(&name).ok())
-            .unwrap_or(AdapterId::UNSPECIFIED);
+        let id = if raw.AdapterName.is_null() {
+            AdapterId::UNSPECIFIED
+        } else {
+            // SAFETY: a non-null adapter name is terminated in the API buffer.
+            unsafe { raw.AdapterName.to_string() }
+                .ok()
+                .and_then(|name| AdapterId::parse(&name).ok())
+                .unwrap_or(AdapterId::UNSPECIFIED)
+        };
         let mut info = AdapterInfo {
             id,
             name,
@@ -956,12 +974,20 @@ mod windows_inventory {
         if address.lpSockaddr.is_null() {
             return None;
         }
+        if address.iSockaddrLength
+            < size_of::<windows::Win32::Networking::WinSock::ADDRESS_FAMILY>() as i32
+        {
+            return None;
+        }
+        // SAFETY: the API supplied an aligned address with room for its family.
         let family = unsafe { (*address.lpSockaddr).sa_family };
         if family == AF_INET {
             if address.iSockaddrLength < size_of::<SOCKADDR_IN>() as i32 {
                 return None;
             }
+            // SAFETY: family and length identify a complete aligned IPv4 sockaddr.
             let sin = unsafe { &*(address.lpSockaddr as *const SOCKADDR_IN) };
+            // SAFETY: an IPv4 sockaddr initializes this address union member.
             let raw = unsafe { sin.sin_addr.S_un.S_addr };
             let ip = Ipv4Addr::from(u32::from_be(raw));
             Some((IpAddr::V4(ip), None))
@@ -969,8 +995,11 @@ mod windows_inventory {
             if address.iSockaddrLength < size_of::<SOCKADDR_IN6>() as i32 {
                 return None;
             }
+            // SAFETY: family and length identify a complete aligned IPv6 sockaddr.
             let sin6 = unsafe { &*(address.lpSockaddr as *const SOCKADDR_IN6) };
+            // SAFETY: an IPv6 sockaddr initializes its address union.
             let bytes = unsafe { sin6.sin6_addr.u.Byte };
+            // SAFETY: the scope union is initialized by the socket address API.
             let scope = unsafe { sin6.Anonymous.sin6_scope_id };
             Some((IpAddr::V6(Ipv6Addr::from(bytes)), Some(scope)))
         } else {
@@ -981,6 +1010,7 @@ mod windows_inventory {
     fn enrich_from_if_entry(info: &mut AdapterInfo) {
         let mut row = MIB_IF_ROW2::default();
         row.InterfaceLuid = NET_LUID_LH { Value: info.luid };
+        // SAFETY: row contains the selected LUID and is writable for the API.
         let result = unsafe { GetIfEntry2(&mut row) };
         if result == ERROR_SUCCESS {
             info.state = map_oper_status(row.OperStatus);
@@ -1063,6 +1093,21 @@ mod windows_inventory {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn null_adapter_name_and_short_socket_address_are_safe() {
+            let raw = IP_ADAPTER_ADDRESSES_LH::default();
+            // SAFETY: all nullable fields of the initialized empty structure are null.
+            let info = unsafe { from_raw_adapter(&raw) };
+            assert_eq!(info.id, AdapterId::UNSPECIFIED);
+            let mut address = SOCKADDR_IN::default();
+            let socket = SOCKET_ADDRESS {
+                lpSockaddr: (&raw mut address).cast(),
+                iSockaddrLength: 0,
+            };
+            // SAFETY: the pointer refers to live aligned storage; length is intentionally short.
+            assert!(unsafe { socket_ip(socket) }.is_none());
+        }
 
         #[test]
         fn physical_and_virtual_interface_classification() {

@@ -12,6 +12,8 @@
 //! an interface option. No socket is shared between sessions or discovery
 //! requests.
 
+#![deny(clippy::undocumented_unsafe_blocks)]
+
 use std::io;
 #[cfg(test)]
 use std::net::Ipv4Addr;
@@ -344,8 +346,10 @@ fn apply_interface_option(socket: &TcpSocket, remote: IpAddr, index: u32) -> io:
     // The Winsock option takes the interface index in network byte order.
     let value = index.to_be_bytes();
     let raw = socket.as_raw_socket();
+    // SAFETY: socket is live and value contains the four-byte option for this call.
     let result = unsafe { setsockopt(SOCKET(raw as usize), level, option, Some(&value)) };
     if result != 0 {
+        // SAFETY: retrieve this thread's Winsock error immediately after failure.
         let code = unsafe { WSAGetLastError() };
         return Err(io::Error::from_raw_os_error(code.0));
     }
