@@ -129,16 +129,18 @@ fn parse(args: Vec<String>) -> Result<Option<Options>, String> {
                 )
             }
             "--if-index" => {
-                if_index = Some(positive(
+                if_index = std::num::NonZeroU32::new(positive(
                     &value_arg(&args, &mut i, key)?,
                     "interface index",
                     u32::MAX as u64,
                 )? as u32)
             }
             "--scope" => {
-                scope = Some(
-                    positive(&value_arg(&args, &mut i, key)?, "scope", u32::MAX as u64)? as u32,
-                )
+                scope = std::num::NonZeroU32::new(positive(
+                    &value_arg(&args, &mut i, key)?,
+                    "scope",
+                    u32::MAX as u64,
+                )? as u32)
             }
             "--json" => {}
             "--poll" => poll = true,
@@ -670,6 +672,39 @@ fn main() {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn interface_index_and_scope_are_nonzero_at_argument_boundary() {
+        let args = [
+            "--ua",
+            "opc.tcp://[fe80::2]:4840",
+            "--bind",
+            "fe80::1",
+            "--if-index",
+            "12",
+            "--scope",
+            "7",
+            "browse",
+        ];
+        let options = super::parse(args.iter().map(|s| s.to_string()).collect())
+            .unwrap()
+            .unwrap();
+        let binding = options.endpoint.ua_bind.unwrap();
+        assert_eq!(binding.ipv6_if_index, std::num::NonZeroU32::new(12));
+        assert_eq!(binding.scope_id, std::num::NonZeroU32::new(7));
+        for option in ["--if-index", "--scope"] {
+            let args = [
+                "--ua",
+                "opc.tcp://localhost:4840",
+                "--bind",
+                "127.0.0.1",
+                option,
+                "0",
+                "browse",
+            ];
+            assert!(super::parse(args.iter().map(|s| s.to_string()).collect()).is_err());
+        }
+    }
+
     use super::*;
     #[test]
     fn redaction_handles_overlapping_credentials_longest_first() {

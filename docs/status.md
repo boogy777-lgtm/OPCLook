@@ -100,3 +100,5 @@ NonZero индексы и role IDs остаются открыты.
 Исправлено смещение эпох DA FILETIME; Windows runtime и остальные этапы открыты.
 Advertised security типизировано с сохранением unknown; NonZero индексы и
 остальные этапы плана остаются открыты.
+Interface индексы и scope типизированы NonZero; реальный Windows runtime и
+остальные этапы плана остаются открыты.

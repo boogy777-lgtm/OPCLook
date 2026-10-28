@@ -1725,8 +1725,8 @@ mod tests {
         let mut ep = EndpointSpec::ua("opc.tcp://192.168.1.50:4840");
         ep.ua_bind = Some(crate::net::NetworkBinding::new(
             "192.168.1.20".parse().unwrap(),
-            Some(7),
-            Some(9),
+            std::num::NonZeroU32::new(7),
+            std::num::NonZeroU32::new(9),
             None,
         ));
         let json = serde_json::to_string(&ep).unwrap();

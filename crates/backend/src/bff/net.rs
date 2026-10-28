@@ -286,7 +286,7 @@ async fn open_bound_socket(
     // Loopback traffic is never pinned to a physical interface.
     if !(loopback || effective.local_ip.is_loopback()) {
         if let Some(index) = effective.interface_index_for(remote.ip()) {
-            apply_interface_option(&socket, remote.ip(), index).map_err(|error| {
+            apply_interface_option(&socket, remote.ip(), index.get()).map_err(|error| {
                 Error::new(
                     StatusCode::BadCommunicationError,
                     format!(
@@ -376,15 +376,19 @@ mod tests {
 
     #[test]
     fn ipv4_and_ipv6_bindings_select_the_right_family_and_index() {
-        let binding =
-            NetworkBinding::new("192.168.1.20".parse().unwrap(), Some(12), Some(24), None);
+        let binding = NetworkBinding::new(
+            "192.168.1.20".parse().unwrap(),
+            std::num::NonZeroU32::new(12),
+            std::num::NonZeroU32::new(24),
+            None,
+        );
         assert_eq!(
             binding.interface_index_for("10.0.0.1".parse().unwrap()),
-            Some(12)
+            std::num::NonZeroU32::new(12)
         );
         assert_eq!(
             binding.interface_index_for("2001:db8::1".parse().unwrap()),
-            Some(24)
+            std::num::NonZeroU32::new(24)
         );
         assert_eq!(
             binding.local_socket_addr("8.8.8.8".parse().unwrap()),
@@ -398,8 +402,13 @@ mod tests {
 
     #[test]
     fn ipv6_link_local_binding_keeps_scope_id() {
-        let binding = NetworkBinding::new("fe80::1".parse().unwrap(), Some(12), Some(24), Some(7));
-        assert_eq!(binding.scope_id, Some(7));
+        let binding = NetworkBinding::new(
+            "fe80::1".parse().unwrap(),
+            std::num::NonZeroU32::new(12),
+            std::num::NonZeroU32::new(24),
+            std::num::NonZeroU32::new(7),
+        );
+        assert_eq!(binding.scope_id, std::num::NonZeroU32::new(7));
         assert_eq!(
             binding.local_socket_addr("fe80::2".parse().unwrap()),
             Some("[fe80::1%7]:0".parse().unwrap())
@@ -460,8 +469,12 @@ mod tests {
                 .unwrap();
             let address = listener.local_addr().unwrap();
             let server = tokio::spawn(async move { listener.accept().await.unwrap().1 });
-            let physical =
-                NetworkBinding::new("192.0.2.10".parse().unwrap(), Some(123), Some(124), None);
+            let physical = NetworkBinding::new(
+                "192.0.2.10".parse().unwrap(),
+                std::num::NonZeroU32::new(123),
+                std::num::NonZeroU32::new(124),
+                None,
+            );
             let connection = connect_bound_tcp(
                 format!("opc.tcp://127.0.0.1:{}", address.port()),
                 physical,

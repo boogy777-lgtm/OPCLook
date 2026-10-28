@@ -1,4 +1,5 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
+use std::num::NonZeroU32;
 
 /// Maximum scan size before confirmation.
 pub const SCAN_CONFIRM_THRESHOLD: u64 = 4096;
@@ -10,24 +11,24 @@ pub struct NetworkBinding {
     /// addresses this binding may use.
     pub local_ip: IpAddr,
     /// IPv4 interface index (`IfIndex`).
-    pub ipv4_if_index: Option<u32>,
+    pub ipv4_if_index: Option<NonZeroU32>,
     /// IPv6 interface index (`Ipv6IfIndex`). Never the IPv4 index.
-    pub ipv6_if_index: Option<u32>,
+    pub ipv6_if_index: Option<NonZeroU32>,
     /// Scope id used for IPv6 link-local addresses.
-    pub scope_id: Option<u32>,
+    pub scope_id: Option<NonZeroU32>,
 }
 
 impl NetworkBinding {
     pub fn new(
         local_ip: IpAddr,
-        ipv4_if_index: Option<u32>,
-        ipv6_if_index: Option<u32>,
-        scope_id: Option<u32>,
+        ipv4_if_index: Option<NonZeroU32>,
+        ipv6_if_index: Option<NonZeroU32>,
+        scope_id: Option<NonZeroU32>,
     ) -> Self {
         Self {
             local_ip,
-            ipv4_if_index: ipv4_if_index.filter(|index| *index != 0),
-            ipv6_if_index: ipv6_if_index.filter(|index| *index != 0),
+            ipv4_if_index,
+            ipv6_if_index,
             scope_id,
         }
     }
@@ -52,7 +53,7 @@ impl NetworkBinding {
     }
 
     /// Interface index to apply for a remote address family.
-    pub fn interface_index_for(&self, remote: IpAddr) -> Option<u32> {
+    pub fn interface_index_for(&self, remote: IpAddr) -> Option<NonZeroU32> {
         match remote {
             IpAddr::V4(_) => self.ipv4_if_index,
             IpAddr::V6(_) => self.ipv6_if_index,
@@ -65,7 +66,9 @@ impl NetworkBinding {
             (IpAddr::V4(local), IpAddr::V4(_)) => Some(SocketAddr::new(IpAddr::V4(local), 0)),
             (IpAddr::V6(local), IpAddr::V6(_)) => {
                 let scope = if local.is_unicast_link_local() {
-                    self.scope_id.unwrap_or(0)
+                    self.scope_id
+                        .or(self.ipv6_if_index)
+                        .map_or(0, NonZeroU32::get)
                 } else {
                     0
                 };
@@ -83,9 +86,9 @@ impl NetworkBinding {
             SocketAddr::V6(mut v6) => {
                 if v6.ip().is_unicast_link_local() && v6.scope_id() == 0 {
                     if let Some(scope) = self.scope_id {
-                        v6.set_scope_id(scope);
+                        v6.set_scope_id(scope.get());
                     } else if let Some(index) = self.ipv6_if_index {
-                        v6.set_scope_id(index);
+                        v6.set_scope_id(index.get());
                     }
                 }
                 SocketAddr::V6(v6)

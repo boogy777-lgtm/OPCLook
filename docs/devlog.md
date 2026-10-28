@@ -306,3 +306,8 @@ Advertised policy/mode представляют отсутствие, извес
 несколько вариантов одного URL. Linux UA 62/62, GUI security 10/10, live CLI
 2/2, Windows typecheck и Rust 1.95 contract check прошли. Windows runtime и
 оставшиеся этапы открыты.
+
+Interface и IPv6 scope типизированы как NonZero; legacy cache сохраняет
+числовую форму интерфейсов, нулевой scope использует индекс IPv6 для link-local.
+Linux network 35/35, CLI 6/6, settings 46/46, UI network 5 passed / 1 ignored,
+Windows typecheck и Rust 1.95 contract check прошли; runtime Windows открыт.

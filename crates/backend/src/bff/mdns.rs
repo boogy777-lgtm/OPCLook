@@ -87,8 +87,8 @@ pub(crate) fn interface_index_for(binding: Option<&NetworkBinding>) -> u32 {
         return 0;
     }
     match binding.local_ip {
-        IpAddr::V4(_) => binding.ipv4_if_index.unwrap_or(0),
-        IpAddr::V6(_) => binding.ipv6_if_index.unwrap_or(0),
+        IpAddr::V4(_) => binding.ipv4_if_index.map_or(0, std::num::NonZeroU32::get),
+        IpAddr::V6(_) => binding.ipv6_if_index.map_or(0, std::num::NonZeroU32::get),
     }
 }
 
@@ -683,14 +683,28 @@ mod tests {
 
     #[test]
     fn interface_index_uses_the_source_address_family() {
-        let v4 = NetworkBinding::new("192.168.1.20".parse().unwrap(), Some(12), Some(24), None);
+        let v4 = NetworkBinding::new(
+            "192.168.1.20".parse().unwrap(),
+            std::num::NonZeroU32::new(12),
+            std::num::NonZeroU32::new(24),
+            None,
+        );
         assert_eq!(interface_index_for(Some(&v4)), 12);
 
-        let v6 = NetworkBinding::new("fe80::1".parse().unwrap(), Some(12), Some(24), Some(7));
+        let v6 = NetworkBinding::new(
+            "fe80::1".parse().unwrap(),
+            std::num::NonZeroU32::new(12),
+            std::num::NonZeroU32::new(24),
+            std::num::NonZeroU32::new(7),
+        );
         assert_eq!(interface_index_for(Some(&v6)), 24);
 
-        let v4_without_index =
-            NetworkBinding::new("192.168.1.20".parse().unwrap(), None, Some(24), None);
+        let v4_without_index = NetworkBinding::new(
+            "192.168.1.20".parse().unwrap(),
+            None,
+            std::num::NonZeroU32::new(24),
+            None,
+        );
         assert_eq!(interface_index_for(Some(&v4_without_index)), 0);
 
         let loopback = NetworkBinding::loopback();

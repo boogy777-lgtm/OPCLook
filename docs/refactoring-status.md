@@ -339,3 +339,14 @@ Windows workspace all-targets typecheck с test-only флагами и contract 
 на Rust 1.95 прошли. Для Linux локально добавлен codegen-units=1 для engine
 после повреждённого metadata; это не настройка репозитория. Windows runtime,
 NonZero индексы, role IDs и полный gate остаются открыты.
+
+Индексы IPv4/IPv6 и scope хранятся `Option<NonZeroU32>` от inventory/CLI до
+contract NetworkBinding. Legacy cached adapter JSON читает числовой 0 как None
+и пишет отсутствующий interface как прежний 0; ненулевые индексы и выбранный
+адаптер сохраняются. Для link-local с нулевым/отсутствующим scope используется
+IPv6 interface index; явный scope сохраняет приоритет. Linux network 35/35,
+CLI unit 6/6, settings 46/46, network-tab 5 passed / 1 Windows-only ignored;
+Windows workspace all-targets typecheck с test-only флагами, Rust 1.95 contract
+check и boundary script прошли. GUI test потребовал локального CARGO_INCREMENTAL=0
+после повреждённого engine rlib; изменения конфигурации не коммитились.
+Реальный Windows inventory/DA и final exact-head CI ещё обязательны.

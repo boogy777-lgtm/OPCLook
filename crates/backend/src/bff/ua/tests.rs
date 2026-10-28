@@ -754,7 +754,12 @@ fn network_results_keep_distinct_servers() {
 }
 
 fn scan_binding(local: &str) -> NetworkBinding {
-    NetworkBinding::new(local.parse().unwrap(), Some(7), Some(8), None)
+    NetworkBinding::new(
+        local.parse().unwrap(),
+        std::num::NonZeroU32::new(7),
+        std::num::NonZeroU32::new(8),
+        None,
+    )
 }
 
 #[test]

@@ -16,6 +16,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashSet;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::num::NonZeroU32;
 
 // ---------------------------------------------------------------------------
 // Adapter identity
@@ -190,8 +191,8 @@ pub struct AdapterAddress {
     pub ip: IpAddr,
     pub prefix: u8,
     /// IPv6 scope id (link-local addresses need it for binding).
-    #[serde(default)]
-    pub scope_id: Option<u32>,
+    #[serde(default, deserialize_with = "deserialize_scope_id")]
+    pub scope_id: Option<NonZeroU32>,
 }
 
 impl AdapterAddress {
@@ -221,9 +222,9 @@ pub struct AdapterInfo {
     pub addresses: Vec<AdapterAddress>,
     pub gateways: Vec<IpAddr>,
     /// IPv4 interface index (`IfIndex`).
-    pub if_index: u32,
+    pub if_index: Option<NonZeroU32>,
     /// IPv6 interface index (`Ipv6IfIndex`); not interchangeable with IPv4.
-    pub ipv6_if_index: u32,
+    pub ipv6_if_index: Option<NonZeroU32>,
     pub luid: u64,
     pub metric: u32,
     pub is_physical: bool,
@@ -293,12 +294,7 @@ impl AdapterInfo {
             IpAddr::V6(ip) if ip.is_unicast_link_local() => address.scope_id,
             _ => None,
         };
-        NetworkBinding::new(
-            address.ip,
-            (self.if_index != 0).then_some(self.if_index),
-            (self.ipv6_if_index != 0).then_some(self.ipv6_if_index),
-            scope_id,
-        )
+        NetworkBinding::new(address.ip, self.if_index, self.ipv6_if_index, scope_id)
     }
 }
 
@@ -335,16 +331,41 @@ pub struct CachedAdapter {
     pub addresses: Vec<AdapterAddress>,
     #[serde(default)]
     pub gateways: Vec<IpAddr>,
-    #[serde(default)]
-    pub if_index: u32,
-    #[serde(default)]
-    pub ipv6_if_index: u32,
+    #[serde(
+        default,
+        serialize_with = "serialize_if_index",
+        deserialize_with = "deserialize_if_index"
+    )]
+    pub if_index: Option<NonZeroU32>,
+    #[serde(
+        default,
+        serialize_with = "serialize_if_index",
+        deserialize_with = "deserialize_if_index"
+    )]
+    pub ipv6_if_index: Option<NonZeroU32>,
     #[serde(default)]
     pub luid: u64,
     #[serde(default)]
     pub metric: u32,
     #[serde(default)]
     pub is_physical: bool,
+}
+
+fn serialize_if_index<S: Serializer>(
+    index: &Option<NonZeroU32>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_u32(index.map_or(0, NonZeroU32::get))
+}
+fn deserialize_if_index<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<NonZeroU32>, D::Error> {
+    Ok(Option::<u32>::deserialize(deserializer)?.and_then(NonZeroU32::new))
+}
+fn deserialize_scope_id<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<NonZeroU32>, D::Error> {
+    Ok(Option::<u32>::deserialize(deserializer)?.and_then(NonZeroU32::new))
 }
 
 impl CachedAdapter {
@@ -732,8 +753,8 @@ pub fn synthetic_loopback() -> AdapterInfo {
             },
         ],
         gateways: Vec::new(),
-        if_index: 0,
-        ipv6_if_index: 0,
+        if_index: None,
+        ipv6_if_index: None,
         luid: 0,
         metric: 0,
         is_physical: false,
@@ -928,8 +949,8 @@ mod windows_inventory {
             gateway = entry.Next;
         }
         // SAFETY: GetAdaptersAddresses initialized the adapter index union.
-        let if_index = unsafe { raw.Anonymous1.Anonymous.IfIndex };
-        let ipv6_if_index = raw.Ipv6IfIndex;
+        let if_index = NonZeroU32::new(unsafe { raw.Anonymous1.Anonymous.IfIndex });
+        let ipv6_if_index = NonZeroU32::new(raw.Ipv6IfIndex);
         // SAFETY: the initialized LUID union is read as its integer representation.
         let luid = unsafe { raw.Luid.Value };
         let state = map_oper_status(raw.OperStatus);
@@ -970,7 +991,7 @@ mod windows_inventory {
         info
     }
 
-    unsafe fn socket_ip(address: SOCKET_ADDRESS) -> Option<(IpAddr, Option<u32>)> {
+    unsafe fn socket_ip(address: SOCKET_ADDRESS) -> Option<(IpAddr, Option<NonZeroU32>)> {
         if address.lpSockaddr.is_null() {
             return None;
         }
@@ -1001,7 +1022,7 @@ mod windows_inventory {
             let bytes = unsafe { sin6.sin6_addr.u.Byte };
             // SAFETY: the scope union is initialized by the socket address API.
             let scope = unsafe { sin6.Anonymous.sin6_scope_id };
-            Some((IpAddr::V6(Ipv6Addr::from(bytes)), Some(scope)))
+            Some((IpAddr::V6(Ipv6Addr::from(bytes)), NonZeroU32::new(scope)))
         } else {
             None
         }
@@ -1176,8 +1197,8 @@ mod tests {
             if_type: if is_loopback { 24 } else { 6 },
             addresses,
             gateways: Vec::new(),
-            if_index: 1,
-            ipv6_if_index: 2,
+            if_index: std::num::NonZeroU32::new(1),
+            ipv6_if_index: std::num::NonZeroU32::new(2),
             luid: 1,
             metric: 10,
             is_physical,
@@ -1187,6 +1208,29 @@ mod tests {
 
     fn id(text: &str) -> AdapterId {
         AdapterId::parse(text).unwrap()
+    }
+
+    #[test]
+    fn legacy_interface_indexes_and_zero_scope_round_trip() {
+        let raw = r#"{"id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","if_index":0,"ipv6_if_index":12,"addresses":[{"ip":"fe80::1","prefix":64,"scope_id":0}]}"#;
+        let cached: CachedAdapter = serde_json::from_str(raw).unwrap();
+        assert_eq!(cached.if_index, None);
+        assert_eq!(cached.ipv6_if_index, NonZeroU32::new(12));
+        assert_eq!(cached.addresses[0].scope_id, None);
+        let saved = serde_json::to_value(&cached).unwrap();
+        assert_eq!(saved["if_index"], 0);
+        assert_eq!(saved["ipv6_if_index"], 12);
+        assert!(saved["addresses"][0]["scope_id"].is_null());
+        let binding = cached.to_info().network_binding_for(cached.addresses[0]);
+        let remote: std::net::SocketAddr = "[fe80::2]:4840".parse().unwrap();
+        assert_eq!(
+            binding.prepare_remote(remote).to_string(),
+            "[fe80::2%12]:4840"
+        );
+        assert_eq!(
+            binding.local_socket_addr(remote.ip()).unwrap().to_string(),
+            "[fe80::1%12]:0"
+        );
     }
 
     #[test]
@@ -1589,7 +1633,7 @@ mod tests {
     fn adapter_cache_loads_without_windows_and_keeps_ipv6_scope() {
         let selected = id("30000000-0000-0000-0000-000000000001");
         let mut link_local = addr("fe80::10", 64);
-        link_local.scope_id = Some(12);
+        link_local.scope_id = std::num::NonZeroU32::new(12);
         let cached = CachedAdapter::from_info(&adapter(
             selected,
             "Ethernet",
@@ -1612,7 +1656,10 @@ mod tests {
         state.resolve(resolution.selection, resolution.local_ip);
         let lease = state.lease.expect("lease");
         assert_eq!(lease.local_ip().to_string(), "fe80::10");
-        assert_eq!(lease.network_binding().scope_id, Some(12));
+        assert_eq!(
+            lease.network_binding().scope_id,
+            std::num::NonZeroU32::new(12)
+        );
     }
 
     #[test]
@@ -1807,16 +1854,16 @@ mod tests {
             true,
             vec![addr("192.168.1.20", 24)],
         );
-        info.if_index = 11;
-        info.ipv6_if_index = 17;
+        info.if_index = std::num::NonZeroU32::new(11);
+        info.ipv6_if_index = std::num::NonZeroU32::new(17);
         let inv = NetworkInventory::new(vec![info], 1);
         let lease = inv
             .resolve(&AdapterSelection::Adapter(selected), None)
             .unwrap();
         let binding = lease.network_binding();
         assert_eq!(binding.local_ip.to_string(), "192.168.1.20");
-        assert_eq!(binding.ipv4_if_index, Some(11));
-        assert_eq!(binding.ipv6_if_index, Some(17));
+        assert_eq!(binding.ipv4_if_index, std::num::NonZeroU32::new(11));
+        assert_eq!(binding.ipv6_if_index, std::num::NonZeroU32::new(17));
         assert_eq!(binding.scope_id, None);
     }
 
@@ -1824,7 +1871,7 @@ mod tests {
     fn ipv6_link_local_lease_binding_keeps_scope_id() {
         let selected = id("dddddddd-dddd-dddd-dddd-dddddddddddd");
         let mut link_local = addr("fe80::10", 64);
-        link_local.scope_id = Some(6);
+        link_local.scope_id = std::num::NonZeroU32::new(6);
         let info = adapter(selected, "Ethernet", true, false, true, vec![link_local]);
         let inv = NetworkInventory::new(vec![info], 3);
         let lease = inv
@@ -1835,8 +1882,8 @@ mod tests {
             .unwrap();
         let binding = lease.network_binding();
         assert_eq!(binding.local_ip.to_string(), "fe80::10");
-        assert_eq!(binding.scope_id, Some(6));
-        assert_eq!(binding.ipv6_if_index, Some(2));
+        assert_eq!(binding.scope_id, std::num::NonZeroU32::new(6));
+        assert_eq!(binding.ipv6_if_index, std::num::NonZeroU32::new(2));
     }
 
     #[test]
