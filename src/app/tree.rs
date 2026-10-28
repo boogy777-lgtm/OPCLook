@@ -9,7 +9,7 @@ impl App {
     /// dispatched (`None` for the synthetic views root or a dead worker). The
     /// recursive add-children job uses this id to correlate its replies.
     pub fn browse(&mut self, session: SessionId, node_id: String) -> Option<RequestId> {
-        if node_id == "\u{1}views" {
+        if node_id == BrowseNode::VIEWS_ROOT_ID {
             self.browse_views(session);
             return None;
         }
@@ -39,7 +39,7 @@ impl App {
             .node
             .node_id
             .clone();
-        if node_id == "\u{1}views" {
+        if node_id == BrowseNode::VIEWS_ROOT_ID {
             self.browse_views(session);
             return None;
         }

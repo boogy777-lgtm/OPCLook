@@ -219,3 +219,7 @@ Object/folder для навигации. Это только один пункт
 Локально прошли Linux all-targets typecheck для GUI/CLI и библиотек и один
 backend-тест маски (1/1), а также Windows i686 workspace all-targets typecheck
 с test-only отключением ресурсов/манифеста; Windows тесты не запускались.
+
+Синтетический корень Views имеет одну константу и метод `BrowseNode`; проверка
+идентификатора прошла в contract (1/1 Linux), GUI all-targets typecheck прошёл
+на Windows i686 с test-only отключением ресурсов. Остальные пункты A/C открыты.

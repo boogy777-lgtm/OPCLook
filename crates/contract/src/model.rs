@@ -1267,6 +1267,15 @@ pub struct BrowseNode {
     pub has_children: bool,
 }
 
+impl BrowseNode {
+    /// Internal node id reserved for the synthetic UA Views root.
+    pub const VIEWS_ROOT_ID: &'static str = "\u{1}views";
+
+    pub fn is_views_root(&self) -> bool {
+        self.node_id == Self::VIEWS_ROOT_ID
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ItemSpec {
     pub key: ItemKey,
@@ -1532,6 +1541,19 @@ pub enum EventKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn synthetic_views_root_is_identified_by_reserved_id() {
+        let mut node = BrowseNode {
+            node_id: BrowseNode::VIEWS_ROOT_ID.to_owned(),
+            name: String::new(),
+            kind: NodeKind::Branch,
+            has_children: true,
+        };
+        assert!(node.is_views_root());
+        node.node_id = "ns=1;s=views".to_owned();
+        assert!(!node.is_views_root());
+    }
 
     #[test]
     fn operation_codes_are_ascii_and_cover_the_emitters() {

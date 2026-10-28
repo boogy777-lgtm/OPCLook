@@ -417,14 +417,9 @@ impl App {
             EventKind::Views { children } => {
                 // Seed a synthetic «Представления» root node; browsing it lists
                 // the server Views and selecting a View adopts it for browsing.
-                const VIEWS_MARKER: &str = "\u{1}views";
                 if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
                     view.root_loading = false;
-                    let marker_index = match view
-                        .tree
-                        .iter()
-                        .position(|t| t.node.node_id == VIEWS_MARKER)
-                    {
+                    let marker_index = match view.tree.iter().position(|t| t.node.is_views_root()) {
                         Some(index) => index,
                         None => {
                             let id = view.next_tree_id;
@@ -435,7 +430,7 @@ impl App {
                                     id,
                                     parent: None,
                                     node: BrowseNode {
-                                        node_id: VIEWS_MARKER.to_string(),
+                                        node_id: BrowseNode::VIEWS_ROOT_ID.to_string(),
                                         name: tr(lang, Tr::ViewsRoot).to_string(),
                                         kind: NodeKind::Branch,
                                         has_children: true,
