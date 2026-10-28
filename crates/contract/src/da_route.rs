@@ -24,6 +24,7 @@ pub enum RouteDecision {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DaRouteError {
+    RequestIdsExhausted,
     NoAdapter,
     AdapterUnavailable,
     Resolve(String),

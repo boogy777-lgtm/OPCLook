@@ -216,14 +216,12 @@ impl<C> Engine<C> {
                 ));
             }
         };
+        let id = self.next.ok_or(DaRouteError::RequestIdsExhausted)?;
         if self.route_service.is_none() {
             self.route_service = Some(
                 RouteService::new().map_err(|e| DaRouteError::HelperUnavailable(e.to_string()))?,
             );
         }
-        let id = self.next.ok_or_else(|| {
-            DaRouteError::HelperUnavailable("request identifiers exhausted".into())
-        })?;
         let service = self
             .route_service
             .as_ref()
@@ -443,13 +441,13 @@ impl<C> Engine<C> {
             CommandKind::RemoveItems { keys } => keys.clone(),
             _ => Vec::new(),
         };
+        let id = self.next.ok_or(DispatchError::Exhausted)?;
         if matches!(&kind, CommandKind::Connect { .. } | CommandKind::Disconnect) {
             self.cancel_da_routes(session);
             self.timeout_queued.retain(|(id, _)| *id != session);
             self.requests.retain(|(id, _), _| *id != session);
             self.pending_adds.retain(|(id, _), _| *id != session);
         }
-        let id = self.next.ok_or(DispatchError::Exhausted)?;
         self.next = id.checked_add(1);
         let operation = kind.operation();
         if !matches!(
@@ -983,6 +981,36 @@ impl<C> Engine<C> {
 mod tests {
     use super::*;
     use opclook_contract::model::BackendMsg;
+    #[test]
+    fn request_exhaustion_keeps_pending_work_and_reports_da_error() {
+        let mut engine = Engine::<()>::default();
+        engine.test_skip_dispatch = true;
+        engine.next = Some(u64::MAX);
+        let id = engine
+            .send(1, Protocol::OpcUa, CommandKind::Read { keys: vec![] }, ())
+            .unwrap();
+        assert_eq!(id, u64::MAX);
+        assert!(engine.has_pending(1, id));
+        assert!(matches!(
+            engine.send(1, Protocol::OpcUa, CommandKind::Disconnect, ()),
+            Err(DispatchError::Exhausted)
+        ));
+        assert!(engine.has_pending(1, id));
+        let result = engine.prepare_da(
+            0,
+            CommandKind::Discover {
+                host: String::new(),
+            },
+            (),
+            RouteOptions {
+                adapter: None,
+                local_addresses: vec![],
+                deadline: Instant::now() + Duration::from_secs(1),
+            },
+        );
+        assert_eq!(result, Err(DaRouteError::RequestIdsExhausted));
+        assert!(engine.route_service.is_none());
+    }
     #[test]
     fn da_preparation_rejects_ua_endpoint() {
         let mut engine = Engine::<()>::default();

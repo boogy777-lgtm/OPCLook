@@ -405,3 +405,5 @@ future (E), измеренный 10k frame/allocation baseline и произво
 PNG проверка UI и физические DA/UAC/маршруты остаются открытыми.
 
 Счётчики GUI сессий и сигналов теперь checked: максимум выдаётся один раз, затем видимая локализованная ошибка; частичная партия сохраняется и отправляется. Linux регрессии 2/2, Windows i686 workspace all-targets typecheck с test-only флагами; сами SessionId и ItemKey пока числовые алиасы, а Origin/Owner и Windows runtime ещё открыты.
+
+Request allocator уже использовал checked successor; теперь exhaustion проверяется до изменения ожидающих запросов и отмены маршрутов, а DA подготовка возвращает типизированную локализованную ошибку до старта сервиса. Linux Engine 19/19, Windows i686 workspace all-targets typecheck с test-only флагами. Ролевая типизация и удаление sentinel открыты.

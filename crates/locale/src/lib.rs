@@ -2558,6 +2558,7 @@ fn protection_text(lang: Lang, protection: UaProtection) -> &'static str {
 pub fn da_route_error(lang: Lang, error: &opclook_contract::da_route::DaRouteError) -> String {
     use opclook_contract::da_route::DaRouteError as E;
     let detail = match error {
+        E::RequestIdsExhausted => return tr(lang, Tr::RequestIdsExhausted).to_string(),
         E::NoAdapter => tr(lang, Tr::DaRouteNoAdapter).to_string(),
         E::AdapterUnavailable => tr(lang, Tr::SelectAdapterRequired).to_string(),
         E::Resolve(host) => fmt(lang, Tr::DaRouteResolve, &[host]),
