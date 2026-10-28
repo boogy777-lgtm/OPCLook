@@ -5,7 +5,7 @@
   <p>
     <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
     <a href="https://github.com/boogy777-lgtm/OPCLook"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-OPCLook-181717?logo=github"></a>
-    <img alt="Rust 1.95+" src="https://img.shields.io/badge/Rust-1.95%2B-000000?logo=rust&amp;logoColor=white">
+    <img alt="Rust 1.99+" src="https://img.shields.io/badge/Rust-1.99%2B-000000?logo=rust&amp;logoColor=white">
     <img alt="Windows x86" src="https://img.shields.io/badge/platform-Windows%20x86-0078D4?logo=windows">
     <img alt="OPC DA 2.0" src="https://img.shields.io/badge/OPC%20DA-2.0-1E3A5F">
     <img alt="OPC UA client" src="https://img.shields.io/badge/OPC%20UA-client-0B7285">
@@ -126,8 +126,8 @@ powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 target\i686-pc-windows-msvc\release\opcda-egui.exe
 ```
 
-Требуется 32-битный тулчейн `i686-pc-windows-msvc` (MSVC) и Rust 2024
-(см. `rust-version` в `Cargo.toml`). Для корректного отображения кириллицы
+Требуется 32-битный тулчейн `i686-pc-windows-msvc` (MSVC) и Rust 1.99 или новее (edition 2024). Проект закрепляет Rust 1.99.1
+в `rust-toolchain.toml`; тот же выпуск используется в CI. Для корректного отображения кириллицы
 загружаются системные шрифты `segoeui.ttf` и `consola.ttf` с фолбэком.
 Локализация интерфейса: русский, English, 中文.
 

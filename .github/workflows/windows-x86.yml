@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: i686-pc-windows-msvc
           components: rustfmt
@@ -67,7 +67,7 @@ jobs:
       CARGO_TARGET_DIR: target-linux
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: rustfmt
       - name: System libraries for egui/eframe
