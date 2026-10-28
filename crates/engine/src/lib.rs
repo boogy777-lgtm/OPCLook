@@ -233,6 +233,8 @@ impl<C> Engine<C> {
             view.endpoint = endpoint.clone();
             view.state = SessionState::Connecting;
             view.read_in_flight = false;
+            view.subscription = SubscriptionState::Inactive;
+            view.items.clear();
         }
         self.requests.insert(
             (session, id),
@@ -472,6 +474,8 @@ impl<C> Engine<C> {
             view.endpoint = endpoint;
             view.state = SessionState::Connecting;
             view.read_in_flight = false;
+            view.subscription = SubscriptionState::Inactive;
+            view.items.clear();
         }
         if !added.is_empty() {
             self.pending_adds.insert(
@@ -1254,6 +1258,68 @@ mod tests {
             })
             .unwrap();
         assert!(!engine.session(1).unwrap().items.contains_key(&2));
+    }
+    #[test]
+    fn reconnect_drops_old_confirmations_before_failed_readd() {
+        let mut engine = Engine::<()>::default();
+        let endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+        let mut view = SessionRuntime::new(endpoint.clone(), Instant::now());
+        view.state = SessionState::Connected;
+        view.subscription = SubscriptionState::Active;
+        view.items.insert(4, true);
+        engine.sessions.insert(1, view);
+        let connect = engine
+            .send(
+                1,
+                Protocol::OpcUa,
+                CommandKind::Connect {
+                    endpoint: endpoint.clone(),
+                },
+                (),
+            )
+            .unwrap();
+        assert!(engine.session(1).unwrap().items.is_empty());
+        engine
+            .accept(&Event {
+                session: 1,
+                request_id: connect,
+                kind: EventKind::Connected {
+                    endpoint,
+                    info: BackendMsg::raw("connected"),
+                },
+            })
+            .unwrap();
+        engine.requests.insert(
+            (1, 50),
+            PendingRequest {
+                operation: Operation::AddItems,
+                sent: Instant::now(),
+                ctx: (),
+            },
+        );
+        engine
+            .pending_adds
+            .insert((1, 50), [(4, false)].into_iter().collect());
+        engine
+            .accept(&Event {
+                session: 1,
+                request_id: 50,
+                kind: EventKind::AddItems {
+                    results: vec![(4, Err(BackendMsg::raw("rejected")))],
+                },
+            })
+            .unwrap();
+        engine
+            .accept(&Event {
+                session: 1,
+                request_id: 0,
+                kind: EventKind::SubscriptionState {
+                    state: SubscriptionState::Active,
+                },
+            })
+            .unwrap();
+        assert!(engine.session(1).unwrap().items.is_empty());
+        assert!(engine.due(Instant::now(), Duration::ZERO, None).is_empty());
     }
     #[test]
     fn legacy_add_error_uses_correlated_operation_identity() {
