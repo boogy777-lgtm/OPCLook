@@ -587,3 +587,8 @@ None-security TCP proxy, 30-секундный production deadline, queued Brows
 прошёл Linux debug smoke; Windows i686 test typecheck и boundary guard двух
 целей прошли. Оптимизированный baseline и PNG ещё выполняются; F/G/H остаются
 открытыми.
+
+**2026-10-28, PNG QA:** headless lavapipe test 1/1 и ручной просмотр пяти
+снимков App::update: 10k RU, DA helper error RU, UA security/identity ZH,
+Network RU, подтверждение RU. DA error — fixture, не Windows runtime.
+Оптимизированный F baseline ещё выполняется.

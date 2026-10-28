@@ -501,3 +501,9 @@ Windows i686 backend all-targets typecheck прошёл, runtime не прове
 Windows i686 typecheck теста, CLI boundary Linux и Windows и fmt прошли.
 Debug-цифры не считаются оптимизированным baseline; PNG и релевантные
 оптимизированные измерения ещё выполняются. Runtime Windows не проверен.
+
+**2026-10-28, PNG QA:** Linux lavapipe/wgpu, opt-in `ui-snapshots`, пять
+PNG настоящего App::update просмотрены: русские и китайские глифы читаемы;
+обработанная фиктивная ошибка helper с IPC timeout видна. Тест 1/1; снимки
+не являются проверкой Windows helper/UAC или реального DA. Обычная сборка не
+включает wgpu через эту feature.

@@ -191,3 +191,9 @@ Windows runtime и финальный exact-head CI остаются откры�
 и обновление 100 значений через обработчик событий прошли Linux smoke в debug.
 Это ещё не оптимизированный baseline. Рендер PNG, оптимизированные измерения,
 F/G/H, Windows runtime и итоговый exact-head CI остаются открыты.
+
+**2026-10-28, визуальная проверка:** пять PNG `App::update` (10k RU,
+ошибка DA helper RU, security/identity UA ZH, сеть RU, подтверждение RU)
+получены headless и просмотрены. Ошибка DA искусственно задана; реальный
+Windows helper/UAC/DA остаётся непроверенным. Оптимизированный F baseline
+ещё измеряется.
