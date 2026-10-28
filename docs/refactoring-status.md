@@ -244,3 +244,8 @@ UI RowQuality отделяет реальные коды сервера от NoD
 Linux: `ui_polish_table` 17/17, отбор `stale` в ui_interactions 5/5, CLI unit
 5/5; Windows i686 workspace all-targets typecheck с test-only флагами прошёл.
 PNG не рендерился; полный gate, Windows runtime и остальные A/C открыты.
+
+Язык в Settings теперь `Lang`: legacy варианты читаются при загрузке, неизвестный
+код и отсутствие поля дают русский, запись сохраняет коды ru/en/zh. Linux
+settings 46/46, взаимодействие меню языка 1/1 и Windows GUI all-targets
+ typecheck с test-only отключением ресурсов прошли. Остальные A/C открыты.

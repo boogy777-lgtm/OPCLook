@@ -256,3 +256,7 @@ Linux), взаимодействие диалога проверено отде�
 нет данных и ошибки; коды FFFFFFFE/FFFFFFFD больше не совпадают с плейсхолдером.
 Linux UI polish 17/17, stale interactions 5/5, CLI unit 5/5, Windows typecheck;
 рендер PNG и общий gate остаются открытыми.
+
+Settings хранит типизированный Lang и сохраняет совместимые коды языка;
+старые синонимы и неизвестный код проверены на границе. Linux settings 46/46,
+меню языка 1/1 и Windows GUI typecheck прошли.

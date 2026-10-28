@@ -12,14 +12,6 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::net::IpAddr;
 use std::path::PathBuf;
 
-/// Stored code for the default UI language (Russian). Used as the serde fallback
-/// so older settings files without a `lang` field still load, and whenever the
-/// persisted code is unknown/missing. An explicitly persisted language (e.g.
-/// "en") is never overridden.
-pub fn default_lang() -> String {
-    Lang::default().as_str().to_string()
-}
-
 /// Default «Доверять сертификату сервера» is OFF: strict PKI trust by default.
 pub fn default_trust_server_cert() -> bool {
     false
@@ -183,10 +175,9 @@ pub struct Settings {
     /// plain `ColumnId` names; legacy quoted names are parsed on load.
     #[serde(default, deserialize_with = "deserialize_column_order")]
     pub column_order: Option<Vec<ColumnId>>,
-    /// UI language code ("ru", "en", "zh"). Missing/invalid entries fall back
-    /// to Russian on load (see `lang()`).
-    #[serde(default = "default_lang")]
-    pub lang: String,
+    /// UI language, stored as a legacy-compatible code. Unknown codes fall back to Russian.
+    #[serde(default, deserialize_with = "deserialize_lang")]
+    pub lang: Lang,
     /// UA connect dialog: trust the server certificate without importing it
     /// into the PKI trust store. Default OFF (strict PKI trust).
     #[serde(default = "default_trust_server_cert")]
@@ -226,6 +217,11 @@ pub struct Settings {
     /// destroy the only copy, so `save()` refuses until the app restarts.
     #[serde(skip)]
     pub save_blocked: bool,
+}
+
+fn deserialize_lang<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Lang, D::Error> {
+    let code = String::deserialize(deserializer)?;
+    Ok(Lang::from_str(&code).unwrap_or_default())
 }
 
 fn deserialize_column_order<'de, D: Deserializer<'de>>(
@@ -272,7 +268,7 @@ impl Default for Settings {
             last_ua_url: String::new(),
             recent_endpoints: Vec::new(),
             column_order: None,
-            lang: default_lang(),
+            lang: Lang::default(),
             ua_trust_server_cert: default_trust_server_cert(),
             ua_session_timeout_ms: default_session_timeout(),
             ua_security_policy: UaSecurityPolicy::Auto,
@@ -400,7 +396,7 @@ impl Settings {
 
     /// Current UI language, falling back to Russian for an unknown/missing code.
     pub fn lang(&self) -> Lang {
-        Lang::from_str(&self.lang).unwrap_or(Lang::default())
+        self.lang
     }
 
     /// Remember the LDS host of the connect dialog; saves only on a change.
@@ -414,7 +410,7 @@ impl Settings {
 
     /// Set the UI language and normalize its stored code.
     pub fn set_lang(&mut self, lang: Lang) {
-        self.lang = lang.as_str().to_string();
+        self.lang = lang;
     }
 
     /// The normalized order for table headers, the setup dialog and DnD.
@@ -800,8 +796,7 @@ mod tests {
     /// persisted language (e.g. "en") is never overridden on load.
     #[test]
     fn fresh_settings_default_to_russian_and_persisted_lang_is_kept() {
-        let mut s = Settings::default();
-        s.lang = String::new();
+        let s: Settings = serde_json::from_str(r#"{"lang":""}"#).unwrap();
         assert_eq!(
             s.lang(),
             crate::i18n::Lang::Ru,
@@ -840,7 +835,7 @@ mod tests {
         );
         assert!(d.recent_endpoints.is_empty());
         assert!(d.column_order.is_none(), "column_order defaults to None");
-        assert_eq!(d.lang, "ru", "UI language defaults to Russian");
+        assert_eq!(d.lang, Lang::Ru, "UI language defaults to Russian");
         assert_eq!(d.lang(), crate::i18n::Lang::Ru);
         assert!(d.preferred_adapter.is_none());
         assert!(d.selected_local_ip.is_none());
@@ -1003,18 +998,19 @@ mod tests {
 
     #[test]
     fn unknown_or_missing_lang_falls_back_to_russian() {
-        // A settings file written before `lang` existed loads with "ru".
-        let json = r#"{"lang":"xx","options":null,"columns":null,"script":"","last_da_host":"","last_da_server":"","last_ua_url":"","recent_endpoints":null,"column_order":null}"#;
-        // Build a minimal valid settings payload via defaults and inject bad lang.
+        for code in ["zz", ""] {
+            let value = serde_json::json!({"lang": code});
+            let s: Settings = serde_json::from_value(value).unwrap();
+            assert_eq!(s.lang(), Lang::Ru);
+        }
+        let missing: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(missing.lang(), Lang::Ru);
         let mut s = Settings::default();
-        s.lang = "zz".to_string();
-        assert_eq!(s.lang(), crate::i18n::Lang::Ru);
-        s.lang = "".to_string();
-        assert_eq!(s.lang(), crate::i18n::Lang::Ru);
-        s.set_lang(crate::i18n::Lang::En);
-        assert_eq!(s.lang, "en");
-        assert_eq!(s.lang(), crate::i18n::Lang::En);
-        let _ = json;
+        s.set_lang(Lang::En);
+        assert_eq!(s.lang, Lang::En);
+        assert_eq!(serde_json::to_value(&s).unwrap()["lang"], "en");
+        let legacy: Settings = serde_json::from_str(r#"{"lang":"English"}"#).unwrap();
+        assert_eq!(legacy.lang(), Lang::En);
     }
 
     #[test]
