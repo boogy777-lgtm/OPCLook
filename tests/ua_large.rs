@@ -247,7 +247,11 @@ fn add_items(gateway: &Gateway, session: u64, items: &[ItemSpec]) {
     }
 }
 
-fn read_all(gateway: &Gateway, session: u64, keys: &[u32]) -> (Vec<(u32, DataValue)>, Duration) {
+fn read_all(
+    gateway: &Gateway,
+    session: u64,
+    keys: &[opcda_egui::bff::model::ItemKey],
+) -> (Vec<(opcda_egui::bff::model::ItemKey, DataValue)>, Duration) {
     let started = Instant::now();
     let event = wait_for(
         gateway,
@@ -273,7 +277,7 @@ fn read_all(gateway: &Gateway, session: u64, keys: &[u32]) -> (Vec<(u32, DataVal
 
 /// Sum of the debug-formatted values is a stable lower-bound proxy for the
 /// response payload (the client model is what the UI receives).
-fn approx_payload_bytes(values: &[(u32, DataValue)]) -> usize {
+fn approx_payload_bytes(values: &[(opcda_egui::bff::model::ItemKey, DataValue)]) -> usize {
     values
         .iter()
         .map(|(_, dv)| format!("{:?}", dv.value).len())
@@ -353,11 +357,11 @@ fn ua_large_browse_read_and_cycles() {
         .iter()
         .enumerate()
         .map(|(index, node_id)| ItemSpec {
-            key: (index + 1) as u32,
+            key: opcda_egui::bff::model::ItemKey::new((index + 1) as u32).unwrap(),
             item_id: node_id.clone(),
         })
         .collect();
-    let keys: Vec<u32> = specs.iter().map(|s| s.key).collect();
+    let keys: Vec<_> = specs.iter().map(|s| s.key).collect();
 
     let add_started = Instant::now();
     add_items(&gateway, session, &specs);
@@ -372,7 +376,7 @@ fn ua_large_browse_read_and_cycles() {
         .iter()
         .filter(|(_, dv)| dv.quality.kind == QualityKind::Good)
         .count();
-    let missing: Vec<u32> = keys
+    let missing: Vec<_> = keys
         .iter()
         .copied()
         .filter(|key| !values.iter().any(|(k, _)| k == key))

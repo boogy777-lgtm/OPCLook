@@ -96,7 +96,7 @@ pub(super) fn monitoring_parameters(
     with_filter: bool,
 ) -> MonitoringParameters {
     MonitoringParameters {
-        client_handle: key,
+        client_handle: key.get(),
         sampling_interval: UA_SAMPLING_INTERVAL_MS,
         filter: if with_filter {
             data_change_filter(deadband)
@@ -497,7 +497,16 @@ impl UaSession {
         let types = self.types.clone();
         let callback =
             DataChangeCallback::new(move |data_value: UaDataValue, item: &MonitoredItem| {
-                let key = item.client_handle();
+                let Some(key) = ItemKey::new(item.client_handle()) else {
+                    let _ = event_tx.send(Event {
+                        request_id: 0,
+                        session: session_id,
+                        kind: EventKind::Log {
+                            message: BackendMsg::InvalidItemHandle,
+                        },
+                    });
+                    return;
+                };
                 let _ = event_tx.send(Event {
                     request_id: 0,
                     session: session_id,
@@ -632,7 +641,7 @@ impl UaSession {
                     .map(|(key, id)| MonitoredItemModifyRequest {
                         monitored_item_id: *id,
                         requested_parameters: MonitoringParameters {
-                            client_handle: *key,
+                            client_handle: key.get(),
                             sampling_interval: UA_SAMPLING_INTERVAL_MS,
                             filter: data_change_filter(deadband),
                             queue_size: 1,

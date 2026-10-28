@@ -411,7 +411,7 @@ pub fn run_router<H: DaHost>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bff::model::{EndpointSpec, ItemSpec, Protocol};
+    use crate::bff::model::{EndpointSpec, ItemKey, ItemSpec, Protocol};
     use std::sync::Mutex;
     use std::sync::mpsc::{Receiver, channel};
 
@@ -601,7 +601,13 @@ mod tests {
 
         router.dispatch(connect(1, 1, "block"));
         router.dispatch(connect(2, 2, "ok"));
-        router.dispatch(command(3, 2, CommandKind::Read { keys: vec![7] }));
+        router.dispatch(command(
+            3,
+            2,
+            CommandKind::Read {
+                keys: vec![ItemKey::new(7).unwrap()],
+            },
+        ));
 
         let a = next(&rx);
         assert!(is_kind(&a, 2), "session 2 must answer first: {a:?}");
@@ -624,8 +630,20 @@ mod tests {
         let (host, release, _disc) = MockHost::new();
         let (mut router, rx) = router_with(host);
         router.dispatch(connect(1, 1, "block"));
-        router.dispatch(command(2, 1, CommandKind::Read { keys: vec![1] }));
-        router.dispatch(command(3, 1, CommandKind::Read { keys: vec![2] }));
+        router.dispatch(command(
+            2,
+            1,
+            CommandKind::Read {
+                keys: vec![ItemKey::new(1).unwrap()],
+            },
+        ));
+        router.dispatch(command(
+            3,
+            1,
+            CommandKind::Read {
+                keys: vec![ItemKey::new(2).unwrap()],
+            },
+        ));
         release.send(()).unwrap();
         let ids: Vec<u64> = (0..3).map(|_| next(&rx).request_id).collect();
         assert_eq!(ids, vec![1, 2, 3]);
@@ -640,13 +658,25 @@ mod tests {
             9,
             CommandKind::AddItems {
                 items: vec![ItemSpec {
-                    key: 5,
+                    key: ItemKey::new(5).unwrap(),
                     item_id: "a".into(),
                 }],
             },
         ));
-        router.dispatch(command(2, 9, CommandKind::Read { keys: vec![5, 6] }));
-        router.dispatch(command(3, 9, CommandKind::RemoveItems { keys: vec![5] }));
+        router.dispatch(command(
+            2,
+            9,
+            CommandKind::Read {
+                keys: vec![ItemKey::new(5).unwrap(), ItemKey::new(6).unwrap()],
+            },
+        ));
+        router.dispatch(command(
+            3,
+            9,
+            CommandKind::RemoveItems {
+                keys: vec![ItemKey::new(5).unwrap()],
+            },
+        ));
         router.dispatch(command(4, 9, CommandKind::Test));
         // Disconnect of an unknown session stays silent, like before.
         router.dispatch(command(5, 9, CommandKind::Disconnect));

@@ -93,12 +93,12 @@ fn browse_refresh_jumps_over_queued_reads() {
         // nodes; repeat the standard nodes to reach 10 subscriptions.
         let mut items = Vec::new();
         items.push(ItemSpec {
-            key: 1,
+            key: opcda_egui::bff::model::ItemKey::FIRST,
             item_id: CODESYS_VAR.to_string(),
         });
         for i in 0..9 {
             items.push(ItemSpec {
-                key: 2 + i as u32,
+                key: opcda_egui::bff::model::ItemKey::new(2 + i as u32).unwrap(),
                 item_id: if i % 2 == 0 {
                     "i=2259".to_string()
                 } else {
@@ -138,7 +138,9 @@ fn browse_refresh_jumps_over_queued_reads() {
                     session,
                     protocol: Protocol::OpcUa,
                     kind: CommandKind::Read {
-                        keys: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+                        keys: (1..=10)
+                            .map(|key| opcda_egui::bff::model::ItemKey::new(key).unwrap())
+                            .collect(),
                     },
                 },
                 Duration::from_secs(30),

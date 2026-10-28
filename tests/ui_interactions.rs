@@ -7,7 +7,7 @@ use egui_kittest::{
 };
 use opcda_egui::app::{App, ReconnectState, SessionState};
 use opcda_egui::bff::model::{
-    BrowseNode, Command, CommandKind, EndpointSpec, EventKind, NodeKind, Protocol, ScanId,
+    BrowseNode, Command, CommandKind, EndpointSpec, EventKind, ItemKey, NodeKind, Protocol, ScanId,
     SubscriptionState, UaSecurityMode, UaSecurityPolicy, Value,
 };
 use opcda_egui::settings::Settings;
@@ -70,7 +70,7 @@ fn harness(app: App) -> Harness<'static, App> {
         )
 }
 
-fn seed_table(app: &mut App, names: &[(&str, &str, i64)]) -> Vec<u32> {
+fn seed_table(app: &mut App, names: &[(&str, &str, i64)]) -> Vec<ItemKey> {
     app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
     names
         .iter()
@@ -191,7 +191,7 @@ fn table_row_context_menu_removes_selected() {
     right_click_row(&h, "SigA");
     click_menu_item(&mut h, "Удалить выбранные");
 
-    let rows: Vec<u32> = h.state().rows.iter().map(|r| r.key).collect();
+    let rows: Vec<ItemKey> = h.state().rows.iter().map(|r| r.key).collect();
     assert_eq!(rows, vec![keys[1]]);
 }
 
@@ -460,7 +460,7 @@ fn csv_save_load_roundtrip_preserves_rows() {
 }
 
 /// Seeding helper for a writable row.
-fn seed_writable_table(app: &mut App, names: &[(&str, &str, i64)]) -> Vec<u32> {
+fn seed_writable_table(app: &mut App, names: &[(&str, &str, i64)]) -> Vec<ItemKey> {
     app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
     names
         .iter()

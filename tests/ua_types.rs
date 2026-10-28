@@ -179,15 +179,15 @@ fn ua_type_support_reads_without_panic_and_handles_unknown_types() {
         // distinct built-in types.
         let items = vec![
             ItemSpec {
-                key: 1,
+                key: opcda_egui::bff::model::ItemKey::new(1).unwrap(),
                 item_id: "i=2258".to_string(),
             }, // Server_ServerStatus_CurrentTime (DateTime)
             ItemSpec {
-                key: 2,
+                key: opcda_egui::bff::model::ItemKey::new(2).unwrap(),
                 item_id: "i=2259".to_string(),
             }, // Server_ServerStatus_State (Int32)
             ItemSpec {
-                key: 3,
+                key: opcda_egui::bff::model::ItemKey::new(3).unwrap(),
                 item_id: "ns=1;s=GVL.MyVar".to_string(),
             }, // may not exist -> graceful
         ];
@@ -376,7 +376,7 @@ fn ua_untyped_array_and_structured_read_are_graceful() {
             .take(limit)
             .enumerate()
             .map(|(i, v)| ItemSpec {
-                key: i as u32 + 10,
+                key: opcda_egui::bff::model::ItemKey::new(i as u32 + 10).unwrap(),
                 item_id: v.node_id.clone(),
             })
             .collect();

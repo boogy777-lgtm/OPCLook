@@ -480,18 +480,23 @@ fn u2_unknown_node_is_reported_as_error_and_valid_node_delivers_values() {
     let results = app.add_items(
         1,
         &[
-            (1, server.node("Level")),
-            (2, format!("ns={};s=NoSuchTag", server.ns)),
+            (ItemKey::new(1).unwrap(), server.node("Level")),
+            (
+                ItemKey::new(2).unwrap(),
+                format!("ns={};s=NoSuchTag", server.ns),
+            ),
         ],
     );
     assert_eq!(results.len(), 2);
     assert!(
-        results.iter().any(|(k, r)| *k == 1 && r.is_ok()),
+        results
+            .iter()
+            .any(|(k, r)| *k == ItemKey::new(1).unwrap() && r.is_ok()),
         "valid node must be Ok: {results:?}"
     );
     let bad = results
         .iter()
-        .find(|(k, _)| *k == 2)
+        .find(|(k, _)| *k == ItemKey::new(2).unwrap())
         .and_then(|(_, r)| r.as_ref().err())
         .expect("unknown node must be an Err");
     assert!(
@@ -500,7 +505,9 @@ fn u2_unknown_node_is_reported_as_error_and_valid_node_delivers_values() {
     );
 
     server.set("Level", Variant::Double(42.5));
-    let value = app.value_of(1, Duration::from_secs(10), |v| *v == Value::F64(42.5));
+    let value = app.value_of(ItemKey::new(1).unwrap(), Duration::from_secs(10), |v| {
+        *v == Value::F64(42.5)
+    });
     assert!(value.is_some(), "valid item must push its value");
 }
 
@@ -510,9 +517,12 @@ fn u2_malformed_node_id_is_an_error_not_a_silent_ok() {
     let mut app = Harness::new();
     app.connect(1, Harness::endpoint(&server.url))
         .expect("connect");
-    let results = app.add_items(1, &[(1, "это не NodeId".to_string())]);
+    let results = app.add_items(
+        1,
+        &[(ItemKey::new(1).unwrap(), "это не NodeId".to_string())],
+    );
     assert!(
-        matches!(results.first(), Some((1, Err(_)))),
+        matches!(results.first(), Some((KEY_1, Err(_)))),
         "malformed NodeId must be rejected: {results:?}"
     );
 }
@@ -524,8 +534,11 @@ fn u2_no_monitored_item_means_no_active_subscription() {
     let mut app = Harness::new();
     app.connect(1, Harness::endpoint(&server.url))
         .expect("connect");
-    let results = app.add_items(1, &[(1, format!("ns={};s=Nope", server.ns))]);
-    assert!(matches!(results.first(), Some((1, Err(_)))));
+    let results = app.add_items(
+        1,
+        &[(ItemKey::new(1).unwrap(), format!("ns={};s=Nope", server.ns))],
+    );
+    assert!(matches!(results.first(), Some((KEY_1, Err(_)))));
     let active = app.wait(Duration::from_secs(1), |event| match event.kind {
         EventKind::SubscriptionState {
             state: SubscriptionState::Active,
@@ -549,11 +562,19 @@ fn u2_removing_one_item_keeps_the_other_subscribed() {
     // Keys far from the server's own id sequence (1, 2, ...).
     let results = app.add_items(
         1,
-        &[(501, server.node("Level")), (502, server.node("Counter"))],
+        &[
+            (ItemKey::new(501).unwrap(), server.node("Level")),
+            (ItemKey::new(502).unwrap(), server.node("Counter")),
+        ],
     );
     assert!(results.iter().all(|(_, r)| r.is_ok()), "{results:?}");
 
-    let removed = app.send(1, CommandKind::RemoveItems { keys: vec![501] });
+    let removed = app.send(
+        1,
+        CommandKind::RemoveItems {
+            keys: vec![ItemKey::new(501).unwrap()],
+        },
+    );
     assert!(matches!(
         app.reply(removed, PROMPT_LONG).expect("removed").kind,
         EventKind::Removed { .. }
@@ -562,12 +583,14 @@ fn u2_removing_one_item_keeps_the_other_subscribed() {
     server.set("Level", Variant::Double(77.0));
     server.set("Counter", Variant::Int32(5));
     assert!(
-        app.value_of(502, Duration::from_secs(10), |v| *v == Value::I64(5))
+        app.value_of(ItemKey::new(502).unwrap(), Duration::from_secs(10), |v| *v
+            == Value::I64(5))
             .is_some(),
         "the remaining item must keep pushing"
     );
     assert!(
-        app.value_of(501, Duration::from_secs(2), |v| *v == Value::F64(77.0))
+        app.value_of(ItemKey::new(501).unwrap(), Duration::from_secs(2), |v| *v
+            == Value::F64(77.0))
             .is_none(),
         "the removed item must stop pushing"
     );
@@ -635,8 +658,8 @@ fn u1_hung_connect_does_not_block_other_sessions() {
     let mut app = Harness::new();
     app.connect(1, Harness::endpoint(&server.url))
         .expect("connect to the live server");
-    let added = app.add_items(1, &[(1, server.node("Level"))]);
-    assert!(matches!(added.first(), Some((1, Ok(_)))));
+    let added = app.add_items(1, &[(ItemKey::new(1).unwrap(), server.node("Level"))]);
+    assert!(matches!(added.first(), Some((KEY_1, Ok(_)))));
 
     // Session 2 connects to a host that never answers.
     let hung = app.send(
@@ -669,7 +692,12 @@ fn u1_hung_connect_does_not_block_other_sessions() {
         started.elapsed()
     );
 
-    let read = app.send(1, CommandKind::Read { keys: vec![1] });
+    let read = app.send(
+        1,
+        CommandKind::Read {
+            keys: vec![ItemKey::new(1).unwrap()],
+        },
+    );
     let reply = app.reply(read, PROMPT);
     assert!(
         matches!(
@@ -736,12 +764,17 @@ fn u1_commands_for_a_session_without_connection_get_exactly_one_error_each() {
             view_id: None,
         },
     );
-    let read = app.send(5, CommandKind::Read { keys: vec![1, 2] });
+    let read = app.send(
+        5,
+        CommandKind::Read {
+            keys: vec![ItemKey::new(1).unwrap(), ItemKey::new(2).unwrap()],
+        },
+    );
     let write = app.send(
         5,
         CommandKind::Write {
             request: crate::bff::model::WriteRequest {
-                key: 1,
+                key: ItemKey::new(1).unwrap(),
                 value: Value::I64(1),
                 type_hint: None,
             },
@@ -944,10 +977,11 @@ fn u4_deadband_change_is_applied_to_a_live_subscription() {
     let mut app = Harness::new();
     app.connect(1, Harness::endpoint(&server.url))
         .expect("connect");
-    let added = app.add_items(1, &[(1, server.node("Level"))]);
-    assert!(matches!(added.first(), Some((1, Ok(_)))), "{added:?}");
+    let added = app.add_items(1, &[(ItemKey::new(1).unwrap(), server.node("Level"))]);
+    assert!(matches!(added.first(), Some((KEY_1, Ok(_)))), "{added:?}");
     assert!(
-        app.value_of(1, Duration::from_secs(10), |v| *v == Value::F64(1.0))
+        app.value_of(ItemKey::new(1).unwrap(), Duration::from_secs(10), |v| *v
+            == Value::F64(1.0))
             .is_some(),
         "the initial value is pushed"
     );
@@ -963,13 +997,15 @@ fn u4_deadband_change_is_applied_to_a_live_subscription() {
     std::thread::sleep(Duration::from_millis(500));
     server.set("Level", Variant::Double(2.0));
     assert!(
-        app.value_of(1, Duration::from_secs(2), |v| *v == Value::F64(2.0))
+        app.value_of(ItemKey::new(1).unwrap(), Duration::from_secs(2), |v| *v
+            == Value::F64(2.0))
             .is_none(),
         "a change inside the deadband must be filtered out"
     );
     server.set("Level", Variant::Double(10.0));
     assert!(
-        app.value_of(1, Duration::from_secs(10), |v| *v == Value::F64(10.0))
+        app.value_of(ItemKey::new(1).unwrap(), Duration::from_secs(10), |v| *v
+            == Value::F64(10.0))
             .is_some(),
         "a change beyond the deadband is delivered"
     );
@@ -985,7 +1021,8 @@ fn u4_deadband_change_is_applied_to_a_live_subscription() {
     std::thread::sleep(Duration::from_millis(500));
     server.set("Level", Variant::Double(10.5));
     assert!(
-        app.value_of(1, Duration::from_secs(10), |v| *v == Value::F64(10.5))
+        app.value_of(ItemKey::new(1).unwrap(), Duration::from_secs(10), |v| *v
+            == Value::F64(10.5))
             .is_some(),
         "without a deadband every change is delivered"
     );
@@ -997,10 +1034,11 @@ fn u4_publishing_interval_change_is_applied_to_a_live_subscription() {
     let mut app = Harness::new();
     app.connect(1, Harness::endpoint(&server.url))
         .expect("connect");
-    let added = app.add_items(1, &[(1, server.node("Level"))]);
-    assert!(matches!(added.first(), Some((1, Ok(_)))), "{added:?}");
+    let added = app.add_items(1, &[(ItemKey::new(1).unwrap(), server.node("Level"))]);
+    assert!(matches!(added.first(), Some((KEY_1, Ok(_)))), "{added:?}");
     assert!(
-        app.value_of(1, Duration::from_secs(10), |v| *v == Value::F64(1.0))
+        app.value_of(ItemKey::new(1).unwrap(), Duration::from_secs(10), |v| *v
+            == Value::F64(1.0))
             .is_some()
     );
 
@@ -1015,7 +1053,8 @@ fn u4_publishing_interval_change_is_applied_to_a_live_subscription() {
     std::thread::sleep(Duration::from_millis(500));
     server.set("Level", Variant::Double(3.0));
     assert!(
-        app.value_of(1, Duration::from_secs(3), |v| *v == Value::F64(3.0))
+        app.value_of(ItemKey::new(1).unwrap(), Duration::from_secs(3), |v| *v
+            == Value::F64(3.0))
             .is_none(),
         "the subscription still publishes at the old, fast interval"
     );
@@ -1029,7 +1068,8 @@ fn u4_publishing_interval_change_is_applied_to_a_live_subscription() {
         },
     );
     assert!(
-        app.value_of(1, Duration::from_secs(10), |v| *v == Value::F64(3.0))
+        app.value_of(ItemKey::new(1).unwrap(), Duration::from_secs(10), |v| *v
+            == Value::F64(3.0))
             .is_some(),
         "the restored interval publishes the change"
     );
@@ -1048,15 +1088,17 @@ fn u4_configure_before_the_first_item_is_used_when_the_subscription_is_created()
             deadband: 5.0,
         },
     );
-    let added = app.add_items(1, &[(1, server.node("Level"))]);
-    assert!(matches!(added.first(), Some((1, Ok(_)))), "{added:?}");
+    let added = app.add_items(1, &[(ItemKey::new(1).unwrap(), server.node("Level"))]);
+    assert!(matches!(added.first(), Some((KEY_1, Ok(_)))), "{added:?}");
     assert!(
-        app.value_of(1, Duration::from_secs(10), |v| *v == Value::F64(1.0))
+        app.value_of(ItemKey::new(1).unwrap(), Duration::from_secs(10), |v| *v
+            == Value::F64(1.0))
             .is_some()
     );
     server.set("Level", Variant::Double(2.0));
     assert!(
-        app.value_of(1, Duration::from_secs(2), |v| *v == Value::F64(2.0))
+        app.value_of(ItemKey::new(1).unwrap(), Duration::from_secs(2), |v| *v
+            == Value::F64(2.0))
             .is_none(),
         "the stored deadband applies to items created later"
     );
@@ -1125,10 +1167,11 @@ fn secure_connect_and_read(port: u16, policy: UaSecurityPolicy) {
         info.contains(policy.as_str()),
         "the session info names the policy: {info:?}"
     );
-    let added = app.add_items(1, &[(1, server.node("Level"))]);
-    assert!(matches!(added.first(), Some((1, Ok(_)))), "{added:?}");
+    let added = app.add_items(1, &[(ItemKey::new(1).unwrap(), server.node("Level"))]);
+    assert!(matches!(added.first(), Some((KEY_1, Ok(_)))), "{added:?}");
     assert!(
-        app.value_of(1, Duration::from_secs(10), |v| *v == Value::F64(1.0))
+        app.value_of(ItemKey::new(1).unwrap(), Duration::from_secs(10), |v| *v
+            == Value::F64(1.0))
             .is_some(),
         "values flow over the {policy} channel"
     );
@@ -1411,7 +1454,7 @@ fn v3_custom_structure_reads_as_named_fields() {
     let mut app = Harness::new();
     app.connect(1, Harness::endpoint(&server.url))
         .expect("connect");
-    let results = app.add_items(1, &[(1, server.node("Pump"))]);
+    let results = app.add_items(1, &[(ItemKey::new(1).unwrap(), server.node("Pump"))]);
     assert!(results.iter().all(|(_, r)| r.is_ok()), "{results:?}");
     let type_name = results
         .first()
@@ -1429,7 +1472,9 @@ fn v3_custom_structure_reads_as_named_fields() {
             ("Name".to_string(), Value::Str("P-101".to_string())),
         ],
     };
-    let got = app.value_of(1, PROMPT_LONG, |v| matches!(v, Value::Struct { .. }));
+    let got = app.value_of(ItemKey::new(1).unwrap(), PROMPT_LONG, |v| {
+        matches!(v, Value::Struct { .. })
+    });
     let got = got.unwrap_or_else(|| {
         panic!(
             "no structured value; events: {:?}",
@@ -1507,7 +1552,7 @@ fn p1_run(server: &TestServer, total: usize, pushed: usize) -> (usize, usize, Ve
             .iter()
             .enumerate()
             .map(|(i, node)| ItemSpec {
-                key: (batch * 100 + i + 1) as ItemKey,
+                key: ItemKey::new((batch * 100 + i + 1) as u32).unwrap(),
                 item_id: node.clone(),
             })
             .collect();
@@ -1607,3 +1652,5 @@ fn test_server_moves_off_a_taken_port() {
     app.connect(1, Harness::endpoint(&server.url))
         .expect("connect on the moved port");
 }
+
+const KEY_1: ItemKey = ItemKey::FIRST;

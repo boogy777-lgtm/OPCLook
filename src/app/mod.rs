@@ -240,7 +240,7 @@ impl App {
             csv_import: None,
             add_children: None,
             next_session: Some(1),
-            next_key: Some(1),
+            next_key: Some(ItemKey::FIRST),
             next_scan: Some(ScanId::FIRST),
             cjk_font: CjkFont::NotProbed,
             row_index: row_index::RowIndex::default(),
@@ -810,7 +810,7 @@ impl App {
             .map(|s| s.endpoint.display_name())
             .unwrap_or_default();
         let key = self.next_key.expect("test row IDs exhausted");
-        self.next_key = key.checked_add(1);
+        self.next_key = key.successor();
         self.push_row(Row {
             key,
             session,

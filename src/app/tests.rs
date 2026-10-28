@@ -1894,13 +1894,14 @@ fn session_ids_stop_after_maximum_and_report_exhaustion() {
 #[test]
 fn item_ids_stop_after_maximum_and_keep_earlier_items() {
     let (_ctx, mut app) = tree_app();
-    app.next_key = Some(u32::MAX);
+    assert!(ItemKey::new(0).is_none());
+    app.next_key = ItemKey::new(u32::MAX);
     app.add_items(
         1,
         vec![("one".into(), "one".into()), ("two".into(), "two".into())],
     );
     assert_eq!(app.rows.len(), 1);
-    assert_eq!(app.rows[0].key, u32::MAX);
+    assert_eq!(app.rows[0].key.get(), u32::MAX);
     assert!(app.next_key.is_none());
     assert_eq!(app.status, tr(app.lang(), Tr::ItemIdsExhausted));
     app.add_items(1, vec![("three".into(), "three".into())]);

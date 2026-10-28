@@ -1,6 +1,6 @@
 use opclook_contract::model::{
-    BackendMsg, CommandKind, DataValue, EndpointSpec, Event, EventKind, ItemSpec, Operation,
-    Protocol, QualityKind, UaSecurityMode, UaSecurityPolicy, Value, WriteRequest,
+    BackendMsg, CommandKind, DataValue, EndpointSpec, Event, EventKind, ItemKey, ItemSpec,
+    Operation, Protocol, QualityKind, UaSecurityMode, UaSecurityPolicy, Value, WriteRequest,
 };
 use opclook_contract::net::NetworkBinding;
 use opclook_engine::{DispatchError, Due, Engine};
@@ -518,7 +518,7 @@ fn run(options: &Options) -> Result<(), String> {
         protocol,
         CommandKind::AddItems {
             items: vec![ItemSpec {
-                key: 1,
+                key: ItemKey::FIRST,
                 item_id: node.clone(),
             }],
         },
@@ -543,7 +543,7 @@ fn run(options: &Options) -> Result<(), String> {
             protocol,
             CommandKind::Write {
                 request: WriteRequest {
-                    key: 1,
+                    key: ItemKey::FIRST,
                     value,
                     type_hint: None,
                 },
@@ -560,12 +560,18 @@ fn run(options: &Options) -> Result<(), String> {
         };
     }
     if command == "read" {
-        let id = send(&mut engine, protocol, CommandKind::Read { keys: vec![1] })?;
+        let id = send(
+            &mut engine,
+            protocol,
+            CommandKind::Read {
+                keys: vec![ItemKey::FIRST],
+            },
+        )?;
         return match response(&mut engine, id, options.timeout, &stop, &options.endpoint)? {
             EventKind::Values { values } => {
                 let data = values
                     .into_iter()
-                    .find_map(|(key, data)| (key == 1).then_some(data))
+                    .find_map(|(key, data)| (key == ItemKey::FIRST).then_some(data))
                     .ok_or("server returned no value")?;
                 output(&json!({"node_id":node,"data":data_json(&data,&options.endpoint)?}))?;
                 if let Some(reason) = data.reason {
@@ -626,7 +632,7 @@ fn run(options: &Options) -> Result<(), String> {
         match event.kind {
             EventKind::Values { values } => {
                 for (key, data) in values {
-                    if key == 1 {
+                    if key == ItemKey::FIRST {
                         output(
                             &json!({"node_id":node,"data":data_json(&data,&options.endpoint)?}),
                         )?;

@@ -407,3 +407,7 @@ PNG проверка UI и физические DA/UAC/маршруты оста
 Счётчики GUI сессий и сигналов теперь checked: максимум выдаётся один раз, затем видимая локализованная ошибка; частичная партия сохраняется и отправляется. Linux регрессии 2/2, Windows i686 workspace all-targets typecheck с test-only флагами; сами SessionId и ItemKey пока числовые алиасы, а Origin/Owner и Windows runtime ещё открыты.
 
 Request allocator уже использовал checked successor; теперь exhaustion проверяется до изменения ожидающих запросов и отмены маршрутов, а DA подготовка возвращает типизированную локализованную ошибку до старта сервиса. Linux Engine 19/19, Windows i686 workspace all-targets typecheck с test-only флагами. Ролевая типизация и удаление sentinel открыты.
+
+ItemKey типизирован ненулевым приватным NonZeroU32; проверенная выдача сохраняет прежнее поведение исчерпания. UA и DA делают явные преобразования в wire handle, UA callback отклоняет zero и пишет локализованную диагностику; compile-fail проверяет несовместимость ItemKey/ScanId. Linux GUI exhaustion 1/1, headless удаление 1/1, contract compile-fail 1/1; Linux all-targets и Windows i686 workspace all-targets typecheck (test-only флаги) прошли. SessionId/RequestId и Origin/Owner ещё открыты, физический DA/UAC и Windows runtime не проверены.
+
+Измерено после ItemKey: Linux backend 199/199, Engine 19/19, CLI 6/6; Windows backend/CLI standalone all-targets typecheck без resource skip прошёл. Первый backend run выявил тестовый fallback, вычислявший недопустимый zero; исправлен и полный набор повторно прошёл.

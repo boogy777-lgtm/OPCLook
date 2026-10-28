@@ -126,11 +126,11 @@ fn server_browse_add_and_read() {
                 kind: CommandKind::AddItems {
                     items: vec![
                         ItemSpec {
-                            key: 1,
+                            key: opcda_egui::bff::model::ItemKey::new(1).unwrap(),
                             item_id: "i=2259".to_string(),
                         },
                         ItemSpec {
-                            key: 2,
+                            key: opcda_egui::bff::model::ItemKey::new(2).unwrap(),
                             item_id: "i=2258".to_string(),
                         },
                     ],
@@ -154,7 +154,12 @@ fn server_browse_add_and_read() {
                 request_id: next_id(),
                 session,
                 protocol: Protocol::OpcUa,
-                kind: CommandKind::Read { keys: vec![1, 2] },
+                kind: CommandKind::Read {
+                    keys: vec![
+                        opcda_egui::bff::model::ItemKey::new(1).unwrap(),
+                        opcda_egui::bff::model::ItemKey::new(2).unwrap(),
+                    ],
+                },
             },
             Duration::from_secs(20),
             |kind| matches!(kind, EventKind::Values { .. }),
@@ -181,12 +186,12 @@ fn server_browse_add_and_read() {
 
         let state = &values
             .iter()
-            .find(|(k, _)| *k == 1)
+            .find(|(k, _)| *k == opcda_egui::bff::model::ItemKey::new(1).unwrap())
             .expect("missing key 1")
             .1;
         let current_time = &values
             .iter()
-            .find(|(k, _)| *k == 2)
+            .find(|(k, _)| *k == opcda_egui::bff::model::ItemKey::new(2).unwrap())
             .expect("missing key 2")
             .1;
         assert!(
@@ -214,7 +219,7 @@ fn server_invalid_node_read_does_not_panic() {
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::AddItems {
                     items: vec![ItemSpec {
-                        key: 1,
+                        key: opcda_egui::bff::model::ItemKey::new(1).unwrap(),
                         item_id: "ns=999;s=does-not-exist".to_string(),
                     }],
                 },
@@ -234,7 +239,9 @@ fn server_invalid_node_read_does_not_panic() {
                 request_id: next_id(),
                 session,
                 protocol: Protocol::OpcUa,
-                kind: CommandKind::Read { keys: vec![1] },
+                kind: CommandKind::Read {
+                    keys: vec![opcda_egui::bff::model::ItemKey::new(1).unwrap()],
+                },
             },
             Duration::from_secs(20),
             |kind| matches!(kind, EventKind::Values { .. }),

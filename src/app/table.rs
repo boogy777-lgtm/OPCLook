@@ -31,7 +31,7 @@ impl App {
                 self.journal.error(message);
                 break;
             };
-            self.next_key = key.checked_add(1);
+            self.next_key = key.successor();
             let display_name = if display_name.trim().is_empty() {
                 item_id.clone()
             } else {

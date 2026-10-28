@@ -1253,13 +1253,16 @@ mod tests {
                 .is_err()
         );
     }
+    fn key(raw: u32) -> ItemKey {
+        ItemKey::new(raw).unwrap()
+    }
     fn pending_add_engine() -> Engine<()> {
         let mut engine = Engine::<()>::default();
         let mut view =
             SessionRuntime::new(EndpointSpec::ua("opc.tcp://127.0.0.1:4840"), Instant::now());
         view.state = SessionState::Connected;
         view.subscription = SubscriptionState::Active;
-        view.items.insert(1, false);
+        view.items.insert(key(1), false);
         engine.sessions.insert(1, view);
         engine.requests.insert(
             (1, 9),
@@ -1269,9 +1272,10 @@ mod tests {
                 ctx: (),
             },
         );
-        engine
-            .pending_adds
-            .insert((1, 9), [(2, false), (3, false)].into_iter().collect());
+        engine.pending_adds.insert(
+            (1, 9),
+            [(key(2), false), (key(3), false)].into_iter().collect(),
+        );
         engine
     }
     #[test]
@@ -1281,7 +1285,9 @@ mod tests {
             .accept(&Event {
                 request_id: 0,
                 session: 1,
-                kind: EventKind::PollOnly { keys: vec![2, 3] },
+                kind: EventKind::PollOnly {
+                    keys: vec![key(2), key(3)],
+                },
             })
             .unwrap();
         let info = opclook_contract::model::ItemInfo {
@@ -1294,15 +1300,18 @@ mod tests {
                 request_id: 9,
                 session: 1,
                 kind: EventKind::AddItems {
-                    results: vec![(2, Ok(info)), (3, Err(BackendMsg::raw("rejected")))],
+                    results: vec![
+                        (key(2), Ok(info)),
+                        (key(3), Err(BackendMsg::raw("rejected"))),
+                    ],
                 },
             })
             .unwrap();
-        assert_eq!(engine.session(1).unwrap().items.get(&1), Some(&false));
-        assert_eq!(engine.session(1).unwrap().items.get(&2), Some(&true));
-        assert!(!engine.session(1).unwrap().items.contains_key(&3));
+        assert_eq!(engine.session(1).unwrap().items.get(&key(1)), Some(&false));
+        assert_eq!(engine.session(1).unwrap().items.get(&key(2)), Some(&true));
+        assert!(!engine.session(1).unwrap().items.contains_key(&key(3)));
         let due = engine.due(Instant::now(), Duration::from_secs(1), None);
-        assert!(matches!(due.as_slice(), [Due::Read { keys, .. }] if keys == &vec![2]));
+        assert!(matches!(due.as_slice(), [Due::Read { keys, .. }] if keys == &vec![key(2)]));
     }
     #[test]
     fn removing_a_key_before_add_reply_does_not_reinstall_it() {
@@ -1311,7 +1320,7 @@ mod tests {
             .send(
                 1,
                 Protocol::OpcUa,
-                CommandKind::RemoveItems { keys: vec![2] },
+                CommandKind::RemoveItems { keys: vec![key(2)] },
                 (),
             )
             .unwrap();
@@ -1325,11 +1334,11 @@ mod tests {
                 request_id: 9,
                 session: 1,
                 kind: EventKind::AddItems {
-                    results: vec![(2, Ok(info))],
+                    results: vec![(key(2), Ok(info))],
                 },
             })
             .unwrap();
-        assert!(!engine.session(1).unwrap().items.contains_key(&2));
+        assert!(!engine.session(1).unwrap().items.contains_key(&key(2)));
     }
     #[test]
     fn reconnect_drops_old_confirmations_before_failed_readd() {
@@ -1339,7 +1348,7 @@ mod tests {
         let mut view = SessionRuntime::new(endpoint.clone(), Instant::now());
         view.state = SessionState::Connected;
         view.subscription = SubscriptionState::Active;
-        view.items.insert(4, true);
+        view.items.insert(key(4), true);
         engine.sessions.insert(1, view);
         let connect = engine
             .send(
@@ -1372,13 +1381,13 @@ mod tests {
         );
         engine
             .pending_adds
-            .insert((1, 50), [(4, false)].into_iter().collect());
+            .insert((1, 50), [(key(4), false)].into_iter().collect());
         engine
             .accept(&Event {
                 session: 1,
                 request_id: 50,
                 kind: EventKind::AddItems {
-                    results: vec![(4, Err(BackendMsg::raw("rejected")))],
+                    results: vec![(key(4), Err(BackendMsg::raw("rejected")))],
                 },
             })
             .unwrap();
@@ -1485,7 +1494,7 @@ mod tests {
         let mut view =
             SessionRuntime::new(EndpointSpec::ua("opc.tcp://127.0.0.1:4840"), Instant::now());
         view.state = SessionState::Connected;
-        view.items.insert(7, true);
+        view.items.insert(key(7), true);
         view.read_in_flight = true;
         view.last_poll = Instant::now() - Duration::from_secs(10);
         engine.sessions.insert(1, view);
@@ -1529,7 +1538,7 @@ mod tests {
         let mut view =
             SessionRuntime::new(EndpointSpec::ua("opc.tcp://127.0.0.1:4840"), Instant::now());
         view.state = SessionState::Connected;
-        view.items.insert(7, true);
+        view.items.insert(key(7), true);
         view.read_in_flight = true;
         engine.sessions.insert(1, view);
         engine.requests.insert(

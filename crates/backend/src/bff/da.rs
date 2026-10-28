@@ -626,7 +626,7 @@ impl DaSession {
                 szAccessPath: PWSTR::null(),
                 szItemID: PWSTR(wide_ids[idx].as_mut_ptr()),
                 bActive: windows::core::BOOL(1),
-                hClient: item.key,
+                hClient: item.key.get(),
                 dwBlobSize: 0,
                 pBlob: std::ptr::null_mut(),
                 vtRequestedDataType: 0,

@@ -98,6 +98,7 @@ translation_keys! {
     ScanIdsExhausted,
     SessionIdsExhausted,
     ItemIdsExhausted,
+    InvalidItemHandle,
     CsvServerAmbiguous,
     CsvServerEmpty,
     CjkFontMissing,
@@ -786,6 +787,7 @@ fn ru(key: Tr) -> &'static str {
         ScanIdsExhausted => "Исчерпаны идентификаторы сканирования",
         SessionIdsExhausted => "Исчерпаны идентификаторы сессий",
         ItemIdsExhausted => "Исчерпаны идентификаторы сигналов",
+        InvalidItemHandle => "Получен неверный идентификатор сигнала",
         CsvServerAmbiguous => {
             "Строка CSV пропущена: имени сервера «{0}» соответствует несколько подключений, укажите точное имя"
         }
@@ -1389,6 +1391,7 @@ fn en(key: Tr) -> &'static str {
         ScanIdsExhausted => "Scan identifiers exhausted",
         SessionIdsExhausted => "Session identifiers exhausted",
         ItemIdsExhausted => "Item identifiers exhausted",
+        InvalidItemHandle => "Received an invalid item identifier",
         CsvServerAmbiguous => {
             "CSV row skipped: server name \"{0}\" matches several connections, give the exact name"
         }
@@ -1982,6 +1985,7 @@ fn zh(key: Tr) -> &'static str {
         ScanIdsExhausted => "扫描标识符已耗尽",
         SessionIdsExhausted => "会话标识符已耗尽",
         ItemIdsExhausted => "信号标识符已耗尽",
+        InvalidItemHandle => "收到无效的信号标识符",
         CsvServerAmbiguous => "已跳过 CSV 行：服务器名“{0}”匹配多个连接，请指定准确名称",
         CsvServerEmpty => "已跳过 CSV 行：信号“{0}”未指定服务器",
         CjkFontMissing => "未找到可显示中文的字体（msyh.ttc、simsun.ttc）：界面文字可能显示为方块",
@@ -2581,6 +2585,7 @@ pub fn backend_text(lang: Lang, msg: &BackendMsg) -> String {
     use BackendMsg as M;
     match msg {
         // ---- pass-through / composition ----
+        M::InvalidItemHandle => tr(lang, Tr::InvalidItemHandle).to_string(),
         M::Raw(text) => text.clone(),
         M::DaRoute(error) => da_route_error(lang, error),
         M::RequestTimeout { seconds } => fmt(lang, Tr::NoReplyFromServer, &[seconds]),

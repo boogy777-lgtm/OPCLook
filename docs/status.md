@@ -115,3 +115,5 @@ CI 557fca20 относится к D hotfix, не к текущему head.
 Счётчики сессий и сигналов проверяют исчерпание без переполнения; отдельные типы SessionId/ItemKey и Origin/Owner всё ещё открыты.
 
 Исчерпание request IDs при DA-подготовке теперь возвращает типизированную локализованную ошибку; отказ Disconnect сохраняет ожидающие запросы. Типизация RequestId/Origin/Owner ещё открыта.
+
+ItemKey теперь ненулевой отдельный тип до backend/CLI и явных UA/DA wire handles; SessionId, RequestId, Origin/Owner и финальный CI ещё открыты.

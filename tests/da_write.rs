@@ -154,7 +154,7 @@ fn da_write_roundtrip() {
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::AddItems {
                     items: vec![ItemSpec {
-                        key: 1,
+                        key: opcda_egui::bff::model::ItemKey::new(1).unwrap(),
                         item_id: item_id.clone(),
                     }],
                 },
@@ -188,7 +188,9 @@ fn da_write_roundtrip() {
                 request_id: next_id(),
                 session,
                 protocol: Protocol::OpcDa,
-                kind: CommandKind::Read { keys: vec![1] },
+                kind: CommandKind::Read {
+                    keys: vec![opcda_egui::bff::model::ItemKey::new(1).unwrap()],
+                },
             },
             Duration::from_secs(30),
             |kind| matches!(kind, EventKind::Values { .. }),
@@ -216,7 +218,7 @@ fn da_write_roundtrip() {
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::Write {
                     request: WriteRequest {
-                        key: 1,
+                        key: opcda_egui::bff::model::ItemKey::new(1).unwrap(),
                         value: original.value.clone(),
                         type_hint: None,
                     },

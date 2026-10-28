@@ -3,7 +3,38 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
 pub type SessionId = u64;
-pub type ItemKey = u32;
+/// Nonzero client handle identifying one item.
+///
+/// Item and scan identities cannot be interchanged:
+/// ```compile_fail
+/// use opclook_contract::model::{ItemKey, ScanId};
+/// let _: ScanId = ItemKey::FIRST;
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ItemKey(std::num::NonZeroU32);
+impl ItemKey {
+    pub const FIRST: Self = Self(std::num::NonZeroU32::MIN);
+    pub const fn new(value: u32) -> Option<Self> {
+        match std::num::NonZeroU32::new(value) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
+    }
+    pub const fn get(self) -> u32 {
+        self.0.get()
+    }
+    pub const fn successor(self) -> Option<Self> {
+        match self.get().checked_add(1) {
+            Some(value) => Self::new(value),
+            None => None,
+        }
+    }
+}
+impl fmt::Display for ItemKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.get().fmt(f)
+    }
+}
 pub type RequestId = u64;
 
 /// Identity of one streaming UA subnet scan. Zero is never a scan identity.
@@ -148,6 +179,7 @@ pub struct DaServerStatus {
 /// Rendering is the responsibility of the frontend.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BackendMsg {
+    InvalidItemHandle,
     // ---- pass-through / composition ----
     Raw(String),
     DaRoute(crate::da_route::DaRouteError),

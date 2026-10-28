@@ -130,8 +130,8 @@ fn run_cycle(gateway: &Gateway, session: u64, cycle: u32) {
     }
 
     // Keys unique per cycle so event matching never crosses runs.
-    let k1 = (cycle * 2 + 1) as u32;
-    let k2 = (cycle * 2 + 2) as u32;
+    let k1 = opcda_egui::bff::model::ItemKey::new((cycle * 2 + 1) as u32).unwrap();
+    let k2 = opcda_egui::bff::model::ItemKey::new((cycle * 2 + 2) as u32).unwrap();
     let add = wait_for(
         gateway,
         Command {

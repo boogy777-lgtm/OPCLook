@@ -17,7 +17,7 @@ use crate::constants::{DEFAULT_UA_PORT, SCAN_CONFIRM_THRESHOLD};
 use crate::i18n::{Lang, backend_text};
 use crate::net::SubnetSpec;
 use chrono::TimeZone;
-use opclook_contract::model::ScanId;
+use opclook_contract::model::{ItemKey, ScanId};
 use opcua::types::VariantScalarTypeId as Vt;
 use opcua::types::{
     DataChangeFilter, DataChangeTrigger, DeadbandType, EndpointDescription, LocalizedText,
@@ -227,7 +227,9 @@ fn cmd(kind: CommandKind) -> Command {
 
 #[test]
 fn control_command_classification() {
-    assert!(!is_control_command(&CommandKind::Read { keys: vec![1] }));
+    assert!(!is_control_command(&CommandKind::Read {
+        keys: vec![ItemKey::new(1).unwrap()]
+    }));
     assert!(!is_control_command(&CommandKind::Test));
     assert!(is_control_command(&CommandKind::Browse {
         node_id: "".into(),
@@ -240,7 +242,7 @@ fn control_command_classification() {
     assert!(is_control_command(&CommandKind::AddItems { items: vec![] }));
     assert!(is_control_command(&CommandKind::Write {
         request: WriteRequest {
-            key: 1,
+            key: ItemKey::new(1).unwrap(),
             value: Value::I64(1),
             type_hint: None
         }
@@ -299,16 +301,16 @@ fn subscription_monitoring_parameters_shape() {
     // ItemKey is the client handle; single-slot queue discarding the oldest
     // value; sampling follows the publishing interval (-1), not "as fast as
     // the server can" (0).
-    let params = super::session::monitoring_parameters(42, 0.0, true);
+    let params = super::session::monitoring_parameters(ItemKey::new(42).unwrap(), 0.0, true);
     assert_eq!(params.client_handle, 42);
     assert_eq!(params.sampling_interval, -1.0);
     assert_eq!(params.queue_size, 1);
     assert!(params.discard_oldest);
     assert!(params.filter.is_null(), "no deadband, no filter");
 
-    let with_deadband = super::session::monitoring_parameters(7, 2.5, true);
+    let with_deadband = super::session::monitoring_parameters(ItemKey::new(7).unwrap(), 2.5, true);
     assert!(!with_deadband.filter.is_null());
-    let retry = super::session::monitoring_parameters(7, 2.5, false);
+    let retry = super::session::monitoring_parameters(ItemKey::new(7).unwrap(), 2.5, false);
     assert!(
         retry.filter.is_null(),
         "the filterless retry carries no filter"
@@ -320,14 +322,20 @@ fn subscription_monitoring_parameters_shape() {
 fn controls_jump_over_reads_without_losing_them() {
     let mut queue = CommandQueue::default();
     for command in [
-        cmd(CommandKind::Read { keys: vec![1] }),
-        cmd(CommandKind::Read { keys: vec![2] }),
+        cmd(CommandKind::Read {
+            keys: vec![ItemKey::new(1).unwrap()],
+        }),
+        cmd(CommandKind::Read {
+            keys: vec![ItemKey::new(2).unwrap()],
+        }),
         cmd(CommandKind::Browse {
             node_id: "i=85".into(),
             filter: crate::bff::model::NodeClassFilter::All,
             view_id: None,
         }),
-        cmd(CommandKind::Read { keys: vec![3] }),
+        cmd(CommandKind::Read {
+            keys: vec![ItemKey::new(3).unwrap()],
+        }),
         cmd(CommandKind::AddItems { items: vec![] }),
     ] {
         queue.push_command(command);
@@ -337,7 +345,9 @@ fn controls_jump_over_reads_without_losing_them() {
         order.push(match command.kind {
             CommandKind::Browse { .. } => "browse".to_string(),
             CommandKind::AddItems { .. } => "add".to_string(),
-            CommandKind::Read { keys } => format!("read{}", keys.first().copied().unwrap_or(0)),
+            CommandKind::Read { keys } => {
+                format!("read{}", keys.first().map(|key| key.get()).unwrap_or(0))
+            }
             _ => "?".to_string(),
         });
     }
@@ -1233,15 +1243,15 @@ fn rejected_items_come_back_as_errors_in_request_order() {
     use std::collections::HashMap;
     let items = [
         ItemSpec {
-            key: 7,
+            key: ItemKey::new(7).unwrap(),
             item_id: "ns=2;s=A".to_string(),
         },
         ItemSpec {
-            key: 3,
+            key: ItemKey::new(3).unwrap(),
             item_id: "ns=2;s=B".to_string(),
         },
         ItemSpec {
-            key: 9,
+            key: ItemKey::new(9).unwrap(),
             item_id: "ns=2;s=C".to_string(),
         },
     ];
@@ -1250,10 +1260,17 @@ fn rejected_items_come_back_as_errors_in_request_order() {
         type_id: None,
         writable,
     };
-    let infos = HashMap::from([(7, info(true)), (3, info(false)), (9, info(true))]);
-    let rejected = HashMap::from([(3, BackendMsg::raw("BadNodeIdUnknown (0x80340000)"))]);
+    let infos = HashMap::from([
+        (ItemKey::new(7).unwrap(), info(true)),
+        (ItemKey::new(3).unwrap(), info(false)),
+        (ItemKey::new(9).unwrap(), info(true)),
+    ]);
+    let rejected = HashMap::from([(
+        ItemKey::new(3).unwrap(),
+        BackendMsg::raw("BadNodeIdUnknown (0x80340000)"),
+    )]);
     let merged = merge_add_results(&items, infos, &rejected);
-    let keys: Vec<_> = merged.iter().map(|(k, _)| *k).collect();
+    let keys: Vec<_> = merged.iter().map(|(k, _)| k.get()).collect();
     assert_eq!(keys, [7, 3, 9]);
     assert!(merged[0].1.is_ok());
     assert_eq!(
@@ -1272,18 +1289,18 @@ fn create_results_are_paired_with_their_items_and_bad_statuses_are_failures() {
         (StatusCode::BadFilterNotAllowed, 0),
     ];
     // Four items asked, three results answered: the fourth is a failure, not "ok".
-    let outcomes = create_outcomes(&[10, 20, 30, 40], &results);
+    let outcomes = create_outcomes(&[KEY_10, KEY_20, KEY_30, KEY_40], &results);
     assert_eq!(outcomes.len(), 4);
-    assert!(matches!(outcomes[0], (10, Ok(11))));
+    assert!(matches!(outcomes[0], (KEY_10, Ok(11))));
     assert!(matches!(
         &outcomes[1],
-        (20, Err(failure)) if backend_text(Lang::En, &failure.text()).starts_with("BadNodeIdUnknown")
+        (KEY_20, Err(failure)) if backend_text(Lang::En, &failure.text()).starts_with("BadNodeIdUnknown")
     ));
     assert!(matches!(
         &outcomes[2],
-        (30, Err(failure)) if failure.is_filter_refusal()
+        (KEY_30, Err(failure)) if failure.is_filter_refusal()
     ));
-    assert!(matches!(&outcomes[3], (40, Err(ItemFailure::Call(_)))));
+    assert!(matches!(&outcomes[3], (KEY_40, Err(ItemFailure::Call(_)))));
 }
 
 #[test]
@@ -1428,3 +1445,8 @@ fn integer_writes_reject_fractional_and_out_of_range_floats() {
     assert!(value_to_ua_variant(&Value::U64(u64::MAX), Some(Vt::Int64)).is_err());
     assert!(value_to_ua_variant(&Value::F64(f64::MAX), Some(Vt::Float)).is_err());
 }
+
+const KEY_10: ItemKey = ItemKey::new(10).unwrap();
+const KEY_20: ItemKey = ItemKey::new(20).unwrap();
+const KEY_30: ItemKey = ItemKey::new(30).unwrap();
+const KEY_40: ItemKey = ItemKey::new(40).unwrap();

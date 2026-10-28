@@ -1,4 +1,5 @@
 use opcda_egui::bff::Gateway;
+use opcda_egui::bff::model::ItemKey;
 use opcda_egui::bff::model::{
     BrowseNode, Command, CommandKind, EndpointSpec, Event, EventKind, ItemSpec, NodeKind, Protocol,
     Value, WriteRequest,
@@ -146,7 +147,7 @@ fn add_items(gateway: &Gateway, session: u64, items: &[String]) -> Event {
         .iter()
         .enumerate()
         .map(|(i, id)| ItemSpec {
-            key: (i + 1) as u32,
+            key: ItemKey::new((i + 1) as u32).unwrap(),
             item_id: id.clone(),
         })
         .collect();
@@ -164,7 +165,7 @@ fn add_items(gateway: &Gateway, session: u64, items: &[String]) -> Event {
     .expect("add items timeout")
 }
 
-fn read_value(gateway: &Gateway, session: u64, key: u32) -> Value {
+fn read_value(gateway: &Gateway, session: u64, key: ItemKey) -> Value {
     let event = wait_for(
         gateway,
         Command {
@@ -190,7 +191,7 @@ fn read_value(gateway: &Gateway, session: u64, key: u32) -> Value {
     }
 }
 
-fn write_value(gateway: &Gateway, session: u64, key: u32, value: Value) {
+fn write_value(gateway: &Gateway, session: u64, key: ItemKey, value: Value) {
     let event = wait_for(
         gateway,
         Command {
@@ -244,7 +245,7 @@ fn find_writable(
     gateway: &Gateway,
     session: u64,
     candidates: &[String],
-) -> Option<(u32, String, String, Value)> {
+) -> Option<(ItemKey, String, String, Value)> {
     // Add candidates as items (this resolves DataType + AccessLevel) and inspect each
     // for writable + known scalar type. For any writable candidate, qualify it further
     // with a trial write/read-back/restore so we only target a value that actually sticks.
@@ -257,9 +258,9 @@ fn find_writable(
         EventKind::AddItems { results } => results,
         other => panic!("unexpected add: {other:?}"),
     };
-    let mut by_key: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
+    let mut by_key: std::collections::HashMap<ItemKey, String> = std::collections::HashMap::new();
     for (i, id) in ids.iter().enumerate() {
-        by_key.insert((i + 1) as u32, id.clone());
+        by_key.insert(ItemKey::new((i + 1) as u32).unwrap(), id.clone());
     }
 
     for (key, info) in results {
@@ -372,8 +373,8 @@ fn ua_write_readback_and_restore() {
                     .clone()
                     .filter(|d| d.as_str() != "Other" && d.as_str() != "Unknown")
                     .expect("override node has no resolvable data type");
-                let value = read_value(&gateway, session, 1);
-                (1u32, override_node, data_type_name, value)
+                let value = read_value(&gateway, session, ItemKey::FIRST);
+                (ItemKey::FIRST, override_node, data_type_name, value)
             } else {
                 let (items, tree) = collect_items(&gateway, session, "i=85");
                 assert!(
