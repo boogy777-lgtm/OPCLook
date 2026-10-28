@@ -4508,7 +4508,7 @@ mod tests {
     fn backend_samples_cover_every_variant() {
         // The enum body is counted from the source so that a variant added
         // without a sample (and so without the checks above) fails here.
-        let source = include_str!("../../contract/src/model.rs");
+        let source = include_str!("../../contract/src/model/message.rs");
         let start = source
             .find("pub enum BackendMsg {")
             .expect("BackendMsg is defined in model.rs");
