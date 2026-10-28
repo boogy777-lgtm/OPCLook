@@ -40,6 +40,7 @@ pub enum Theme {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Options {
     pub update_interval_secs: u64,
     pub auto_reconnect: bool,
@@ -168,6 +169,7 @@ pub enum SettingsNotice {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
     pub options: Options,
     pub columns: ColumnSet,
@@ -1494,6 +1496,29 @@ mod tests {
         value.as_object_mut().unwrap().remove("ua_lds_host");
         let old: Settings = serde_json::from_value(value).unwrap();
         assert_eq!(old.ua_lds_host, "");
+    }
+
+    #[test]
+    fn load_partial_legacy_file_preserves_fields_and_clamps_options() {
+        let dir = std::env::temp_dir().join("opcda-egui-settings-partial-legacy");
+        let _ = std::fs::remove_dir_all(&dir);
+        with_appdata(&dir, || {
+            let path = settings_path();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, r#"{"last_da_host":"legacy-host","options":{"update_interval_secs":18446744073709551615}}"#).unwrap();
+            let loaded = Settings::load();
+            assert_eq!(loaded.last_da_host, "legacy-host");
+            assert_eq!(
+                loaded.options.update_interval_secs,
+                UPDATE_INTERVAL_MAX_SECS
+            );
+            assert_eq!(
+                loaded.options.auto_reconnect,
+                Options::default().auto_reconnect
+            );
+            assert_eq!(loaded.last_ua_url, Settings::default().last_ua_url);
+            assert!(loaded.take_notices().is_empty());
+        });
     }
 
     #[test]
