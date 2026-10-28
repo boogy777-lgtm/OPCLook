@@ -938,7 +938,7 @@ fn wait_for_pipe(name: &str, timeout: Duration) -> Result<(), String> {
     use windows::Win32::System::Pipes::WaitNamedPipeW;
     use windows::core::HSTRING;
     let wide = HSTRING::from(name);
-    let millis = timeout.as_millis().min(u32::MAX as u128) as u32;
+    let millis = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
     // SAFETY: the HSTRING is terminated and stays live for the call.
     let ok = unsafe { WaitNamedPipeW(&wide, millis) };
     if ok.as_bool() {

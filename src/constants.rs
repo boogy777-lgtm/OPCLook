@@ -89,8 +89,8 @@ mod tests {
     #[test]
     fn reconnect_cap_is_the_single_source_of_truth() {
         assert_eq!(RECONNECT_MAX_ATTEMPTS, 20);
-        assert_eq!(RECONNECT_BASE_DELAY_SECS, 1);
-        assert!(RECONNECT_MAX_DELAY_SECS >= RECONNECT_BASE_DELAY_SECS);
+        assert_eq!(RECONNECT_BASE_DELAY, std::time::Duration::from_secs(1));
+        assert!(RECONNECT_MAX_DELAY >= RECONNECT_BASE_DELAY);
     }
 
     #[test]

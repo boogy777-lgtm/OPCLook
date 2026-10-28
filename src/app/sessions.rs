@@ -2,7 +2,7 @@ use super::*;
 use crate::bff::model::{CommandKind, EndpointSpec, Protocol, SessionId};
 use crate::constants::RECONNECT_MAX_ATTEMPTS;
 #[cfg(test)]
-use crate::constants::{RECONNECT_BASE_DELAY_SECS, RECONNECT_MAX_DELAY_SECS};
+use crate::constants::{RECONNECT_BASE_DELAY, RECONNECT_MAX_DELAY};
 use crate::i18n::{Tr, fmt, tr};
 #[cfg(test)]
 use std::time::Duration;
@@ -630,11 +630,11 @@ impl App {
 }
 
 /// Exponential reconnect backoff: 1s, 2s, 4s, 8s, ... for attempt 1, 2, 3, 4,
-/// capped at `RECONNECT_MAX_DELAY_SECS`. Overflow-safe for absurd attempt
+/// capped at `RECONNECT_MAX_DELAY`. Overflow-safe for absurd attempt
 /// numbers.
 #[cfg(test)]
 pub(super) fn reconnect_delay(attempt: u32) -> Duration {
-    opclook_engine::reconnect_delay(attempt, RECONNECT_BASE_DELAY_SECS, RECONNECT_MAX_DELAY_SECS)
+    opclook_engine::reconnect_delay(attempt, RECONNECT_BASE_DELAY, RECONNECT_MAX_DELAY)
 }
 
 #[cfg(test)]

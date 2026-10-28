@@ -5,14 +5,14 @@ use super::*;
 use crate::bff::model::{
     BackendMsg, BrowseNode, EndpointSpec, EventKind, NodeKind, Operation, WriteRequest,
 };
-use crate::constants::{RECONNECT_MAX_ATTEMPTS, RECONNECT_MAX_DELAY_SECS};
+use crate::constants::{RECONNECT_MAX_ATTEMPTS, RECONNECT_MAX_DELAY};
 use crate::i18n::Lang;
 use crate::settings::Options;
 
 #[test]
 fn reconnect_delay_doubles_exponentially() {
     // Attempts 1..=7 double: 1, 2, 4, ... 64 would be next but the ceiling
-    // (RECONNECT_MAX_DELAY_SECS = 60) applies from attempt 7 on.
+    // (RECONNECT_MAX_DELAY = 60) applies from attempt 7 on.
     let expected = [1u64, 2, 4, 8, 16, 32, 60, 60, 60];
     for (attempt, secs) in expected.iter().enumerate() {
         assert_eq!(
@@ -30,13 +30,13 @@ fn reconnect_delay_has_a_ceiling_for_every_attempt() {
     // U10: the old loop reached 2^19 s (about 6 days) at attempt 20.
     for attempt in 1..=RECONNECT_MAX_ATTEMPTS {
         assert!(
-            reconnect_delay(attempt).as_secs() <= RECONNECT_MAX_DELAY_SECS,
+            reconnect_delay(attempt).as_secs() <= RECONNECT_MAX_DELAY.as_secs(),
             "attempt {attempt}"
         );
     }
     assert_eq!(
         reconnect_delay(RECONNECT_MAX_ATTEMPTS).as_secs(),
-        RECONNECT_MAX_DELAY_SECS
+        RECONNECT_MAX_DELAY.as_secs()
     );
 }
 
@@ -44,10 +44,10 @@ fn reconnect_delay_has_a_ceiling_for_every_attempt() {
 fn reconnect_delay_never_overflows() {
     // Beyond the 64-bit shift width the helper pins to the ceiling instead of
     // panicking.
-    assert_eq!(reconnect_delay(65).as_secs(), RECONNECT_MAX_DELAY_SECS);
+    assert_eq!(reconnect_delay(65).as_secs(), RECONNECT_MAX_DELAY.as_secs());
     assert_eq!(
         reconnect_delay(u32::MAX).as_secs(),
-        RECONNECT_MAX_DELAY_SECS
+        RECONNECT_MAX_DELAY.as_secs()
     );
 }
 

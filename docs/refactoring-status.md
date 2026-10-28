@@ -350,3 +350,16 @@ Windows workspace all-targets typecheck с test-only флагами, Rust 1.95 c
 check и boundary script прошли. GUI test потребовал локального CARGO_INCREMENTAL=0
 после повреждённого engine rlib; изменения конфигурации не коммитились.
 Реальный Windows inventory/DA и final exact-head CI ещё обязательны.
+
+Фиксированные пределы reconnect и timeout Engine выражены Duration;
+backoff использует bounded checked doubling и сохраняет прежнюю последовательность
+1,2,4,8,16,32,60 секунд. Настройки seconds/ms и DA helper wire seconds остаются
+числовыми ради совместимой схемы; WinAPI миллисекунды преобразуются проверенно.
+Linux Engine 18/18 и GUI reconnect 3/3, Windows workspace all-targets typecheck
+с test-only флагами и fmt прошли. Финальные Linux/Windows exact-head CI,
+реальный DA/UAC и остальные этапы ещё обязательны.
+
+Review расширил границу bounded backoff до 96 удвоений: положительная Duration
+не меньше 1 нс, Duration::MAX меньше 2^94 нс; нулевая база возвращается сразу.
+Linux регрессия для 1 нс/Duration::MAX/u32::MAX и нулевой базы 1/1, Windows
+engine all-targets typecheck без resource skip и fmt прошли. Финальный CI нужен.

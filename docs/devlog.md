@@ -311,3 +311,10 @@ Interface и IPv6 scope типизированы как NonZero; legacy cache с
 числовую форму интерфейсов, нулевой scope использует индекс IPv6 для link-local.
 Linux network 35/35, CLI 6/6, settings 46/46, UI network 5 passed / 1 ignored,
 Windows typecheck и Rust 1.95 contract check прошли; runtime Windows открыт.
+
+Reconnect и request floors типизированы Duration, арифметика backoff ограничена;
+значения settings/wire остаются совместимыми числами. Linux Engine 18/18,
+GUI reconnect 3/3, Windows workspace typecheck прошли; общий gate открыт.
+
+Граница Duration backoff исправлена для публичного API с наносекундной базой
+и огромным максимумом; Linux regression 1/1 и Windows engine typecheck прошли.

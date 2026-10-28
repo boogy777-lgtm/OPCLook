@@ -102,3 +102,6 @@ Advertised security типизировано с сохранением unknown; 
 остальные этапы плана остаются открыты.
 Interface индексы и scope типизированы NonZero; реальный Windows runtime и
 остальные этапы плана остаются открыты.
+Duration reconnect/timeout и проверки инвариантов выполнены; роли ID и этапы
+B/E/F/G/H, Windows runtime и финальный exact-head CI остаются открыты.
+Backoff покрывает весь диапазон Duration; итоговые CI и другие этапы открыты.

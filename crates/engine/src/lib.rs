@@ -37,8 +37,8 @@ impl ReconnectState {
         &mut self,
         now: Instant,
         cap: u32,
-        base_secs: u64,
-        max_secs: u64,
+        base: Duration,
+        max: Duration,
     ) -> ReconnectScheduled {
         let previous = match *self {
             Self::Stopped | Self::Exhausted => return ReconnectScheduled::Unchanged,
@@ -50,7 +50,7 @@ impl ReconnectState {
             return ReconnectScheduled::Exhausted;
         }
         let attempt = previous + 1;
-        let delay = reconnect_delay(attempt, base_secs, max_secs);
+        let delay = reconnect_delay(attempt, base, max);
         let Some(at) = now.checked_add(delay) else {
             *self = Self::Exhausted;
             return ReconnectScheduled::Exhausted;
@@ -65,23 +65,31 @@ pub enum ReconnectScheduled {
     Exhausted,
     Waiting { attempt: u32, delay: Duration },
 }
-pub fn reconnect_delay(attempt: u32, base_secs: u64, max_secs: u64) -> Duration {
-    Duration::from_secs(
-        base_secs
-            .checked_shl(attempt.saturating_sub(1))
-            .unwrap_or(u64::MAX)
-            .min(max_secs),
-    )
+pub fn reconnect_delay(attempt: u32, base: Duration, max: Duration) -> Duration {
+    let mut delay = base.min(max);
+    if delay.is_zero() {
+        return delay;
+    }
+    // A positive Duration is at least 1 ns, and Duration::MAX is below
+    // 2^94 ns. At most 96 doublings reach the cap or overflow, even for
+    // adversarial attempt counts.
+    for _ in 0..attempt.saturating_sub(1).min(96) {
+        delay = delay.checked_mul(2).unwrap_or(max).min(max);
+        if delay == max {
+            break;
+        }
+    }
+    delay
 }
 pub fn request_timeout(operation: Operation, configured_secs: u64) -> Duration {
     let floor = match operation {
         Operation::Connect
         | Operation::Discover
         | Operation::SearchServers
-        | Operation::SearchNetwork => constants::REQUEST_SLOW_MIN_SECS,
-        _ => constants::REQUEST_MIN_SECS,
+        | Operation::SearchNetwork => constants::REQUEST_SLOW_MIN,
+        _ => constants::REQUEST_MIN,
     };
-    Duration::from_secs(configured_secs.max(floor))
+    Duration::from_secs(configured_secs).max(floor)
 }
 #[derive(Clone, Debug)]
 pub struct PendingRequest<C> {
@@ -873,8 +881,8 @@ impl<C> Engine<C> {
                 view.reconnect.schedule(
                     now,
                     constants::RECONNECT_MAX_ATTEMPTS,
-                    constants::RECONNECT_BASE_DELAY_SECS,
-                    constants::RECONNECT_MAX_DELAY_SECS,
+                    constants::RECONNECT_BASE_DELAY,
+                    constants::RECONNECT_MAX_DELAY,
                 )
             })
             .unwrap_or(ReconnectScheduled::Unchanged)
@@ -1155,6 +1163,29 @@ mod tests {
             vec![Operation::Write]
         );
     }
+    #[test]
+    fn reconnect_duration_is_bounded_for_fractional_and_extreme_values() {
+        let base = Duration::from_millis(250);
+        let max = Duration::from_secs(2);
+        assert_eq!(reconnect_delay(1, base, max), base);
+        assert_eq!(reconnect_delay(3, base, max), Duration::from_secs(1));
+        assert_eq!(reconnect_delay(u32::MAX, base, max), max);
+        assert_eq!(reconnect_delay(u32::MAX, Duration::MAX, max), max);
+        assert_eq!(
+            reconnect_delay(u32::MAX, Duration::from_nanos(1), Duration::MAX),
+            Duration::MAX
+        );
+        assert_eq!(
+            reconnect_delay(u32::MAX, Duration::ZERO, Duration::MAX),
+            Duration::ZERO
+        );
+        assert_eq!(request_timeout(Operation::Read, 0), constants::REQUEST_MIN);
+        assert_eq!(
+            request_timeout(Operation::Connect, 0),
+            constants::REQUEST_SLOW_MIN
+        );
+    }
+
     #[test]
     fn timeout_is_one_correlated_event_and_late_reply_is_dropped() {
         let mut engine = Engine::<()>::default();
