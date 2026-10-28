@@ -592,3 +592,9 @@ None-security TCP proxy, 30-секундный production deadline, queued Brows
 снимков App::update: 10k RU, DA helper error RU, UA security/identity ZH,
 Network RU, подтверждение RU. DA error — fixture, не Windows runtime.
 Оптимизированный F baseline ещё выполняется.
+
+**2026-10-28, F baseline:** оптимизированный test profile на Linux: 10k
+статично 2918.9/4472.3 мкс медиана/p95; 100 Values + кадр 3312.2/6089.1;
+отдельный журнал 5000 — 75120.0/101021.1 мкс. Это CPU wall для headless
+стенда, не GPU FPS. Аллокации и условия — в `docs/reports/refactor-frame-baseline.md`.
+F оптимизация, G/H, Windows runtime и exact-head CI ещё открыты.

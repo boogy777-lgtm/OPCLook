@@ -3,7 +3,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use opcda_egui::app::App;
 use opcda_egui::bff::model::{
-    DataValue, EndpointSpec, EventKind, Quality, QualityKind, SessionId, Value,
+    DataValue, EndpointSpec, EventKind, Quality, QualityKind, SessionId, Value, VarType,
 };
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 use std::{alloc::System, time::Instant};
@@ -31,6 +31,11 @@ fn fixture(journal: bool) -> App {
             Value::I64(i as i64),
         );
     }
+    for row in &mut app.rows {
+        row.data_type = Some("Int64".into());
+        row.canonical_vt = Some(VarType(20));
+        row.timestamp = chrono::DateTime::from_timestamp(1_700_000_000, 0);
+    }
     if journal {
         for i in 0..5000 {
             app.journal.info(format!("Journal entry {i:05}"));
@@ -46,7 +51,7 @@ fn fixture(journal: bool) -> App {
 
 fn scene(changed: usize, journal: bool) {
     let mut h = Harness::builder()
-        .with_size([1200.0, 900.0])
+        .with_size([1600.0, 900.0])
         .with_accessibility_check(false)
         .with_context_setup(|ctx| {
             opcda_egui::app::install_fonts(ctx);
@@ -78,7 +83,10 @@ fn scene(changed: usize, journal: bool) {
                                 kind: QualityKind::Good,
                                 text: "Good".into(),
                             },
-                            timestamp: None,
+                            timestamp: chrono::DateTime::from_timestamp(
+                                1_700_000_000 + frame as i64,
+                                0,
+                            ),
                             reason: None,
                         },
                     )
@@ -101,6 +109,11 @@ fn scene(changed: usize, journal: bool) {
     }
     if changed > 0 {
         assert!(matches!(h.state().rows[0].value, Value::I64(100_119)));
+        let timestamp = h.state().rows[0].timestamp_text();
+        assert!(
+            h.query_all_by_label(&timestamp).next().is_some(),
+            "updated timestamp must be visible"
+        );
         assert!(
             h.query_all_by_label("100119").next().is_some(),
             "updated value must be visible"

@@ -1,12 +1,11 @@
 # Статус
 
-**2026-10-28, E core:** отправка команд, ошибки UA-сервисов, разбор LDS и
-завершение воркеров типизированы. Командные каналы закрываются до ожидания;
-ошибки завершения показываются в GUI/CLI. Linux all-targets и Windows i686
-workspace all-targets typecheck прошли; Windows проверка использовала test-only
-пропуск ресурсов и manifest и не является runtime-проверкой. B15 live proxy,
-CSV-диагностика, F/G/H, реальный DA/UAC и финальный exact-head CI открыты.
-Подробные проверки — в `docs/refactoring-status.md` и `docs/devlog.md`.
+**2026-10-28, текущее состояние:** B и E реализованы, включая B15 live
+proxy и CSV diagnostics; пять headless PNG просмотрены. F baseline измерен: 10k статично 2918.9 мкс медиана / 4472.3 мкс p95,
+100 Values + кадр 3312.2 / 6089.1 мкс; отдельно журнал 5000 записей
+75120.0 / 101021.1 мкс (CPU wall, не GPU FPS). F оптимизация,
+G/H, Windows runtime, физические DA/UAC и финальный exact-head CI остаются
+открытыми. Подробности — в `docs/refactoring-status.md` и `docs/devlog.md`.
 
 **Windows CI:** исправление владения VARIANT прошло полный Windows CI на
 предыдущем head `7f`; для `5217` завершились Linux и Windows CI. Текущий head требует
