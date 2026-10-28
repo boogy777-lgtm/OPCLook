@@ -1,10 +1,10 @@
 //! Live check for BUG 1: after several items are subscribed, an «Обновить»
 //! (Browse "") command must not wait behind queued periodic Read commands.
 //! Requires a live OPC UA server (default CODESYS at 127.0.0.1:4840).
-use opcda_egui::bff::Gateway;
 use opcda_egui::bff::model::{
     Command, CommandKind, EndpointSpec, Event, EventKind, ItemSpec, Protocol,
 };
+use opclook_backend::bff::Gateway;
 use std::time::{Duration, Instant};
 
 const DEFAULT_URL: &str = "opc.tcp://127.0.0.1:4840";
@@ -26,13 +26,13 @@ fn wait_for(
     predicate: impl Fn(&EventKind) -> bool,
 ) -> Option<Event> {
     let request_id = command.request_id;
-    let session = command.session;
+    let owner = command.owner;
     let started = Instant::now();
     gateway.send(command).expect("gateway send");
     let deadline = started + timeout;
     while Instant::now() < deadline {
         while let Some(event) = gateway.try_recv() {
-            if event.request_id != request_id || event.session != session {
+            if event.origin != request_id.into() || event.owner != owner {
                 continue;
             }
             if predicate(&event.kind) {
@@ -48,8 +48,10 @@ fn connect(gateway: &Gateway, session: u64) {
     let connected = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Connect {
                 endpoint: EndpointSpec::ua(test_url()),
@@ -66,8 +68,10 @@ fn disconnect(gateway: &Gateway, session: u64) {
     let _ = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Disconnect,
         },
@@ -93,12 +97,12 @@ fn browse_refresh_jumps_over_queued_reads() {
         // nodes; repeat the standard nodes to reach 10 subscriptions.
         let mut items = Vec::new();
         items.push(ItemSpec {
-            key: 1,
+            key: opcda_egui::bff::model::ItemKey::FIRST,
             item_id: CODESYS_VAR.to_string(),
         });
         for i in 0..9 {
             items.push(ItemSpec {
-                key: 2 + i as u32,
+                key: opcda_egui::bff::model::ItemKey::new(2 + i as u32).unwrap(),
                 item_id: if i % 2 == 0 {
                     "i=2259".to_string()
                 } else {
@@ -109,8 +113,10 @@ fn browse_refresh_jumps_over_queued_reads() {
         let add = wait_for(
             &gateway,
             Command {
-                request_id: next_id(),
-                session,
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+                owner: opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                ),
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::AddItems { items },
             },
@@ -134,11 +140,15 @@ fn browse_refresh_jumps_over_queued_reads() {
             let read = wait_for(
                 &gateway,
                 Command {
-                    request_id: next_id(),
-                    session,
+                    request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+                    owner: opcda_egui::bff::model::Owner::Session(
+                        opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                    ),
                     protocol: Protocol::OpcUa,
                     kind: CommandKind::Read {
-                        keys: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+                        keys: (1..=10)
+                            .map(|key| opcda_egui::bff::model::ItemKey::new(key).unwrap())
+                            .collect(),
                     },
                 },
                 Duration::from_secs(30),
@@ -153,12 +163,14 @@ fn browse_refresh_jumps_over_queued_reads() {
         let browse = wait_for(
             &gateway,
             Command {
-                request_id: next_id(),
-                session,
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+                owner: opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                ),
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Browse {
                     node_id: String::new(),
-                    filter: None,
+                    filter: opcda_egui::bff::model::NodeClassFilter::All,
                     view_id: None,
                 },
             },

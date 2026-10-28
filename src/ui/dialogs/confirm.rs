@@ -2,18 +2,18 @@ use super::dialog_spacing;
 use crate::app::App;
 use crate::i18n::{Tr, tr};
 
-pub(super) fn confirm_dialog(app: &mut App, ui: &mut egui::Ui) {
+pub(super) fn confirm_dialog(app: &mut App, ui: &mut egui::Ui, was_open: bool) {
     let ctx = ui.ctx().clone();
-    if !app.dialogs.confirm.open {
+    let Some(request) = app.dialogs.confirm.as_ref() else {
         return;
-    }
+    };
     let lang = app.lang();
-    let title = if app.dialogs.confirm.title.is_empty() {
+    let title = if request.title.is_empty() {
         tr(lang, Tr::ConfirmTitle).to_string()
     } else {
-        app.dialogs.confirm.title.clone()
+        request.title.clone()
     };
-    let text = app.dialogs.confirm.text.clone();
+    let text = request.text.clone();
     let mut yes = false;
     let mut no = false;
     egui::Window::new(&title)
@@ -23,8 +23,9 @@ pub(super) fn confirm_dialog(app: &mut App, ui: &mut egui::Ui) {
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(&ctx, |ui| {
             dialog_spacing(ui);
-            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
-            let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            let enter =
+                was_open && ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.is_none());
+            let esc = was_open && ui.input(|i| i.key_pressed(egui::Key::Escape));
             ui.label(text);
             ui.separator();
             ui.horizontal(|ui| {

@@ -10,13 +10,16 @@ try {
     $profileFlag = "--$Configuration"
     cargo build --package opcda-egui --bin opcda-egui --target $Target $profileFlag
     if ($LASTEXITCODE -ne 0) { throw "opcda-egui build failed" }
+    cargo build --package opclook-cli --bin opclook-cli --target $Target $profileFlag
+    if ($LASTEXITCODE -ne 0) { throw "opclook-cli build failed" }
     cargo build --package opcda-nethelper --bin opcda-nethelper --target $Target $profileFlag
     if ($LASTEXITCODE -ne 0) { throw "opcda-nethelper build failed" }
 
     $release = Join-Path $root "target\$Target\$Configuration"
     $app = Join-Path $release "opcda-egui.exe"
+    $cli = Join-Path $release "opclook-cli.exe"
     $helper = Join-Path $release "opcda-nethelper.exe"
-    foreach ($path in @($app, $helper)) {
+    foreach ($path in @($app, $cli, $helper)) {
         if (-not (Test-Path $path)) { throw "missing artifact: $path" }
         $stream = [System.IO.File]::OpenRead($path)
         try {
@@ -36,7 +39,7 @@ try {
     $package = Join-Path $release "package"
     if (Test-Path $package) { Remove-Item -Recurse -Force $package }
     New-Item -ItemType Directory -Path $package | Out-Null
-    Copy-Item $app, $helper -Destination $package
+    Copy-Item $app, $cli, $helper -Destination $package
     Copy-Item (Join-Path $root "nethelper\nethelper.manifest") -Destination $package
     Copy-Item (Join-Path $root "README.md") -Destination $package
     Copy-Item (Join-Path $root "LICENSE") -Destination $package
@@ -45,6 +48,7 @@ try {
     Copy-Item (Join-Path $root "docs\images\*") -Destination $images
     Write-Host "Package ready: $package"
     Write-Host "  opcda-egui.exe (32-bit)"
+    Write-Host "  opclook-cli.exe (32-bit)"
     Write-Host "  opcda-nethelper.exe (32-bit, requireAdministrator)"
 } finally {
     Pop-Location

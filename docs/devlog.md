@@ -1,3 +1,15 @@
+## 2026-10-28 — Rust 1.99 baseline
+
+Все семь крейтов объявляют минимальный Rust 1.99; локальный инструмент и оба задания CI закреплены на 1.99.1 с rustfmt. Устаревший `Atomic::fetch_update` заменён на `try_update` с сохранением порядка памяти и логики. Измерено: fmt и Windows i686 workspace all-targets typecheck с `--locked --offline` прошли (ресурсы GUI и manifest helper пропущены для typecheck), 2 теста route_service на Linux прошли. Windows runtime и CI точного HEAD определяются внешними проверками; предыдущие результаты Rust 1.95 остаются историческими.
+
+## 2026-10-28 — backend G/H checkpoint
+
+GUID parsing now uses fixed storage, subnet iteration uses inclusive ranges, and UA sessions retain parsed node IDs with keyed monitor lookup. A live sample-server test checks repeated reads, write and invalid ID. UA helper extraction removes the worker/session/io dependency cycle; chunked reads belong to the session. Connection and PKI, request/type loading, item management, and subscription implementation are separated into modules around the owned session. It initially changed Add/Remove no-connection labels; `981725c` restores them, with direct regression and existing live test passing. DA workers own one tagged session while the router retains isolation; routing classification is shared. Contract and network files were split by responsibility without changing public paths. Linux network tests 37, DA router 18, contract 29, locale 11 and compile-fail doctests 3 passed; Windows backend all-target typecheck and Linux CLI boundary check passed. Full Linux backend rerun passed 218/218 including live UA and B15 proxy; Windows i686 workspace all-target typecheck passed with check-only resource/manifest flags. Exact-head CI and real Windows/DA/UAC validation remain open; GUI/Settings H remains open.
+
+## 2026-10-28 — F GUI hot paths
+
+Implemented bounded and cached table/tree rendering, lazy visible-row formatting, virtual journal with full hover/export details, bounded array children, and revision-based row index invalidation including equal-length replacement. Linux optimized headless median CPU wall: static 10k 2206.8 µs, 100 value updates + frame 2462.6 µs, 5000 journal entries 494.5 µs; baseline and p95, allocations, fixture hash and commands are in `docs/reports/refactor-frame-baseline.md`. The figures are measurements of this instrumented host, not GPU FPS or resident memory. Five before/after scenes reviewed, including CJK and helper IPC error. Windows i686 typecheck passed with cross-check flags; Windows runtime, physical DA/UAC and exact-head CI remain open. Remaining backend G and structural H/Settings work remain open.
+
 # Дев-лог
 
 ## 2026-10-27 — аудит и дерево серверов UA
@@ -151,3 +163,429 @@
   в `docs/status.md`.
 - Не проверено: Windows-сборка — CI; перетаскивание на пустую таблицу с кнопкой — только
   по построению и старым DnD-тестам.
+
+
+## 2026-10-28 — начат первый этап Rust-ревью
+
+Проверены находки B1–B20 и оба P; исправления и ограничения перечислены в
+`refactoring-status.md`. Измерено на Linux: 398 тестов библиотеки прошли, один
+диагностический отфильтрован; integration binaries прошли с отмеченными ignored.
+Новый тест TrustLease прошёл отдельно. Windows i686 проверен `cargo check --tests`
+с явным пропуском ресурсов/тестового манифеста; исполнение под Windows и COM/UAC
+остаются для CI/стенда. Helper теперь проверяет PID обоих концов pipe, SID клиента
+и использует BCrypt для имени; незавершённое ограничение времени IPC записано в
+статусе. Перенос слоёв ещё не выполнен.
+
+
+## 2026-10-28 — начало переноса слоёв
+
+Текущие исходники backend перенесены в отдельный крейт вместе с исправлениями
+этапа B1–B20; контракт и локализация отделены, Engine обслуживает оба клиента.
+Компиляция Linux тестовых целей и отдельного CLI проверена. Измерено: Engine
+4 passed, CLI unit 2 passed, GUI `ui_interactions` 138 passed, 1 ignored;
+полный гейт и живой CLI ещё ожидают проверки. Блокирующая подготовка DA-маршрутов и helper
+остаётся открытой задачей, как и остальные этапы `refactoring-plan.md`.
+
+
+### 2026-10-28: граница DA и CLI
+
+Маршрутные описания перенесены в contract, платформенный код — в backend;
+перенос не устраняет синхронную подготовку в GUI. Измерено на Linux: CLI 4
+и Engine 5 тестов прошли; 12 route-тестов backend прошли.
+Запись JSON ограничена по фактическим сериализованным байтам; закрытый канал
+stdout завершает клиент без диагностической ошибки. Незатребованная ошибка
+чтения больше не освобождает слот ожидаемого ответа. CI для `2a6d017`
+прошёл на Linux и Windows; аппаратный DA/UAC не проверен.
+
+Helper exchange ограничен 3 секундами и 16 КиБ; потеря pipe инвалидирует
+helper-owned leases. Измерено: 14 Linux route-тестов прошли; Windows i686
+backend `cargo check --tests` прошёл, реальный pipe/UAC/DA не запускался.
+
+GUI DA discovery/connect переданы Engine и ограниченному route service;
+ошибки локализуются из типизированных событий. Измерено на Linux: GUI lib 186,
+Engine 11, locale 9 и тест реального кадра App::update прошли. Проверка
+реального Windows pipe/UAC/DA и живого CLI остаётся открытой.
+
+Измерено на Linux: 2 live subprocess-теста CLI прошли против sample UA;
+проверены browse/read/write/read, три принудительных poll, push после 3 секунд
+покоя при timeout 1 секунда, Ctrl+C, отсутствие секретов в ошибке и BrokenPipe.
+
+Таймауты GUI-запросов формирует Engine через типизированные события; поздние
+ответы отбрасываются. Измерено: Engine 12, GUI lib 186 и locale 9 прошли.
+
+Engine подтверждает AddItems по результатам каждого ключа и не опрашивает
+ошибочные или просроченные добавления; ранний PollOnly и удаление до ответа
+покрыты регрессиями. Измерено: 16 тестов Engine и 2 live CLI-теста прошли.
+Повторный полный гейт на текущем head выполняется.
+
+Измерено для `a7d07ab`: полный Linux gate прошёл; Windows i686 workspace
+`cargo check --all-targets` прошёл с test-only пропуском ресурсов/манифеста.
+Финальный Windows CI и реальный DA/UAC ещё не выполнены. PNG GUI не рендерился;
+его проверка и настоящий 10k frame/allocation benchmark переданы следующему
+UI/performance этапу. Grace-дренирование того же future при timeout сохранить.
+
+
+2026-10-28, этап D: guard для COM строк, массивов, VARIANT, статуса и группы;
+helper token/LocalAlloc/impersonation и системной библиотеки DNS; Windows
+safety lint расширен до изменённых платформенных модулей. Добавлены Windows
+регрессии B11/B12/B19 и resource cleanup, пока только typecheck. Локально
+измерено: locale 9/9, K1 GUI 1/1, diagnostics `cargo check`; финальный CI
+текущего head и внешние DA/UAC проверки открыты. См. матрицу
+`docs/refactoring-status.md`.
+
+Этап D продолжен: group guard владеет группой до shutdown/drop; BYREF и
+неизвестные/несовместимые layout SAFEARRAY отклоняются, глубина вложенности
+ограничена 32. Это ограничения форматов, не реализованная поддержка BYREF.
+Измерено на Linux: backend lib 189 passed, 0 failed, 0 ignored. Новые Windows
+регрессии проверены типами и ожидают выполнения в CI.
+
+Завершение этапа D: SAFEARRAY передаётся в VARIANT только после успешных
+Unaccess/Unlock; Drop повторяет неудачные операции и пытается уничтожить массив.
+При постоянном сбое OLE освобождение не гарантировано. Windows fault-тесты
+пока только typecheck, выполнение ожидает CI; timeout pipe worker ограничен
+временем жизни завершающегося helper процесса.
+
+### 2026-10-28 — тип фильтра Browse
+
+Фильтр классов узлов сделан явным enum от состояния сессии до команды и UA
+маски. Выбор Variables сохраняет Objects для доступа к вложенным переменным.
+Остальные пункты типизации A/C ещё открыты; полный gate и Windows runtime не
+считаются выполненными этой локальной проверкой.
+
+Синтетический Views root использует общий идентификатор и метод contract;
+контрактный тест прошёл на Linux, Windows GUI проверен только по типам.
+
+Частичные старые settings загружаются с defaults вместо полной потери файла;
+сохранённые интервалы по-прежнему ограничиваются при загрузке. Linux regression
+1/1 и Windows GUI typecheck прошли; остальные пункты C остаются открыты.
+
+Порядок колонок типизирован при загрузке; legacy quoted/plain значения,
+дедупликация, fallback и формат сохранения покрыты settings тестами (46/46
+Linux), взаимодействие диалога проверено отдельно (1/1 Linux). Windows —
+только typecheck, полный gate не выполнен.
+
+Качество строки теперь различает серверный код и локальные состояния ожидания,
+нет данных и ошибки; коды FFFFFFFE/FFFFFFFD больше не совпадают с плейсхолдером.
+Linux UI polish 17/17, stale interactions 5/5, CLI unit 5/5, Windows typecheck;
+рендер PNG и общий gate остаются открытыми.
+
+Settings хранит типизированный Lang и сохраняет совместимые коды языка;
+старые синонимы и неизвестный код проверены на границе. Linux settings 46/46,
+меню языка 1/1 и Windows GUI typecheck прошли.
+
+Сервис DA использует общий Duration refresh; отношения lease и UA keepalive
+проверяются при компиляции. Linux тест констант 1/1, Windows typecheck прошли;
+прочие временные границы и полный gate остаются открыты.
+
+Сетевой выбор настроек хранит AdapterId/IpAddr и разбирает старые строки один
+раз при загрузке. Невалидные значения остаются unselected; stale GUID не
+удаляется автоматически. Linux settings 46/46, network-tab 5 passed / 1
+Windows-only ignored; Windows проверен по типам.
+
+DA VarType отделён от UA типов и использует именованные константы в GUI,
+контракте и VT-таблице backend. Проверены Linux VT 1/1, K3 UI 1/1 и Windows
+typecheck; реальный COM runtime остаётся открытым.
+
+Первый шаг общего UaUrl проверяет вход до журнала и сохраняет смысл пути,
+query и fragment при сравнении; оставшиеся пути обнаружения и объединения ещё
+не переведены. SDK не принимает scoped IPv6 URL; это не заявленная новая
+поддержка. Полный gate и Windows runtime остаются открытыми.
+
+Windows CI изолировал heap corruption в тесте некорректного layout: Drop
+`VARIANT` в extension windows-rs ранее не был учтён. Исправлены двойное
+уничтожение в тесте и владение BSTR при повторном чтении SAFEARRAY; тест
+повторного чтения добавлен. Windows runtime исправления ещё ожидает CI.
+
+Общий UaUrl используется в дереве, scanner и LDS вводе; идентичность сохраняет
+регистр path/query и учитывает адрес и порт. Loopback LDS aliases разделены по
+порту. Linux discovery 12/12, scanner 2/2, U15 8/8, UI grouping 2/2; Windows
+workspace typecheck прошёл. Полный parse-once merge и остальные пункты C открыты.
+
+Discovery URL проверяются при получении и хранятся UaUrl, с безопасной
+диагностикой отброшенных записей; совпадение сессии учитывает host, порт,
+path/query и security. Linux discovery 13/13, scanner 2/2, UI identity 2/2,
+grouping 2/2, security-filter 10/10, locale 9/9; Windows typecheck прошёл,
+реальный runtime и полный gate остаются обязательными.
+Ключ URL сессии хранит валидный identity либо исходный invalid, без двух
+взаимоисключающих полей. Linux identity 2/2 и Windows GUI typecheck прошли.
+
+Исправлен знак смещения FILETIME→Unix для DA дат; 0 остаётся отсутствующим
+временем. Linux checked-conversion regression 1/1; Windows FILETIME wrapper
+прошёл проверку типов, runtime ещё нужен в CI.
+
+Advertised policy/mode представляют отсутствие, известное или неизвестное
+значение; неизвестные и неродной `#None` не понижаются, scanner сохраняет
+несколько вариантов одного URL. Linux UA 62/62, GUI security 10/10, live CLI
+2/2, Windows typecheck и Rust 1.95 contract check прошли. Windows runtime и
+оставшиеся этапы открыты.
+
+Interface и IPv6 scope типизированы как NonZero; legacy cache сохраняет
+числовую форму интерфейсов, нулевой scope использует индекс IPv6 для link-local.
+Linux network 35/35, CLI 6/6, settings 46/46, UI network 5 passed / 1 ignored,
+Windows typecheck и Rust 1.95 contract check прошли; runtime Windows открыт.
+
+Reconnect и request floors типизированы Duration, арифметика backoff ограничена;
+значения settings/wire остаются совместимыми числами. Linux Engine 18/18,
+GUI reconnect 3/3, Windows workspace typecheck прошли; общий gate открыт.
+
+Граница Duration backoff исправлена для публичного API с наносекундной базой
+и огромным максимумом; Linux regression 1/1 и Windows engine typecheck прошли.
+
+UA URL валидатор отклоняет запрещённые SDK символы host и знак порта;
+Linux parity/security test 1/1 и Windows backend typecheck прошли.
+
+Advertised::Known(Auto), если создан вручную, отвергается в resolver и UI;
+Linux regressions 1/1 + 1/1 и Windows workspace typecheck прошли. Компактная
+матрица C и последующая передача перечислены в refactoring-status. Зелёный
+Windows/Linux CI 557fca20 проверил D hotfix, но не последующие C/FILETIME.
+
+**2026-10-28 — A, ScanId:** ненулевой тип проходит через контракт, GUI и scanner; checked successor выдаёт u64::MAX один раз, затем остановка видима в диалоге и журнале (RU/EN/ZH). Измерено: Linux regression исчерпания 1/1, scanner 10/10, stale scan UI 1/1; Linux all-targets check основных пакетов и Windows i686 workspace all-targets check с test-only флагами прошли. Windows runtime, физические DA/UAC/маршруты и PNG не проверены; прочие роли и Origin/Owner открыты.
+
+**2026-10-28 — A, исчерпание GUI:** генерация session/item прекращается после выдачи максимума; ошибка локализована и видна в статусе и журнале. Частичная партия сигналов сохраняет выданные ключи и отправляется; остаток не создаётся. Измерено: Linux две регрессии исчерпания прошли; Windows i686 workspace all-targets typecheck с test-only флагами прошёл. Типизация ролей и реальный Windows runtime остаются открыты.
+
+**2026-10-28 — A, исчерпание request ID:** Engine проверяет наличие ID до отмены маршрутов и ожидающих запросов при Connect/Disconnect; DA-подготовка возвращает отдельную ошибку исчерпания до создания route service. Linux Engine 19/19 и Windows i686 workspace all-targets typecheck с test-only флагами прошли. Числовой RequestId и sentinel Origin/Owner ещё открыты, runtime/финальный CI не проверены.
+
+**2026-10-28 — A, ItemKey:** ненулевой тип вместо u32 по контракту, Engine и GUI/CLI; UA/DA передают числовой handle через get, входящий UA zero отклоняется с локализованной записью в журнал. Checked successor сохраняет ранее исправленное исчерпание. Compile-fail защищает смешение ItemKey/ScanId. Linux GUI exhaustion и headless удаление строки 1/1 каждое; Linux all-targets и Windows i686 workspace all-targets typecheck с test-only флагами прошли. Реальный DA, UAC, Windows runtime и PNG всё ещё не проверены; SessionId/RequestId/Origin/Owner открыты.
+
+Измерено после ItemKey: Linux backend 199/199, Engine 19/19, CLI 6/6; Windows backend/CLI standalone all-targets typecheck без resource skip прошёл. Первый backend run выявил тестовый fallback, вычислявший недопустимый zero; исправлен и полный набор повторно прошёл.
+
+**2026-10-28 — изоляция PKI тестов:** backend unit tests используют временный каталог до инициализации live fixture, а не рабочий каталог/профиль. Linux regression 1/1 и Windows i686 backend tests typecheck без resource skip прошли. Runtime Windows не проверен.
+
+**2026-10-28 — A, RequestId/Origin:** RequestId отделён от ScanId и не допускает zero, внутренние команды могут быть без токена, Event различает ответ и push. Корреляция остаётся одноразовой, timeout несёт исходный токен; проверены push при pending Read, late reply, DA route и exhaustion, включая сохранение работающего Read. UI при отказе отправки освобождает ожидания и не завершает неотправленные действия; принятая часть write batch учитывается до следующей отправки. Исправлен отсутствующий locale sample InvalidItemHandle (9/9). Измерено: Linux backend 200/200, CLI 6/6 + live 2/2, contract 25/25 + doctest 2/2, Engine 20/20, GUI unit 196/196 и headless UI interactions 139/139 (1 ignored); Windows i686 all-targets typecheck с test-only флагом и standalone backend/CLI без него прошли. Реальный Windows runtime/DA/UAC, PNG и exact-head CI не проверены; SessionId/Owner, B/E/F/G/H остаются открыты.
+
+**2026-10-28 — A, SessionId/Owner:** discovery отделён от реальных ненулевых SessionId во всём стеке; checked successor сохраняет выдачу максимума один раз. Pending/таймауты ключуются Owner, backend отклоняет владельца не того вида, discovery timeout не воздействует на session. Engine test recorder фиксирует фактическую отправку ровно одного внутреннего Disconnect с Owner::Session и без RequestId при таймауте Connect. Исправлен найденный GUI эффект: unsolicited Values/Read Error не сбрасывает pending Read. Измерено Linux: backend 202/202, contract 26/26 + 3 doctests, locale 9/9, CLI 6/6 + live 2/2, Engine 22/22, GUI 198/198, UI interactions 139/139 (1 ignored); Windows i686 all-targets typecheck с test-only флагами, backend/CLI standalone без пропуска ресурсов и diagnostics bins Linux/Windows typecheck. A завершён; B/E/F/G/H, финальный CI, Windows runtime, физический DA/UAC, PNG и 10k baseline открыты.
+
+**2026-10-28 — состояния диалогов B (частично).** Подтверждение владеет
+обязательным действием до Yes/No; повторный Enter в кадре открытия и Enter с
+модификаторами не согласуют запись. UA identity — enum; введённые имя и пароль
+остаются в буферах при переключении, но не передаются для Anonymous/Certificate.
+Вкладка Network хранит предыдущий протокол, поэтому при повторном открытии
+восстанавливается последняя DA/UA вкладка; настройки и поля переключаемых вкладок
+сохраняют прежнее поведение. Измерено Linux GUI 198 unit и 141 interaction
+passed, 1 Windows-only ignored; Linux all-targets, Windows i686 workspace
+all-targets typecheck с test-only флагами, fmt и CLI boundary на обоих targets
+прошли. PNG, Windows runtime и финальный CI ещё не выполнены.
+
+Тест root browse/read гонялся с ответом DA stub и нестабильно падал при
+повторном прогоне. Test recorder теперь удерживает отправленный Browse pending
+и проверяет единственную команду Browse и отсутствие Read; отдельный тест
+прошёл, production scheduling не менялся.
+
+**2026-10-28 — подэтап B2.** UA discovery хранит SingleHost/Network с
+RequestId, Auto с непустым Host/Network/Both, отдельное ожидание подтверждения
+большой подсети и активный Subnet со ScanId. Новый поиск снимает только свои
+pending запросы; DA discovery отдельно отменяет только Discover, сохраняя даже
+поставленный в очередь UA timeout. Ошибки и timeout отдельных шагов завершают
+Auto без потери частичных результатов. ScanEnd выражает Completed, Cancelled
+или Failed; для отмены и ошибки сохраняется реально полученный progress.
+Headless тесты покрывают клики подтверждения и остановки, stale events, оба
+направления изоляции, отказ отправки, timeout и три исхода scan. Linux backend
+UA tests 62/62, contract 26/26 + 3 doctest, CLI 6/6 + live sample 2/2 прошли.
+PNG, Windows runtime и финальный exact-head CI не проверены; остальные B/E/F/G/H
+и baseline 10k открыты.
+Измерено после финальных изменений: Linux GUI unit 204/204, UI interactions
+143/143 (1 Windows-only ignored), Engine 22/22; Linux all-targets, diagnostics
+bins и boundary для Linux/Windows targets прошли. Windows i686 workspace
+all-targets и diagnostics bins прошли только typecheck с test-only пропуском
+ресурсов/manifest; standalone backend/CLI all-targets typecheck без пропусков
+прошёл. `cargo fmt --all -- --check` прошёл.
+
+### 2026-10-28 — подэтап B3: состояния DA/CSV/Auto
+
+Результаты DA и выбор используют `DaHit` с неизменной host identity; ручной
+ProgID и fallback первого найденного сервера сохранены. CSV job различает
+running, cancelled и completed; закрытие после отмены сохраняет частичный
+импорт. EndpointSpec использует прямые Auto policy/mode, старые отсутствующие,
+null и legacy значения принимаются; явный security не понижается. Это только
+подэтап B, SessionKind и следующие состояния не затронуты.
+
+Измерено Linux: GUI unit 204/204, UI 144/144 и 1 ignored до последних двух
+добавленных DA регрессий; новые DA selection, double-click и session identity
+прошли отдельно. Contract compatibility тесты 6/6, Linux GUI/CLI all-targets,
+diagnostics, boundary и fmt прошли. Windows i686 workspace all-targets и
+diagnostics проверены с test-only флагами, standalone backend/CLI без флагов.
+После повреждения локальных metadata очищены только engine/locale target
+артефакты и набор повторён. PNG renderer не собрался offline: отсутствует
+`wgpu-core-deps-apple`; визуальная проверка остаётся открытой. Windows runtime,
+физические DA/UAC, финальный exact-head CI, оставшиеся B/E/F/G/H и 10k baseline
+не выполнены.
+
+Повторный полный Linux набор после очистки metadata: backend 202/202,
+Engine 22/22, contract 27/27 + 3 doctest, CLI 6/6 + 2/2 live sample.
+
+CSV dialog больше не использует checked `expect`: состояние и счётчики читаются
+одним snapshot через `let Some`. Linux interaction отмены и завершения 1/1,
+Windows i686 GUI all-targets typecheck с test-only пропуском ресурсов и fmt
+прошли; ограничения предыдущей записи сохраняются.
+
+### 2026-10-28 — B4: SessionKind
+
+DA больше не содержит UA View/filter/timeout/subscription; UI получает состояние
+подписки и Read из Engine. Endpoint закрыт от прямой мутации, обновление
+сохраняет UA выбор для того же протокола, а при смене инициализирует новый
+вариант. Тестовая фикстура сохраняет прежнее время последнего опроса.
+Измерено: Linux GUI unit 206 passed, UI interaction 148 passed и 1 ignored,
+Linux all-targets с test-support и Windows i686 workspace all-targets typecheck
+(test-only пропуск ресурсов/manifest); fmt. Windows runtime, DA/UAC, PNG,
+финальный exact-head CI, 10k baseline и прочие пункты B/E/F/G/H открыты.
+
+2026-10-28 B5 checkpoint: DA helper lifecycle now owns the pending launcher,
+launched process and connected client in distinct states; display status is
+computed from that state. A request deadline retains an outstanding launcher
+or process for the next attempt, preventing duplicate UAC prompts. Linux route
+manager tests: 17 passed, including pending launch, pipe retry, cancellation
+and lease loss. Windows runtime, actual DA/UAC, shared IPC and typed errors
+remain open; Windows i686 typecheck is reported separately.
+
+2026-10-28 B5/IPC: shared protocol v2 tagged requests validate required fields
+and typed IPs while accepting legacy unused null fields. IPC failures retain
+kind/detail through the client and detail in route errors, including refresh,
+remove and localized RU/EN/ZH output. Spawn failure marks the helper unavailable;
+pipe retries retain the process. Linux targeted route 20/20, IPC 2/2, locale
+10/10; Windows i686 backend/helper --tests typechecked with helper manifest
+suppression for tests only. Earlier full Linux backend 203/203 and contract
+29/29 preceded the final targeted tests. Actual Windows execution, DA/UAC,
+exact-head CI and remaining B/E/F/G/H work are open.
+
+
+### 2026-10-28 — B6: JournalMessage
+
+Сообщение журнала теперь либо plain, либо localized с ключом и сохранёнными
+аргументами. Убрана заранее форматируемая русская копия; экспорт по умолчанию
+остался русским, явный экспорт и рендер используют выбранный язык, импорт
+остаётся текстовым. Регрессии проверяют все три языка, экспорт/импорт и одно
+форматирование аргумента. Тестовые читатели переведены на `render`.
+Windows i686 GUI all-targets прошёл только typecheck с test-only пропуском
+ресурсов. PNG, Windows runtime, DA/UAC и итоговый exact-head CI открыты;
+оптимизации журнала отложены до измерения baseline F.
+
+Измерено на Linux: GUI unit 208/208, headless UI interactions 148/148
+(1 ignored). `cargo fmt --all -- --check` прошёл.
+
+
+### 2026-10-28 — E core: typed errors and bounded shutdown
+
+Ошибки send и UA-сервисов типизированы и локализованы; LDS возвращает
+причину отказа. Поздний UA-ответ дренируется тем же future и остаётся
+таймаутом. Shutdown закрывает оба канала до ожидания, не join-ит живой
+thread после done, передаёт Joined/Panicked/TimedOut в UI и CLI. DA router
+сохраняет панику дочернего join как typed outcome, без повторной паники.
+Linux all-targets, Windows i686 workspace all-targets и Windows diagnostics
+bins прошли typecheck; Windows resource/manifest флаги только для проверки.
+Windows runtime, DA/UAC, live B15 proxy, CSV и exact-head CI остаются открыты.
+
+Измерено: Linux backend 212/212, engine 22/22, locale 11/11; отдельные
+shutdown-регрессии 4/4. Диагностические binaries прошли Linux и Windows
+typecheck; реальное выполнение Windows не проверено.
+GUI unit 209/209, gateway 2/2, UI interactions 148/148 (1 Windows-only
+ignored), отдельная регрессия DA discovery cleanup panic 1/1.
+Release profile перешёл с `panic = "abort"` на стандартный unwind, чтобы
+паники worker могли быть обнаружены; размер бинарника может вырасти (не измерен).
+CLI unit 6/6 и live 2/2 прошли на Linux; Windows i686 contract release cfg
+подтвердил `panic="unwind"`. Полная release-сборка и её размер не проверены.
+
+**2026-10-28, CSV diagnostics:** malformed quoting, missing fields and empty
+item IDs are reported with physical record start lines; reports are capped at
+100 with an omitted count. Blank lines remain intentional. Exact `server` +
+`item_id` header recognition avoids dropping servers named `server...`.
+Unresolved sessions also include the source line. RU/EN/ZH messages cover both
+modal and synchronous imports. Linux targeted CSV tests and Windows i686
+all-targets typecheck are used; Windows runtime remains unverified.
+CSV follow-up: retain at most three import columns while still validating
+quoting in discarded columns; tested a 100,000-delimiter row (measured test
+input). Linux CSV tests 11/11 and Windows i686 all-targets typecheck passed.
+E CI follow-up: the boundary guard rejected the GUI's new direct dependency on
+`opclook-contract`, which supplies shared typed errors. Allow that explicit
+edge while retaining the other boundary checks. The guard passed locally for
+both Linux x86_64 and Windows i686 targets.
+
+B15 live: sample server + bounded TCP proxy задерживает ответ на настоящий
+NamespaceArray Read, сохраняя последовательность кадров. Измерено Linux 2/2
+за 62.78 с, включая startup/teardown: timeout закрывает сессию без Browse на
+проводе, ожидающий Read получает NoConnection; Disconnect прерывает загрузку.
+Windows i686 backend all-targets typecheck прошёл, runtime не проверен.
+
+**2026-10-28, F стенд, промежуточная проверка.** Добавлен игнорируемый тест
+полного `App::update`: отдельно 10 000 строк без изменений, пакет 100 значений
+с обработкой события и 5000 записей журнала; фиксируется медиана/p95 времени,
+числа аллокаций и байтов. Синхронизация fixture вынесена из измерения.
+Измерено: Linux debug smoke 1/1, видимое обновлённое значение проверено;
+Windows i686 typecheck теста, CLI boundary Linux и Windows и fmt прошли.
+Debug-цифры не считаются оптимизированным baseline; PNG и релевантные
+оптимизированные измерения ещё выполняются. Runtime Windows не проверен.
+
+**2026-10-28, PNG QA:** Linux lavapipe/wgpu, opt-in `ui-snapshots`, пять
+PNG настоящего App::update просмотрены: русские и китайские глифы читаемы;
+обработанная фиктивная ошибка helper с IPC timeout видна. Тест 1/1; снимки
+не являются проверкой Windows helper/UAC или реального DA. Обычная сборка не
+включает wgpu через эту feature.
+
+**2026-10-28, F baseline измерен:** оптимизированный Linux test profile opt=3,
+полный App::update, 120 кадров после прогрева: 10k статично 2918.9/4472.3 мкс
+медиана/p95, пакет 100 Values + кадр 3312.2/6089.1 мкс, отдельный журнал 5000
+75120.0/101021.1 мкс. Медианные аллокации соответственно 4472, 4530 и 90968.
+Полная методика, байты, ограничения и воспроизводимая команда —
+`docs/reports/refactor-frame-baseline.md`. Тест 1/1, включая видимые value/time;
+CPU wall, не физический FPS. F/G/H и Windows runtime остаются открыты.
+
+
+**2026-10-28, H — граница компиляции GUI:** normal dependencies GUI теперь
+contract, engine и locale; backend доступен напрямую только как dev dependency
+для низкоуровневых интеграционных тестов. Engine явно предоставляет безопасные
+сетевые и сертификатные метаданные, VT и типизированную проверку UA security;
+Gateway доступен только через test-support. Guard проверяет граф normal
+зависимостей. Остальные структурные задачи H и Settings, оптимизации F/G,
+Windows runtime, физический DA/UAC и финальный exact-head CI остаются открыты.
+
+Измерено: Linux полный набор приложений и библиотек прошёл (GUI unit 211/211,
+UI interactions 148/148 и 1 Windows-only ignored, backend 215/215 включая оба
+B15 live, CLI live 2/2); normal GUI+CLI и отдельный CLI построены. Windows i686
+workspace all-targets проверен по типам с test-only флагами; normal GUI и
+diagnostics, standalone CLI проверены отдельно. Guard прошёл для Linux и Windows.
+Windows runtime и ресурсы cross-check не исполнял. Native whole-workspace check
+неприменим: Windows-only nethelper на Linux не компилирует windows-future.
+
+
+### 2026-10-28 — GUI link-loss cleanup
+
+The coordinator clears stale values, loading indicators, subscription projection and outstanding requests through one path on link loss; the engine owns reconnect policy. A rejected worker dispatch regression covers partial writes and UI state. Measured: Linux GUI library 214 passed; Windows i686 workspace all-target typecheck passed (cross-check flags, no Windows runtime). GUI/Settings structural work and exact-head CI remain open.
+
+
+### 2026-10-28 — settings diagnostics and late data
+
+Load returns settings with notices, saves return typed failures, and the application reports errors immediately; on exit the existing native dialog includes save failures with shutdown errors. Unsolicited values, subscription and poll-only updates from an old link are ignored until connected. Regression tests cover both changes. Measured: Linux GUI 216 library, 149 interaction (one Windows-only ignored), 14 theme and one isolation test passed; Windows i686 all-target typecheck passed with cross-check flags. Settings grouping and other GUI structure remain open.
+
+
+### 2026-10-28 — grouped settings
+
+View, UA and network preferences are grouped with flattened serialization preserving all legacy keys; existing default, clamp, security, adapter and column migration tests remain in place, with an exact top-level key regression. Measured: Linux GUI 217 library, 149 interaction (one Windows-only ignored), 14 theme tests, and Windows i686 all-target typecheck passed. Other GUI structural work and exact-head CI remain open.
+
+
+### 2026-10-28 — localized network and save diagnostics
+
+Network control messages use locale keys with technical details retained as arguments; save-blocked is typed and localized, and a failed script save does not report success. Measured: Linux GUI 219 library, 149 interactions (one Windows-only ignored), Windows i686 workspace all-target typecheck passed. Exact-head CI and Windows runtime remain open.
+
+
+### 2026-10-28 — GUI coordinator
+
+Separated event dispatch by domain, introduced WriteBatch transitions and session accessors while keeping correlation in Engine. Linux 219 library and 149 interaction tests (one Windows-only ignored) passed before the final equivalent protocol lookup simplification; Windows i686 all-target typecheck passed afterward. Exact-head CI remains open.
+
+
+### 2026-10-28 — UI decomposition and images
+
+Connection results/security controls, tree row rendering, table cell rendering and table action handling now have named components. Measured: Linux 219 GUI library, 149 interaction (one Windows-only ignored), 20 table tests and Windows i686 all-target typecheck passed. Five egui/wgpu Mesa scenes were rerendered and visually inspected in `docs/screenshots/after-h/`; the preexisting F images remain intact. Exact-head CI and Windows runtime remain open.
+
+
+### 2026-10-28 — selected Clippy fixes
+
+Applied selected clone reuse, redundant clone/borrow removal, derivable defaults and a matching-arm simplification. Measured: Linux GUI 219 library and 149 interaction tests (one Windows-only ignored) passed; Windows i686 all-target typecheck passed with cross-check flags. No zero-warning or Windows runtime claim.
+
+
+### 2026-10-28 — итог реализации A–H
+
+План A–H и исправления B1–B20 реализованы; актуальные решения, локальные проверки и внешние ограничения сведены в [матрицу](refactoring-status.md). Предыдущие записи фиксируют состояние на момент соответствующих проверок. Снимки до F, после F и после H сохранены; условия и измерения приведены в [отчёте](reports/refactor-frame-baseline.md). Exact-head CI и физический Windows DA/UAC/маршруты требуют отдельного подтверждения.
+
+
+### 2026-10-28 — план следующей работы
+
+Подготовлен [план для нового чата](next-ui-command-plan.md): тема и доступность, каталог действий, сочетания, палитра команд и локальные UI-компоненты. Это план, не реализация; A–H и базовая версия Rust остаются без изменений.

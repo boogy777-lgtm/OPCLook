@@ -5,8 +5,15 @@ use crate::i18n::{Tr, tr};
 pub(super) fn about_dialog(app: &mut App, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     if !app.dialogs.about.open {
+        app.dialogs.about.certificate_subject = None;
         return;
     }
+    let subject = app
+        .dialogs
+        .about
+        .certificate_subject
+        .get_or_insert_with(crate::bff::ua::client_cert_subject)
+        .clone();
     let lang = app.lang();
     let mut close = false;
     egui::Window::new(tr(lang, Tr::AboutTitle))
@@ -44,7 +51,7 @@ pub(super) fn about_dialog(app: &mut App, ui: &mut egui::Ui) {
                     ui.horizontal(|ui| {
                         ui.label(format!(
                             "• {} ({}) — {state}",
-                            session.endpoint.display_name(),
+                            session.endpoint().display_name(),
                             session.protocol()
                         ));
                         if !session.info.is_empty() {
@@ -65,9 +72,9 @@ pub(super) fn about_dialog(app: &mut App, ui: &mut egui::Ui) {
             ui.label(egui::RichText::new(tr(lang, Tr::PkiPathLabel)).strong());
             ui.label(crate::bff::ua::pki_dir_public().display().to_string());
             ui.label(egui::RichText::new(tr(lang, Tr::ClientCertSubjectLabel)).strong());
-            match crate::bff::ua::client_cert_subject() {
+            match &subject {
                 Some(subject) => {
-                    ui.label(&subject);
+                    ui.label(subject);
                 }
                 None => {
                     ui.label(tr(lang, Tr::NoClientCert));
@@ -83,5 +90,6 @@ pub(super) fn about_dialog(app: &mut App, ui: &mut egui::Ui) {
         });
     if close {
         app.dialogs.about.open = false;
+        app.dialogs.about.certificate_subject = None;
     }
 }

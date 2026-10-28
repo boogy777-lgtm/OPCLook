@@ -3,8 +3,8 @@
 //! network search. Run with an OPC UA server at OPCUA_TEST_URL:
 //!
 //!   cargo test --test ua_security -- --ignored
-use opcda_egui::bff::Gateway;
 use opcda_egui::bff::model::{Command, CommandKind, EndpointSpec, Event, EventKind, Protocol};
+use opclook_backend::bff::Gateway;
 use std::time::{Duration, Instant};
 
 const DEFAULT_URL: &str = "opc.tcp://127.0.0.1:4840";
@@ -26,12 +26,12 @@ fn wait_for(
     predicate: impl Fn(&EventKind) -> bool,
 ) -> Option<Event> {
     let request_id = command.request_id;
-    let session = command.session;
+    let owner = command.owner;
     gateway.send(command).expect("gateway send");
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         while let Some(event) = gateway.try_recv() {
-            if event.request_id != request_id || event.session != session {
+            if event.origin != request_id.into() || event.owner != owner {
                 continue;
             }
             if predicate(&event.kind) {
@@ -48,8 +48,10 @@ fn connect_endpoint(gateway: &Gateway, session: u64, endpoint: EndpointSpec) -> 
     wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Connect { endpoint },
         },
@@ -63,8 +65,10 @@ fn disconnect(gateway: &Gateway, session: u64) {
     let _ = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Disconnect,
         },
@@ -83,8 +87,10 @@ fn server_search_enumerates_endpoints() {
     let events = wait_for(
         &gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::SearchUaServers {
                 host: "127.0.0.1".to_string(),
@@ -107,7 +113,7 @@ fn server_search_enumerates_endpoints() {
             let endpoints_ok = servers.iter().all(|s| !s.endpoints.is_empty());
             assert!(endpoints_ok, "discovered server(s) expose no endpoints");
         }
-        EventKind::Error { message, .. } => panic!("discovery failed: {message}"),
+        EventKind::Error { message, .. } => panic!("discovery failed: {message:?}"),
         other => panic!("unexpected event: {other:?}"),
     }
 }
@@ -120,21 +126,21 @@ fn server_connect_explicit_none_policy() {
     let gateway = Gateway::new();
     let session = next_id();
     let mut endpoint = EndpointSpec::ua(test_url());
-    endpoint.ua_security_policy = Some(opcda_egui::bff::ua::SECURITY_POLICY_NONE);
-    endpoint.ua_security_mode = Some(opcda_egui::bff::ua::SECURITY_MODE_NONE);
+    endpoint.ua_security_policy = opcda_egui::bff::ua::SECURITY_POLICY_NONE;
+    endpoint.ua_security_mode = opcda_egui::bff::ua::SECURITY_MODE_NONE;
     endpoint.ua_trust_server_cert = true;
     endpoint.ua_session_timeout = Some(90_000);
     let connected = connect_endpoint(&gateway, session, endpoint);
     match connected.kind {
         EventKind::Connected { endpoint, info } => {
             assert_eq!(endpoint.ua_session_timeout, Some(90_000));
-            let info = info.to_string();
+            let info = opcda_egui::i18n::backend_text(opcda_egui::i18n::Lang::En, &info);
             assert!(
                 info.contains("None"),
                 "session info should include the resolved policy: {info}"
             );
         }
-        EventKind::Error { message, .. } => panic!("connect failed: {message}"),
+        EventKind::Error { message, .. } => panic!("connect failed: {message:?}"),
         other => panic!("unexpected event: {other:?}"),
     }
     disconnect(&gateway, session);
@@ -150,13 +156,13 @@ fn server_connect_auto_resolves_security() {
     let connected = connect_endpoint(&gateway, session, EndpointSpec::ua(test_url()));
     match connected.kind {
         EventKind::Connected { info, .. } => {
-            let info = info.to_string();
+            let info = opcda_egui::i18n::backend_text(opcda_egui::i18n::Lang::En, &info);
             assert!(
                 info.contains('[') && info.contains('/'),
                 "session info should describe policy/mode: {info}"
             );
         }
-        EventKind::Error { message, .. } => panic!("connect failed: {message}"),
+        EventKind::Error { message, .. } => panic!("connect failed: {message:?}"),
         other => panic!("unexpected event: {other:?}"),
     }
     disconnect(&gateway, session);
@@ -172,8 +178,10 @@ fn server_network_search_reaches_server() {
     let events = wait_for(
         &gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::SearchUaNetwork {
                 bind: None,

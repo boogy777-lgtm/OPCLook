@@ -1,98 +1,93 @@
-use opcda_egui::bff::Gateway;
+mod probe_support;
 use opcda_egui::bff::model::{
     Command, CommandKind, DataValue, EndpointSpec, Event, EventKind, ItemKey, ItemSpec, NodeKind,
     Protocol, ServerEntry,
 };
+use probe_support::Probe;
 use std::time::{Duration, Instant};
 
-fn main() {
-    let gateway = Gateway::new();
-    let mut request = 1u64;
-    let session = 7u64;
+fn main() -> Result<(), String> {
+    let probe = Probe::new();
+    let mut request = opcda_egui::bff::model::RequestId::FIRST;
+    let session = opcda_egui::bff::model::SessionId::new(7).ok_or("invalid session")?;
 
-    gateway
-        .send(Command {
-            request_id: request,
-            session: 0,
-            protocol: Protocol::OpcDa,
-            kind: CommandKind::Discover {
-                host: String::new(),
-            },
-        })
-        .expect("gateway send");
-    request += 1;
+    probe.send(Command {
+        request_id: Some(request),
+        owner: opcda_egui::bff::model::Owner::Discovery,
+        protocol: Protocol::OpcDa,
+        kind: CommandKind::Discover {
+            host: String::new(),
+        },
+    })?;
+    request = request.successor().ok_or("request identifiers exhausted")?;
 
-    let Some(servers) = wait(&gateway, Duration::from_secs(20), |event| {
+    let Some(servers) = wait(&probe, Duration::from_secs(20), |event| {
         matches!(
             event.kind,
             EventKind::Servers { .. } | EventKind::Error { .. }
         )
     }) else {
         println!("discover timeout");
-        return;
+        return Ok(());
     };
     let EventKind::Servers { servers, .. } = servers.kind else {
         println!("discover failed: {servers:?}");
-        return;
+        return Ok(());
     };
     let Some(ServerEntry { id, .. }) = servers.first() else {
         println!("no DA servers");
-        return;
+        return Ok(());
     };
     println!("Using server {id}");
 
-    gateway
-        .send(Command {
-            request_id: request,
-            session,
-            protocol: Protocol::OpcDa,
-            kind: CommandKind::Connect {
-                endpoint: EndpointSpec::da(String::new(), id.clone()),
-            },
-        })
-        .expect("gateway send");
-    request += 1;
+    probe.send(Command {
+        request_id: Some(request),
+        owner: session.into(),
+        protocol: Protocol::OpcDa,
+        kind: CommandKind::Connect {
+            endpoint: EndpointSpec::da(String::new(), id.clone()),
+        },
+    })?;
+    request = request.successor().ok_or("request identifiers exhausted")?;
 
-    let Some(connected) = wait(&gateway, Duration::from_secs(20), |event| {
+    let Some(connected) = wait(&probe, Duration::from_secs(20), |event| {
         matches!(
             event.kind,
             EventKind::Connected { .. } | EventKind::Error { .. }
         )
     }) else {
         println!("connect timeout");
-        return;
+        return Ok(());
     };
     if !matches!(connected.kind, EventKind::Connected { .. }) {
         println!("connect failed: {:?}", connected.kind);
-        return;
+        return Ok(());
     }
 
-    gateway
-        .send(Command {
-            request_id: request,
-            session,
-            protocol: Protocol::OpcDa,
-            kind: CommandKind::Browse {
-                node_id: String::new(),
-                filter: None,
-                view_id: None,
-            },
-        })
-        .expect("gateway send");
-    request += 1;
+    probe.send(Command {
+        request_id: Some(request),
+        owner: session.into(),
+        protocol: Protocol::OpcDa,
+        kind: CommandKind::Browse {
+            node_id: String::new(),
+            filter: opcda_egui::bff::model::NodeClassFilter::All,
+            view_id: None,
+        },
+    })?;
+    request = request.successor().ok_or("request identifiers exhausted")?;
 
-    let Some(root) = wait(&gateway, Duration::from_secs(20), |event| {
+    let Some(root) = wait(&probe, Duration::from_secs(20), |event| {
         matches!(
             event.kind,
             EventKind::Browse { .. } | EventKind::Error { .. }
         )
     }) else {
         println!("browse timeout");
-        return;
+        return Ok(());
     };
     let EventKind::Browse { children, .. } = root.kind else {
         println!("browse failed: {:?}", root.kind);
-        return;
+        return Ok(());
     };
     println!("Root nodes: {}", children.len());
     for node in children.iter().take(20) {
@@ -110,20 +105,18 @@ fn main() {
 
     if item.is_none() {
         if let Some(branch) = branch {
-            gateway
-                .send(Command {
-                    request_id: request,
-                    session,
-                    protocol: Protocol::OpcDa,
-                    kind: CommandKind::Browse {
-                        node_id: branch.clone(),
-                        filter: None,
-                        view_id: None,
-                    },
-                })
-                .expect("gateway send");
-            request += 1;
-            if let Some(event) = wait(&gateway, Duration::from_secs(20), |event| {
+            probe.send(Command {
+                request_id: Some(request),
+                owner: session.into(),
+                protocol: Protocol::OpcDa,
+                kind: CommandKind::Browse {
+                    node_id: branch.clone(),
+                    filter: opcda_egui::bff::model::NodeClassFilter::All,
+                    view_id: None,
+                },
+            })?;
+            request = request.successor().ok_or("request identifiers exhausted")?;
+            if let Some(event) = wait(&probe, Duration::from_secs(20), |event| {
                 matches!(
                     event.kind,
                     EventKind::Browse { .. } | EventKind::Error { .. }
@@ -145,25 +138,23 @@ fn main() {
 
     let Some((item_id, _name)) = item else {
         println!("no leaf found");
-        disconnect(&gateway, session, request);
-        return;
+        disconnect(&probe, session, request)?;
+        return Ok(());
     };
 
-    gateway
-        .send(Command {
-            request_id: request,
-            session,
-            protocol: Protocol::OpcDa,
-            kind: CommandKind::AddItems {
-                items: vec![ItemSpec {
-                    key: 1,
-                    item_id: item_id.clone(),
-                }],
-            },
-        })
-        .expect("gateway send");
-    request += 1;
-    if let Some(event) = wait(&gateway, Duration::from_secs(20), |event| {
+    probe.send(Command {
+        request_id: Some(request),
+        owner: session.into(),
+        protocol: Protocol::OpcDa,
+        kind: CommandKind::AddItems {
+            items: vec![ItemSpec {
+                key: opcda_egui::bff::model::ItemKey::FIRST,
+                item_id: item_id.clone(),
+            }],
+        },
+    })?;
+    request = request.successor().ok_or("request identifiers exhausted")?;
+    if let Some(event) = wait(&probe, Duration::from_secs(20), |event| {
         matches!(
             event.kind,
             EventKind::AddItems { .. } | EventKind::Error { .. }
@@ -172,18 +163,16 @@ fn main() {
         println!("AddItems: {:?}", event.kind);
     }
 
-    gateway
-        .send(Command {
-            request_id: request,
-            session,
-            protocol: Protocol::OpcDa,
-            kind: CommandKind::Read {
-                keys: vec![1 as ItemKey],
-            },
-        })
-        .expect("gateway send");
-    request += 1;
-    if let Some(event) = wait(&gateway, Duration::from_secs(20), |event| {
+    probe.send(Command {
+        request_id: Some(request),
+        owner: session.into(),
+        protocol: Protocol::OpcDa,
+        kind: CommandKind::Read {
+            keys: vec![ItemKey::FIRST],
+        },
+    })?;
+    request = request.successor().ok_or("request identifiers exhausted")?;
+    if let Some(event) = wait(&probe, Duration::from_secs(20), |event| {
         matches!(
             event.kind,
             EventKind::Values { .. } | EventKind::Error { .. }
@@ -210,31 +199,35 @@ fn main() {
         }
     }
 
-    disconnect(&gateway, session, request);
+    disconnect(&probe, session, request)?;
     std::thread::sleep(Duration::from_millis(500));
+    Ok(())
 }
 
-fn disconnect(gateway: &Gateway, session: u64, request: u64) {
-    gateway
-        .send(Command {
-            request_id: request,
-            session,
-            protocol: Protocol::OpcDa,
-            kind: CommandKind::Disconnect,
-        })
-        .expect("gateway send");
-    let _ = wait(gateway, Duration::from_secs(5), |event| {
+fn disconnect(
+    probe: &Probe,
+    session: opcda_egui::bff::model::SessionId,
+    request: opcda_egui::bff::model::RequestId,
+) -> Result<(), String> {
+    probe.send(Command {
+        request_id: Some(request),
+        owner: session.into(),
+        protocol: Protocol::OpcDa,
+        kind: CommandKind::Disconnect,
+    })?;
+    let _ = wait(probe, Duration::from_secs(5), |event| {
         matches!(
             event.kind,
             EventKind::Disconnected { .. } | EventKind::Error { .. }
         )
     });
+    Ok(())
 }
 
-fn wait(gateway: &Gateway, timeout: Duration, predicate: impl Fn(&Event) -> bool) -> Option<Event> {
+fn wait(probe: &Probe, timeout: Duration, predicate: impl Fn(&Event) -> bool) -> Option<Event> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        while let Some(event) = gateway.try_recv() {
+        while let Some(event) = probe.try_recv() {
             println!("EVENT: {:?}", event.kind);
             if predicate(&event) {
                 return Some(event);

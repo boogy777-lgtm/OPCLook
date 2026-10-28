@@ -57,6 +57,7 @@ impl UaSecurityOption {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct UaUrlNode {
     pub url: String,
+    identity: crate::bff::model::UaUrl,
     pub options: Vec<UaSecurityOption>,
 }
 
@@ -88,41 +89,32 @@ pub(crate) struct UaTreePick {
     pub connect: bool,
 }
 
-/// Case/trailing-slash-insensitive URL identity used for grouping/selection.
-pub(crate) fn url_key(url: &str) -> String {
-    url.trim().trim_end_matches('/').to_ascii_lowercase()
-}
-
 /// Classify one advertised (policy, mode) pair. `None` means "not advertised"
 /// (both strings empty: the URL is known but its security was never fetched).
 pub(crate) fn classify_security(endpoint: &UaEndpointInfo) -> Option<UaSecurityOption> {
-    let policy_text = endpoint.security_policy.trim();
-    let mode_text = endpoint.security_mode.trim();
-    if policy_text.is_empty() && mode_text.is_empty() {
+    let policy = &endpoint.security_policy;
+    let mode = &endpoint.security_mode;
+    if policy.is_unspecified() && mode.is_unspecified() {
         return None;
     }
-    let short_policy = policy_text
-        .rsplit('#')
-        .next()
-        .unwrap_or(policy_text)
-        .to_string();
-    let parsed = if policy_text.is_empty() || mode_text.is_empty() {
-        None
-    } else {
-        UaSecurityPolicy::from_advertised(policy_text)
-            .zip(UaSecurityMode::from_advertised(mode_text))
-            .filter(|(policy, mode)| {
-                *policy != UaSecurityPolicy::Auto
-                    && *mode != UaSecurityMode::Auto
-                    && validate_security_pair(*policy, *mode).is_ok()
-            })
-    };
+    let parsed = policy.known().zip(mode.known()).filter(|(policy, mode)| {
+        *policy != UaSecurityPolicy::Auto
+            && *mode != UaSecurityMode::Auto
+            && validate_security_pair(*policy, *mode).is_ok()
+    });
     Some(match parsed {
         Some((policy, mode)) => UaSecurityOption::Supported { policy, mode },
-        None => UaSecurityOption::Unsupported {
-            policy: short_policy,
-            mode: mode_text.to_string(),
-        },
+        None => {
+            let policy_text = policy.to_string();
+            UaSecurityOption::Unsupported {
+                policy: policy_text
+                    .rsplit('#')
+                    .next()
+                    .unwrap_or(&policy_text)
+                    .to_owned(),
+                mode: mode.to_string(),
+            }
+        }
     })
 }
 
@@ -132,16 +124,17 @@ pub(crate) fn classify_security(endpoint: &UaEndpointInfo) -> Option<UaSecurityO
 pub(crate) fn group_endpoints(endpoints: &[UaEndpointInfo]) -> Vec<UaUrlNode> {
     let mut nodes: Vec<UaUrlNode> = Vec::new();
     for endpoint in endpoints {
-        let url = endpoint.url.trim();
-        if url.is_empty() {
-            continue;
-        }
-        let key = url_key(url);
-        let index = match nodes.iter().position(|node| url_key(&node.url) == key) {
+        let identity = endpoint.url.clone();
+        let url = identity.as_str();
+        let index = match nodes
+            .iter()
+            .position(|node| node.identity.same_endpoint(&identity))
+        {
             Some(index) => index,
             None => {
                 nodes.push(UaUrlNode {
                     url: url.to_string(),
+                    identity: identity.clone(),
                     options: Vec::new(),
                 });
                 nodes.len() - 1
@@ -219,26 +212,48 @@ pub(crate) fn ua_server_tree(
     lang: Lang,
     servers: &[UaServerInfo],
     epoch: u64,
+    cache_id: u64,
+    revision: u64,
     selected_url: &str,
     selected_policy: UaSecurityPolicy,
     selected_mode: UaSecurityMode,
 ) -> Option<UaTreePick> {
     let mut pick: Option<UaTreePick> = None;
-    let selected_key = url_key(selected_url);
+    let selected = selected_url.parse::<crate::bff::model::UaUrl>().ok();
     let hint = tr(lang, Tr::DoubleClickServerHint);
     // Few servers: open them all. Many servers: start collapsed so the list
     // stays scannable.
     let open_servers = servers.len() <= 3;
 
+    let id = egui::Id::unique(("ua_grouped_results", cache_id));
+    let cached = ui
+        .ctx()
+        .data(|data| data.get_temp::<(u64, std::sync::Arc<Vec<Vec<UaUrlNode>>>)>(id));
+    let grouped = match cached {
+        Some((old_revision, grouped)) if old_revision == revision => grouped,
+        _ => {
+            let grouped = std::sync::Arc::new(
+                servers
+                    .iter()
+                    .map(|server| group_endpoints(&server.endpoints))
+                    .collect::<Vec<_>>(),
+            );
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(id, (revision, grouped.clone())));
+            grouped
+        }
+    };
     for (server_index, server) in servers.iter().enumerate() {
-        let nodes = group_endpoints(&server.endpoints);
+        let Some(nodes) = grouped.get(server_index) else {
+            continue;
+        };
         let option_count: usize = nodes.iter().map(|node| node.options.len()).sum();
-        let summary = fmt(
-            lang,
-            Tr::UaTreeSummary,
-            &[&nodes.len().to_string(), &option_count.to_string()],
-        );
-        let holds_selection = nodes.iter().any(|node| url_key(&node.url) == selected_key);
+        let summary = fmt(lang, Tr::UaTreeSummary, &[&nodes.len(), &option_count]);
+        let holds_selection = nodes.iter().any(|node| {
+            selected
+                .as_ref()
+                .is_some_and(|url| node.identity.same_endpoint(url))
+        });
         let title = egui::RichText::new(server_title(server)).strong();
         let header = egui::CollapsingHeader::new(title)
             .id_salt(("ua_tree_server", epoch, server_index))
@@ -251,7 +266,9 @@ pub(crate) fn ua_server_tree(
                 }
                 let open_urls = nodes.len() <= 2;
                 for (url_index, node) in nodes.iter().enumerate() {
-                    let same_url = url_key(&node.url) == selected_key;
+                    let same_url = selected
+                        .as_ref()
+                        .is_some_and(|url| node.identity.same_endpoint(url));
                     let exact_leaf = same_url && node.offers(selected_policy, selected_mode);
                     // The URL row is selected when its URL is current and no
                     // leaf of it matches the current policy/mode (Auto etc.).
@@ -353,9 +370,9 @@ mod tests {
 
     fn ep(url: &str, policy: &str, mode: &str) -> UaEndpointInfo {
         UaEndpointInfo {
-            url: url.to_string(),
-            security_policy: policy.to_string(),
-            security_mode: mode.to_string(),
+            url: url.parse().unwrap(),
+            security_policy: crate::bff::model::AdvertisedPolicy::from_wire(policy),
+            security_mode: crate::bff::model::AdvertisedMode::from_wire(mode),
         }
     }
 
@@ -365,6 +382,28 @@ mod tests {
     // A policy this client does not implement (the list of supported ones grows:
     // Aes256_Sha256_RsaPss used to stand here and is supported now).
     const FUTURE: &str = "http://opcfoundation.org/UA/SecurityPolicy#Aes512_Sha999_Hypothetical";
+
+    #[test]
+    fn groups_by_host_and_ip_but_preserves_path_and_query_case() {
+        let nodes = group_endpoints(&[
+            ep("opc.tcp://[::1]/A?x=/", NONE, "None"),
+            ep("opc.tcp://[0:0:0:0:0:0:0:1]:4840/A/?x=/", NONE, "None"),
+            ep("opc.tcp://[::1]/a?x=/", NONE, "None"),
+            ep("opc.tcp://[::1]/A?x=", NONE, "None"),
+        ]);
+        assert_eq!(nodes.len(), 3);
+    }
+
+    #[test]
+    fn auto_is_not_a_server_advertised_security_choice() {
+        let mut endpoint = ep("opc.tcp://host", "None", "None");
+        endpoint.security_policy =
+            crate::bff::model::AdvertisedPolicy::Known(UaSecurityPolicy::Auto);
+        assert!(matches!(
+            classify_security(&endpoint),
+            Some(UaSecurityOption::Unsupported { .. })
+        ));
+    }
 
     #[test]
     fn groups_by_url_and_keeps_first_spelling() {

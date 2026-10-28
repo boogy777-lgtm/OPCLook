@@ -381,13 +381,20 @@ fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
 /// would show Russian text in the English and Chinese interface.
 #[test]
 fn backend_has_no_hardcoded_cyrillic_strings() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bff");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/backend/src/bff");
     let mut files = Vec::new();
     rust_files(&root, &mut files);
     assert!(
         files.len() >= 15,
         "the backend sources were not found under {root:?}: {files:?}"
     );
+    let contract =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/contract/src/model.rs");
+    assert!(
+        contract.is_file(),
+        "contract model was not found: {contract:?}"
+    );
+    files.push(contract);
     let mut failures: Vec<String> = Vec::new();
     for path in files {
         let name = path

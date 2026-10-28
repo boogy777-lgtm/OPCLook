@@ -25,6 +25,7 @@ use write::write_dialog;
 use crate::app::App;
 
 pub(super) fn dialogs(app: &mut App, ui: &mut egui::Ui) {
+    let confirm_was_open = app.dialogs.confirm.is_some();
     connect_dialog(app, ui);
     add_signal_dialog(app, ui);
     write_dialog(app, ui);
@@ -32,7 +33,7 @@ pub(super) fn dialogs(app: &mut App, ui: &mut egui::Ui) {
     options_dialog(app, ui);
     about_dialog(app, ui);
     message_dialog(app, ui);
-    confirm_dialog(app, ui);
+    confirm_dialog(app, ui, confirm_was_open);
     csv_import_dialog(app, ui);
 }
 

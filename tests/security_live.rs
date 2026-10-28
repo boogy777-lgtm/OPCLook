@@ -3,11 +3,11 @@
 //! Run with an OPC UA server at OPCUA_TEST_URL:
 //!
 //!   cargo test --test security_live -- --ignored
-use opcda_egui::bff::Gateway;
 use opcda_egui::bff::model::{
     Command, CommandKind, EndpointSpec, Event, EventKind, Protocol, UaSecurityMode,
     UaSecurityPolicy,
 };
+use opclook_backend::bff::Gateway;
 use std::time::{Duration, Instant};
 
 const DEFAULT_URL: &str = "opc.tcp://127.0.0.1:4840";
@@ -29,12 +29,12 @@ fn wait_for(
     predicate: impl Fn(&EventKind) -> bool,
 ) -> Option<Event> {
     let request_id = command.request_id;
-    let session = command.session;
+    let owner = command.owner;
     gateway.send(command).expect("gateway send");
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         while let Some(event) = gateway.try_recv() {
-            if event.request_id != request_id || event.session != session {
+            if event.origin != request_id.into() || event.owner != owner {
                 continue;
             }
             if predicate(&event.kind) {
@@ -50,8 +50,10 @@ fn connect_endpoint(gateway: &Gateway, session: u64, endpoint: EndpointSpec) -> 
     wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Connect { endpoint },
         },
@@ -65,8 +67,10 @@ fn disconnect(gateway: &Gateway, session: u64) {
     let _ = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Disconnect,
         },
@@ -83,19 +87,19 @@ fn live_auto_security_still_connects() {
     let gateway = Gateway::new();
     let session = next_id();
     let mut endpoint = EndpointSpec::ua(test_url());
-    endpoint.ua_security_policy = Some(UaSecurityPolicy::Auto);
-    endpoint.ua_security_mode = Some(UaSecurityMode::Auto);
+    endpoint.ua_security_policy = UaSecurityPolicy::Auto;
+    endpoint.ua_security_mode = UaSecurityMode::Auto;
     endpoint.ua_trust_server_cert = true;
     let event = connect_endpoint(&gateway, session, endpoint);
     match event.kind {
         EventKind::Connected { info, .. } => {
-            let info = info.to_string();
+            let info = opcda_egui::i18n::backend_text(opcda_egui::i18n::Lang::En, &info);
             assert!(
                 info.contains("None") || info.contains("Basic256"),
                 "info should name the resolved policy: {info}"
             );
         }
-        EventKind::Error { message, .. } => panic!("auto connect failed: {message}"),
+        EventKind::Error { message, .. } => panic!("auto connect failed: {message:?}"),
         other => panic!("unexpected event: {other:?}"),
     }
     disconnect(&gateway, session);
@@ -110,29 +114,29 @@ fn live_explicit_unadvertised_security_is_an_error() {
     let gateway = Gateway::new();
     let session = next_id();
     let mut endpoint = EndpointSpec::ua(test_url());
-    endpoint.ua_security_policy = Some(UaSecurityPolicy::Basic256Sha256);
-    endpoint.ua_security_mode = Some(UaSecurityMode::SignAndEncrypt);
+    endpoint.ua_security_policy = UaSecurityPolicy::Basic256Sha256;
+    endpoint.ua_security_mode = UaSecurityMode::SignAndEncrypt;
     endpoint.ua_trust_server_cert = true;
     let event = connect_endpoint(&gateway, session, endpoint);
     match event.kind {
         EventKind::Error { message, .. } => {
             let opcda_egui::bff::model::BackendMsg::SecurityResolveFailed { detail } = &message
             else {
-                panic!("expected the security-resolution error, got: {message}");
+                panic!("expected the security-resolution error, got: {message:?}");
             };
             assert!(
                 detail.contains("not offered"),
-                "expected a clear 'not offered' detail, got: {message}"
+                "expected a clear 'not offered' detail, got: {message:?}"
             );
             assert!(
                 detail.contains("advertised:"),
-                "error must list the advertised endpoints, got: {message}"
+                "error must list the advertised endpoints, got: {message:?}"
             );
         }
         EventKind::Connected { info, .. } => {
             panic!(
                 "server actually advertises Basic256Sha256/SignAndEncrypt; \
-                 this test targets a None-only CODESYS endpoint (connected: {info})"
+                 this test targets a None-only CODESYS endpoint (connected: {info:?})"
             );
         }
         other => panic!("unexpected event: {other:?}"),

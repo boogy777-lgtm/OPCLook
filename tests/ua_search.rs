@@ -2,8 +2,8 @@
 //! These require a running OPC UA server (the test rig starts CODESYS at
 //! 127.0.0.1:4840). Run with:
 //!   cargo test --test ua_search -- --ignored --nocapture
-use opcda_egui::bff::Gateway;
 use opcda_egui::bff::model::{Command, CommandKind, Event, EventKind, Protocol};
+use opclook_backend::bff::Gateway;
 use std::time::{Duration, Instant};
 
 const DEFAULT_PORT: u16 = 4840;
@@ -30,8 +30,8 @@ fn wait_for_servers(gateway: &Gateway, host: &str, port: u16, timeout: Duration)
     let request_id = next_id();
     gateway
         .send(Command {
-            request_id,
-            session: 0,
+            request_id: opcda_egui::bff::model::RequestId::new(request_id),
+            owner: opcda_egui::bff::model::Owner::Discovery,
             protocol: Protocol::OpcUa,
             kind: CommandKind::SearchUaServers {
                 host: host.to_string(),
@@ -43,7 +43,11 @@ fn wait_for_servers(gateway: &Gateway, host: &str, port: u16, timeout: Duration)
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         while let Some(event) = gateway.try_recv() {
-            if event.request_id == request_id {
+            if event.origin
+                == opcda_egui::bff::model::Origin::Reply(
+                    opcda_egui::bff::model::RequestId::new(request_id).unwrap(),
+                )
+            {
                 return Some(event);
             }
         }

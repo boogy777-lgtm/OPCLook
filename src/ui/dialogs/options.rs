@@ -116,7 +116,7 @@ pub(super) fn options_dialog(app: &mut App, ui: &mut egui::Ui) {
     if apply {
         app.apply_options();
         app.dialogs.options.open = false;
-        app.settings.save();
+        app.persist_settings();
     }
     if close {
         app.dialogs.options.open = false;

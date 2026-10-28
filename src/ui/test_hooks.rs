@@ -286,9 +286,12 @@ mod dnd_proof {
         ctx.set_visuals(egui::Visuals::dark());
         let mut app = App::new_test(&ctx);
         app.settings.set_lang(crate::i18n::Lang::Ru);
-        app.seed_session(1, crate::bff::model::EndpointSpec::da("", "Srv.Test"));
+        app.seed_session(
+            crate::bff::model::SessionId::new(1).unwrap(),
+            crate::bff::model::EndpointSpec::da("", "Srv.Test"),
+        );
         app.seed_tree_item(
-            1,
+            crate::bff::model::SessionId::new(1).unwrap(),
             None,
             0,
             BrowseNode {
@@ -298,7 +301,7 @@ mod dnd_proof {
                 has_children: false,
             },
         );
-        assert_eq!(app.rows.len(), 0);
+        assert_eq!(app.rows().len(), 0);
         (ctx, app)
     }
 
@@ -376,11 +379,11 @@ mod dnd_proof {
         frame(&ctx, &mut app, input);
 
         assert_eq!(
-            app.rows.len(),
+            app.rows().len(),
             1,
             "dropping an Item must add exactly one row"
         );
-        assert_eq!(app.rows[0].item_id, "ns=1;s=item");
+        assert_eq!(app.rows()[0].item_id, "ns=1;s=item");
     }
 
     /// The drop target includes the unused central-panel space, even when
@@ -420,7 +423,7 @@ mod dnd_proof {
             modifiers: Modifiers::NONE,
         }];
         frame(&ctx, &mut app, release);
-        assert_eq!(app.rows.len(), 1, "blank background must accept a drop");
+        assert_eq!(app.rows().len(), 1, "blank background must accept a drop");
     }
 
     #[test]
@@ -450,7 +453,7 @@ mod dnd_proof {
         ];
         frame(&ctx, &mut app, input);
 
-        assert_eq!(app.rows.len(), 0, "a click must not add rows");
+        assert_eq!(app.rows().len(), 0, "a click must not add rows");
         assert_eq!(
             app.tree_focused, true,
             "a click on a tree row keeps tree focus"
@@ -472,20 +475,23 @@ mod dnd_proof {
     /// Seed a session with a branch of many item children so the table has rows
     /// to drag in / scroll, plus an Item sibling for direct drops.
     fn seed_wide_table(app: &mut App, rows: usize) -> u64 {
-        app.seed_session(1, crate::bff::model::EndpointSpec::da("", "Srv.Test"));
+        app.seed_session(
+            crate::bff::model::SessionId::new(1).unwrap(),
+            crate::bff::model::EndpointSpec::da("", "Srv.Test"),
+        );
         for i in 0..rows {
             app.seed_row(
-                1,
+                crate::bff::model::SessionId::new(1).unwrap(),
                 &format!("ns=1;s=item{i}"),
                 &format!("Sig{i:0>2}"),
                 crate::bff::model::Value::I64(i as i64),
             );
         }
-        app.activate_session(1);
+        app.activate_session(crate::bff::model::SessionId::new(1).unwrap());
         app.selected_tree = None;
         // A tree Item not yet subscribed, for the drop path.
         app.seed_tree_item(
-            1,
+            crate::bff::model::SessionId::new(1).unwrap(),
             None,
             0,
             BrowseNode {
@@ -532,7 +538,7 @@ mod dnd_proof {
         // reset the scroll offset.
         for i in 0..10 {
             app.seed_row(
-                1,
+                crate::bff::model::SessionId::new(1).unwrap(),
                 &format!("ns=1;s=new{i}"),
                 &format!("New{i}"),
                 crate::bff::model::Value::I64(i as i64),
@@ -553,7 +559,7 @@ mod dnd_proof {
             inner_after.min.x
         );
         assert_eq!(
-            app.rows.len(),
+            app.rows().len(),
             110,
             "all seeded + added rows must be present"
         );
@@ -621,7 +627,7 @@ mod dnd_proof {
         }];
         frame(&ctx, &mut app, rel);
 
-        assert_eq!(app.rows.len(), 7, "drop must add the tree Item");
+        assert_eq!(app.rows().len(), 7, "drop must add the tree Item");
         let (offset_after, _, inner_after) =
             table_scroll_for_test().expect("table scroll hook after drop");
         assert!(
@@ -647,12 +653,15 @@ mod dnd_proof {
         ctx.set_visuals(egui::Visuals::dark());
         let mut app = App::new_test(&ctx);
         app.settings.set_lang(crate::i18n::Lang::Ru);
-        app.seed_session(1, crate::bff::model::EndpointSpec::da("", "Alpha.Server"));
         app.seed_session(
-            2,
+            crate::bff::model::SessionId::new(1).unwrap(),
+            crate::bff::model::EndpointSpec::da("", "Alpha.Server"),
+        );
+        app.seed_session(
+            crate::bff::model::SessionId::new(2).unwrap(),
             crate::bff::model::EndpointSpec::da("box2", "Beta.Long.Server.Name"),
         );
-        app.activate_session(1);
+        app.activate_session(crate::bff::model::SessionId::new(1).unwrap());
         reset_ui_test_hooks();
 
         frame_at(&ctx, &mut app, SIZE);
@@ -720,8 +729,8 @@ mod dnd_proof {
         frame(&ctx, &mut app, release);
         let order = app.settings.resolved_order();
         assert_eq!(order[2], ColumnId::FullName, "header drop must reorder");
-        assert_eq!(order, app.settings.columns.order);
-        assert!(app.settings.column_order.is_some());
+        assert_eq!(order, app.settings.view.columns.order);
+        assert!(app.settings.view.column_order.is_some());
     }
 
     /// Releasing the grip on the middle of a dialog row must work too:
@@ -735,7 +744,10 @@ mod dnd_proof {
         ctx.set_visuals(egui::Visuals::dark());
         let mut app = App::new_test(&ctx);
         app.settings.set_lang(crate::i18n::Lang::Ru);
-        app.seed_session(1, crate::bff::model::EndpointSpec::da("", "Srv.Test"));
+        app.seed_session(
+            crate::bff::model::SessionId::new(1).unwrap(),
+            crate::bff::model::EndpointSpec::da("", "Srv.Test"),
+        );
         app.dialogs.columns.open = true;
         for _ in 0..3 {
             frame(&ctx, &mut app, base_input());
@@ -789,7 +801,10 @@ mod dnd_proof {
         ctx.set_visuals(egui::Visuals::dark());
         let mut app = App::new_test(&ctx);
         app.settings.set_lang(crate::i18n::Lang::Ru);
-        app.seed_session(1, crate::bff::model::EndpointSpec::da("", "Srv.Test"));
+        app.seed_session(
+            crate::bff::model::SessionId::new(1).unwrap(),
+            crate::bff::model::EndpointSpec::da("", "Srv.Test"),
+        );
         app.dialogs.columns.open = true;
         columns_hook_api::clear();
 
@@ -806,7 +821,7 @@ mod dnd_proof {
         assert!(!grip.is_negative());
         assert!(!gap.is_negative());
 
-        let before: Vec<ColumnId> = app.settings.columns.order.clone();
+        let before: Vec<ColumnId> = app.settings.view.columns.order.clone();
         assert_eq!(before[1], ColumnId::FullName);
 
         // Press on the FullName grip.
@@ -846,7 +861,7 @@ mod dnd_proof {
         }];
         frame(&ctx, &mut app, rel);
 
-        let after: Vec<ColumnId> = app.settings.columns.order.clone();
+        let after: Vec<ColumnId> = app.settings.view.columns.order.clone();
         assert_eq!(
             after.len(),
             ColumnId::ALL.len(),
@@ -860,13 +875,13 @@ mod dnd_proof {
             "«Полное имя» must move to the slot after «Записываемый тип», got position {full_pos}: {after:?}"
         );
         assert!(
-            app.settings.column_order.is_some(),
+            app.settings.view.column_order.is_some(),
             "column_order must be persisted after the dialog DnD"
         );
         // And persistence is consistent with the reordered legacy list.
         assert_eq!(
             app.settings.resolved_order(),
-            app.settings.columns.order,
+            app.settings.view.columns.order,
             "resolved order must match the persisted columns.order"
         );
     }

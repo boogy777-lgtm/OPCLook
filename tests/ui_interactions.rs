@@ -7,7 +7,7 @@ use egui_kittest::{
 };
 use opcda_egui::app::{App, ReconnectState, SessionState};
 use opcda_egui::bff::model::{
-    BrowseNode, Command, CommandKind, EndpointSpec, EventKind, NodeKind, Protocol,
+    BrowseNode, Command, CommandKind, EndpointSpec, EventKind, ItemKey, NodeKind, Protocol, ScanId,
     SubscriptionState, UaSecurityMode, UaSecurityPolicy, Value,
 };
 use opcda_egui::settings::Settings;
@@ -70,11 +70,11 @@ fn harness(app: App) -> Harness<'static, App> {
         )
 }
 
-fn seed_table(app: &mut App, names: &[(&str, &str, i64)]) -> Vec<u32> {
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+fn seed_table(app: &mut App, names: &[(&str, &str, i64)]) -> Vec<ItemKey> {
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     names
         .iter()
-        .map(|(id, name, value)| app.seed_row(1, id, name, Value::I64(*value)))
+        .map(|(id, name, value)| app.seed_row(sid(1), id, name, Value::I64(*value)))
         .collect()
 }
 
@@ -124,9 +124,9 @@ fn open_combo_right_of(h: &mut Harness<'_, App>, label: &str, dx: f32) {
 
 /// Seed a session with two sibling Item nodes and return their ids.
 fn seed_tree(app: &mut App) -> (u64, u64) {
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     let a = app.seed_tree_item(
-        1,
+        sid(1),
         None,
         0,
         BrowseNode {
@@ -137,7 +137,7 @@ fn seed_tree(app: &mut App) -> (u64, u64) {
         },
     );
     let b = app.seed_tree_item(
-        1,
+        sid(1),
         None,
         0,
         BrowseNode {
@@ -162,9 +162,9 @@ fn tree_empty_pos(h: &Harness<'_, App>, name: &str) -> egui::Pos2 {
 fn tree_row_context_menu_copies_node_name() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     app.seed_tree_item(
-        1,
+        sid(1),
         None,
         0,
         BrowseNode {
@@ -191,7 +191,7 @@ fn table_row_context_menu_removes_selected() {
     right_click_row(&h, "SigA");
     click_menu_item(&mut h, "Удалить выбранные");
 
-    let rows: Vec<u32> = h.state().rows.iter().map(|r| r.key).collect();
+    let rows: Vec<ItemKey> = h.state().rows().iter().map(|r| r.key).collect();
     assert_eq!(rows, vec![keys[1]]);
 }
 
@@ -281,7 +281,7 @@ fn columns_dialog_keyboard_alt_down_reorders_and_persists() {
         );
         assert_eq!(after[idx], before[idx + 1]);
         assert!(
-            h.state().settings.column_order.is_some(),
+            h.state().settings.view.column_order.is_some(),
             "column_order must be persisted after the keyboard move"
         );
     });
@@ -316,7 +316,7 @@ fn columns_dialog_keyboard_alt_up_reorders_and_persists() {
             "«Значение» must move up via Ctrl+ArrowUp"
         );
         assert_eq!(after[idx], before[idx - 1]);
-        assert!(h.state().settings.column_order.is_some());
+        assert!(h.state().settings.view.column_order.is_some());
     });
 }
 
@@ -377,9 +377,9 @@ fn delete_removes_selected_row() {
     h.key_press(Key::Delete);
     h.run_steps(3);
 
-    assert_eq!(h.state().rows.len(), 1);
-    assert!(h.state().rows.iter().any(|r| r.key == keys[1]));
-    assert!(!h.state().rows.iter().any(|r| r.key == keys[0]));
+    assert_eq!(h.state().rows().len(), 1);
+    assert!(h.state().rows().iter().any(|r| r.key == keys[1]));
+    assert!(!h.state().rows().iter().any(|r| r.key == keys[0]));
 }
 
 #[test]
@@ -402,9 +402,9 @@ fn enter_opens_write_dialog() {
 fn tree_space_toggles_expansion() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     let branch = app.seed_tree_item(
-        1,
+        sid(1),
         None,
         0,
         BrowseNode {
@@ -414,7 +414,7 @@ fn tree_space_toggles_expansion() {
             has_children: true,
         },
     );
-    app.set_tree_focus(1, branch);
+    app.set_tree_focus(sid(1), branch);
 
     let mut h = harness(app);
     h.key_press(Key::Space);
@@ -424,9 +424,9 @@ fn tree_space_toggles_expansion() {
         .state()
         .sessions
         .iter()
-        .find(|s| s.id == 1)
+        .find(|s| s.id == sid(1))
         .unwrap()
-        .tree
+        .tree()
         .iter()
         .find(|t| t.id == branch)
         .unwrap();
@@ -449,22 +449,22 @@ fn csv_save_load_roundtrip_preserves_rows() {
     assert!(text.contains("SigB"));
 
     let mut loaded = App::new_test(&ctx);
-    loaded.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    loaded.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     let count = opcda_egui::ui::import_tree_csv_from_path(&mut loaded, &tmp).expect("import");
     let _ = std::fs::remove_file(&tmp);
 
     assert_eq!(count, 2);
-    let ids: Vec<&str> = loaded.rows.iter().map(|r| r.item_id.as_str()).collect();
+    let ids: Vec<&str> = loaded.rows().iter().map(|r| r.item_id.as_str()).collect();
     assert!(ids.contains(&"ns=1;s=a"));
     assert!(ids.contains(&"ns=1;s=b"));
 }
 
 /// Seeding helper for a writable row.
-fn seed_writable_table(app: &mut App, names: &[(&str, &str, i64)]) -> Vec<u32> {
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+fn seed_writable_table(app: &mut App, names: &[(&str, &str, i64)]) -> Vec<ItemKey> {
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     names
         .iter()
-        .map(|(id, name, value)| app.seed_writable_row(1, id, name, Value::I64(*value)))
+        .map(|(id, name, value)| app.seed_writable_row(sid(1), id, name, Value::I64(*value)))
         .collect()
 }
 
@@ -472,7 +472,7 @@ fn seed_writable_table(app: &mut App, names: &[(&str, &str, i64)]) -> Vec<u32> {
 fn write_dialog_shows_confirmation_when_enabled() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.settings.options.confirm_write = true;
+    app.settings.view.options.confirm_write = true;
     seed_writable_table(&mut app, &[("a", "SigA", 42)]);
 
     let mut h = harness(app);
@@ -485,7 +485,7 @@ fn write_dialog_shows_confirmation_when_enabled() {
     // Click "Записать"; because confirm_write is on, a confirm dialog appears
     // and the write is not sent yet (write dialog stays open behind it).
     click_menu_item(&mut h, "Записать");
-    assert!(h.state().dialogs.confirm.open);
+    assert!(h.state().dialogs.confirm.is_some());
     assert!(h.state().dialogs.write.open);
 }
 
@@ -493,7 +493,7 @@ fn write_dialog_shows_confirmation_when_enabled() {
 fn write_confirm_no_keeps_write_dialog() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.settings.options.confirm_write = true;
+    app.settings.view.options.confirm_write = true;
     seed_writable_table(&mut app, &[("a", "SigA", 42)]);
 
     let mut h = harness(app);
@@ -502,10 +502,10 @@ fn write_confirm_no_keeps_write_dialog() {
     h.key_press(Key::Enter);
     h.run_steps(3);
     click_menu_item(&mut h, "Записать");
-    assert!(h.state().dialogs.confirm.open);
+    assert!(h.state().dialogs.confirm.is_some());
 
     click_menu_item(&mut h, "Да");
-    assert!(!h.state().dialogs.confirm.open);
+    assert!(!h.state().dialogs.confirm.is_some());
     assert!(!h.state().dialogs.write.open);
 }
 
@@ -513,7 +513,7 @@ fn write_confirm_no_keeps_write_dialog() {
 fn write_without_confirm_writes_immediately() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.settings.options.confirm_write = false;
+    app.settings.view.options.confirm_write = false;
     seed_writable_table(&mut app, &[("a", "SigA", 42)]);
 
     let mut h = harness(app);
@@ -522,7 +522,7 @@ fn write_without_confirm_writes_immediately() {
     h.key_press(Key::Enter);
     h.run_steps(3);
     click_menu_item(&mut h, "Записать");
-    assert!(!h.state().dialogs.confirm.open);
+    assert!(!h.state().dialogs.confirm.is_some());
     assert!(!h.state().dialogs.write.open);
 }
 
@@ -533,8 +533,8 @@ fn tab_exclusive_switch_keeps_flags_and_changes_view() {
     let mut app = App::new_test(&ctx);
     // Both panels enabled -> a real tab bar appears; clicking a tab is a view
     // choice only, it does NOT toggle the show_* flags.
-    app.settings.options.show_script = true;
-    app.settings.options.show_log = true;
+    app.settings.view.options.show_script = true;
+    app.settings.view.options.show_log = true;
     app.bottom_tab = BottomTab::Script;
     seed_table(&mut app, &[("a", "SigA", 1)]);
 
@@ -550,8 +550,8 @@ fn tab_exclusive_switch_keeps_flags_and_changes_view() {
     tab.click();
     h.run_steps(10);
     // Flags unchanged; only the selected view changed.
-    assert!(h.state().settings.options.show_script);
-    assert!(h.state().settings.options.show_log);
+    assert!(h.state().settings.view.options.show_script);
+    assert!(h.state().settings.view.options.show_log);
     assert_eq!(h.state().bottom_tab, BottomTab::Journal);
 }
 
@@ -561,8 +561,8 @@ fn single_tab_does_not_show_unavailable_tab() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     // Only script enabled -> journal tab must be absent (view stays Script).
-    app.settings.options.show_script = true;
-    app.settings.options.show_log = false;
+    app.settings.view.options.show_script = true;
+    app.settings.view.options.show_log = false;
     app.bottom_tab = BottomTab::Journal;
     seed_table(&mut app, &[("a", "SigA", 1)]);
 
@@ -571,18 +571,18 @@ fn single_tab_does_not_show_unavailable_tab() {
     assert_eq!(h.state().bottom_tab, BottomTab::Journal);
     h.run_steps(5);
     // Still on script-only view; journal panel not renderable as a tab.
-    assert!(!h.state().settings.options.show_log);
+    assert!(!h.state().settings.view.options.show_log);
 }
 
 #[test]
 fn reconnect_stop_sets_flag_and_changes_hint() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.settings.options.auto_reconnect = true;
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.settings.view.options.auto_reconnect = true;
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     // Simulate a disconnected session the auto-reconnect loop is looking at.
     {
-        let view = app.sessions.iter_mut().find(|s| s.id == 1).unwrap();
+        let view = app.sessions.iter_mut().find(|s| s.id == sid(1)).unwrap();
         view.state = SessionState::Disconnected;
         view.reconnect = ReconnectState::Waiting {
             at: std::time::Instant::now(),
@@ -594,7 +594,7 @@ fn reconnect_stop_sets_flag_and_changes_hint() {
     assert!(hint.is_some());
     assert!(hint.unwrap().contains("Повторное подключение 2/20"));
 
-    h.state_mut().stop_reconnect(1);
+    h.state_mut().stop_reconnect(sid(1));
     let hint2 = h.state().reconnect_hint();
     assert!(hint2.is_none() || hint2.unwrap().contains("остановлено"));
 }
@@ -605,12 +605,12 @@ fn reconnect_stop_sets_flag_and_changes_hint() {
 fn stale_reply_with_unknown_request_id_is_ignored() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     let info_before = app.sessions[0].info.clone();
 
     app.on_event_for_test_with_request(
-        1,
-        9_999,
+        sid(1),
+        opcda_egui::bff::model::RequestId::new(9_999).unwrap(),
         EventKind::Connected {
             endpoint: EndpointSpec::da("", "Srv.Stale"),
             info: opcda_egui::bff::model::BackendMsg::raw("stale"),
@@ -623,8 +623,8 @@ fn stale_reply_with_unknown_request_id_is_ignored() {
     );
 
     app.on_event_for_test_with_request(
-        1,
-        9_999,
+        sid(1),
+        opcda_egui::bff::model::RequestId::new(9_999).unwrap(),
         EventKind::Browse {
             node_id: String::new(),
             children: vec![BrowseNode {
@@ -636,7 +636,7 @@ fn stale_reply_with_unknown_request_id_is_ignored() {
         },
     );
     assert!(
-        app.sessions[0].tree.is_empty(),
+        app.sessions[0].tree().is_empty(),
         "stale Browse must be ignored"
     );
 }
@@ -649,11 +649,11 @@ fn matching_request_id_reply_is_accepted() {
         let ctx = egui::Context::default();
         let mut app = App::new_test(&ctx);
         app.open_tab_for_endpoint(EndpointSpec::da("", "Srv.Match"));
-        let ids = app.pending_request_ids_for_test(1);
+        let ids = app.pending_request_ids_for_test(sid(1));
         assert_eq!(ids.len(), 1, "one Connect outstanding, got {ids:?}");
         let connect_id = ids[0];
         app.on_event_for_test_with_request(
-            1,
+            sid(1),
             connect_id,
             EventKind::Connected {
                 endpoint: EndpointSpec::da("", "Srv.Match"),
@@ -665,7 +665,7 @@ fn matching_request_id_reply_is_accepted() {
 
         // Replaying the same id after it was consumed is now stale.
         app.on_event_for_test_with_request(
-            1,
+            sid(1),
             connect_id,
             EventKind::Connected {
                 endpoint: EndpointSpec::da("", "Srv.Match"),
@@ -685,15 +685,15 @@ fn matching_request_id_reply_is_accepted() {
 fn push_event_with_zero_request_id_is_accepted() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
     app.on_event_for_test_at(
-        1,
+        sid(1),
         EventKind::SubscriptionState {
             state: SubscriptionState::Active,
         },
     );
     assert_eq!(
-        app.sessions[0].subscription,
+        app.sessions[0].ua().unwrap().subscription,
         SubscriptionState::Active,
         "request-id 0 push must be accepted"
     );
@@ -707,14 +707,14 @@ fn disconnect_connect_does_not_let_old_connected_mutate_new_state() {
         let ctx = egui::Context::default();
         let mut app = App::new_test(&ctx);
         app.open_tab_for_endpoint(EndpointSpec::da("", "Srv.Old"));
-        let old_connect = app.pending_request_ids_for_test(1)[0];
+        let old_connect = app.pending_request_ids_for_test(sid(1))[0];
 
-        app.disconnect_session(1);
-        app.reconnect_session(1);
+        app.disconnect_session(sid(1));
+        app.reconnect_session(sid(1));
         assert_eq!(app.sessions[0].state, SessionState::Connecting);
 
         app.on_event_for_test_with_request(
-            1,
+            sid(1),
             old_connect,
             EventKind::Connected {
                 endpoint: EndpointSpec::da("", "Srv.Old"),
@@ -729,12 +729,12 @@ fn disconnect_connect_does_not_let_old_connected_mutate_new_state() {
         assert_ne!(app.sessions[0].info, "old");
 
         let new_connect = *app
-            .pending_request_ids_for_test(1)
+            .pending_request_ids_for_test(sid(1))
             .iter()
             .max()
             .expect("new Disconnect+Connect outstanding");
         app.on_event_for_test_with_request(
-            1,
+            sid(1),
             new_connect,
             EventKind::Connected {
                 endpoint: EndpointSpec::da("", "Srv.Old"),
@@ -760,12 +760,12 @@ fn column_reorder_persists_in_settings() {
         let mut order = resolved;
         order.swap(idx, idx - 1); // Value moves one position left
         app.settings.persist_column_order(&order);
-        app.settings.save();
+        app.settings.save().unwrap();
 
         // Persisted for save/load via BOTH the legacy columns.order and the new
         // column_order snapshot.
-        assert!(app.settings.column_order.is_some());
-        assert_eq!(app.settings.columns.order[idx - 1], ColumnId::Value);
+        assert!(app.settings.view.column_order.is_some());
+        assert_eq!(app.settings.view.columns.order[idx - 1], ColumnId::Value);
         let resolved = app.settings.resolved_order();
         assert_eq!(resolved[idx - 1], ColumnId::Value);
         // Re-listing the canonical set keeps every column exactly once.
@@ -774,8 +774,7 @@ fn column_reorder_persists_in_settings() {
         // A fresh Settings built from the persisted layout resolves the same order
         // (as it would after a save/load roundtrip).
         let reloaded = Settings {
-            columns: app.settings.columns.clone(),
-            column_order: app.settings.column_order.clone(),
+            view: app.settings.view.clone(),
             ..Settings::default()
         };
         assert_eq!(reloaded.resolved_order()[idx - 1], ColumnId::Value);
@@ -786,7 +785,7 @@ fn column_reorder_persists_in_settings() {
 fn status_popup_opens_from_indicator_state() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     seed_table(&mut app, &[("a", "SigA", 1)]);
 
     let mut h = harness(app);
@@ -805,13 +804,13 @@ fn status_popup_opens_from_indicator_state() {
 fn pending_write_shows_status_label_then_summary() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     seed_table(&mut app, &[("a", "SigA", 1)]);
 
     let mut h = harness(app);
     // A write batch is in flight -> «Запись...» label is visible.
-    h.state_mut().pending_writes = 2;
-    h.state_mut().write_total = 2;
+    h.state_mut().write_batch.pending = 2;
+    h.state_mut().write_batch.total = 2;
     h.run_steps(5);
     let visible = h.get_all_by_label("Запись...").count();
     assert!(
@@ -820,10 +819,10 @@ fn pending_write_shows_status_label_then_summary() {
     );
 
     // Batch finishes -> the status bar renders the compact summary.
-    h.state_mut().pending_writes = 0;
-    h.state_mut().write_ok = 2;
-    h.state_mut().write_total = 2;
-    h.state_mut().last_write_summary = Some("Записано: 2 из 2".to_string());
+    h.state_mut().write_batch.pending = 0;
+    h.state_mut().write_batch.ok = 2;
+    h.state_mut().write_batch.total = 2;
+    h.state_mut().write_batch.summary = Some("Записано: 2 из 2".to_string());
     h.run_steps(5);
     let shown = h.get_all_by_label("Записано: 2 из 2").count();
     assert_eq!(
@@ -831,7 +830,7 @@ fn pending_write_shows_status_label_then_summary() {
         "completed-write summary should be in the status bar"
     );
     assert_eq!(
-        h.state().last_write_summary.as_deref(),
+        h.state().write_batch.summary.as_deref(),
         Some("Записано: 2 из 2")
     );
 }
@@ -884,8 +883,8 @@ fn lease_with_subnet(ip: &str, prefix: u8) -> opcda_egui::net::NetworkLease {
             if_type: 0,
             addresses: vec![address],
             gateways: Vec::new(),
-            if_index: 7,
-            ipv6_if_index: 8,
+            if_index: std::num::NonZeroU32::new(7),
+            ipv6_if_index: std::num::NonZeroU32::new(8),
             luid: 0,
             metric: 10,
             is_physical: false,
@@ -923,8 +922,8 @@ fn net_adapter(
             })
             .collect(),
         gateways: Vec::new(),
-        if_index: 9,
-        ipv6_if_index: 9,
+        if_index: std::num::NonZeroU32::new(9),
+        ipv6_if_index: std::num::NonZeroU32::new(9),
         luid: 42,
         metric: 10,
         is_physical: physical,
@@ -937,9 +936,9 @@ fn scan_server() -> opcda_egui::bff::model::UaServerInfo {
         application_name: "SCAN".to_string(),
         application_uri: "urn:scan".to_string(),
         endpoints: vec![opcda_egui::bff::model::UaEndpointInfo {
-            url: "opc.tcp://10.0.0.9:4840".to_string(),
-            security_policy: "None".to_string(),
-            security_mode: "None".to_string(),
+            url: "opc.tcp://10.0.0.9:4840".parse().unwrap(),
+            security_policy: opcda_egui::bff::model::AdvertisedPolicy::from_wire("None"),
+            security_mode: opcda_egui::bff::model::AdvertisedMode::from_wire("None"),
         }],
     }
 }
@@ -953,57 +952,56 @@ fn ua_scan_events_ignore_stale_scan_ids() {
     app.open_connect_dialog();
     {
         let d = &mut app.dialogs.connect;
-        d.ua_scan_id = Some(2);
-        d.ua_subnet_searching = true;
+        d.ua_search = opcda_egui::app::UaSearch::Subnet {
+            scan_id: ScanId::new(2).unwrap(),
+        };
         d.ua_scan_total = 10;
     }
     app.on_event_for_test(EventKind::UaScanProgress {
-        scan_id: 1,
+        scan_id: ScanId::new(1).unwrap(),
         total: 5,
         checked: 5,
         found: 3,
     });
     app.on_event_for_test(EventKind::UaScanFound {
-        scan_id: 1,
+        scan_id: ScanId::new(1).unwrap(),
         servers: vec![scan_server()],
     });
     app.on_event_for_test(EventKind::UaScanFinished {
-        scan_id: 1,
-        cancelled: false,
+        scan_id: ScanId::new(1).unwrap(),
         found: 3,
-        error: None,
+        end: opcda_egui::bff::model::ScanEnd::Completed,
     });
     let d = &app.dialogs.connect;
-    assert_eq!(d.ua_scan_id, Some(2));
-    assert!(d.ua_subnet_searching);
+    assert_eq!(d.ua_search.scan_id(), ScanId::new(2));
+    assert!(d.ua_search.scan_id().is_some());
     assert_eq!(d.ua_scan_checked, 0);
     assert_eq!(d.ua_scan_total, 10);
     assert!(d.ua_scan_servers.is_empty());
-    assert!(d.ua_search_results.is_empty());
+    assert!(d.ua_search_results().is_empty());
 
     app.on_event_for_test(EventKind::UaScanProgress {
-        scan_id: 2,
+        scan_id: ScanId::new(2).unwrap(),
         total: 10,
         checked: 4,
         found: 1,
     });
     app.on_event_for_test(EventKind::UaScanFound {
-        scan_id: 2,
+        scan_id: ScanId::new(2).unwrap(),
         servers: vec![scan_server()],
     });
     app.on_event_for_test(EventKind::UaScanFinished {
-        scan_id: 2,
-        cancelled: false,
+        scan_id: ScanId::new(2).unwrap(),
         found: 1,
-        error: None,
+        end: opcda_egui::bff::model::ScanEnd::Completed,
     });
     let d = &app.dialogs.connect;
-    assert_eq!(d.ua_scan_id, None);
-    assert!(!d.ua_subnet_searching);
+    assert_eq!(d.ua_search.scan_id(), None);
+    assert!(!d.ua_search.scan_id().is_some());
     assert_eq!(d.ua_scan_checked, 10);
     assert_eq!(d.ua_scan_found, 1);
-    assert_eq!(d.ua_search_results.len(), 1);
-    assert_eq!(d.ua_search_results[0].application_uri, "urn:scan");
+    assert_eq!(d.ua_search_results().len(), 1);
+    assert_eq!(d.ua_search_results()[0].application_uri, "urn:scan");
 }
 
 /// A subnet above the confirmation threshold is not launched on the first
@@ -1019,9 +1017,9 @@ fn ua_subnet_scan_requires_confirmation_for_large_subnet() {
     app.start_ua_subnet_scan();
     {
         let d = &app.dialogs.connect;
-        assert!(!d.ua_subnet_searching);
-        assert_eq!(d.ua_scan_id, None);
-        assert_eq!(d.ua_scan_confirm, Some(8190));
+        assert!(!d.ua_search.scan_id().is_some());
+        assert_eq!(d.ua_search.scan_id(), None);
+        assert_eq!(d.ua_search.confirmation_count(), Some(8190));
         assert!(
             d.ua_scan_error.as_deref().unwrap_or("").contains("Подсеть"),
             "localized confirmation prompt expected"
@@ -1030,14 +1028,14 @@ fn ua_subnet_scan_requires_confirmation_for_large_subnet() {
     app.confirm_ua_subnet_scan();
     {
         let d = &app.dialogs.connect;
-        assert!(d.ua_subnet_searching);
-        assert!(d.ua_scan_id.is_some());
-        assert_eq!(d.ua_scan_confirm, None);
-        assert_eq!(d.ua_search_results.len(), 0);
+        assert!(d.ua_search.scan_id().is_some());
+        assert!(d.ua_search.scan_id().is_some());
+        assert_eq!(d.ua_search.confirmation_count(), None);
+        assert_eq!(d.ua_search_results().len(), 0);
     }
     app.cancel_ua_subnet_scan();
-    assert!(!app.dialogs.connect.ua_subnet_searching);
-    assert_eq!(app.dialogs.connect.ua_scan_id, None);
+    assert!(!app.dialogs.connect.ua_search.scan_id().is_some());
+    assert_eq!(app.dialogs.connect.ua_search.scan_id(), None);
 }
 
 /// Scan/cancel commands are streaming: they must not reserve request-id slots.
@@ -1048,12 +1046,28 @@ fn ua_subnet_scan_commands_are_not_pending_requests() {
     app.open_connect_dialog();
     app.network.loaded = true;
     app.network.lease = Some(lease_with_subnet("10.0.0.5", 30));
-    let before = app.pending_request_ids_for_test(0);
+    let before = app.pending_request_ids_for_test(opcda_egui::bff::model::Owner::Discovery);
     app.start_ua_subnet_scan();
-    assert!(app.dialogs.connect.ua_subnet_searching);
-    assert_eq!(app.pending_request_ids_for_test(0), before);
+    assert!(app.dialogs.connect.ua_search.scan_id().is_some());
+    assert_eq!(
+        app.pending_request_ids_for_test(opcda_egui::bff::model::Owner::Discovery),
+        before
+    );
     app.cancel_ua_subnet_scan();
-    assert_eq!(app.pending_request_ids_for_test(0), before);
+    assert_eq!(
+        app.pending_request_ids_for_test(opcda_egui::bff::model::Owner::Discovery),
+        before
+    );
+}
+
+fn start_recorded_ua_host(app: &mut App) -> opcda_egui::bff::model::RequestId {
+    app.record_dispatches_for_test();
+    app.dialogs.connect.ua_search_host = "127.0.0.1".into();
+    app.search_ua_servers();
+    let opcda_egui::app::UaSearch::SingleHost { request } = app.dialogs.connect.ua_search else {
+        panic!("host search")
+    };
+    request
 }
 
 /// UaServersFound populates the connect dialog's search results state.
@@ -1062,29 +1076,79 @@ fn ua_servers_found_populates_results_state() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
+    let request = start_recorded_ua_host(&mut app);
     let servers = vec![opcda_egui::bff::model::UaServerInfo {
         application_name: "CODESYS".to_string(),
         application_uri: "urn:test".to_string(),
         endpoints: vec![opcda_egui::bff::model::UaEndpointInfo {
-            url: "opc.tcp://127.0.0.1:4840".to_string(),
-            security_policy: "None".to_string(),
-            security_mode: "None".to_string(),
+            url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
+            security_policy: opcda_egui::bff::model::AdvertisedPolicy::from_wire("None"),
+            security_mode: opcda_egui::bff::model::AdvertisedMode::from_wire("None"),
         }],
     }];
-    app.on_event_for_test(opcda_egui::bff::model::EventKind::UaServersFound {
-        host: "127.0.0.1".to_string(),
-        port: 4840,
-        servers,
-    });
-    assert_eq!(app.dialogs.connect.ua_search_results.len(), 1);
-    assert!(!app.dialogs.connect.ua_searching);
+    app.on_event_for_test_with_request(
+        opcda_egui::bff::model::Owner::Discovery,
+        request,
+        opcda_egui::bff::model::EventKind::UaServersFound {
+            host: "127.0.0.1".to_string(),
+            port: 4840,
+            servers,
+        },
+    );
+    assert_eq!(app.dialogs.connect.ua_search_results().len(), 1);
+    assert!(!app.dialogs.connect.ua_search.host_searching());
     assert_eq!(
-        app.dialogs.connect.ua_search_results[0]
+        app.dialogs.connect.ua_search_results()[0]
             .endpoints
             .first()
             .unwrap()
-            .url,
+            .url
+            .as_str(),
         "opc.tcp://127.0.0.1:4840"
+    );
+}
+
+#[test]
+fn ua_discovery_reply_arrives_on_network_pane() {
+    use opcda_egui::app::ConnectPane;
+    use opcda_egui::bff::model::{AdvertisedMode, AdvertisedPolicy, UaEndpointInfo, UaServerInfo};
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    let request = start_recorded_ua_host(&mut app);
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.get_by_label("OPC UA").click();
+    h.run_steps(3);
+    h.get_by_label("Сетевые настройки").click();
+    h.run_steps(3);
+    h.state_mut().on_event_for_test_with_request(
+        opcda_egui::bff::model::Owner::Discovery,
+        request,
+        EventKind::UaServersFound {
+            host: "127.0.0.1".into(),
+            port: 4840,
+            servers: vec![UaServerInfo {
+                application_name: "Sample".into(),
+                application_uri: "urn:sample".into(),
+                endpoints: vec![UaEndpointInfo {
+                    url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
+                    security_policy: AdvertisedPolicy::from_wire("None"),
+                    security_mode: AdvertisedMode::from_wire("None"),
+                }],
+            }],
+        },
+    );
+    assert!(matches!(
+        h.state().dialogs.connect.pane,
+        ConnectPane::Network { .. }
+    ));
+    assert_eq!(h.state().dialogs.connect.ua_search_results().len(), 1);
+    h.get_by_label("OPC UA").click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().dialogs.connect.ua_search_results()[0].application_name,
+        "Sample"
     );
 }
 
@@ -1111,20 +1175,25 @@ fn connect_dialog_reopen_keeps_discovered_servers() {
 
     // A completed single-host UA search populates the result list as well as the
     // security-combo endpoint source.
-    app.on_event_for_test(EventKind::UaServersFound {
-        host: "127.0.0.1".to_string(),
-        port: 4840,
-        servers: vec![UaServerInfo {
-            application_name: "CODESYS".to_string(),
-            application_uri: "urn:test".to_string(),
-            endpoints: vec![UaEndpointInfo {
-                url: "opc.tcp://127.0.0.1:4840".to_string(),
-                security_policy: "None".to_string(),
-                security_mode: "None".to_string(),
+    let request = start_recorded_ua_host(&mut app);
+    app.on_event_for_test_with_request(
+        opcda_egui::bff::model::Owner::Discovery,
+        request,
+        EventKind::UaServersFound {
+            host: "127.0.0.1".to_string(),
+            port: 4840,
+            servers: vec![UaServerInfo {
+                application_name: "CODESYS".to_string(),
+                application_uri: "urn:test".to_string(),
+                endpoints: vec![UaEndpointInfo {
+                    url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
+                    security_policy: opcda_egui::bff::model::AdvertisedPolicy::from_wire("None"),
+                    security_mode: opcda_egui::bff::model::AdvertisedMode::from_wire("None"),
+                }],
             }],
-        }],
-    });
-    assert_eq!(app.dialogs.connect.ua_search_results.len(), 1);
+        },
+    );
+    assert_eq!(app.dialogs.connect.ua_search_results().len(), 1);
     assert_eq!(app.dialogs.connect.ua_discovered_endpoints.len(), 1);
 
     // Close cancels in-flight searches (keeping the found servers), then reopen.
@@ -1137,7 +1206,7 @@ fn connect_dialog_reopen_keeps_discovered_servers() {
         "DA servers must survive a close/reopen"
     );
     assert_eq!(
-        app.dialogs.connect.ua_search_results.len(),
+        app.dialogs.connect.ua_search_results().len(),
         1,
         "UA search results must survive a close/reopen"
     );
@@ -1150,7 +1219,8 @@ fn connect_dialog_reopen_keeps_discovered_servers() {
     // discovery (no fresh pending request on session 0).
     assert_eq!(app.dialogs.connect.da_auto_pending, 0);
     assert!(
-        app.pending_request_ids_for_test(0).is_empty(),
+        app.pending_request_ids_for_test(opcda_egui::bff::model::Owner::Discovery)
+            .is_empty(),
         "reopening with a populated DA list must not restart discovery"
     );
 }
@@ -1165,29 +1235,34 @@ fn connect_dialog_reopen_keeps_merged_subnet_scan_results() {
     app.network.loaded = true;
     app.network.lease = Some(lease_with_subnet("10.0.0.5", 30));
     app.start_ua_subnet_scan();
-    let scan_id = app.dialogs.connect.ua_scan_id.expect("subnet scan id");
+    let scan_id = app
+        .dialogs
+        .connect
+        .ua_search
+        .scan_id()
+        .expect("subnet scan id");
     app.on_event_for_test(EventKind::UaScanFound {
         scan_id,
         servers: vec![scan_server()],
     });
     // Scan results appear immediately instead of waiting for completion.
-    assert_eq!(app.dialogs.connect.ua_search_results.len(), 1);
+    assert_eq!(app.dialogs.connect.ua_search_results().len(), 1);
 
     app.close_connect_dialog();
     assert_eq!(
-        app.dialogs.connect.ua_search_results.len(),
+        app.dialogs.connect.ua_search_results().len(),
         1,
         "closing must cancel the scan and merge its buffer"
     );
 
     app.open_connect_dialog();
     assert_eq!(
-        app.dialogs.connect.ua_search_results.len(),
+        app.dialogs.connect.ua_search_results().len(),
         1,
         "merged subnet-scan results must survive a reopen"
     );
     assert_eq!(app.dialogs.connect.ua_discovered_endpoints.len(), 1);
-    assert!(!app.dialogs.connect.ua_subnet_searching);
+    assert!(!app.dialogs.connect.ua_search.scan_id().is_some());
 }
 
 /// UA connect dialog renders the security controls with the Auto defaults.
@@ -1242,11 +1317,14 @@ fn u15_connect_dialog_has_an_lds_host_field_used_by_the_lds_search() {
         h.get_by_label("Поиск через LDS/mDNS").click();
         h.run_steps(5);
         let state = h.state();
-        assert!(state.dialogs.connect.ua_network_searching);
+        assert!(state.dialogs.connect.ua_search.network_searching());
         assert!(state.dialogs.connect.error.is_none());
-        assert_eq!(state.settings.ua_lds_host, "127.0.0.1:48690");
+        assert_eq!(state.settings.ua.ua_lds_host, "127.0.0.1:48690");
         assert_eq!(
-            opcda_egui::settings::Settings::load().ua_lds_host,
+            opcda_egui::settings::Settings::load()
+                .settings
+                .ua
+                .ua_lds_host,
             "127.0.0.1:48690",
             "the field is persisted"
         );
@@ -1268,10 +1346,10 @@ fn u15_connect_dialog_rejects_a_malformed_lds_host() {
         h.run_steps(2);
         h.get_by_label("Поиск через LDS/mDNS").click();
         h.run_steps(5);
-        assert!(!h.state().dialogs.connect.ua_network_searching);
+        assert!(!h.state().dialogs.connect.ua_search.network_searching());
         assert!(h.state().dialogs.connect.error.is_some());
         assert!(h.query_all_by_label_contains("LDS-хост:").count() >= 1);
-        assert_eq!(h.state().settings.ua_lds_host, "");
+        assert_eq!(h.state().settings.ua.ua_lds_host, "");
     });
 }
 
@@ -1280,6 +1358,7 @@ fn u15_connect_dialog_rejects_a_malformed_lds_host() {
 /// rewrite the saved selection.
 #[test]
 fn connect_dialog_network_tab_renders_single_adapter_combo() {
+    use opcda_egui::bff::model::Protocol;
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
@@ -1288,7 +1367,10 @@ fn connect_dialog_network_tab_renders_single_adapter_combo() {
 
     h.get_by_label("Сетевые настройки").click();
     h.run_steps(5);
-    assert!(h.state().dialogs.connect.network_tab);
+    assert!(matches!(
+        h.state().dialogs.connect.pane,
+        opcda_egui::app::ConnectPane::Network { .. }
+    ));
     assert_eq!(
         h.query_all_by_label("Сетевые адаптеры").count(),
         0,
@@ -1314,10 +1396,37 @@ fn connect_dialog_network_tab_renders_single_adapter_combo() {
         1
     );
 
+    // The last protocol and both drafts survive the network pane and reopen.
+    h.get_by_label("OPC UA").click();
+    h.run_steps(3);
+    h.state_mut().dialogs.connect.ua_url = "opc.tcp://localhost:4840".into();
+    h.state_mut().dialogs.connect.da_manual = "Draft.DA".into();
+    h.get_by_label("Сетевые настройки").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialogs.connect.pane.protocol(), Protocol::OpcUa);
+    h.state_mut().close_connect_dialog();
+    h.state_mut().open_connect_dialog();
+    assert_eq!(
+        h.state().dialogs.connect.pane,
+        opcda_egui::app::ConnectPane::Ua
+    );
+    h.state_mut().dialogs.connect.ua_url = "opc.tcp://localhost:4840".into();
+    h.state_mut().dialogs.connect.da_manual = "Draft.DA".into();
+    h.run_steps(3);
+    h.get_by_label("Сетевые настройки").click();
+    h.run_steps(3);
+    h.get_by_label("OPC UA").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialogs.connect.ua_url, "opc.tcp://localhost:4840");
+    assert_eq!(h.state().dialogs.connect.da_manual, "Draft.DA");
+
     // Switching back to a protocol tab leaves the network view.
     h.get_by_label("OPC DA (COM)").click();
     h.run_steps(5);
-    assert!(!h.state().dialogs.connect.network_tab);
+    assert!(!matches!(
+        h.state().dialogs.connect.pane,
+        opcda_egui::app::ConnectPane::Network { .. }
+    ));
 }
 
 /// A remote UA host search requires an explicitly selected adapter; without
@@ -1328,11 +1437,11 @@ fn remote_ua_search_without_adapter_is_blocked() {
     let mut app = App::new_test(&ctx);
     set_ru(&mut app);
     app.open_connect_dialog();
-    app.dialogs.connect.protocol = Protocol::OpcUa;
+    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
     app.dialogs.connect.ua_search_host = "192.0.2.10".to_string();
     app.dialogs.connect.ua_search_port = "4840".to_string();
     app.search_ua_servers();
-    assert!(!app.dialogs.connect.ua_searching);
+    assert!(!app.dialogs.connect.ua_search.host_searching());
     assert!(
         app.dialogs
             .connect
@@ -1365,7 +1474,7 @@ fn remote_ua_connect_without_adapter_is_blocked_but_loopback_is_allowed() {
         assert_eq!(app.sessions.len(), 1, "loopback connect is always allowed");
         assert!(
             app.sessions[0]
-                .endpoint
+                .endpoint()
                 .ua_bind
                 .as_ref()
                 .is_some_and(|binding| binding.is_loopback()),
@@ -1384,8 +1493,8 @@ fn v2_endpoints_with_other_security_are_separate_sessions() {
         let url = "opc.tcp://127.0.0.1:4840";
         let plain = EndpointSpec::ua(url);
         let mut secure = EndpointSpec::ua(url);
-        secure.ua_security_policy = Some(UaSecurityPolicy::Basic256Sha256);
-        secure.ua_security_mode = Some(UaSecurityMode::SignAndEncrypt);
+        secure.ua_security_policy = UaSecurityPolicy::Basic256Sha256;
+        secure.ua_security_mode = UaSecurityMode::SignAndEncrypt;
 
         assert!(app.open_tab_for_endpoint(plain.clone()));
         assert!(app.open_tab_for_endpoint(secure.clone()));
@@ -1425,16 +1534,19 @@ fn connect_dialog_ua_tab_does_not_autostart_search() {
     h.run_steps(5);
 
     let d = &h.state().dialogs.connect;
-    assert!(!d.ua_searching, "UA host search must not start on tab open");
     assert!(
-        !d.ua_network_searching,
+        !d.ua_search.host_searching(),
+        "UA host search must not start on tab open"
+    );
+    assert!(
+        !d.ua_search.network_searching(),
         "LDS/mDNS search must not start on tab open"
     );
     assert!(
-        !d.ua_subnet_searching,
+        !d.ua_search.scan_id().is_some(),
         "subnet scan must not start on tab open"
     );
-    assert_eq!(d.ua_auto_pending, 0);
+    assert_eq!(d.ua_search.auto_pending_count(), 0);
 }
 
 /// Clicking the already active UA tab is not a "leave UA" action and must not
@@ -1444,8 +1556,10 @@ fn connect_dialog_active_ua_tab_keeps_scan() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.dialogs.connect.protocol = Protocol::OpcUa;
-    app.dialogs.connect.ua_subnet_searching = true;
+    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
+    app.dialogs.connect.ua_search = opcda_egui::app::UaSearch::Subnet {
+        scan_id: ScanId::new(1).unwrap(),
+    };
     let mut h = harness(app);
     h.run_steps(5);
 
@@ -1453,7 +1567,7 @@ fn connect_dialog_active_ua_tab_keeps_scan() {
     h.run_steps(2);
 
     assert!(
-        h.state().dialogs.connect.ua_subnet_searching,
+        h.state().dialogs.connect.ua_search.scan_id().is_some(),
         "active UA tab click must not cancel the scan"
     );
 }
@@ -1493,7 +1607,7 @@ fn network_tab_startup_uses_cached_adapters_without_windows_query() {
         let a = "31000000-0000-0000-0000-000000000001";
         let b = "31000000-0000-0000-0000-000000000002";
         let mut settings = Settings::default();
-        settings.cached_adapters = opcda_egui::settings::CachedAdapters::from_vec(vec![
+        settings.network.cached_adapters = opcda_egui::settings::CachedAdapters::from_vec(vec![
             opcda_egui::net::CachedAdapter::from_info(&net_adapter(
                 a,
                 "Cached A",
@@ -1557,8 +1671,9 @@ fn network_tab_stale_guid_has_zero_selection_and_forget_keeps_cache() {
             net_adapter(a, "Ethernet", true, true, &[("192.168.1.20", 24)]),
             net_adapter(b, "Wi-Fi", false, true, &[("10.0.0.5", 24)]),
         ]);
-        app.settings.preferred_adapter = Some(stale.to_string());
-        app.settings.selected_local_ip = Some("10.9.9.9".to_string());
+        app.settings.network.preferred_adapter =
+            Some(opcda_egui::net::AdapterId::parse(stale).unwrap());
+        app.settings.network.selected_local_ip = Some("10.9.9.9".parse().unwrap());
         app.open_connect_dialog();
 
         let mut h = harness(app);
@@ -1593,10 +1708,10 @@ fn network_tab_stale_guid_has_zero_selection_and_forget_keeps_cache() {
         h.get_by_label("Забыть").click();
         h.run_steps(5);
         let app = h.state();
-        assert!(app.settings.preferred_adapter.is_none());
-        assert!(app.settings.selected_local_ip.is_none());
+        assert!(app.settings.network.preferred_adapter.is_none());
+        assert!(app.settings.network.selected_local_ip.is_none());
         assert_eq!(
-            app.settings.cached_adapters.adapters.len(),
+            app.settings.network.cached_adapters.adapters.len(),
             2,
             "forgetting a stale GUID must not clear the cached list"
         );
@@ -1646,8 +1761,8 @@ fn network_tab_one_ip_read_only_and_multiple_ip_combo() {
         );
         h.run_steps(5);
         assert_eq!(
-            h.state().settings.selected_local_ip.as_deref(),
-            Some("10.0.0.5")
+            h.state().settings.network.selected_local_ip,
+            Some("10.0.0.5".parse().unwrap())
         );
         assert_eq!(
             h.state()
@@ -1669,8 +1784,8 @@ fn network_tab_one_ip_read_only_and_multiple_ip_combo() {
         h.get_by_label("10.0.0.6/24").click();
         h.run_steps(5);
         assert_eq!(
-            h.state().settings.selected_local_ip.as_deref(),
-            Some("10.0.0.6")
+            h.state().settings.network.selected_local_ip,
+            Some("10.0.0.6".parse().unwrap())
         );
         assert_eq!(
             h.state()
@@ -1742,7 +1857,7 @@ fn network_tab_refresh_button_queries_windows_inventory() {
             app.network.error
         );
         assert_eq!(
-            app.settings.cached_adapters.adapters.len(),
+            app.settings.network.cached_adapters.adapters.len(),
             app.network.adapters.len(),
             "the persisted cache must match the refreshed inventory"
         );
@@ -1762,7 +1877,7 @@ fn network_refresh_replaces_cache_and_filters_down_adapters() {
             net_adapter(a, "Ethernet", true, true, &[("192.168.1.20", 24)]),
             net_adapter(down, "Ethernet Down", true, false, &[("192.168.1.30", 24)]),
         ]);
-        assert_eq!(app.settings.cached_adapters.adapters.len(), 1);
+        assert_eq!(app.settings.network.cached_adapters.adapters.len(), 1);
         assert_eq!(app.network.adapters.len(), 1);
         assert_eq!(app.network.adapters[0].id.to_string(), a);
 
@@ -1773,11 +1888,12 @@ fn network_refresh_replaces_cache_and_filters_down_adapters() {
             true,
             &[("10.0.0.5", 24)],
         )]);
-        assert_eq!(app.settings.cached_adapters.adapters.len(), 1);
+        assert_eq!(app.settings.network.cached_adapters.adapters.len(), 1);
         assert_eq!(app.network.adapters.len(), 1);
         assert_eq!(app.network.adapters[0].id.to_string(), b);
         assert!(
             app.settings
+                .network
                 .cached_adapters
                 .adapters
                 .iter()
@@ -1808,7 +1924,7 @@ fn changing_adapter_does_not_rebind_active_sessions() {
         );
         app.open_tab_for_endpoint(EndpointSpec::ua("opc.tcp://192.0.2.50:4840"));
         assert_eq!(app.sessions.len(), 1);
-        let old_binding = app.sessions[0].endpoint.ua_bind.clone();
+        let old_binding = app.sessions[0].endpoint().ua_bind.clone();
         assert_eq!(
             old_binding.as_ref().map(|binding| binding.local_ip),
             Some("192.168.1.20".parse().unwrap())
@@ -1821,7 +1937,8 @@ fn changing_adapter_does_not_rebind_active_sessions() {
             None,
         );
         assert_eq!(
-            app.sessions[0].endpoint.ua_bind, old_binding,
+            app.sessions[0].endpoint().ua_bind,
+            old_binding,
             "an active session keeps its captured binding"
         );
         assert_eq!(
@@ -1829,7 +1946,10 @@ fn changing_adapter_does_not_rebind_active_sessions() {
             Some("10.0.0.5".parse().unwrap()),
             "future operations use the new adapter"
         );
-        assert_eq!(app.settings.selected_local_ip.as_deref(), Some("10.0.0.5"));
+        assert_eq!(
+            app.settings.network.selected_local_ip,
+            Some("10.0.0.5".parse().unwrap())
+        );
     });
 }
 
@@ -1851,7 +1971,7 @@ fn connect_dialog_anonymous_identity_does_not_send_credentials() {
             d.ua_url = "opc.tcp://127.0.0.1:4840".to_string();
             d.ua_user = "operator".to_string();
             d.ua_password = "secret".to_string();
-            d.ua_identity_index = 0;
+            d.ua_identity = opcda_egui::app::UaIdentity::Anonymous;
         }
         h.run_steps(2);
         {
@@ -1869,7 +1989,7 @@ fn connect_dialog_anonymous_identity_does_not_send_credentials() {
             .sessions
             .last()
             .expect("connect creates a session container")
-            .endpoint
+            .endpoint()
             .clone();
         assert!(
             endpoint.user.is_empty(),
@@ -1879,6 +1999,45 @@ fn connect_dialog_anonymous_identity_does_not_send_credentials() {
             endpoint.password.is_empty(),
             "Anonymous must not forward a password"
         );
+    });
+}
+
+#[test]
+fn connect_identity_switch_preserves_buffers_and_certificate_auth() {
+    use opcda_egui::app::UaIdentity;
+    with_settings_lock(|| {
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        app.open_connect_dialog();
+        app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
+        app.dialogs.connect.ua_url = "opc.tcp://127.0.0.1:4840".into();
+        app.dialogs.connect.ua_user = "operator".into();
+        app.dialogs.connect.ua_password = "secret".into();
+        let mut h = harness(app);
+        h.run_steps(5);
+        h.get_by_value("Анонимно").click();
+        h.run_steps(2);
+        h.get_by_label("Имя пользователя").click();
+        h.run_steps(2);
+        assert_eq!(h.state().dialogs.connect.ua_identity, UaIdentity::UserName);
+        h.get_by_value("Имя пользователя").click();
+        h.run_steps(2);
+        h.get_by_label("Сертификат").click();
+        h.run_steps(2);
+        let d = &h.state().dialogs.connect;
+        assert_eq!(d.ua_identity, UaIdentity::Certificate);
+        assert_eq!(d.ua_user, "operator");
+        assert_eq!(d.ua_password, "secret");
+        h.query_all_by_label("Подключиться")
+            .filter(|n| !n.accesskit_node().is_disabled())
+            .last()
+            .expect("enabled connect button")
+            .click();
+        h.run_steps(3);
+        let endpoint = &h.state().sessions.last().expect("session").endpoint();
+        assert!(endpoint.ua_use_certificate);
+        assert!(endpoint.user.is_empty());
+        assert!(endpoint.password.is_empty());
     });
 }
 
@@ -1900,7 +2059,7 @@ fn connect_dialog_username_identity_requires_user() {
             d.ua_url = "opc.tcp://127.0.0.1:4840".to_string();
             d.ua_user.clear();
             d.ua_password.clear();
-            d.ua_identity_index = 1;
+            d.ua_identity = opcda_egui::app::UaIdentity::UserName;
         }
         h.run_steps(2);
         {
@@ -1934,7 +2093,7 @@ fn connect_dialog_security_combos_are_typed_and_persist() {
         let ctx = egui::Context::default();
         let mut app = App::new_test(&ctx);
         app.open_connect_dialog();
-        app.dialogs.connect.protocol = Protocol::OpcUa;
+        app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
         let mut h = harness(app);
         h.run_steps(5);
         // Both typed combos start on Auto (selected text is the a11y value).
@@ -1952,7 +2111,7 @@ fn connect_dialog_security_combos_are_typed_and_persist() {
             UaSecurityPolicy::Basic256Sha256
         );
         assert_eq!(
-            h.state().settings.ua_security_policy,
+            h.state().settings.ua.ua_security_policy,
             UaSecurityPolicy::Auto,
             "uncommitted choice must not modify persisted settings"
         );
@@ -1966,7 +2125,7 @@ fn connect_dialog_security_combos_are_typed_and_persist() {
             h.state().dialogs.connect.ua_security_mode,
             UaSecurityMode::Sign
         );
-        assert_eq!(h.state().settings.ua_security_mode, UaSecurityMode::Auto);
+        assert_eq!(h.state().settings.ua.ua_security_mode, UaSecurityMode::Auto);
     });
 }
 
@@ -1977,7 +2136,7 @@ fn connect_dialog_invalid_security_pair_shows_error_and_does_not_connect() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.dialogs.connect.protocol = Protocol::OpcUa;
+    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
     app.dialogs.connect.ua_url = "opc.tcp://127.0.0.1:4840".to_string();
     app.dialogs.connect.ua_security_policy = UaSecurityPolicy::None;
     app.dialogs.connect.ua_security_mode = UaSecurityMode::SignAndEncrypt;
@@ -2011,7 +2170,7 @@ fn connect_dialog_unadvertised_security_choice_shows_error_and_does_not_connect(
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.dialogs.connect.protocol = Protocol::OpcUa;
+    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
     app.dialogs.connect.ua_url = "opc.tcp://127.0.0.1:4840".to_string();
     // A non-empty host makes the seeded endpoint list appear to belong to the
     // current search context; opening the tab no longer auto-starts a search.
@@ -2019,9 +2178,9 @@ fn connect_dialog_unadvertised_security_choice_shows_error_and_does_not_connect(
     app.dialogs.connect.ua_security_policy = UaSecurityPolicy::Basic256Sha256;
     app.dialogs.connect.ua_security_mode = UaSecurityMode::SignAndEncrypt;
     app.dialogs.connect.ua_discovered_endpoints = vec![opcda_egui::bff::model::UaEndpointInfo {
-        url: "opc.tcp://127.0.0.1:4840".to_string(),
-        security_policy: "None".to_string(),
-        security_mode: "None".to_string(),
+        url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
+        security_policy: opcda_egui::bff::model::AdvertisedPolicy::from_wire("None"),
+        security_mode: opcda_egui::bff::model::AdvertisedMode::from_wire("None"),
     }];
     let mut h = harness(app);
     h.run_steps(5);
@@ -2074,13 +2233,12 @@ fn connect_dialog_trust_checkbox_defaults_and_toggles() {
 /// settings file is NOT re-applied to a freshly opened dialog.
 #[test]
 fn connect_dialog_timeout_restores_but_trust_stays_opt_in() {
-    use opcda_egui::bff::model::Protocol;
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.settings.ua_trust_server_cert = true;
-    app.settings.ua_session_timeout_ms = 300_000;
+    app.settings.ua.ua_trust_server_cert = true;
+    app.settings.ua.ua_session_timeout_ms = 300_000;
     app.open_connect_dialog();
-    app.dialogs.connect.protocol = Protocol::OpcUa;
+    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
     let h = harness(app);
     assert!(!h.state().dialogs.connect.ua_trust_server_cert);
     assert_eq!(h.state().dialogs.connect.ua_session_timeout, 300_000);
@@ -2106,7 +2264,7 @@ fn ctrl_a_then_delete_removes_rows() {
 
     h.key_press(Key::Delete);
     h.run_steps(3);
-    assert_eq!(h.state().rows.len(), 0);
+    assert_eq!(h.state().rows().len(), 0);
     assert!(h.state().selected_rows.is_empty());
 }
 
@@ -2134,7 +2292,7 @@ fn esc_closes_write_dialog() {
 fn enter_confirms_write_dialog() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.settings.options.confirm_write = false;
+    app.settings.view.options.confirm_write = false;
     seed_writable_table(&mut app, &[("a", "SigA", 42)]);
 
     let mut h = harness(app);
@@ -2147,7 +2305,53 @@ fn enter_confirms_write_dialog() {
     h.key_press(Key::Enter);
     h.run_steps(3);
     assert!(!h.state().dialogs.write.open);
-    assert_eq!(h.state().pending_writes, 1);
+    assert_eq!(h.state().write_batch.pending, 1);
+}
+
+#[test]
+fn enter_opens_confirmation_without_accepting_it() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.settings.view.options.confirm_write = true;
+    seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+    let mut h = harness(app);
+    h.state_mut().select_only(0);
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().dialogs.confirm.is_some());
+    assert_eq!(h.state().write_batch.pending, 0);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(!h.state().dialogs.confirm.is_some());
+    assert_eq!(h.state().write_batch.pending, 1);
+}
+
+#[test]
+fn modified_enter_cannot_accept_new_write_confirmation() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.settings.view.options.confirm_write = true;
+    seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+    let mut h = harness(app);
+    h.state_mut().select_only(0);
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    h.key_press_modifiers(Modifiers::SHIFT, Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().dialogs.confirm.is_some());
+    assert_eq!(h.state().write_batch.pending, 0);
+    h.key_press_modifiers(Modifiers::SHIFT, Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().dialogs.confirm.is_some());
+    assert_eq!(h.state().write_batch.pending, 0);
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialogs.confirm.is_none());
+    assert!(h.state().dialogs.write.open);
 }
 
 /// K3: the write dialog opens with the current value selected, so typing
@@ -2156,7 +2360,7 @@ fn enter_confirms_write_dialog() {
 fn k3_write_dialog_preselects_value_so_typing_replaces_it() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.settings.options.confirm_write = false;
+    app.settings.view.options.confirm_write = false;
     seed_writable_table(&mut app, &[("a", "SigA", 42)]);
 
     let mut h = harness(app);
@@ -2178,7 +2382,7 @@ fn k3_write_dialog_preselects_value_so_typing_replaces_it() {
     h.key_press(Key::Enter);
     h.run_steps(3);
     assert!(!h.state().dialogs.write.open);
-    assert_eq!(h.state().pending_writes, 1);
+    assert_eq!(h.state().write_batch.pending, 1);
     // The table keeps the keyboard after the dialog: the next Enter opens it again.
     assert_eq!(h.state().table_focus, Some(0));
     h.key_press(Key::Enter);
@@ -2191,9 +2395,9 @@ fn k3_write_dialog_preselects_value_so_typing_replaces_it() {
 fn k3_write_error_reselects_the_value() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.settings.options.confirm_write = false;
+    app.settings.view.options.confirm_write = false;
     let key = seed_writable_table(&mut app, &[("a", "SigA", 42)])[0];
-    app.rows[0].canonical_vt = Some(3); // VT_I4: text is not accepted
+    app.rows_mut_for_test()[0].canonical_vt = Some(opcda_egui::bff::model::VarType::I4); // VT_I4: text is not accepted
     let mut h = harness(app);
     h.state_mut().open_write_dialog(vec![key]);
     h.run_steps(3);
@@ -2230,7 +2434,7 @@ fn k3_ctrl_a_then_delete_after_the_tree_had_focus() {
     assert_eq!(h.state().selected_rows.len(), 2);
     h.key_press(Key::Delete);
     h.run_steps(3);
-    assert_eq!(h.state().rows.len(), 0);
+    assert_eq!(h.state().rows().len(), 0);
 }
 
 /// K3: Tab moves the keyboard tree -> table -> tree.
@@ -2240,7 +2444,7 @@ fn k3_tab_moves_the_keyboard_between_tree_and_table() {
     let mut app = App::new_test(&ctx);
     seed_table(&mut app, &[("a", "SigA", 1)]);
     let node = app.seed_tree_item(
-        1,
+        sid(1),
         None,
         0,
         BrowseNode {
@@ -2262,7 +2466,7 @@ fn k3_tab_moves_the_keyboard_between_tree_and_table() {
     h.key_press(Key::Tab);
     h.run_steps(3);
     assert!(h.state().tree_focused);
-    assert_eq!(h.state().tree_focus, Some((1, node)));
+    assert_eq!(h.state().tree_focus, Some((sid(1), node)));
     assert_eq!(h.state().table_focus, None);
 
     h.key_press_modifiers(Modifiers::SHIFT, Key::Tab);
@@ -2280,21 +2484,21 @@ fn k3_tab_moves_the_keyboard_between_tree_and_table() {
 fn k3_ctrl_tab_switches_sessions_and_ctrl_n_connects() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    app.seed_session(2, EndpointSpec::ua("opc.tcp://127.0.0.1:4841"));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_session(sid(2), EndpointSpec::ua("opc.tcp://127.0.0.1:4841"));
+    app.activate_session(sid(1));
     let mut h = harness(app);
     h.run_steps(2);
 
     h.key_press_modifiers(Modifiers::COMMAND, Key::Tab);
     h.run_steps(3);
-    assert_eq!(h.state().active_session, Some(2));
+    assert_eq!(h.state().active_session, Some(sid(2)));
     h.key_press_modifiers(Modifiers::COMMAND, Key::Tab);
     h.run_steps(3);
-    assert_eq!(h.state().active_session, Some(1), "wraps around");
+    assert_eq!(h.state().active_session, Some(sid(1)), "wraps around");
     h.key_press_modifiers(Modifiers::COMMAND, Key::PageUp);
     h.run_steps(3);
-    assert_eq!(h.state().active_session, Some(2));
+    assert_eq!(h.state().active_session, Some(sid(2)));
 
     h.key_press_modifiers(Modifiers::COMMAND, Key::N);
     h.run_steps(3);
@@ -2328,8 +2532,8 @@ fn pump_value() -> Value {
 fn v3_structured_value_expands_into_field_lines() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    let key = app.seed_row(1, "ns=2;s=Pump", "Pump", pump_value());
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let key = app.seed_row(sid(1), "ns=2;s=Pump", "Pump", pump_value());
     let mut h = harness(app);
     h.run_steps(3);
     assert!(
@@ -2341,7 +2545,7 @@ fn v3_structured_value_expands_into_field_lines() {
     let at = h.get_by_label("Развернуть значение").rect().center();
     pointer_click(&h, at, PointerButton::Primary);
     h.run_steps(3);
-    assert!(h.state().expanded_values.contains(&(key, vec![])));
+    assert!(h.state().expanded_values().contains(&(key, vec![])));
     assert!(h.query_by_label("Speed").is_some());
     assert!(h.query_by_label("Running").is_some());
     assert!(h.query_by_label("MotorType").is_some(), "nested type name");
@@ -2369,8 +2573,8 @@ fn v3_structured_value_expands_into_field_lines() {
 fn v3_arrow_keys_expand_and_collapse_a_structure() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    app.seed_row(1, "ns=2;s=Pump", "Pump", pump_value());
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_row(sid(1), "ns=2;s=Pump", "Pump", pump_value());
     let mut h = harness(app);
     h.state_mut().select_only(0);
     h.run_steps(2);
@@ -2388,7 +2592,7 @@ fn v3_arrow_keys_expand_and_collapse_a_structure() {
     h.key_press(Key::ArrowLeft);
     h.run_steps(3);
     assert!(h.query_by_label("Speed").is_none());
-    assert!(h.state().expanded_values.is_empty());
+    assert!(h.state().expanded_values().is_empty());
 }
 
 /// V3: field lines never take part in the selection: a click on one selects
@@ -2397,9 +2601,9 @@ fn v3_arrow_keys_expand_and_collapse_a_structure() {
 fn v3_field_lines_select_their_row() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    let pump = app.seed_row(1, "ns=2;s=Pump", "Pump", pump_value());
-    let other = app.seed_row(1, "ns=2;s=Level", "Level", Value::F64(1.0));
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let pump = app.seed_row(sid(1), "ns=2;s=Pump", "Pump", pump_value());
+    let other = app.seed_row(sid(1), "ns=2;s=Level", "Level", Value::F64(1.0));
     app.toggle_value(pump, vec![]);
     let mut h = harness(app);
     h.run_steps(3);
@@ -2422,10 +2626,10 @@ fn disconnect_event_keeps_rows_and_marks_them_stale() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     set_ru(&mut app);
-    app.settings.options.auto_reconnect = true;
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.settings.view.options.auto_reconnect = true;
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     app.seed_tree_item(
-        1,
+        sid(1),
         None,
         0,
         BrowseNode {
@@ -2435,25 +2639,30 @@ fn disconnect_event_keeps_rows_and_marks_them_stale() {
             has_children: false,
         },
     );
-    app.seed_row(1, "ns=1;s=keep", "Keep", Value::I64(5));
+    app.seed_row(sid(1), "ns=1;s=keep", "Keep", Value::I64(5));
 
     app.on_event_for_test_at(
-        1,
+        sid(1),
         opcda_egui::bff::model::EventKind::Disconnected {
             reason: opcda_egui::bff::model::BackendMsg::raw("связь потеряна"),
         },
     );
 
     // Rows and tree remain; the value is kept.
-    assert_eq!(app.rows.len(), 1, "rows must survive a disconnect");
-    assert_eq!(app.rows[0].value, Value::I64(5), "last value must be kept");
+    assert_eq!(app.rows().len(), 1, "rows must survive a disconnect");
     assert_eq!(
-        app.rows[0].quality.text, "устаревшие данные",
+        app.rows()[0].value,
+        Value::I64(5),
+        "last value must be kept"
+    );
+    assert_eq!(
+        app.rows()[0].quality.text(),
+        "устаревшие данные",
         "row quality must be marked stale"
     );
     assert_eq!(app.sessions[0].state, SessionState::Disconnected);
     assert_eq!(
-        app.sessions[0].tree.len(),
+        app.sessions[0].tree().len(),
         1,
         "tree must survive a disconnect"
     );
@@ -2466,22 +2675,22 @@ fn disconnect_event_keeps_rows_and_marks_them_stale() {
 fn reconnect_connected_resubscribes_rows_requests_browse_and_read() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
-    app.seed_row(1, "ns=1;s=a", "SigA", Value::I64(1));
-    app.seed_row(1, "ns=1;s=b", "SigB", Value::I64(2));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
+    app.seed_row(sid(1), "ns=1;s=a", "SigA", Value::I64(1));
+    app.seed_row(sid(1), "ns=1;s=b", "SigB", Value::I64(2));
 
     // Drop the connection.
     app.on_event_for_test_at(
-        1,
+        sid(1),
         opcda_egui::bff::model::EventKind::Disconnected {
             reason: opcda_egui::bff::model::BackendMsg::raw("связь потеряна"),
         },
     );
-    assert_eq!(app.rows.len(), 2);
+    assert_eq!(app.rows().len(), 2);
 
     // Server comes back.
     app.on_event_for_test_at(
-        1,
+        sid(1),
         opcda_egui::bff::model::EventKind::Connected {
             endpoint: EndpointSpec::da("", "Srv.Test"),
             info: opcda_egui::bff::model::BackendMsg::raw("подключено"),
@@ -2490,14 +2699,14 @@ fn reconnect_connected_resubscribes_rows_requests_browse_and_read() {
 
     // Rows offered for re-add (pending=true is set by register_rows).
     assert!(
-        app.rows.iter().all(|r| r.pending),
+        app.rows().iter().all(|r| r.pending),
         "rows must be re-registered"
     );
     // Fresh root browse in flight.
-    let view = app.sessions.iter().find(|s| s.id == 1).unwrap();
+    let view = app.sessions.iter().find(|s| s.id == sid(1)).unwrap();
     assert!(view.root_loading, "root must be re-browsed after reconnect");
     assert!(view.root_loaded == false);
-    assert!(view.tree.is_empty());
+    assert!(view.tree().is_empty());
     // Immediate re-read armed: last_poll is in the past.
     assert!(view.read_in_flight == false);
 }
@@ -2508,12 +2717,15 @@ fn reconnect_connected_resubscribes_rows_requests_browse_and_read() {
 fn read_tick_is_suppressed_while_root_loading() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
-    app.seed_row(1, "ns=1;s=a", "SigA", Value::I64(1));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
+    app.seed_row(sid(1), "ns=1;s=a", "SigA", Value::I64(1));
+    // Record the actual dispatch without allowing the DA stub to race its reply.
+    app.record_dispatches_for_test();
+    // A real outstanding browse is the protocol-level gate for polling.
+    app.browse(sid(1), String::new());
     {
-        let view = app.sessions.iter_mut().find(|s| s.id == 1).unwrap();
-        // Force a due read but stall on a root browse.
-        view.root_loading = true;
+        let view = app.sessions.iter_mut().find(|s| s.id == sid(1)).unwrap();
+        // Force a due read while the browse remains in flight.
         view.last_poll = std::time::Instant::now()
             .checked_sub(std::time::Duration::from_secs(60))
             .unwrap_or(std::time::Instant::now());
@@ -2521,11 +2733,14 @@ fn read_tick_is_suppressed_while_root_loading() {
     }
     app.tick_for_test();
     // No read was dispatched: read_in_flight stays false and last_poll unchanged.
-    let view = app.sessions.iter().find(|s| s.id == 1).unwrap();
+    let view = app.sessions.iter().find(|s| s.id == sid(1)).unwrap();
     assert!(
         !view.read_in_flight,
         "read must not be sent while root_loading"
     );
+    let commands = app.dispatched_for_test();
+    assert_eq!(commands.len(), 1);
+    assert!(matches!(commands[0].kind, CommandKind::Browse { .. }));
 }
 
 /// Once a UA session's push subscription is active, the app stops issuing
@@ -2534,23 +2749,23 @@ fn read_tick_is_suppressed_while_root_loading() {
 fn ua_subscription_active_stops_periodic_read() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    app.seed_row(1, "i=2258", "CurrentTime", Value::Empty);
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_row(sid(1), "i=2258", "CurrentTime", Value::Empty);
     {
-        let view = app.sessions.iter_mut().find(|s| s.id == 1).unwrap();
+        let view = app.sessions.iter_mut().find(|s| s.id == sid(1)).unwrap();
         // A periodic read is due and permitted (no browse/tree load in flight).
         view.root_loading = false;
         view.read_in_flight = false;
         view.last_poll = std::time::Instant::now()
             .checked_sub(std::time::Duration::from_secs(60))
             .unwrap_or(std::time::Instant::now());
-        view.subscription = SubscriptionState::Inactive;
+        view.ua_mut().unwrap().subscription = SubscriptionState::Inactive;
     }
 
     // Without an active subscription a due Read is dispatched.
     app.tick_for_test();
     {
-        let view = app.sessions.iter().find(|s| s.id == 1).unwrap();
+        let view = app.sessions.iter().find(|s| s.id == sid(1)).unwrap();
         assert!(
             view.read_in_flight,
             "poll driven Read must be sent while inactive"
@@ -2559,13 +2774,13 @@ fn ua_subscription_active_stops_periodic_read() {
 
     // Mark the subscription active: the same due read is now suppressed.
     app.on_event_for_test_at(
-        1,
+        sid(1),
         EventKind::SubscriptionState {
             state: SubscriptionState::Active,
         },
     );
     {
-        let view = app.sessions.iter_mut().find(|s| s.id == 1).unwrap();
+        let view = app.sessions.iter_mut().find(|s| s.id == sid(1)).unwrap();
         view.read_in_flight = false;
         view.last_poll = std::time::Instant::now()
             .checked_sub(std::time::Duration::from_secs(60))
@@ -2573,13 +2788,13 @@ fn ua_subscription_active_stops_periodic_read() {
         view.root_loading = false;
     }
     app.tick_for_test();
-    let view = app.sessions.iter().find(|s| s.id == 1).unwrap();
+    let view = app.sessions.iter().find(|s| s.id == sid(1)).unwrap();
     assert!(
         !view.read_in_flight,
         "UA read must not be sent while subscription is active"
     );
     assert_eq!(
-        view.subscription,
+        view.ua().unwrap().subscription,
         SubscriptionState::Active,
         "active state must survive the tick"
     );
@@ -2591,19 +2806,19 @@ fn ua_subscription_active_stops_periodic_read() {
 fn da_keeps_polling_unaffected_by_subscription_flag() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
-    app.seed_row(1, "ns=1;s=a", "SigA", Value::I64(1));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
+    app.seed_row(sid(1), "ns=1;s=a", "SigA", Value::I64(1));
     {
-        let view = app.sessions.iter_mut().find(|s| s.id == 1).unwrap();
+        let view = app.sessions.iter_mut().find(|s| s.id == sid(1)).unwrap();
         view.root_loading = false;
         view.read_in_flight = false;
-        view.subscription = SubscriptionState::Active; // meaningless for DA, must be ignored
+        assert!(view.ua().is_none());
         view.last_poll = std::time::Instant::now()
             .checked_sub(std::time::Duration::from_secs(60))
             .unwrap_or(std::time::Instant::now());
     }
     app.tick_for_test();
-    let view = app.sessions.iter().find(|s| s.id == 1).unwrap();
+    let view = app.sessions.iter().find(|s| s.id == sid(1)).unwrap();
     assert!(
         view.read_in_flight,
         "DA must keep polling (subscription flag ignored)"
@@ -2617,41 +2832,56 @@ fn da_keeps_polling_unaffected_by_subscription_flag() {
 fn ua_reconnect_resubscribes_rows_and_resets_subscription_flag() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    app.seed_row(1, "i=2258", "CurrentTime", Value::I64(0));
-    app.seed_row(1, "i=2256", "ServerStatus", Value::I64(0));
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_row(sid(1), "i=2258", "CurrentTime", Value::I64(0));
+    app.seed_row(sid(1), "i=2256", "ServerStatus", Value::I64(0));
     {
-        let view = app.sessions.iter_mut().find(|s| s.id == 1).unwrap();
-        view.subscription = SubscriptionState::Active;
+        let view = app.sessions.iter_mut().find(|s| s.id == sid(1)).unwrap();
+        let ua = view.ua_mut().unwrap();
+        ua.subscription = SubscriptionState::Active;
+        ua.ua_view_id = Some("ns=1;s=view".into());
+        ua.ua_browse_filter = opcda_egui::bff::model::NodeClassFilter::Variables;
     }
     app.on_event_for_test_at(
-        1,
+        sid(1),
         EventKind::Disconnected {
             reason: opcda_egui::bff::model::BackendMsg::raw("связь потеряна"),
         },
     );
     // While disconnected the subscription is gone.
-    let view = app.sessions.iter().find(|s| s.id == 1).unwrap();
+    let view = app.sessions.iter().find(|s| s.id == sid(1)).unwrap();
     assert_eq!(view.state, SessionState::Disconnected);
 
     // Server returns: a fresh subscription must be re-established.
+    let mut endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+    endpoint.ua_session_timeout = Some(123_000);
     app.on_event_for_test_at(
-        1,
+        sid(1),
         EventKind::Connected {
-            endpoint: EndpointSpec::ua("opc.tcp://127.0.0.1:4840"),
+            endpoint,
             info: opcda_egui::bff::model::BackendMsg::raw("подключено"),
         },
     );
-    let view = app.sessions.iter().find(|s| s.id == 1).unwrap();
+    let view = app.sessions.iter().find(|s| s.id == sid(1)).unwrap();
     assert_eq!(view.state, SessionState::Connected);
     assert!(view.root_loading, "root must be re-browsed after reconnect");
     assert_eq!(
-        view.subscription,
+        view.ua().unwrap().subscription,
         SubscriptionState::Inactive,
         "state must reset so a new subscription is created on re-add"
     );
+    assert_eq!(
+        view.ua().unwrap().ua_view_id.as_deref(),
+        Some("ns=1;s=view")
+    );
+    assert_eq!(
+        view.ua().unwrap().ua_browse_filter,
+        opcda_egui::bff::model::NodeClassFilter::Variables
+    );
+    assert_eq!(view.ua().unwrap().ua_session_timeout_ms, 123_000);
     // Rows offered for re-add (AddItems dispatched via register_rows).
-    let rows: Vec<&opcda_egui::app::Row> = app.rows.iter().filter(|r| r.session == 1).collect();
+    let rows: Vec<&opcda_egui::app::Row> =
+        app.rows().iter().filter(|r| r.session == sid(1)).collect();
     assert_eq!(rows.len(), 2);
     assert!(
         rows.iter().all(|r| r.pending),
@@ -2665,11 +2895,11 @@ fn ua_reconnect_resubscribes_rows_and_resets_subscription_flag() {
 fn ua_failed_subscription_falls_back_to_polling() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    app.seed_row(1, "i=2258", "CurrentTime", Value::Empty);
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_row(sid(1), "i=2258", "CurrentTime", Value::Empty);
     {
-        let view = app.sessions.iter_mut().find(|s| s.id == 1).unwrap();
-        view.subscription = SubscriptionState::Active;
+        let view = app.sessions.iter_mut().find(|s| s.id == sid(1)).unwrap();
+        view.ua_mut().unwrap().subscription = SubscriptionState::Active;
         view.root_loading = false;
         view.read_in_flight = false;
         view.last_poll = std::time::Instant::now()
@@ -2677,12 +2907,15 @@ fn ua_failed_subscription_falls_back_to_polling() {
             .unwrap_or(std::time::Instant::now());
     }
     app.on_event_for_test_at(
-        1,
+        sid(1),
         EventKind::SubscriptionState {
             state: SubscriptionState::Failed,
         },
     );
-    assert_eq!(app.sessions[0].subscription, SubscriptionState::Failed);
+    assert_eq!(
+        app.sessions[0].ua().unwrap().subscription,
+        SubscriptionState::Failed
+    );
     app.tick_for_test();
     assert!(
         app.sessions[0].read_in_flight,
@@ -2696,8 +2929,8 @@ fn server_info_popup_shows_subscription_state() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     set_ru(&mut app);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    app.sessions[0].subscription = SubscriptionState::Failed;
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.sessions[0].ua_mut().unwrap().subscription = SubscriptionState::Failed;
     app.status_popup = true;
 
     let mut h = harness(app);
@@ -2719,26 +2952,27 @@ fn reconnect_attempts_cap_stops_the_loop_and_shows_exhausted() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     set_ru(&mut app);
-    app.settings.options.auto_reconnect = true;
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
-    app.activate_session(1);
-    // 20 attempts already made, server still down.
+    app.settings.view.options.auto_reconnect = true;
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
+    app.activate_session(sid(1));
+    // The twentieth automatic Connect is in flight; its failure exhausts the cap.
     {
-        let view = app.sessions.iter_mut().find(|s| s.id == 1).unwrap();
-        view.state = SessionState::Disconnected;
+        let view = app.sessions.iter_mut().find(|s| s.id == sid(1)).unwrap();
+        view.state = SessionState::Connecting;
         view.reconnect = ReconnectState::Waiting {
             at: std::time::Instant::now(),
             attempt: 20,
         };
     }
     app.on_event_for_test_at(
-        1,
-        EventKind::Disconnected {
-            reason: opcda_egui::bff::model::BackendMsg::raw("опять"),
+        sid(1),
+        EventKind::Error {
+            operation: opcda_egui::bff::model::Operation::Connect,
+            message: opcda_egui::bff::model::BackendMsg::raw("опять"),
         },
     );
     // Re-scheduling must refuse: the state becomes Exhausted, no new timer.
-    let view = app.sessions.iter().find(|s| s.id == 1).unwrap();
+    let view = app.sessions.iter().find(|s| s.id == sid(1)).unwrap();
     assert_eq!(view.reconnect, ReconnectState::Exhausted);
     let hint = app.reconnect_hint().unwrap_or_default();
     assert!(hint.contains("Попытки исчерпаны (20)"), "got: {hint}");
@@ -2755,8 +2989,8 @@ fn tree_click_focus_enables_arrow_navigation() {
     let mut app = App::new_test(&ctx);
     // Keep both bottom panels off so the tree pane is tall enough for an empty
     // click point below the nodes.
-    app.settings.options.show_script = false;
-    app.settings.options.show_log = false;
+    app.settings.view.options.show_script = false;
+    app.settings.view.options.show_log = false;
     app.bottom_tab = BottomTab::Journal;
     let (_a, _b) = seed_tree(&mut app);
     assert_eq!(app.tree_focused, false);
@@ -2809,9 +3043,9 @@ fn tree_item_click_keeps_focus_for_arrows() {
 fn tree_enter_on_subscribed_item_opens_write_dialog() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     let id = app.seed_tree_item(
-        1,
+        sid(1),
         None,
         0,
         BrowseNode {
@@ -2821,8 +3055,8 @@ fn tree_enter_on_subscribed_item_opens_write_dialog() {
             has_children: false,
         },
     );
-    let row_key = app.seed_writable_row(1, "ns=1;s=sub", "Subscribed", Value::I64(7));
-    app.set_tree_focus(1, id);
+    let row_key = app.seed_writable_row(sid(1), "ns=1;s=sub", "Subscribed", Value::I64(7));
+    app.set_tree_focus(sid(1), id);
     assert!(!app.dialogs.write.open);
 
     let mut h = harness(app);
@@ -2844,9 +3078,9 @@ fn tree_enter_on_subscribed_item_opens_write_dialog() {
 fn tree_enter_on_unsubscribed_item_adds_row_without_dialog() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     let id = app.seed_tree_item(
-        1,
+        sid(1),
         None,
         0,
         BrowseNode {
@@ -2856,16 +3090,16 @@ fn tree_enter_on_unsubscribed_item_adds_row_without_dialog() {
             has_children: false,
         },
     );
-    assert_eq!(app.rows.len(), 0, "no rows yet");
+    assert_eq!(app.rows().len(), 0, "no rows yet");
 
     let mut h = harness(app);
-    h.state_mut().set_tree_focus(1, id);
+    h.state_mut().set_tree_focus(sid(1), id);
     h.run_steps(3);
     h.key_press(Key::Enter);
     h.run_steps(3);
 
-    assert_eq!(h.state().rows.len(), 1, "row must be added");
-    assert_eq!(h.state().rows[0].item_id, "ns=1;s=new");
+    assert_eq!(h.state().rows().len(), 1, "row must be added");
+    assert_eq!(h.state().rows()[0].item_id, "ns=1;s=new");
     assert!(
         !h.state().dialogs.write.open,
         "write dialog must NOT open for an unsubscribed item"
@@ -2875,8 +3109,8 @@ fn tree_enter_on_unsubscribed_item_adds_row_without_dialog() {
         .state()
         .journal
         .entries()
-        .last()
-        .map(|e| e.text.clone())
+        .back()
+        .map(|e| e.render(opcda_egui::i18n::Lang::Ru))
         .unwrap_or_default();
     assert!(note.contains("Сигнал добавлен в таблицу"), "got: {note}");
 }
@@ -2888,10 +3122,10 @@ fn tree_focus_cleared_by_typing_in_text_field() {
     let mut app = App::new_test(&ctx);
     // Show the script editor (single bottom panel) so there is a real text field
     // into which the user can click.
-    app.settings.options.show_script = true;
-    app.settings.options.show_log = false;
+    app.settings.view.options.show_script = true;
+    app.settings.view.options.show_log = false;
     let (_a, _b) = seed_tree(&mut app);
-    app.set_tree_focus(1, _a);
+    app.set_tree_focus(sid(1), _a);
     let mut h = harness(app);
     h.run_steps(3);
     assert_eq!(h.state().tree_focused, true);
@@ -2918,7 +3152,7 @@ fn connect_dialog_opens_on_da_tab_with_auto_discovery() {
     let mut h = harness(app);
     h.run_steps(3);
     assert_eq!(
-        h.state().dialogs.connect.protocol,
+        h.state().dialogs.connect.pane.protocol(),
         opcda_egui::bff::model::Protocol::OpcDa
     );
     assert_eq!(
@@ -2968,8 +3202,8 @@ fn tab_strip_is_in_tags_area_not_top_panel() {
     );
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.One"));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.One"));
+    app.activate_session(sid(1));
     let mut h = harness(app);
     h.run_steps(5);
     // The tab label is rendered (now inside the central tags panel).
@@ -2983,36 +3217,53 @@ fn connect_dialog_ua_empty_host_without_adapter_searches_loopback_only() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.dialogs.connect.protocol = opcda_egui::bff::model::Protocol::OpcUa;
+    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
+    app.record_dispatches_for_test();
     app.search_ua_all();
+    let opcda_egui::app::UaSearch::Auto {
+        pending: opcda_egui::app::AutoPending::Host(request),
+    } = app.dialogs.connect.ua_search
+    else {
+        panic!("host auto search")
+    };
     let d = &app.dialogs.connect;
-    assert_eq!(d.ua_searching, true, "combined UA search must be running");
+    assert_eq!(
+        d.ua_search.host_searching(),
+        true,
+        "combined UA search must be running"
+    );
     assert!(
-        !d.ua_network_searching,
+        !d.ua_search.network_searching(),
         "LDS/mDNS must not run without a selected adapter"
     );
-    assert_eq!(d.ua_auto_pending, 1, "one loopback request");
+    assert_eq!(d.ua_search.auto_pending_count(), 1, "one loopback request");
     let hosts = [("127.0.0.1".to_string(), 4840)];
     for (h_name, p) in hosts {
-        app.on_event_for_test(EventKind::UaServersFound {
-            host: h_name.clone(),
-            port: p,
-            servers: vec![opcda_egui::bff::model::UaServerInfo {
-                application_name: "SRV".to_string(),
-                application_uri: format!("urn:srv-{h_name}"),
-                endpoints: vec![opcda_egui::bff::model::UaEndpointInfo {
-                    url: format!("opc.tcp://{h_name}:{p}"),
-                    security_policy: "None".to_string(),
-                    security_mode: "None".to_string(),
+        app.on_event_for_test_with_request(
+            opcda_egui::bff::model::Owner::Discovery,
+            request,
+            EventKind::UaServersFound {
+                host: h_name.clone(),
+                port: p,
+                servers: vec![opcda_egui::bff::model::UaServerInfo {
+                    application_name: "SRV".to_string(),
+                    application_uri: format!("urn:srv-{h_name}"),
+                    endpoints: vec![opcda_egui::bff::model::UaEndpointInfo {
+                        url: format!("opc.tcp://{h_name}:{p}").parse().unwrap(),
+                        security_policy: opcda_egui::bff::model::AdvertisedPolicy::from_wire(
+                            "None",
+                        ),
+                        security_mode: opcda_egui::bff::model::AdvertisedMode::from_wire("None"),
+                    }],
                 }],
-            }],
-        });
+            },
+        );
     }
-    assert!(!app.dialogs.connect.ua_searching);
-    assert!(!app.dialogs.connect.ua_network_searching);
-    assert_eq!(app.dialogs.connect.ua_auto_pending, 0);
+    assert!(!app.dialogs.connect.ua_search.host_searching());
+    assert!(!app.dialogs.connect.ua_search.network_searching());
+    assert_eq!(app.dialogs.connect.ua_search.auto_pending_count(), 0);
     assert!(
-        app.dialogs.connect.ua_search_results.len() == 1,
+        app.dialogs.connect.ua_search_results().len() == 1,
         "the loopback result must be in the list"
     );
 }
@@ -3023,8 +3274,8 @@ fn connect_dialog_ua_empty_host_without_adapter_searches_loopback_only() {
 fn tab_strip_has_no_connect_button() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.One"));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.One"));
+    app.activate_session(sid(1));
     let mut h = harness(app);
     h.run_steps(5);
     assert!(
@@ -3048,12 +3299,12 @@ fn tab_strip_has_no_connect_button() {
 fn tab_strip_many_tabs_scroll_without_breaking_table() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.One"));
-    app.seed_row(1, "a", "SigA", Value::I64(1));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.One"));
+    app.seed_row(sid(1), "a", "SigA", Value::I64(1));
     for i in 2..=14 {
-        app.seed_session(i, EndpointSpec::da("", &format!("Srv.{i:0>2}")));
+        app.seed_session(sid(i), EndpointSpec::da("", &format!("Srv.{i:0>2}")));
     }
-    app.activate_session(1);
+    app.activate_session(sid(1));
     let mut h = harness(app);
     h.run_steps(5);
     // A representative sample of the tabs is mounted, and the table row renders.
@@ -3083,7 +3334,7 @@ fn connect_dialog_port_field_visibility_per_tab() {
     let mut h = harness(app);
     h.run_steps(3);
     // DA tab active -> no port input visible.
-    assert_eq!(h.state().dialogs.connect.protocol, Protocol::OpcDa);
+    assert_eq!(h.state().dialogs.connect.pane.protocol(), Protocol::OpcDa);
     let da_ports = h.query_all_by_value("4840").collect::<Vec<_>>();
     assert!(
         da_ports.is_empty(),
@@ -3112,18 +3363,26 @@ fn connect_dialog_select_da_server_enables_connect() {
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
     app.dialogs.connect.da_pending = false;
-    app.dialogs.connect.da_servers.push(ServerEntry {
-        id: "Alpha.Server".to_string(),
-        description: "Тестовый".to_string(),
+    app.dialogs.connect.da_servers.push(opcda_egui::app::DaHit {
+        server: ServerEntry {
+            id: "Alpha.Server".to_string(),
+            description: "Тестовый".to_string(),
+        },
+        host: String::new(),
     });
     let mut h = harness(app);
     h.run_steps(3);
-    assert_eq!(h.state().dialogs.connect.protocol, Protocol::OpcDa);
+    assert_eq!(h.state().dialogs.connect.pane.protocol(), Protocol::OpcDa);
     // The DA server is rendered as a selectable row.
     h.get_by_label("Alpha.Server — Тестовый").click();
     h.run_steps(3);
     assert_eq!(
-        h.state().dialogs.connect.da_selected.as_deref(),
+        h.state()
+            .dialogs
+            .connect
+            .da_selected
+            .as_ref()
+            .map(|hit| hit.server.id.as_str()),
         Some("Alpha.Server")
     );
     assert_eq!(h.state().dialogs.connect.da_manual, "Alpha.Server");
@@ -3142,16 +3401,19 @@ fn connect_dialog_select_ua_result_fills_url() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.dialogs.connect.protocol = opcda_egui::bff::model::Protocol::OpcUa;
-    app.dialogs.connect.ua_search_results.push(UaServerInfo {
-        application_name: "CODESYS".to_string(),
-        application_uri: "urn:test".to_string(),
-        endpoints: vec![UaEndpointInfo {
-            url: "opc.tcp://127.0.0.1:4840".to_string(),
-            security_policy: "None".to_string(),
-            security_mode: "None".to_string(),
-        }],
-    });
+    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
+    app.dialogs
+        .connect
+        .ua_search_results_mut_for_test()
+        .push(UaServerInfo {
+            application_name: "CODESYS".to_string(),
+            application_uri: "urn:test".to_string(),
+            endpoints: vec![UaEndpointInfo {
+                url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
+                security_policy: opcda_egui::bff::model::AdvertisedPolicy::from_wire("None"),
+                security_mode: opcda_egui::bff::model::AdvertisedMode::from_wire("None"),
+            }],
+        });
     let mut h = harness(app);
     h.get_by_label("OPC UA").click();
     h.run_steps(5);
@@ -3181,7 +3443,7 @@ fn rejected_ua_connect_keeps_popup_open_with_error() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.dialogs.connect.protocol = Protocol::OpcUa;
+    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
     app.dialogs.connect.ua_url = "opc.tcp://192.0.2.77:4840".to_string();
     let mut h = harness(app);
     h.run_steps(4);
@@ -3199,7 +3461,7 @@ fn rejected_ua_connect_keeps_popup_open_with_error() {
 // ---- Columns dialog ↑/↓ (Task 3) ----
 
 /// The columns dialog's «Вниз» button reorders its own list immediately and the
-/// change is persisted into settings.column_order.
+/// change is persisted into settings.view.column_order.
 #[test]
 fn columns_dialog_down_moves_row_and_persists() {
     with_settings_lock(|| {
@@ -3234,21 +3496,11 @@ fn columns_dialog_down_moves_row_and_persists() {
         );
         assert_eq!(after[target_idx], before[target_idx + 1]);
         assert!(
-            h.state().settings.column_order.is_some(),
+            h.state().settings.view.column_order.is_some(),
             "column_order must be persisted after the dialog move"
         );
-        // Persisted snapshot reflects the move. Entries are stored as plain
-        // variant names (the double-encoding bug stored JSON strings); accept both.
-        let persisted = h.state().settings.column_order.clone().unwrap();
-        let parsed: Vec<ColumnId> = persisted
-            .iter()
-            .filter_map(|s| {
-                let trimmed = s.trim();
-                serde_json::from_str::<ColumnId>(trimmed)
-                    .or_else(|_| serde_json::from_str::<ColumnId>(&format!("\"{trimmed}\"")))
-                    .ok()
-            })
-            .collect();
+        // The in-memory persisted snapshot is typed and reflects the move.
+        let parsed = h.state().settings.view.column_order.clone().unwrap();
         assert_eq!(parsed.len(), ColumnId::ALL.len(), "all columns persisted");
         assert_eq!(
             parsed[target_idx + 1],
@@ -3307,14 +3559,14 @@ fn language_switch_persists_in_settings() {
         // over the Russian default — here it equals it).
         app.set_lang(Lang::Ru);
         assert_eq!(app.lang(), Lang::Ru);
-        let reloaded = opcda_egui::settings::Settings::load();
+        let reloaded = opcda_egui::settings::Settings::load().settings;
         assert_eq!(reloaded.lang(), Lang::Ru);
 
         // And switching to Chinese persists through Settings::save() to
         // settings.json; a persisted non-default language is never overridden.
         app.set_lang(Lang::Zh);
         assert_eq!(app.lang(), Lang::Zh);
-        let reloaded2 = opcda_egui::settings::Settings::load();
+        let reloaded2 = opcda_egui::settings::Settings::load().settings;
         assert_eq!(reloaded2.lang(), Lang::Zh);
     });
 }
@@ -3327,19 +3579,19 @@ fn language_switch_keeps_rows_and_selection() {
         let ctx = egui::Context::default();
         let mut app = App::new_test(&ctx);
         seed_table(&mut app, &[("a", "SigA", 1), ("b", "SigB", 2)]);
-        app.selected_rows.insert(app.rows[0].key);
-        let count_before = app.rows.len();
+        app.selected_rows.insert(app.rows()[0].key);
+        let count_before = app.rows().len();
 
         let mut h = harness(app);
         h.run_steps(3);
-        assert_eq!(h.state().rows.len(), count_before);
+        assert_eq!(h.state().rows().len(), count_before);
         assert_eq!(h.state().selected_rows.len(), 1);
 
         h.state_mut().set_lang(Lang::Zh);
         h.run_steps(3);
 
         // Switching language must not clear rows or the selection state.
-        assert_eq!(h.state().rows.len(), count_before);
+        assert_eq!(h.state().rows().len(), count_before);
         assert_eq!(h.state().selected_rows.len(), 1);
         assert_eq!(h.state().lang(), Lang::Zh);
     });
@@ -3350,9 +3602,9 @@ fn language_switch_keeps_rows_and_selection() {
 /// Seed an active session with a Branch whose direct Item children are already
 /// loaded into the tree.
 fn seed_branch_with_items(app: &mut App) -> (u64, u64, u64) {
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     let branch = app.seed_tree_item(
-        1,
+        sid(1),
         None,
         0,
         BrowseNode {
@@ -3363,7 +3615,7 @@ fn seed_branch_with_items(app: &mut App) -> (u64, u64, u64) {
         },
     );
     let c1 = app.seed_tree_item(
-        1,
+        sid(1),
         Some(branch),
         1,
         BrowseNode {
@@ -3374,7 +3626,7 @@ fn seed_branch_with_items(app: &mut App) -> (u64, u64, u64) {
         },
     );
     let c2 = app.seed_tree_item(
-        1,
+        sid(1),
         Some(branch),
         1,
         BrowseNode {
@@ -3389,7 +3641,12 @@ fn seed_branch_with_items(app: &mut App) -> (u64, u64, u64) {
 
 /// Feed a Browse reply using the request id the running add-children job issued
 /// for `node_id` (request-id correlation).
-fn feed_job_browse(app: &mut App, session: u64, node_id: &str, children: Vec<BrowseNode>) {
+fn feed_job_browse(
+    app: &mut App,
+    session: opcda_egui::bff::model::SessionId,
+    node_id: &str,
+    children: Vec<BrowseNode>,
+) {
     let request_id = app
         .add_children
         .as_ref()
@@ -3418,17 +3675,17 @@ fn add_dropped_tree_branch_with_loaded_children_adds_items() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     let (branch, _, _) = seed_branch_with_items(&mut app);
-    assert_eq!(app.rows.len(), 0);
+    assert_eq!(app.rows().len(), 0);
 
-    app.add_dropped_tree(1, vec![branch]);
+    app.add_dropped_tree(sid(1), vec![branch]);
 
     // No rows yet: the browse for the branch is in flight.
-    assert_eq!(app.rows.len(), 0);
+    assert_eq!(app.rows().len(), 0);
 
     // Feed the browse response for the branch; its Item children are collected.
     feed_job_browse(
         &mut app,
-        1,
+        sid(1),
         "branch",
         vec![
             BrowseNode {
@@ -3447,11 +3704,11 @@ fn add_dropped_tree_branch_with_loaded_children_adds_items() {
     );
 
     assert_eq!(
-        app.rows.len(),
+        app.rows().len(),
         2,
         "both Item children of the branch must be added"
     );
-    let ids: Vec<&str> = app.rows.iter().map(|r| r.item_id.as_str()).collect();
+    let ids: Vec<&str> = app.rows().iter().map(|r| r.item_id.as_str()).collect();
     assert!(ids.contains(&"c1"));
     assert!(ids.contains(&"c2"));
 }
@@ -3462,9 +3719,9 @@ fn add_dropped_tree_branch_with_loaded_children_adds_items() {
 fn add_dropped_tree_unloaded_branch_browses_then_adds() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     let branch = app.seed_tree_item(
-        1,
+        sid(1),
         None,
         0,
         BrowseNode {
@@ -3476,20 +3733,20 @@ fn add_dropped_tree_unloaded_branch_browses_then_adds() {
     );
     // Simulate a branch the client has not browsed into yet.
     {
-        let view = app.sessions.iter_mut().find(|s| s.id == 1).unwrap();
-        view.tree
+        let view = app.sessions.iter_mut().find(|s| s.id == sid(1)).unwrap();
+        view.tree_mut_for_test()
             .iter_mut()
             .find(|t| t.id == branch)
             .unwrap()
             .loaded = false;
     }
 
-    app.add_dropped_tree(1, vec![branch]);
+    app.add_dropped_tree(sid(1), vec![branch]);
 
     // No rows yet; the browse is in flight (branch marked loading).
-    assert_eq!(app.rows.len(), 0);
-    let view = app.sessions.iter().find(|s| s.id == 1).unwrap();
-    let item = view.tree.iter().find(|t| t.id == branch).unwrap();
+    assert_eq!(app.rows().len(), 0);
+    let view = app.sessions.iter().find(|s| s.id == sid(1)).unwrap();
+    let item = view.tree().iter().find(|t| t.id == branch).unwrap();
     assert!(
         item.loading,
         "drop must trigger a browse of the unloaded branch"
@@ -3499,7 +3756,7 @@ fn add_dropped_tree_unloaded_branch_browses_then_adds() {
     // The browse completes with two Item children.
     feed_job_browse(
         &mut app,
-        1,
+        sid(1),
         "branch",
         vec![
             BrowseNode {
@@ -3518,7 +3775,7 @@ fn add_dropped_tree_unloaded_branch_browses_then_adds() {
     );
 
     assert_eq!(
-        app.rows.len(),
+        app.rows().len(),
         2,
         "pending children must be added on browse completion"
     );
@@ -3530,12 +3787,12 @@ fn add_dropped_tree_item_adds_row() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     let (a, _b) = seed_tree(&mut app);
-    assert_eq!(app.rows.len(), 0);
+    assert_eq!(app.rows().len(), 0);
 
-    app.add_dropped_tree(1, vec![a]);
+    app.add_dropped_tree(sid(1), vec![a]);
 
-    assert_eq!(app.rows.len(), 1);
-    assert_eq!(app.rows[0].item_id, "ns=1;s=a");
+    assert_eq!(app.rows().len(), 1);
+    assert_eq!(app.rows()[0].item_id, "ns=1;s=a");
 }
 
 /// Re-dropping an already-subscribed Item must not create a duplicate row.
@@ -3544,12 +3801,12 @@ fn add_dropped_tree_deduplicates_existing_rows() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     let (a, _b) = seed_tree(&mut app);
-    app.add_items(1, vec![("ns=1;s=a".to_string(), "SigA".to_string())]);
-    assert_eq!(app.rows.len(), 1);
+    app.add_items(sid(1), vec![("ns=1;s=a".to_string(), "SigA".to_string())]);
+    assert_eq!(app.rows().len(), 1);
 
-    app.add_dropped_tree(1, vec![a]);
+    app.add_dropped_tree(sid(1), vec![a]);
 
-    assert_eq!(app.rows.len(), 1, "duplicate drop must be skipped");
+    assert_eq!(app.rows().len(), 1, "duplicate drop must be skipped");
 }
 
 /// Dropping a node that belongs to a different session than the active one
@@ -3558,9 +3815,9 @@ fn add_dropped_tree_deduplicates_existing_rows() {
 fn add_dropped_tree_cross_session_warns_and_skips() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     let other = app.seed_tree_item(
-        1,
+        sid(1),
         None,
         0,
         BrowseNode {
@@ -3571,17 +3828,16 @@ fn add_dropped_tree_cross_session_warns_and_skips() {
         },
     );
     // Seed a second session and make it the active one.
-    app.seed_session(2, EndpointSpec::da("", "Srv.Other"));
-    assert_eq!(app.active_session, Some(2));
+    app.seed_session(sid(2), EndpointSpec::da("", "Srv.Other"));
+    assert_eq!(app.active_session, Some(sid(2)));
 
-    app.add_dropped_tree(1, vec![other]);
+    app.add_dropped_tree(sid(1), vec![other]);
 
-    assert_eq!(app.rows.len(), 0, "cross-session drop must be skipped");
-    let warned = app
-        .journal
-        .entries()
-        .iter()
-        .any(|e| e.text.contains("активного сервера"));
+    assert_eq!(app.rows().len(), 0, "cross-session drop must be skipped");
+    let warned = app.journal.entries().iter().any(|e| {
+        e.render(opcda_egui::i18n::Lang::Ru)
+            .contains("активного сервера")
+    });
     assert!(warned, "cross-session drop must journal a warning");
 }
 
@@ -3619,7 +3875,7 @@ fn open_tab_for_endpoint_creates_visible_active_session() {
         assert_eq!(app.sessions.len(), 1);
         assert!(app.sessions[0].visible, "new session tab must be visible");
         assert_eq!(app.active_session, Some(app.sessions[0].id));
-        assert_eq!(app.sessions[0].endpoint.address, "Alpha.Server");
+        assert_eq!(app.sessions[0].endpoint().address, "Alpha.Server");
     });
 }
 
@@ -3632,7 +3888,7 @@ fn reopen_tab_for_same_endpoint_does_not_duplicate() {
         app.open_tab_for_endpoint(EndpointSpec::da("", "Alpha.Server"));
         app.seed_row(app.sessions[0].id, "ns=1;s=a", "SigA", Value::I64(7));
         let id = app.sessions[0].id;
-        let rows_before = app.rows.len();
+        let rows_before = app.rows().len();
         let counts_before = app.sessions.len();
 
         // Simulate closing the tab, then double-clicking the server again.
@@ -3652,7 +3908,7 @@ fn reopen_tab_for_same_endpoint_does_not_duplicate() {
         );
         assert_eq!(app.active_session, Some(id));
         assert_eq!(
-            app.rows.len(),
+            app.rows().len(),
             rows_before,
             "rows stay with the same container"
         );
@@ -3665,12 +3921,12 @@ fn reopen_tab_for_same_endpoint_does_not_duplicate() {
 fn close_tab_hides_view_keeps_rows_and_keeps_connection() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    app.seed_row(1, "ns=1;s=a", "SigA", Value::I64(1));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    app.seed_row(sid(1), "ns=1;s=a", "SigA", Value::I64(1));
+    app.activate_session(sid(1));
     assert_eq!(app.sessions[0].state, SessionState::Connected);
 
-    app.close_tab(1);
+    app.close_tab(sid(1));
 
     assert!(!app.sessions[0].visible, "closed tab must be hidden");
     assert_eq!(
@@ -3678,13 +3934,13 @@ fn close_tab_hides_view_keeps_rows_and_keeps_connection() {
         SessionState::Connected,
         "closing a tab must NOT disconnect a connected session"
     );
-    assert_eq!(app.rows.len(), 1, "rows must survive closing the tab");
-    assert_eq!(app.sessions[0].tree.len(), 0);
+    assert_eq!(app.rows().len(), 1, "rows must survive closing the tab");
+    assert_eq!(app.sessions[0].tree().len(), 0);
     assert!(
         app.active_session.is_none(),
         "no visible tab remains -> no active session"
     );
-    assert_eq!(app.sessions[0].endpoint.address, "Alpha.Server");
+    assert_eq!(app.sessions[0].endpoint().address, "Alpha.Server");
 }
 
 /// Closing the active tab activates the nearest remaining visible tab.
@@ -3692,15 +3948,15 @@ fn close_tab_hides_view_keeps_rows_and_keeps_connection() {
 fn close_active_tab_activates_nearest_visible() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.One"));
-    app.seed_session(2, EndpointSpec::da("", "Srv.Two"));
-    app.seed_session(3, EndpointSpec::da("", "Srv.Three"));
-    app.activate_session(2);
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.One"));
+    app.seed_session(sid(2), EndpointSpec::da("", "Srv.Two"));
+    app.seed_session(sid(3), EndpointSpec::da("", "Srv.Three"));
+    app.activate_session(sid(2));
 
-    app.close_tab(2);
+    app.close_tab(sid(2));
 
     // Nearest remaining visible to the right is session 3.
-    assert_eq!(app.active_session, Some(3));
+    assert_eq!(app.active_session, Some(sid(3)));
     assert!(!app.sessions[1].visible);
     assert_eq!(
         app.sessions.iter().filter(|s| s.visible).count(),
@@ -3714,29 +3970,29 @@ fn close_active_tab_activates_nearest_visible() {
 fn remove_session_drops_container_and_rows() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    app.seed_row(1, "ns=1;s=a", "SigA", Value::I64(1));
-    app.seed_row(1, "ns=1;s=b", "SigB", Value::I64(2));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    app.seed_row(sid(1), "ns=1;s=a", "SigA", Value::I64(1));
+    app.seed_row(sid(1), "ns=1;s=b", "SigB", Value::I64(2));
+    app.activate_session(sid(1));
 
     // The destructive path is gated behind the confirm dialog.
     app.request_confirm(
         "t".to_string(),
         "remove?".to_string(),
-        ConfirmAction::RemoveSession(1),
+        ConfirmAction::RemoveSession(sid(1)),
     );
-    assert!(app.dialogs.confirm.open);
+    assert!(app.dialogs.confirm.is_some());
     app.confirm_yes();
 
     assert!(app.sessions.is_empty(), "container must be dropped");
-    assert!(app.rows.is_empty(), "its rows must be dropped");
+    assert!(app.rows().is_empty(), "its rows must be dropped");
     assert!(app.active_session.is_none());
 }
 
 fn seed_ua_sessions(app: &mut App, count: usize) {
     for index in 0..count {
         app.seed_session(
-            1000 + index as u64,
+            sid(1000 + index as u64),
             EndpointSpec::ua(format!("opc.tcp://127.0.0.1:{}", 20000 + index)),
         );
     }
@@ -3780,7 +4036,7 @@ fn ua_session_cap_allows_reconnect_at_the_limit() {
         seed_ua_sessions(&mut app, 100);
         assert_eq!(app.ua_session_count(), 100);
 
-        app.reconnect_session(1000);
+        app.reconnect_session(sid(1000));
         assert_eq!(
             app.ua_session_count(),
             100,
@@ -3803,7 +4059,7 @@ fn ua_session_cap_does_not_block_da_sessions() {
         assert_eq!(app.ua_session_count(), 100);
         assert_eq!(app.sessions.len(), 101);
         assert_eq!(
-            app.sessions.last().unwrap().endpoint.protocol,
+            app.sessions.last().unwrap().endpoint().protocol,
             Protocol::OpcDa
         );
     });
@@ -3828,7 +4084,7 @@ fn ua_session_cap_counts_hidden_disconnected_and_frees_on_remove() {
             "hidden/disconnected UA sessions count"
         );
 
-        app.remove_session(1000);
+        app.remove_session(sid(1000));
         assert_eq!(app.ua_session_count(), 99);
         app.open_tab_for_endpoint(EndpointSpec::ua("opc.tcp://127.0.0.1:4841"));
         assert_eq!(app.ua_session_count(), 100, "removal frees a slot");
@@ -3841,17 +4097,17 @@ fn ua_session_cap_counts_hidden_disconnected_and_frees_on_remove() {
 fn tab_switch_changes_active_session_and_rendered_rows() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.One"));
-    app.seed_row(1, "a", "SigA1", Value::I64(1));
-    app.seed_session(2, EndpointSpec::da("", "Srv.Two"));
-    app.seed_row(2, "b", "SigB2", Value::I64(2));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.One"));
+    app.seed_row(sid(1), "a", "SigA1", Value::I64(1));
+    app.seed_session(sid(2), EndpointSpec::da("", "Srv.Two"));
+    app.seed_row(sid(2), "b", "SigB2", Value::I64(2));
+    app.activate_session(sid(1));
 
     // Session 2's row is present but not active yet.
-    assert_eq!(app.active_session, Some(1));
+    assert_eq!(app.active_session, Some(sid(1)));
     // Switch to session 2 via the tab bar: active changes.
-    app.activate_session(2);
-    assert_eq!(app.active_session, Some(2));
+    app.activate_session(sid(2));
+    assert_eq!(app.active_session, Some(sid(2)));
 
     let mut h = harness(app);
     h.run_steps(5);
@@ -3859,7 +4115,7 @@ fn tab_switch_changes_active_session_and_rendered_rows() {
     assert!(h.query_all_by_label("DA: Srv.One").count() >= 1);
     assert!(h.query_all_by_label("DA: Srv.Two").count() >= 1);
     // The table renders both sessions' rows (global signal table).
-    assert_eq!(h.state().active_session, Some(2));
+    assert_eq!(h.state().active_session, Some(sid(2)));
 }
 
 /// The tab bar renders an empty-state hint + «Подключиться...» when no tab is open.
@@ -3867,8 +4123,8 @@ fn tab_switch_changes_active_session_and_rendered_rows() {
 fn tab_bar_shows_empty_state_even_with_hidden_containers() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    app.close_tab(1); // hide the only container
+    app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    app.close_tab(sid(1)); // hide the only container
 
     let mut h = harness(app);
     h.run_steps(5);
@@ -3890,22 +4146,22 @@ fn tab_bar_shows_empty_state_even_with_hidden_containers() {
 fn tab_context_menu_remove_from_list_drops_container() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    app.seed_row(1, "a", "SigA", Value::I64(1));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    app.seed_row(sid(1), "a", "SigA", Value::I64(1));
+    app.activate_session(sid(1));
 
     let mut h = harness(app);
     // Open the tab's context menu and pick «Удалить из списка».
     h.get_by_label("DA: Alpha.Server").click_secondary();
     click_menu_item(&mut h, "Удалить из списка");
     assert!(
-        h.state().dialogs.confirm.open,
+        h.state().dialogs.confirm.is_some(),
         "confirmation must be requested"
     );
 
     click_menu_item(&mut h, "Да");
     assert!(h.state().sessions.is_empty());
-    assert!(h.state().rows.is_empty());
+    assert!(h.state().rows().is_empty());
 }
 
 /// A manual disconnect keeps the container (tab/rows/address), marks rows stale
@@ -3916,13 +4172,13 @@ fn disconnect_keeps_container_and_does_not_arm_reconnect() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     set_ru(&mut app);
-    app.settings.options.auto_reconnect = true;
-    app.seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    app.seed_row(1, "ns=1;s=a", "SigA", Value::I64(5));
-    app.activate_session(1);
+    app.settings.view.options.auto_reconnect = true;
+    app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    app.seed_row(sid(1), "ns=1;s=a", "SigA", Value::I64(5));
+    app.activate_session(sid(1));
 
     // User disconnects manually (menu → «Отключиться» → confirm).
-    app.disconnect_session(1);
+    app.disconnect_session(sid(1));
 
     // Container survives: session + row still present, row marked stale.
     assert_eq!(app.sessions.len(), 1);
@@ -3930,13 +4186,13 @@ fn disconnect_keeps_container_and_does_not_arm_reconnect() {
         app.sessions[0].visible,
         "tab stays visible after manual disconnect"
     );
-    assert_eq!(app.rows.len(), 1, "rows must survive a manual disconnect");
-    assert_eq!(app.rows[0].quality.text, "устаревшие данные");
+    assert_eq!(app.rows().len(), 1, "rows must survive a manual disconnect");
+    assert_eq!(app.rows()[0].quality.text(), "устаревшие данные");
 
     // The backend reports the link closed; because this was a manual disconnect
     // it must NOT re-arm the auto-reconnect loop.
     app.on_event_for_test_at(
-        1,
+        sid(1),
         EventKind::Disconnected {
             reason: opcda_egui::bff::model::BackendMsg::raw("отключено"),
         },
@@ -3988,8 +4244,8 @@ fn servers_add_button_opens_connect_dialog() {
 fn servers_row_shows_state_name_and_remove() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    app.activate_session(sid(1));
     let mut h = harness(app);
     h.run_steps(3);
     // The servers list shows the bare name (the tab shows "DA: Alpha.Server").
@@ -4018,8 +4274,8 @@ fn servers_row_shows_state_name_and_remove() {
 fn servers_row_applies_remote_host_suffix() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("box1", "Alpha.Server"));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("box1", "Alpha.Server"));
+    app.activate_session(sid(1));
     let mut h = harness(app);
     h.run_steps(3);
     assert!(
@@ -4034,9 +4290,9 @@ fn servers_row_applies_remote_host_suffix() {
 fn servers_row_remove_requires_confirm_and_drops_after_yes() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    app.seed_row(1, "a", "SigA", Value::I64(1));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    app.seed_row(sid(1), "a", "SigA", Value::I64(1));
+    app.activate_session(sid(1));
     let mut h = harness(app);
     h.run_steps(3);
 
@@ -4044,19 +4300,22 @@ fn servers_row_remove_requires_confirm_and_drops_after_yes() {
     remove.click();
     h.run_steps(3);
     assert!(
-        h.state().dialogs.confirm.open,
+        h.state().dialogs.confirm.is_some(),
         "row × must open the remove confirm dialog"
     );
     // The container and its tab are still present before confirmation.
     assert_eq!(h.state().sessions.len(), 1);
-    assert_eq!(h.state().rows.len(), 1);
+    assert_eq!(h.state().rows().len(), 1);
 
     click_menu_item(&mut h, "Да");
     assert!(
         h.state().sessions.is_empty(),
         "session dropped after confirm"
     );
-    assert!(h.state().rows.is_empty(), "its rows dropped after confirm");
+    assert!(
+        h.state().rows().is_empty(),
+        "its rows dropped after confirm"
+    );
 }
 
 /// The servers-row × (confirm→No) leaves the container and rows intact.
@@ -4064,17 +4323,17 @@ fn servers_row_remove_requires_confirm_and_drops_after_yes() {
 fn servers_row_remove_cancel_keeps_container() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    app.seed_row(1, "a", "SigA", Value::I64(1));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    app.seed_row(sid(1), "a", "SigA", Value::I64(1));
+    app.activate_session(sid(1));
     let mut h = harness(app);
     h.run_steps(3);
     servers_remove_button(&h).expect("servers ×").click();
     h.run_steps(3);
-    assert!(h.state().dialogs.confirm.open);
+    assert!(h.state().dialogs.confirm.is_some());
     click_menu_item(&mut h, "Нет");
     assert_eq!(h.state().sessions.len(), 1, "container kept on cancel");
-    assert_eq!(h.state().rows.len(), 1, "rows kept on cancel");
+    assert_eq!(h.state().rows().len(), 1, "rows kept on cancel");
 }
 
 /// The tab bar's «×» only hides the view, keeping the container + connection.
@@ -4082,9 +4341,9 @@ fn servers_row_remove_cancel_keeps_container() {
 fn tab_close_button_only_hides_view() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    app.seed_row(1, "a", "SigA", Value::I64(1));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    app.seed_row(sid(1), "a", "SigA", Value::I64(1));
+    app.activate_session(sid(1));
     let mut h = harness(app);
 
     // The tab × is inside the central panel (x >= 400), unlike the servers ×.
@@ -4097,7 +4356,7 @@ fn tab_close_button_only_hides_view() {
     tab_close.click();
     h.run_steps(3);
     assert_eq!(h.state().sessions.len(), 1, "container survives tab ×");
-    assert_eq!(h.state().rows.len(), 1, "rows survive tab ×");
+    assert_eq!(h.state().rows().len(), 1, "rows survive tab ×");
     assert!(!h.state().sessions[0].visible, "tab × hides only the view");
 }
 
@@ -4106,8 +4365,8 @@ fn tab_close_button_only_hides_view() {
 fn tab_strip_plus_opens_connect_dialog() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    app.activate_session(sid(1));
     let mut h = harness(app);
     h.run_steps(3);
     assert!(!h.state().dialogs.connect.open);
@@ -4128,9 +4387,9 @@ fn tab_strip_plus_opens_connect_dialog() {
 fn servers_row_reconnect_counter_and_stop_resume_toggle() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.settings.options.auto_reconnect = true;
-    app.seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    app.activate_session(1);
+    app.settings.view.options.auto_reconnect = true;
+    app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    app.activate_session(sid(1));
     // Simulate a lost link that armed a reconnect loop at attempt 3.
     app.sessions[0].state = SessionState::Disconnected;
     app.sessions[0].reconnect = ReconnectState::Waiting {
@@ -4191,8 +4450,8 @@ fn toolbar_enable_states_follow_active_session() {
 
     // Connected: all three enabled.
     h.state_mut()
-        .seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    h.state_mut().activate_session(1);
+        .seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    h.state_mut().activate_session(sid(1));
     h.run_steps(3);
     assert!(widget_enabled(&h, "Подключиться"));
     assert!(widget_enabled(&h, "Отключиться"));
@@ -4219,11 +4478,11 @@ fn toolbar_enable_states_follow_active_session() {
 fn v1_each_tab_shows_its_own_tags_and_row_menu_has_no_tree_actions() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    app.seed_session(2, EndpointSpec::ua("opc.tcp://127.0.0.1:4841"));
-    app.activate_session(1);
-    app.seed_row(1, "a", "SigA", Value::I64(1));
-    app.seed_row(2, "b", "SigB", Value::I64(2));
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_session(sid(2), EndpointSpec::ua("opc.tcp://127.0.0.1:4841"));
+    app.activate_session(sid(1));
+    app.seed_row(sid(1), "a", "SigA", Value::I64(1));
+    app.seed_row(sid(2), "b", "SigB", Value::I64(2));
     let mut h = harness(app);
     h.run_steps(3);
     assert!(h.query_by_label_contains("SigA").is_some());
@@ -4242,7 +4501,7 @@ fn v1_each_tab_shows_its_own_tags_and_row_menu_has_no_tree_actions() {
     h.run_steps(3);
 
     // Switching the tab shows the other endpoint's own list.
-    h.state_mut().activate_session(2);
+    h.state_mut().activate_session(sid(2));
     h.run_steps(3);
     assert!(h.query_by_label_contains("SigB").is_some());
     assert!(h.query_by_label_contains("SigA").is_none());
@@ -4254,11 +4513,11 @@ fn v1_each_tab_shows_its_own_tags_and_row_menu_has_no_tree_actions() {
 fn v1_switching_tabs_drops_the_hidden_selection() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    app.seed_session(2, EndpointSpec::ua("opc.tcp://127.0.0.1:4841"));
-    app.activate_session(1);
-    let a = app.seed_row(1, "a", "SigA", Value::I64(1));
-    let b = app.seed_row(2, "b", "SigB", Value::I64(2));
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_session(sid(2), EndpointSpec::ua("opc.tcp://127.0.0.1:4841"));
+    app.activate_session(sid(1));
+    let a = app.seed_row(sid(1), "a", "SigA", Value::I64(1));
+    let b = app.seed_row(sid(2), "b", "SigB", Value::I64(2));
     let mut h = harness(app);
     h.run_steps(2);
     h.state_mut().select_only(0);
@@ -4271,13 +4530,13 @@ fn v1_switching_tabs_drops_the_hidden_selection() {
     );
     assert!(h.state().selected_rows.contains(&a));
 
-    h.state_mut().activate_session(2);
+    h.state_mut().activate_session(sid(2));
     h.run_steps(2);
     assert!(h.state().selected_rows.is_empty());
     h.key_press(Key::Delete);
     h.run_steps(3);
-    assert!(h.state().rows.iter().any(|r| r.key == a));
-    assert!(h.state().rows.iter().any(|r| r.key == b));
+    assert!(h.state().rows().iter().any(|r| r.key == a));
+    assert!(h.state().rows().iter().any(|r| r.key == b));
 }
 
 /// V1: the count strip shows the active tab's tags.
@@ -4285,16 +4544,16 @@ fn v1_switching_tabs_drops_the_hidden_selection() {
 fn v1_signal_count_is_per_tab() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    app.seed_session(2, EndpointSpec::ua("opc.tcp://127.0.0.1:4841"));
-    app.activate_session(2);
-    app.seed_row(1, "a", "SigA", Value::I64(1));
-    app.seed_row(1, "c", "SigC", Value::I64(3));
-    app.seed_row(2, "b", "SigB", Value::I64(2));
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_session(sid(2), EndpointSpec::ua("opc.tcp://127.0.0.1:4841"));
+    app.activate_session(sid(2));
+    app.seed_row(sid(1), "a", "SigA", Value::I64(1));
+    app.seed_row(sid(1), "c", "SigC", Value::I64(3));
+    app.seed_row(sid(2), "b", "SigB", Value::I64(2));
     assert_eq!(app.visible_row_count(), 1);
-    app.activate_session(1);
+    app.activate_session(sid(1));
     assert_eq!(app.visible_row_count(), 2);
-    assert_eq!(app.visible_row_positions(), vec![0, 1]);
+    assert_eq!(app.visible_row_positions().as_slice(), &[0, 1]);
 }
 
 /// A12: a branch with thousands of nodes builds only the visible rows.
@@ -4302,11 +4561,11 @@ fn v1_signal_count_is_per_tab() {
 fn a12_a_huge_tree_builds_only_the_visible_rows() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.activate_session(sid(1));
     for index in 0..5000 {
         app.seed_tree_item(
-            1,
+            sid(1),
             None,
             0,
             BrowseNode {
@@ -4347,8 +4606,8 @@ fn a7_toolbar_connect_opens_the_dialog_on_first_start() {
 fn a7_toolbar_connect_reconnects_a_disconnected_active_session() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.activate_session(sid(1));
     app.sessions[0].state = SessionState::Disconnected;
     let mut h = harness(app);
     h.run_steps(3);
@@ -4382,7 +4641,7 @@ fn on_exit_shuts_down_the_gateway() {
     with_settings_lock(|| {
         let ctx = egui::Context::default();
         let mut app = App::new_test(&ctx);
-        app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+        app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
 
         let started = std::time::Instant::now();
         <App as eframe::App>::on_exit(&mut app, None);
@@ -4393,23 +4652,29 @@ fn on_exit_shuts_down_the_gateway() {
         );
 
         let error = app
-            .gateway
+            .gateway_for_test()
             .send(Command {
-                request_id: 1,
-                session: 1,
+                request_id: opcda_egui::bff::model::RequestId::new(1),
+                owner: sid(1).into(),
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::Test,
             })
             .unwrap_err();
-        assert!(error.contains("shut down"), "unexpected error: {error}");
+        assert_eq!(error, opcda_egui::bff::SendError::GatewayClosed);
     });
 }
 
 // ---- U9: the connect dialog waits for Connected / Error of its attempt ----
 
-fn u9_start_attempt(app: &mut App, url: &str) -> (u64, u64) {
+fn u9_start_attempt(
+    app: &mut App,
+    url: &str,
+) -> (
+    opcda_egui::bff::model::SessionId,
+    opcda_egui::bff::model::RequestId,
+) {
     app.open_connect_dialog();
-    app.dialogs.connect.protocol = Protocol::OpcUa;
+    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
     app.dialogs.connect.ua_url = url.to_string();
     assert!(app.connect_from_dialog(EndpointSpec::ua(url)));
     let session = app.active_session.expect("session created by the attempt");
@@ -4508,10 +4773,10 @@ fn u9_other_session_connecting_does_not_close_the_dialog() {
     with_settings_lock(|| {
         let ctx = egui::Context::default();
         let mut app = App::new_test(&ctx);
-        app.seed_session(7, EndpointSpec::ua("opc.tcp://127.0.0.1:2"));
+        app.seed_session(sid(7), EndpointSpec::ua("opc.tcp://127.0.0.1:2"));
         app.open_connect_dialog();
         app.on_event_for_test_at(
-            7,
+            sid(7),
             EventKind::Connected {
                 endpoint: EndpointSpec::ua("opc.tcp://127.0.0.1:2"),
                 info: opcda_egui::bff::model::BackendMsg::raw("background"),
@@ -4559,9 +4824,9 @@ fn a2_damaged_settings_file_is_backed_up_and_reported_in_the_journal() {
         let dir = opcda_egui::settings::app_dir();
         std::fs::create_dir_all(&dir).expect("settings dir");
         std::fs::write(dir.join("settings.json"), "{ broken").expect("write damaged file");
-        let settings = Settings::load();
+        let loaded = Settings::load();
         let ctx = egui::Context::default();
-        let app = App::new_test_with_settings(&ctx, settings);
+        let app = App::new_test_with_loaded(&ctx, loaded);
         let text = journal_text(&app);
         assert!(text.contains("повреждён"), "journal: {text}");
         assert!(text.contains("settings.json.bad-"), "journal: {text}");
@@ -4586,8 +4851,7 @@ fn a2_failed_settings_save_is_reported_in_the_journal() {
         std::fs::create_dir_all(dir.join("settings.json")).expect("squatting dir");
         let ctx = egui::Context::default();
         let mut app = App::new_test(&ctx);
-        app.settings.save();
-        app.tick_for_test();
+        app.persist_settings();
         let text = journal_text(&app);
         assert!(
             text.contains("Не удалось сохранить настройки"),
@@ -4604,12 +4868,12 @@ fn a3_failed_connectivity_test_marks_rows_stale_like_disconnected() {
     let mut app = App::new_test(&ctx);
     seed_table(&mut app, &[("tag.a", "A", 1), ("tag.b", "B", 2)]);
     assert!(
-        app.rows
+        app.rows()
             .iter()
-            .all(|r| r.quality.kind == opcda_egui::bff::model::QualityKind::Good)
+            .all(|r| r.quality.kind() == opcda_egui::bff::model::QualityKind::Good)
     );
     app.on_event_for_test_at(
-        1,
+        sid(1),
         EventKind::Error {
             operation: opcda_egui::bff::model::Operation::Test,
             message: opcda_egui::bff::model::BackendMsg::raw("link down"),
@@ -4617,8 +4881,315 @@ fn a3_failed_connectivity_test_marks_rows_stale_like_disconnected() {
     );
     assert_eq!(app.sessions[0].state, SessionState::Disconnected);
     let stale = opcda_egui::i18n::tr(opcda_egui::i18n::Lang::Ru, opcda_egui::i18n::Tr::StaleData);
-    for row in &app.rows {
-        assert_eq!(row.quality.kind, opcda_egui::bff::model::QualityKind::Bad);
-        assert_eq!(row.quality.text, stale);
+    for row in app.rows() {
+        assert_eq!(row.quality.kind(), opcda_egui::bff::model::QualityKind::Bad);
+        assert_eq!(row.quality.text(), stale);
     }
+}
+
+#[test]
+fn da_preparation_failure_is_rendered_by_real_update_frames() {
+    with_settings_lock(|| {
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        set_ru(&mut app);
+        app.dialogs.connect.open = true;
+        assert!(app.connect_from_dialog(EndpointSpec::da("10.23.45.67", "Srv.Test")));
+        assert!(app.dialogs.connect.connecting.is_some());
+        let mut h = Harness::builder()
+            .with_size([1200.0, 900.0])
+            .with_accessibility_check(false)
+            .allow_missing_glyphs()
+            .build_ui_state(|ui, app: &mut App| app.update(ui), app);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while h.state().dialogs.connect.error.is_none() && std::time::Instant::now() < deadline {
+            h.run_steps(1);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(h.state().dialogs.connect.error.is_some());
+        assert!(h.state().dialogs.connect.connecting.is_none());
+        assert_eq!(h.state().sessions[0].state, SessionState::Disconnected);
+    });
+}
+
+fn sid(raw: u64) -> opcda_egui::bff::model::SessionId {
+    opcda_egui::bff::model::SessionId::new(raw).unwrap()
+}
+
+#[test]
+fn scan_terminal_outcomes_keep_partial_results_and_progress() {
+    use opcda_egui::app::UaSearch;
+    use opcda_egui::bff::model::{BackendMsg, ScanEnd};
+    for end in [
+        ScanEnd::Cancelled,
+        ScanEnd::Failed(BackendMsg::raw("scan failed")),
+    ] {
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        app.open_connect_dialog();
+        let scan_id = ScanId::new(42).unwrap();
+        app.dialogs.connect.ua_search = UaSearch::Subnet { scan_id };
+        app.on_event_for_test(EventKind::UaScanProgress {
+            scan_id,
+            total: 10,
+            checked: 3,
+            found: 1,
+        });
+        app.on_event_for_test(EventKind::UaScanFound {
+            scan_id,
+            servers: vec![scan_server()],
+        });
+        let failed = matches!(end, ScanEnd::Failed(_));
+        app.on_event_for_test(EventKind::UaScanFinished {
+            scan_id,
+            found: 1,
+            end,
+        });
+        let d = &app.dialogs.connect;
+        assert_eq!(d.ua_search, UaSearch::Idle);
+        assert_eq!(d.ua_scan_checked, 3);
+        assert_eq!(d.ua_scan_found, 1);
+        assert_eq!(d.ua_search_results().len(), 1);
+        assert_eq!(d.ua_scan_error.is_some(), failed);
+    }
+}
+
+#[test]
+fn large_subnet_confirmation_ui_starts_only_after_yes_and_can_stop() {
+    use opcda_egui::app::{ConnectPane, UaSearch};
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.dialogs.connect.pane = ConnectPane::Ua;
+    app.network.loaded = true;
+    app.network.lease = Some(lease_with_subnet("10.0.0.5", 19));
+    app.record_dispatches_for_test();
+    let mut h = harness(app);
+    h.run_steps(4);
+    h.get_by_label("Поиск в сети").click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().dialogs.connect.ua_search,
+        UaSearch::ConfirmSubnet { count: 8190 }
+    );
+    assert!(
+        !h.state()
+            .dispatched_for_test()
+            .iter()
+            .any(|command| matches!(command.kind, CommandKind::ScanUaNetwork { .. }))
+    );
+    h.get_by_label("Да").click();
+    h.run_steps(3);
+    assert!(matches!(
+        h.state().dialogs.connect.ua_search,
+        UaSearch::Subnet { .. }
+    ));
+    assert!(
+        h.state()
+            .dispatched_for_test()
+            .iter()
+            .any(|command| matches!(
+                command.kind,
+                CommandKind::ScanUaNetwork { subnet: None, .. }
+            ))
+    );
+    h.get_by_label("Остановить").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialogs.connect.ua_search, UaSearch::Idle);
+    assert!(
+        h.state()
+            .dispatched_for_test()
+            .iter()
+            .any(|command| matches!(command.kind, CommandKind::CancelUaScan { .. }))
+    );
+}
+
+#[test]
+fn csv_import_cancel_retains_partial_rows_and_close_then_complete() {
+    use opcda_egui::app::CsvImportState;
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
+    let mut csv = String::from("server;item_id;name\n");
+    for i in 0..100_000 {
+        csv.push_str(&format!("Srv.Test;Tag{i};Name{i}\n"));
+    }
+    opcda_egui::ui::start_csv_import(&mut app, csv);
+    let mut h = harness(app);
+    h.run_steps(1);
+    h.get_by_label("Отмена").click();
+    h.run_steps(1);
+    let job = h.state().csv_import.as_ref().unwrap();
+    assert_eq!(job.state, CsvImportState::Cancelled);
+    assert!(job.processed > 0 && job.processed < job.total);
+    assert_eq!(job.loaded, h.state().rows().len());
+    let retained = job.loaded;
+    h.run_steps(2);
+    assert_eq!(h.state().rows().len(), retained);
+    h.get_by_label("Закрыть").click();
+    h.run_steps(1);
+    assert!(h.state().csv_import.is_none());
+    assert_eq!(h.state().rows().len(), retained);
+
+    opcda_egui::ui::start_csv_import(
+        h.state_mut(),
+        "server;item_id;name\nSrv.Test;Final;Final\n".into(),
+    );
+    h.run_steps(2);
+    let job = h.state().csv_import.as_ref().unwrap();
+    assert_eq!(job.state, CsvImportState::Completed);
+    assert_eq!((job.processed, job.loaded), (1, 1));
+    h.get_by_label("Закрыть").click();
+    h.run_steps(1);
+    assert!(h.state().csv_import.is_none());
+}
+
+#[test]
+fn da_results_with_same_progid_select_their_own_host() {
+    use opcda_egui::bff::model::ServerEntry;
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.dialogs.connect.da_auto_pending = 2;
+    app.dialogs.connect.da_pending = true;
+    for host in ["plant-a", "plant-b"] {
+        app.on_event_for_test(EventKind::Servers {
+            host: host.into(),
+            servers: vec![ServerEntry {
+                id: "Vendor.OPC".into(),
+                description: "Factory".into(),
+            }],
+        });
+    }
+    let mut h = harness(app);
+    h.run_steps(2);
+    assert_eq!(
+        h.state().dialogs.connect.da_selected.as_ref().unwrap().host,
+        "plant-a"
+    );
+    h.get_by_label("Vendor.OPC — Factory @ plant-b").click();
+    h.run_steps(2);
+    let d = &h.state().dialogs.connect;
+    let selected = d.da_selected.as_ref().unwrap();
+    assert_eq!(
+        (selected.server.id.as_str(), selected.host.as_str()),
+        ("Vendor.OPC", "plant-b")
+    );
+    assert_eq!(
+        (d.da_manual.as_str(), d.da_host.as_str()),
+        ("Vendor.OPC", "plant-b")
+    );
+}
+
+#[test]
+fn double_click_da_result_connects_to_its_host() {
+    use opcda_egui::app::DaHit;
+    use opcda_egui::bff::model::ServerEntry;
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.dialogs.connect.da_pending = false;
+    app.dialogs.connect.da_servers.push(DaHit {
+        server: ServerEntry {
+            id: "Vendor.OPC".into(),
+            description: "Factory".into(),
+        },
+        host: "plant-b".into(),
+    });
+    set_ru(&mut app);
+    let mut h = Harness::builder()
+        .with_size([1200.0, 900.0])
+        .with_step_dt(0.016)
+        .with_accessibility_check(false)
+        .allow_missing_glyphs()
+        .build_ui_state(|ui, app| opcda_egui::ui::draw(app, ui), app);
+    h.run_steps(2);
+    h.get_by_label("Vendor.OPC — Factory @ plant-b").click();
+    h.run_steps(1);
+    h.get_by_label("Vendor.OPC — Factory @ plant-b").click();
+    h.run_steps(1);
+    assert_eq!(h.state().sessions.len(), 1);
+    let endpoint = &h.state().sessions[0].endpoint();
+    assert_eq!(
+        (endpoint.host.as_str(), endpoint.address.as_str()),
+        ("plant-b", "Vendor.OPC")
+    );
+}
+
+#[test]
+fn server_popup_shows_ua_fields_only_for_ua_sessions() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    set_ru(&mut app);
+    app.seed_session(sid(1), EndpointSpec::da("", "Server"));
+    app.status_popup = true;
+    let mut h = harness(app);
+    h.run_steps(3);
+    assert_eq!(h.query_all_by_label("Подписка:").count(), 0);
+    assert_eq!(h.query_all_by_label("Таймаут сессии (мс):").count(), 0);
+    h.state_mut()
+        .seed_session(sid(2), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    h.run_steps(3);
+    assert!(h.query_all_by_label("Подписка:").count() > 0);
+    assert!(h.query_all_by_label("Таймаут сессии (мс):").count() > 0);
+}
+
+#[test]
+fn browse_filter_control_is_ua_only_and_changes_ua_filter() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    set_ru(&mut app);
+    app.seed_session(sid(1), EndpointSpec::da("", "Server"));
+    let mut h = harness(app);
+    h.run_steps(3);
+    assert_eq!(h.query_all_by_label("Только переменные").count(), 0);
+    h.state_mut()
+        .seed_session(sid(2), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    h.run_steps(3);
+    h.get_by_label("Только переменные").click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().sessions[1].ua().unwrap().ua_browse_filter,
+        opcda_egui::bff::model::NodeClassFilter::Variables
+    );
+}
+
+#[test]
+fn ua_result_tree_rebuilds_after_same_length_replacement() {
+    use opcda_egui::bff::model::{AdvertisedMode, AdvertisedPolicy, UaEndpointInfo, UaServerInfo};
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
+    let server = |url: &str, policy: &str, mode: &str| UaServerInfo {
+        application_name: "Server".into(),
+        application_uri: "urn:test".into(),
+        endpoints: vec![UaEndpointInfo {
+            url: url.parse().unwrap(),
+            security_policy: AdvertisedPolicy::from_wire(policy),
+            security_mode: AdvertisedMode::from_wire(mode),
+        }],
+    };
+    app.dialogs
+        .connect
+        .ua_search_results_mut_for_test()
+        .push(server("opc.tcp://127.0.0.1:4840", "None", "None"));
+    let mut h = harness(app);
+    h.run_steps(4);
+    assert!(
+        h.query_by_label_contains("opc.tcp://127.0.0.1:4840")
+            .is_some()
+    );
+    h.state_mut()
+        .dialogs
+        .connect
+        .ua_search_results_mut_for_test()[0] = server("opc.tcp://127.0.0.1:4841", "None", "None");
+    h.run_steps(4);
+    assert!(
+        h.query_by_label_contains("opc.tcp://127.0.0.1:4840")
+            .is_none()
+    );
+    h.get_by_label_contains("opc.tcp://127.0.0.1:4841").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialogs.connect.ua_url, "opc.tcp://127.0.0.1:4841");
 }

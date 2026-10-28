@@ -16,12 +16,12 @@
 //!
 //! After the process exits there must be no ESTABLISHED client connection to
 //! port 4840 (`netstat -ano | findstr 4840`).
-use opcda_egui::bff::Gateway;
 use opcda_egui::bff::model::{
     BrowseNode, Command, CommandKind, DataValue, EndpointSpec, Event, EventKind, ItemSpec,
     NodeKind, Protocol, QualityKind,
 };
 use opcda_egui::constants::{BROWSE_MAX_REFERENCES_PER_NODE, READ_MAX_ITEMS_PER_CALL};
+use opclook_backend::bff::Gateway;
 use std::collections::{HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
@@ -48,12 +48,12 @@ fn wait_for(
     predicate: impl Fn(&EventKind) -> bool,
 ) -> Option<Event> {
     let request_id = command.request_id;
-    let session = command.session;
+    let owner = command.owner;
     gateway.send(command).expect("gateway send");
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         while let Some(event) = gateway.try_recv() {
-            if event.request_id != request_id || event.session != session {
+            if event.origin != request_id.into() || event.owner != owner {
                 continue;
             }
             if predicate(&event.kind) {
@@ -69,8 +69,10 @@ fn connect(gateway: &Gateway, session: u64) -> Event {
     wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Connect {
                 endpoint: EndpointSpec::ua(test_url()),
@@ -86,8 +88,10 @@ fn disconnect(gateway: &Gateway, session: u64) {
     let event = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Disconnect,
         },
@@ -111,12 +115,14 @@ fn browse(gateway: &Gateway, session: u64, node_id: &str) -> Vec<BrowseNode> {
     let event = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Browse {
                 node_id: node_id.to_string(),
-                filter: None,
+                filter: opcda_egui::bff::model::NodeClassFilter::All,
                 view_id: None,
             },
         },
@@ -127,7 +133,7 @@ fn browse(gateway: &Gateway, session: u64, node_id: &str) -> Vec<BrowseNode> {
     match event.kind {
         EventKind::Browse { children, .. } => children,
         EventKind::Error { message, .. } => {
-            panic!("browse failed for {node_id}: {message}")
+            panic!("browse failed for {node_id}: {message:?}")
         }
         other => panic!("browse {node_id}: unexpected event {other:?}"),
     }
@@ -220,8 +226,10 @@ fn add_items(gateway: &Gateway, session: u64, items: &[ItemSpec]) {
     let event = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::AddItems {
                 items: items.to_vec(),
@@ -242,18 +250,24 @@ fn add_items(gateway: &Gateway, session: u64, items: &[ItemSpec]) {
                 assert!(result.is_ok(), "add item key {key} failed: {result:?}");
             }
         }
-        EventKind::Error { message, .. } => panic!("add items failed: {message}"),
+        EventKind::Error { message, .. } => panic!("add items failed: {message:?}"),
         other => panic!("add items: unexpected event {other:?}"),
     }
 }
 
-fn read_all(gateway: &Gateway, session: u64, keys: &[u32]) -> (Vec<(u32, DataValue)>, Duration) {
+fn read_all(
+    gateway: &Gateway,
+    session: u64,
+    keys: &[opcda_egui::bff::model::ItemKey],
+) -> (Vec<(opcda_egui::bff::model::ItemKey, DataValue)>, Duration) {
     let started = Instant::now();
     let event = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Read {
                 keys: keys.to_vec(),
@@ -266,14 +280,14 @@ fn read_all(gateway: &Gateway, session: u64, keys: &[u32]) -> (Vec<(u32, DataVal
     let elapsed = started.elapsed();
     match event.kind {
         EventKind::Values { values } => (values, elapsed),
-        EventKind::Error { message, .. } => panic!("read failed: {message}"),
+        EventKind::Error { message, .. } => panic!("read failed: {message:?}"),
         other => panic!("read: unexpected event {other:?}"),
     }
 }
 
 /// Sum of the debug-formatted values is a stable lower-bound proxy for the
 /// response payload (the client model is what the UI receives).
-fn approx_payload_bytes(values: &[(u32, DataValue)]) -> usize {
+fn approx_payload_bytes(values: &[(opcda_egui::bff::model::ItemKey, DataValue)]) -> usize {
     values
         .iter()
         .map(|(_, dv)| format!("{:?}", dv.value).len())
@@ -353,11 +367,11 @@ fn ua_large_browse_read_and_cycles() {
         .iter()
         .enumerate()
         .map(|(index, node_id)| ItemSpec {
-            key: (index + 1) as u32,
+            key: opcda_egui::bff::model::ItemKey::new((index + 1) as u32).unwrap(),
             item_id: node_id.clone(),
         })
         .collect();
-    let keys: Vec<u32> = specs.iter().map(|s| s.key).collect();
+    let keys: Vec<_> = specs.iter().map(|s| s.key).collect();
 
     let add_started = Instant::now();
     add_items(&gateway, session, &specs);
@@ -372,7 +386,7 @@ fn ua_large_browse_read_and_cycles() {
         .iter()
         .filter(|(_, dv)| dv.quality.kind == QualityKind::Good)
         .count();
-    let missing: Vec<u32> = keys
+    let missing: Vec<_> = keys
         .iter()
         .copied()
         .filter(|key| !values.iter().any(|(k, _)| k == key))

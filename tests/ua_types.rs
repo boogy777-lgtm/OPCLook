@@ -4,11 +4,11 @@
 //! filter, browsing server Views, and BrowsePath resolution. Unknown/absent
 //! types must be handled gracefully (never panic).
 
-use opcda_egui::bff::Gateway;
 use opcda_egui::bff::model::{
     BrowseNode, Command, CommandKind, EndpointSpec, Event, EventKind, ItemSpec, NodeKind, Protocol,
     QualityKind,
 };
+use opclook_backend::bff::Gateway;
 use std::time::{Duration, Instant};
 
 const DEFAULT_URL: &str = "opc.tcp://127.0.0.1:4840";
@@ -30,12 +30,12 @@ fn wait_for(
     predicate: impl Fn(&EventKind) -> bool,
 ) -> Option<Event> {
     let request_id = command.request_id;
-    let session = command.session;
+    let owner = command.owner;
     gateway.send(command).expect("gateway send");
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         while let Some(event) = gateway.try_recv() {
-            if event.request_id != request_id || event.session != session {
+            if event.origin != request_id.into() || event.owner != owner {
                 continue;
             }
             if predicate(&event.kind) {
@@ -51,8 +51,10 @@ fn connect(gateway: &Gateway, session: u64) -> Event {
     wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Connect {
                 endpoint: EndpointSpec::ua(test_url()),
@@ -68,8 +70,10 @@ fn disconnect(gateway: &Gateway, session: u64) {
     let _ = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Disconnect,
         },
@@ -99,12 +103,14 @@ fn browse(gateway: &Gateway, session: u64, node_id: &str) -> Vec<BrowseNode> {
     let event = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Browse {
                 node_id: node_id.to_string(),
-                filter: None,
+                filter: opcda_egui::bff::model::NodeClassFilter::All,
                 view_id: None,
             },
         },
@@ -122,8 +128,10 @@ fn read_values(gateway: &Gateway, session: u64, items: &[ItemSpec]) -> Event {
     wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::AddItems {
                 items: items.to_vec(),
@@ -137,8 +145,10 @@ fn read_values(gateway: &Gateway, session: u64, items: &[ItemSpec]) -> Event {
     wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Read { keys },
         },
@@ -179,15 +189,15 @@ fn ua_type_support_reads_without_panic_and_handles_unknown_types() {
         // distinct built-in types.
         let items = vec![
             ItemSpec {
-                key: 1,
+                key: opcda_egui::bff::model::ItemKey::new(1).unwrap(),
                 item_id: "i=2258".to_string(),
             }, // Server_ServerStatus_CurrentTime (DateTime)
             ItemSpec {
-                key: 2,
+                key: opcda_egui::bff::model::ItemKey::new(2).unwrap(),
                 item_id: "i=2259".to_string(),
             }, // Server_ServerStatus_State (Int32)
             ItemSpec {
-                key: 3,
+                key: opcda_egui::bff::model::ItemKey::new(3).unwrap(),
                 item_id: "ns=1;s=GVL.MyVar".to_string(),
             }, // may not exist -> graceful
         ];
@@ -220,12 +230,14 @@ fn ua_variable_filter_browse_returns_variables_only() {
         let filtered = wait_for(
             gateway,
             Command {
-                request_id: next_id(),
-                session,
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+                owner: opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                ),
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Browse {
                     node_id: "i=85".to_string(),
-                    filter: Some(2),
+                    filter: opcda_egui::bff::model::NodeClassFilter::Variables,
                     view_id: None,
                 },
             },
@@ -261,8 +273,10 @@ fn ua_browse_views_lists_views_and_browsing_in_them_does_not_error() {
         let views = wait_for(
             gateway,
             Command {
-                request_id: next_id(),
-                session,
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+                owner: opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                ),
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::BrowseViews,
             },
@@ -274,7 +288,7 @@ fn ua_browse_views_lists_views_and_browsing_in_them_does_not_error() {
             EventKind::Views { children } => children,
             EventKind::Error { message, .. } => {
                 // CODESYS may not expose any Views; that is graceful.
-                println!("BrowseViews unsupported/empty: {message}");
+                println!("BrowseViews unsupported/empty: {message:?}");
                 return;
             }
             other => panic!("unexpected event: {other:?}"),
@@ -289,12 +303,14 @@ fn ua_browse_views_lists_views_and_browsing_in_them_does_not_error() {
         let event = wait_for(
             gateway,
             Command {
-                request_id: next_id(),
-                session,
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+                owner: opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                ),
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Browse {
                     node_id: "i=85".to_string(),
-                    filter: None,
+                    filter: opcda_egui::bff::model::NodeClassFilter::All,
                     view_id: Some(first_view.node_id.clone()),
                 },
             },
@@ -317,8 +333,10 @@ fn ua_resolve_browse_path_resolves_objects() {
         let resolved = wait_for(
             gateway,
             Command {
-                request_id: next_id(),
-                session,
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+                owner: opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                ),
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::ResolveBrowsePath {
                     start_node: None,
@@ -348,7 +366,7 @@ fn ua_resolve_browse_path_resolves_objects() {
                 );
             }
             EventKind::Error { message, .. } => {
-                println!("0:Objects resolve failed (server may not support it): {message}");
+                println!("0:Objects resolve failed (server may not support it): {message:?}");
             }
             other => panic!("unexpected event: {other:?}"),
         }
@@ -376,7 +394,7 @@ fn ua_untyped_array_and_structured_read_are_graceful() {
             .take(limit)
             .enumerate()
             .map(|(i, v)| ItemSpec {
-                key: i as u32 + 10,
+                key: opcda_egui::bff::model::ItemKey::new(i as u32 + 10).unwrap(),
                 item_id: v.node_id.clone(),
             })
             .collect();

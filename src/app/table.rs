@@ -1,19 +1,20 @@
 use super::*;
 use crate::bff::model::{
-    CommandKind, ItemKey, ItemSpec, Protocol, Quality, QualityKind, SessionId, Value, WriteRequest,
+    CommandKind, ItemKey, ItemSpec, Protocol, SessionId, Value, VarType, WriteRequest,
 };
 use crate::i18n::{Tr, fmt, tr};
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Utc};
 
 impl App {
-    pub fn add_items(&mut self, session: SessionId, items: Vec<(String, String)>) {
-        let Some(view) = self.sessions.iter().find(|s| s.id == session) else {
-            return;
+    pub fn add_items(&mut self, session: SessionId, items: Vec<(String, String)>) -> bool {
+        let Some(view) = self.session(session) else {
+            return false;
         };
         let protocol = view.protocol();
-        let server_label = view.endpoint.display_name();
+        let server_label = view.endpoint().display_name();
         let mut specs = Vec::new();
         let mut added = 0usize;
+        let mut exhausted = false;
         for (item_id, display_name) in items {
             if item_id.trim().is_empty() {
                 continue;
@@ -23,8 +24,14 @@ impl App {
             if self.has_row_for_item(session, &item_id) {
                 continue;
             }
-            let key = self.next_key;
-            self.next_key += 1;
+            let Some(key) = self.next_key else {
+                exhausted = true;
+                let message = tr(self.lang(), Tr::ItemIdsExhausted).to_string();
+                self.status.clone_from(&message);
+                self.journal.error(message);
+                break;
+            };
+            self.next_key = key.successor();
             let display_name = if display_name.trim().is_empty() {
                 item_id.clone()
             } else {
@@ -41,36 +48,44 @@ impl App {
                 write_type: None,
                 writable: false,
                 value: Value::Empty,
-                quality: Quality {
-                    code: Quality::CODE_PLACEHOLDER_NO_DATA,
-                    kind: QualityKind::Bad,
-                    text: tr(self.lang(), Tr::NoData).to_string(),
-                },
+                quality: RowQuality::NoData(tr(self.lang(), Tr::NoData).to_string()),
                 timestamp: None,
                 description: String::new(),
                 pending: true,
                 poll_only: false,
                 changed_at: None,
+                value_text_cache: Default::default(),
+                timestamp_text_cache: Default::default(),
             });
             specs.push(ItemSpec { key, item_id });
             added += 1;
         }
         if specs.is_empty() {
-            self.journal.info_l(Tr::AddFailedEmpty, &[]);
-            return;
+            if !exhausted {
+                self.journal.info_l(Tr::AddFailedEmpty, &[]);
+            }
+            return false;
         }
         let keys: Vec<ItemKey> = specs.iter().map(|spec| spec.key).collect();
-        self.send_with(
-            session,
-            protocol,
-            CommandKind::AddItems { items: specs },
-            PendingCtx::AddKeys(keys),
-        );
-        self.journal.info_l(Tr::AddedSignals, &[&added.to_string()]);
+        if self
+            .send_with(
+                session,
+                protocol,
+                CommandKind::AddItems { items: specs },
+                PendingCtx::AddKeys(keys.clone()),
+            )
+            .is_some()
+        {
+            self.journal.info_l(Tr::AddedSignals, &[&added.to_string()]);
+            true
+        } else {
+            self.remove_rows(&keys.into_iter().collect());
+            false
+        }
     }
 
     pub(super) fn register_rows(&mut self, session: SessionId) {
-        let Some(view) = self.sessions.iter().find(|s| s.id == session) else {
+        let Some(view) = self.session(session) else {
             return;
         };
         let protocol = view.protocol();
@@ -86,12 +101,19 @@ impl App {
         }
         if !specs.is_empty() {
             let keys: Vec<ItemKey> = specs.iter().map(|spec| spec.key).collect();
-            self.send_with(
-                session,
-                protocol,
-                CommandKind::AddItems { items: specs },
-                PendingCtx::AddKeys(keys),
-            );
+            if self
+                .send_with(
+                    session,
+                    protocol,
+                    CommandKind::AddItems { items: specs },
+                    PendingCtx::AddKeys(keys.clone()),
+                )
+                .is_none()
+            {
+                for row in self.rows.iter_mut().filter(|row| keys.contains(&row.key)) {
+                    row.pending = false;
+                }
+            }
         }
     }
 
@@ -113,17 +135,28 @@ impl App {
                 }
             }
         }
+        let mut removed = std::collections::HashSet::new();
         for (session, protocol, keys) in by_session {
-            self.send(session, protocol, CommandKind::RemoveItems { keys });
+            if self
+                .send(
+                    session,
+                    protocol,
+                    CommandKind::RemoveItems { keys: keys.clone() },
+                )
+                .is_some()
+            {
+                removed.extend(keys);
+            }
         }
-        let count = self.selected_rows.len();
-        self.rows
-            .retain(|row| !self.selected_rows.contains(&row.key));
-        self.selected_rows.clear();
+        let count = removed.len();
+        self.remove_rows(&removed);
+        self.selected_rows.retain(|key| !removed.contains(key));
         self.table_focus = None;
         self.table_anchor = None;
-        self.journal
-            .info_l(Tr::RemovedSignals, &[&count.to_string()]);
+        if count > 0 {
+            self.journal
+                .info_l(Tr::RemovedSignals, &[&count.to_string()]);
+        }
     }
 }
 
@@ -134,7 +167,8 @@ impl App {
         } else {
             keys
         };
-        keys.retain(|key| self.rows.iter().any(|row| row.key == *key));
+        let existing: std::collections::HashSet<_> = self.rows.iter().map(|row| row.key).collect();
+        keys.retain(|key| existing.contains(key));
         if keys.is_empty() {
             return;
         }
@@ -188,7 +222,7 @@ impl App {
         }
         // With confirm_write enabled, keep the dialog open and ask explicitly,
         // mirroring the original message before the write is sent.
-        if self.settings.options.confirm_write {
+        if self.settings.view.options.confirm_write {
             let names: Vec<String> = keys
                 .iter()
                 .filter_map(|key| self.rows.iter().find(|r| r.key == *key))
@@ -205,12 +239,11 @@ impl App {
                     &[&names.len().to_string(), &value_text],
                 )
             };
-            self.dialogs.confirm = ConfirmDialog {
-                open: true,
+            self.dialogs.confirm = Some(ConfirmRequest {
                 title: tr(lang, Tr::ConfirmWriteTitle).to_string(),
                 text,
-                action: Some(ConfirmAction::Write(request_list.clone())),
-            };
+                action: ConfirmAction::Write(request_list),
+            });
             return;
         }
         self.dialogs.write.open = false;
@@ -218,16 +251,14 @@ impl App {
     }
 
     fn build_write_requests(&self, keys: &[ItemKey]) -> Result<PendingWrites, String> {
-        let Some(row) = self.rows.iter().find(|r| r.key == keys[0]) else {
-            return Ok(PendingWrites {
-                session: 0,
-                protocol: Protocol::OpcDa,
-                requests: Vec::new(),
-                type_label: String::new(),
-            });
+        let Some(row) = keys
+            .first()
+            .and_then(|key| self.rows.iter().find(|r| r.key == *key))
+        else {
+            return Err(tr(self.lang(), Tr::NoConnection).to_string());
         };
         let session = row.session;
-        let Some(view) = self.sessions.iter().find(|s| s.id == session) else {
+        let Some(view) = self.session(session) else {
             return Ok(PendingWrites {
                 session,
                 protocol: Protocol::OpcDa,
@@ -278,59 +309,57 @@ impl App {
     }
 
     pub(super) fn perform_write(&mut self, pending: PendingWrites) {
-        let count = pending.requests.len();
+        let starting_new_batch = self.write_batch.pending == 0;
+        let mut count = 0;
         for request in pending.requests {
             let key = request.key;
-            self.send_with(
-                pending.session,
-                pending.protocol,
-                CommandKind::Write { request },
-                PendingCtx::WriteKey(key),
-            );
+            if self
+                .send_with(
+                    pending.session,
+                    pending.protocol,
+                    CommandKind::Write { request },
+                    PendingCtx::WriteKey(key),
+                )
+                .is_some()
+            {
+                self.write_batch.accepted(starting_new_batch && count == 0);
+                count += 1;
+            }
         }
-        self.dialogs.write.open = false;
-        // A11: a batch started while an earlier one is still running adds to
-        // the same counters; they restart only when nothing is outstanding.
-        if self.pending_writes == 0 {
-            self.write_total = 0;
-            self.write_ok = 0;
-            self.write_err = 0;
+        if count > 0 {
+            self.dialogs.write.open = false;
         }
-        self.pending_writes += count;
-        self.write_total += count;
-        self.last_write_summary = None;
-        let type_label = pending.type_label.clone();
-        self.journal
-            .info_l(Tr::WriteRequested, &[&count.to_string(), &type_label]);
+        let type_label = pending.type_label;
+        if count > 0 {
+            self.journal
+                .info_l(Tr::WriteRequested, &[&count.to_string(), &type_label]);
+        }
     }
 
     /// Execute a queued confirm-dialog action (Yes).
     pub fn confirm_yes(&mut self) {
-        let dialog = std::mem::replace(&mut self.dialogs.confirm, ConfirmDialog::default());
-        if !dialog.open {
+        let Some(request) = self.dialogs.confirm.take() else {
             return;
-        }
-        match dialog.action {
-            Some(ConfirmAction::Write(pending)) => self.perform_write(pending),
-            Some(ConfirmAction::Disconnect(session)) => self.disconnect_session(session),
-            Some(ConfirmAction::RemoveSession(session)) => self.remove_session(session),
-            None => {}
+        };
+        match request.action {
+            ConfirmAction::Write(pending) => self.perform_write(pending),
+            ConfirmAction::Disconnect(session) => self.disconnect_session(session),
+            ConfirmAction::RemoveSession(session) => self.remove_session(session),
         }
     }
 
     /// Cancel a confirm-dialog (No). Keeps the write dialog open for edits.
     pub fn confirm_no(&mut self) {
-        self.dialogs.confirm = ConfirmDialog::default();
+        self.dialogs.confirm = None;
     }
 
     /// Ask the user to confirm an action (opens the confirm dialog).
     pub fn request_confirm(&mut self, title: String, text: String, action: ConfirmAction) {
-        self.dialogs.confirm = ConfirmDialog {
-            open: true,
+        self.dialogs.confirm = Some(ConfirmRequest {
             title,
             text,
-            action: Some(action),
-        };
+            action,
+        });
     }
 }
 
@@ -446,7 +475,7 @@ impl App {
 fn parse_value(
     text: &str,
     kind: WriteKind,
-    canonical_vt: Option<u16>,
+    canonical_vt: Option<VarType>,
     ua_type: Option<&str>,
     protocol: Protocol,
     lang: Lang,
@@ -489,19 +518,25 @@ fn parse_value(
 
 pub(super) fn infer_kind(
     text: &str,
-    canonical_vt: Option<u16>,
+    canonical_vt: Option<VarType>,
     ua_type: Option<&str>,
     protocol: Protocol,
 ) -> WriteKind {
     if protocol == Protocol::OpcDa {
         if let Some(vt) = canonical_vt {
             match vt {
-                11 => return WriteKind::Bool,
-                2 | 3 | 16 | 20 | 22 => return WriteKind::I64,
-                17 | 18 | 19 | 21 | 23 => return WriteKind::U64,
-                4 | 5 | 6 => return WriteKind::F64,
-                7 => return WriteKind::DateTime,
-                8 | 12 | 30 | 31 => return WriteKind::Str,
+                VarType::BOOL => return WriteKind::Bool,
+                VarType::I2 | VarType::I4 | VarType::I1 | VarType::I8 | VarType::INT => {
+                    return WriteKind::I64;
+                }
+                VarType::UI1 | VarType::UI2 | VarType::UI4 | VarType::UI8 | VarType::UINT => {
+                    return WriteKind::U64;
+                }
+                VarType::R4 | VarType::R8 | VarType::CY => return WriteKind::F64,
+                VarType::DATE => return WriteKind::DateTime,
+                VarType::BSTR | VarType::VARIANT | VarType::LPSTR | VarType::LPWSTR => {
+                    return WriteKind::Str;
+                }
                 _ => {}
             }
         }

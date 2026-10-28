@@ -1,0 +1,1077 @@
+use super::session::pki_dir;
+use crate::bff::mdns::{self, MdnService};
+use crate::bff::model::{BackendMsg, LdsTarget, UaEndpointInfo, UaNetworkInfo, UaServerInfo};
+use crate::bff::net::{BoundConnectorBuilder, NetworkBinding, endpoint_url_for};
+use crate::constants::{DISCOVERY_GUARD_TIMEOUT, DISCOVERY_URLS, MDNS_WINDOW, UA_SEARCH_TIMEOUT};
+use opcua::client::ClientBuilder;
+use opcua::types::{ServerOnNetwork, StatusCode};
+use std::future::Future;
+use std::net::SocketAddr;
+use std::time::Duration;
+
+/// What a discovery step found plus its diagnostics. The notes are journal lines
+/// (`EventKind::Log`): a release build has no console, so a step that failed or
+/// was skipped must say so here instead of printing to stderr.
+pub(super) struct Searched<T> {
+    pub found: Vec<T>,
+    pub notes: Vec<BackendMsg>,
+}
+
+/// Searches for OPC UA servers on `host:port` and returns their descriptions
+/// plus endpoint details. Uses `find_servers` on a one-shot connection (which
+/// needs no session); if the discovery endpoint does not advertise servers it
+/// falls back to the endpoint descriptions of the discovery endpoint itself.
+///
+/// For a host that is not this machine, `FindServersOnNetwork` is asked at the
+/// same `host:port` as well: that is how a remote LDS lists the servers
+/// registered with it. Both answers are merged.
+pub(super) async fn search_servers(
+    host: &str,
+    port: u16,
+    binding: Option<&NetworkBinding>,
+) -> Result<Searched<UaServerInfo>, BackendMsg> {
+    let host = host.trim().trim_start_matches('[').trim_end_matches(']');
+    if host.is_empty() {
+        return Err(BackendMsg::HostRequired);
+    }
+    if port == 0 {
+        return Err(BackendMsg::PortInvalid);
+    }
+
+    // Resolve and try ALL addresses, IPv4 first. Many hosts ("localhost")
+    // resolve to ::1 first while the server actually listens on 127.0.0.1, so
+    // guessing just the first address would miss it.
+    let mut addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|e| BackendMsg::ResolveAddressFailed {
+            host: host.to_string(),
+            detail: e.to_string(),
+        })?
+        .collect();
+    addresses.sort_by_key(|a| a.is_ipv6());
+    addresses.dedup();
+    if addresses.is_empty() {
+        return Err(BackendMsg::AddressNoIp {
+            host: host.to_string(),
+        });
+    }
+
+    let client = build_discovery_client()?;
+
+    let mut failures = Vec::new();
+    for addr in &addresses {
+        // IPv6 literals must be bracketed in endpoint URLs.
+        let url = endpoint_url_for(addr.ip(), port);
+        // A remote host may be a Local Discovery Server: ask it for the servers
+        // registered with it while FindServers runs. This machine's own LDS is
+        // covered by the network search, so loopback is not asked twice.
+        let ask_lds = !addr.ip().is_loopback();
+        let mut direct_notes = Vec::new();
+        let (direct, on_network) = tokio::join!(
+            find_servers_at(&client, &url, binding, &mut direct_notes),
+            async {
+                if ask_lds {
+                    Some(find_on_network_at(&client, &url, binding).await)
+                } else {
+                    None
+                }
+            }
+        );
+        let reachable = direct.is_ok();
+        let mut servers = match direct {
+            Ok(servers) => servers,
+            Err(e) => {
+                failures.push(BackendMsg::AtUrl {
+                    url: url.clone(),
+                    cause: Box::new(e),
+                });
+                Vec::new()
+            }
+        };
+        let mut notes = direct_notes;
+        match on_network {
+            Some(Ok(records)) => {
+                for record in &records {
+                    if invalid_discovery_record(record) {
+                        notes.push(BackendMsg::InvalidDiscoveredUaUrl);
+                    }
+                    merge_server_info(&mut servers, server_from_record(record));
+                }
+            }
+            // An ordinary server answers "service unsupported": expected.
+            Some(Err(LdsError::Unsupported)) | None => {}
+            // Only worth a line when the server itself was reachable; otherwise
+            // the failure above already says it.
+            Some(Err(LdsError::Timeout)) if reachable => {
+                notes.push(BackendMsg::LdsTimeout { url: url.clone() });
+            }
+            Some(Err(LdsError::Failed(e))) if reachable => {
+                notes.push(BackendMsg::LdsFailed {
+                    url: url.clone(),
+                    detail: e,
+                });
+            }
+            Some(Err(_)) => {}
+        }
+        if servers.is_empty() {
+            if reachable {
+                failures.push(BackendMsg::AtUrl {
+                    url: url.clone(),
+                    cause: Box::new(BackendMsg::ServersNotFoundShort),
+                });
+            }
+            continue;
+        }
+        return Ok(Searched {
+            found: servers,
+            notes,
+        });
+    }
+
+    Err(BackendMsg::UaNoServers { failures })
+}
+
+/// Why a `FindServersOnNetwork` request gave no records.
+#[derive(Debug, PartialEq, Eq)]
+enum LdsError {
+    /// The peer answered, but is not a discovery server (`BadServiceUnsupported`).
+    Unsupported,
+    /// The peer did not answer within the time budget.
+    Timeout,
+    /// The request failed (for example nothing listens there); the text says why.
+    Failed(String),
+}
+
+/// `FindServersOnNetwork` on `url`: the servers a (remote) LDS has registered.
+async fn find_on_network_at(
+    client: &opcua::client::Client,
+    url: &str,
+    binding: Option<&NetworkBinding>,
+) -> Result<Vec<ServerOnNetwork>, LdsError> {
+    let request = if let Some(binding) = binding {
+        let connector = BoundConnectorBuilder::new(url, binding.clone());
+        tokio::time::timeout(
+            DISCOVERY_GUARD_TIMEOUT,
+            client.find_servers_on_network(connector, 0, 0, None),
+        )
+        .await
+    } else {
+        tokio::time::timeout(
+            DISCOVERY_GUARD_TIMEOUT,
+            client.find_servers_on_network(url, 0, 0, None),
+        )
+        .await
+    };
+    match request {
+        Ok(Ok(response)) => Ok(response.servers.unwrap_or_default()),
+        Ok(Err(e)) if e.status() == StatusCode::BadServiceUnsupported => Err(LdsError::Unsupported),
+        Ok(Err(e)) if e.status() == StatusCode::BadTimeout => Err(LdsError::Timeout),
+        Ok(Err(e)) => Err(LdsError::Failed(e.to_string())),
+        Err(_) => Err(LdsError::Timeout),
+    }
+}
+
+/// One `ServerOnNetwork` record as a server entry. The record carries no
+/// ApplicationUri, so the URI stays empty (the entry is matched by URL).
+fn server_from_record(record: &ServerOnNetwork) -> UaServerInfo {
+    let url = record.discovery_url.to_string();
+    let url = url.trim();
+    let endpoints = url
+        .parse::<opclook_contract::ua_url::UaUrl>()
+        .ok()
+        .map(|url| UaEndpointInfo {
+            url,
+            security_policy: crate::bff::model::AdvertisedPolicy::Unspecified,
+            security_mode: crate::bff::model::AdvertisedMode::Unspecified,
+        })
+        .into_iter()
+        .collect();
+    UaServerInfo {
+        application_name: record.server_name.to_string(),
+        application_uri: String::new(),
+        endpoints,
+    }
+}
+
+/// Merge one server into a list: the same application URI, or failing that a
+/// shared endpoint URL, is the same server; endpoints are unioned.
+pub(super) fn merge_server_info(servers: &mut Vec<UaServerInfo>, incoming: UaServerInfo) {
+    let uri = incoming.application_uri.trim().to_ascii_lowercase();
+    let position = servers
+        .iter()
+        .position(|existing| {
+            !uri.is_empty() && existing.application_uri.trim().to_ascii_lowercase() == uri
+        })
+        .or_else(|| {
+            servers.iter().position(|existing| {
+                existing.endpoints.iter().any(|a| {
+                    incoming
+                        .endpoints
+                        .iter()
+                        .any(|b| a.url.same_endpoint(&b.url))
+                })
+            })
+        });
+    match position.and_then(|i| servers.get_mut(i)) {
+        Some(existing) => {
+            if existing.application_name.trim().is_empty() {
+                existing.application_name = incoming.application_name;
+            }
+            if existing.application_uri.trim().is_empty() {
+                existing.application_uri = incoming.application_uri;
+            }
+            for endpoint in incoming.endpoints {
+                let incoming_is_bare = endpoint.security_policy.is_unspecified()
+                    && endpoint.security_mode.is_unspecified();
+                // A bare URL (an LDS record) adds nothing to the same URL that is
+                // already known, with or without security details.
+                if incoming_is_bare
+                    && existing
+                        .endpoints
+                        .iter()
+                        .any(|e| e.url.same_endpoint(&endpoint.url))
+                {
+                    continue;
+                }
+                // The same URL with security details supersedes the bare URL
+                // an LDS record gave.
+                if let Some(bare) = existing.endpoints.iter_mut().find(|e| {
+                    e.url.same_endpoint(&endpoint.url)
+                        && e.security_policy.is_unspecified()
+                        && e.security_mode.is_unspecified()
+                }) {
+                    if !endpoint.security_policy.is_unspecified()
+                        || !endpoint.security_mode.is_unspecified()
+                    {
+                        *bare = endpoint;
+                    }
+                } else if !existing.endpoints.iter().any(|e| {
+                    e.url.same_endpoint(&endpoint.url)
+                        && e.security_policy == endpoint.security_policy
+                        && e.security_mode == endpoint.security_mode
+                }) {
+                    existing.endpoints.push(endpoint);
+                }
+            }
+        }
+        None => servers.push(incoming),
+    }
+}
+
+async fn find_servers_at(
+    client: &opcua::client::Client,
+    url: &str,
+    binding: Option<&NetworkBinding>,
+    notes: &mut Vec<BackendMsg>,
+) -> Result<Vec<UaServerInfo>, BackendMsg> {
+    use opcua::types::ApplicationDescription;
+
+    let request = if let Some(binding) = binding {
+        let connector = BoundConnectorBuilder::new(url, binding.clone());
+        tokio::time::timeout(
+            DISCOVERY_GUARD_TIMEOUT,
+            client.find_servers(connector, None, None),
+        )
+        .await
+    } else {
+        tokio::time::timeout(
+            DISCOVERY_GUARD_TIMEOUT,
+            client.find_servers(url, None, None),
+        )
+        .await
+    };
+    let descriptions: Vec<ApplicationDescription> = request
+        .map_err(|_| BackendMsg::TimeoutSearch)?
+        .map_err(|e| BackendMsg::SearchRejected {
+            detail: e.to_string(),
+        })?;
+
+    // Fetch actual endpoint descriptions for this discovery endpoint so the
+    // user gets a usable opc.tcp:// URL even if FindServers returns nothing.
+    let mut discovery_uri = String::new();
+    let endpoint_request = if let Some(binding) = binding {
+        let connector = BoundConnectorBuilder::new(url, binding.clone());
+        tokio::time::timeout(
+            DISCOVERY_GUARD_TIMEOUT,
+            client.get_server_endpoints_from_url(connector),
+        )
+        .await
+    } else {
+        tokio::time::timeout(
+            DISCOVERY_GUARD_TIMEOUT,
+            client.get_server_endpoints_from_url(url),
+        )
+        .await
+    };
+    let endpoint_infos: Vec<UaEndpointInfo> = match endpoint_request {
+        Ok(Ok(endpoints)) => {
+            if let Some(first) = endpoints.first() {
+                discovery_uri = first.server.application_uri.to_string();
+            }
+            endpoints
+                .iter()
+                .filter_map(|e| {
+                    let url = match e.endpoint_url.to_string().parse() {
+                        Ok(url) => url,
+                        Err(_) => {
+                            notes.push(BackendMsg::InvalidDiscoveredUaUrl);
+                            return None;
+                        }
+                    };
+                    Some(UaEndpointInfo {
+                        url,
+                        security_policy: crate::bff::model::AdvertisedPolicy::from_wire(
+                            &e.security_policy_uri.to_string(),
+                        ),
+                        security_mode: super::security::advertised_mode(e.security_mode),
+                    })
+                })
+                .collect()
+        }
+        _ => Vec::new(),
+    };
+
+    // Every described application keeps its own advertised DiscoveryUrls. An
+    // LDS answers FindServers with *other* servers; pointing those rows at the
+    // LDS URL (the old fallback) made a double-click connect to the LDS itself.
+    let mut servers: Vec<UaServerInfo> = descriptions
+        .iter()
+        .map(|d| {
+            let mut endpoints: Vec<UaEndpointInfo> = Vec::new();
+            for discovery_url in d.discovery_urls.iter().flatten() {
+                let discovery_url = discovery_url.to_string();
+                let discovery_url = discovery_url.trim();
+                // Only validated opc.tcp URLs are accepted.
+                let Ok(discovery_url) = discovery_url.parse::<opclook_contract::ua_url::UaUrl>()
+                else {
+                    notes.push(BackendMsg::InvalidDiscoveredUaUrl);
+                    continue;
+                };
+                if !endpoints
+                    .iter()
+                    .any(|e| e.url.same_endpoint(&discovery_url))
+                {
+                    endpoints.push(UaEndpointInfo {
+                        url: discovery_url,
+                        security_policy: crate::bff::model::AdvertisedPolicy::Unspecified,
+                        security_mode: crate::bff::model::AdvertisedMode::Unspecified,
+                    });
+                }
+            }
+            UaServerInfo {
+                application_name: d.application_name.text.to_string(),
+                application_uri: d.application_uri.to_string(),
+                endpoints,
+            }
+        })
+        .collect();
+
+    // Attach the fetched endpoint descriptions (with security) to the server
+    // that actually answered at `url`, matched by application URI.
+    if !endpoint_infos.is_empty() {
+        let target = if discovery_uri.is_empty() {
+            None
+        } else {
+            servers
+                .iter_mut()
+                .find(|s| s.application_uri == discovery_uri)
+        };
+        if let Some(app) = target {
+            app.endpoints.extend(endpoint_infos.clone());
+        } else {
+            servers.push(UaServerInfo {
+                application_name: if discovery_uri.is_empty() {
+                    url.to_string()
+                } else {
+                    discovery_uri.clone()
+                },
+                application_uri: discovery_uri.clone(),
+                endpoints: endpoint_infos.clone(),
+            });
+        }
+    }
+
+    // The server that answered at `url` is always reachable there, even when
+    // it advertised no DiscoveryUrls and GetEndpoints failed.
+    if let (Ok(parsed_url), Some(answering)) = (
+        url.parse(),
+        servers.iter_mut().find(|s| {
+            s.endpoints.is_empty()
+                && (discovery_uri.is_empty() || s.application_uri == discovery_uri)
+        }),
+    ) {
+        answering.endpoints.push(UaEndpointInfo {
+            url: parsed_url,
+            security_policy: crate::bff::model::AdvertisedPolicy::Unspecified,
+            security_mode: crate::bff::model::AdvertisedMode::Unspecified,
+        });
+    }
+
+    Ok(servers)
+}
+
+/// Discovers OPC UA servers advertised via LDS (`FindServersOnNetwork`) and
+/// native mDNS (`_opcua-tcp._tcp.local`) concurrently. mDNS is collected in a
+/// strict [`MDNS_WINDOW`], LDS keeps its existing guard, and an LDS failure
+/// never hides mDNS results.
+///
+/// Every mDNS URL is verified with `FindServers`/`GetEndpoints` through the
+/// same binding before it is reported. A URL that does not answer as OPC UA is
+/// dropped; when verification is impossible the result is dropped as well
+/// instead of producing a false positive. Whatever failed or was skipped is
+/// returned in [`Searched::notes`] for the journal.
+pub(super) async fn search_network_servers(
+    binding: Option<&NetworkBinding>,
+    lds: Option<&LdsTarget>,
+) -> Result<Searched<UaNetworkInfo>, BackendMsg> {
+    // An explicit LDS host with no adapter chosen: ask only that host, mDNS
+    // would run on every interface.
+    let mdns_enabled = lds.is_none() || binding.is_some();
+    let mdns_binding = binding.cloned();
+    let mdns_task = tokio::task::spawn_blocking(move || {
+        if mdns_enabled {
+            mdns::discover(mdns_binding.as_ref())
+        } else {
+            mdns::MdnsOutcome {
+                services: Vec::new(),
+                notes: Vec::new(),
+            }
+        }
+    });
+
+    let client = build_discovery_client();
+    let lds_search = async {
+        match &client {
+            Ok(client) => {
+                let search = async {
+                    match lds {
+                        Some(target) => {
+                            let url = target.url();
+                            let urls = [url.as_str()];
+                            search_lds_servers(client, Some(&target.bind), &urls).await
+                        }
+                        None => search_lds_servers(client, binding, &DISCOVERY_URLS).await,
+                    }
+                };
+                match tokio::time::timeout(DISCOVERY_GUARD_TIMEOUT, search).await {
+                    Ok(search) => search,
+                    Err(_) => LdsSearch {
+                        found: Vec::new(),
+                        notes: vec![BackendMsg::LdsSearchTimedOut],
+                    },
+                }
+            }
+            Err(error) => LdsSearch {
+                found: Vec::new(),
+                notes: vec![BackendMsg::LdsUnavailable {
+                    cause: Box::new(error.clone()),
+                }],
+            },
+        }
+    };
+    let mdns_result = async {
+        // The worker owns a strict MDNS_WINDOW; this is only a hard guard for a
+        // wedged blocking task and adds no UI-visible wait.
+        match tokio::time::timeout(MDNS_WINDOW + Duration::from_secs(2), mdns_task).await {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(error)) => mdns::MdnsOutcome {
+                services: Vec::new(),
+                notes: vec![BackendMsg::MdnsCrashed {
+                    detail: error.to_string(),
+                }],
+            },
+            Err(_) => mdns::MdnsOutcome {
+                services: Vec::new(),
+                notes: vec![BackendMsg::MdnsNotInTime],
+            },
+        }
+    };
+    let (lds, mdns_outcome) = tokio::join!(lds_search, mdns_result);
+    let mut found = lds.found;
+    let mut notes = lds.notes;
+    notes.extend(mdns_outcome.notes);
+
+    match &client {
+        Ok(client) => {
+            let verified = verify_mdns_services(client, &mdns_outcome.services, binding).await;
+            notes.extend(verified.notes);
+            for info in verified.found {
+                merge_network_info(&mut found, info);
+            }
+        }
+        Err(_) if !mdns_outcome.services.is_empty() => {
+            notes.push(BackendMsg::MdnsDiscarded);
+        }
+        Err(_) => {}
+    }
+
+    Ok(Searched { found, notes })
+}
+
+/// Result of polling the local discovery URLs.
+struct LdsSearch {
+    found: Vec<UaNetworkInfo>,
+    notes: Vec<BackendMsg>,
+}
+
+/// True for `opc.tcp://localhost…`, `127.x.x.x` and `[::1]`: spellings of this
+/// machine's own discovery endpoint.
+#[cfg(test)]
+fn is_loopback_url(url: &str) -> bool {
+    url.parse::<opclook_contract::ua_url::UaUrl>()
+        .is_ok_and(|url| url.is_loopback())
+}
+
+/// LDS discovery over the standard local endpoints. `localhost` and `127.0.0.1`
+/// are two names of ONE endpoint: once one of them answered (even "not an LDS" or
+/// a timeout) the other is skipped, so the machine's LDS is not polled twice and
+/// a silent host does not cost two timeouts. Only an unreachable first name
+/// (refused, unresolvable) lets the alias try.
+///
+/// Errors are diagnostics only; the caller always receives whatever was found.
+async fn search_lds_servers(
+    client: &opcua::client::Client,
+    binding: Option<&NetworkBinding>,
+    urls: &[&str],
+) -> LdsSearch {
+    poll_lds_urls(urls, |url| async move {
+        find_on_network_at(client, &url, binding).await
+    })
+    .await
+}
+
+/// The polling policy of [`search_lds_servers`], independent of the transport so
+/// it can be tested with a fake `ask`.
+async fn poll_lds_urls<F, Fut>(urls: &[&str], mut ask: F) -> LdsSearch
+where
+    F: FnMut(String) -> Fut,
+    Fut: Future<Output = Result<Vec<ServerOnNetwork>, LdsError>>,
+{
+    let mut found: Vec<UaNetworkInfo> = Vec::new();
+    let mut notes = Vec::new();
+    let mut loopback_answered = std::collections::HashSet::new();
+    let mut answered = false;
+    let mut last_failure: Option<BackendMsg> = None;
+
+    for url in urls {
+        let loopback_port = url
+            .parse::<opclook_contract::ua_url::UaUrl>()
+            .ok()
+            .filter(|url| url.is_loopback())
+            .map(|url| url.port());
+        if loopback_port.is_some_and(|port| loopback_answered.contains(&port)) {
+            continue;
+        }
+        match ask((*url).to_string()).await {
+            Ok(records) => {
+                answered = true;
+                if let Some(port) = loopback_port {
+                    loopback_answered.insert(port);
+                }
+                for record in &records {
+                    if invalid_discovery_record(record) {
+                        notes.push(BackendMsg::InvalidDiscoveredUaUrl);
+                    }
+                    merge_network_info(&mut found, network_info_from_record(record));
+                }
+            }
+            // Reachable, but not a discovery server: nothing to report.
+            Err(LdsError::Unsupported) => {
+                answered = true;
+                if let Some(port) = loopback_port {
+                    loopback_answered.insert(port);
+                }
+            }
+            Err(LdsError::Timeout) => {
+                answered = true;
+                if let Some(port) = loopback_port {
+                    loopback_answered.insert(port);
+                }
+                notes.push(BackendMsg::LdsTimeout {
+                    url: (*url).to_string(),
+                });
+            }
+            Err(LdsError::Failed(error)) => {
+                last_failure = Some(BackendMsg::LdsFailed {
+                    url: (*url).to_string(),
+                    detail: error,
+                });
+            }
+        }
+    }
+    // Nothing listening on the standard port is the normal case on a machine
+    // without an LDS: one line, not one per spelling.
+    if !answered {
+        if let Some(failure) = last_failure {
+            notes.push(failure);
+        }
+    }
+    LdsSearch { found, notes }
+}
+
+/// A `ServerOnNetwork` record as a network-search row. It carries no
+/// ApplicationUri; the URL is never used as a fake one (it would keep this row
+/// from merging with the same server found by a host search).
+fn invalid_discovery_record(record: &ServerOnNetwork) -> bool {
+    let raw = record.discovery_url.to_string();
+    !raw.is_empty() && raw.parse::<opclook_contract::ua_url::UaUrl>().is_err()
+}
+
+fn network_info_from_record(record: &ServerOnNetwork) -> UaNetworkInfo {
+    let discovery_url = record.discovery_url.to_string();
+    let application_uri = if discovery_url.is_empty() {
+        format!("urn:lds-server-{}", record.record_id)
+    } else {
+        String::new()
+    };
+    let urls = discovery_url.parse().ok().into_iter().collect();
+    UaNetworkInfo {
+        application_name: record.server_name.to_string(),
+        application_uri,
+        discovery_urls: urls,
+    }
+}
+
+/// Verify mDNS results through the same binding. Only URLs that answer
+/// `FindServers`/`GetEndpoints` become `UaNetworkInfo` entries.
+async fn verify_mdns_services(
+    client: &opcua::client::Client,
+    services: &[MdnService],
+    binding: Option<&NetworkBinding>,
+) -> Searched<UaNetworkInfo> {
+    let deadline = std::time::Instant::now() + DISCOVERY_GUARD_TIMEOUT;
+    let mut verified = Vec::new();
+    let mut notes = Vec::new();
+
+    for service in services {
+        let mut discovery_urls = Vec::new();
+        let mut application_uri = service.application_uri.clone();
+        let mut application_name = service.application_name.clone();
+        let mut responded = false;
+
+        for url in service.discovery_urls() {
+            let Ok(parsed_url) = url.parse::<opclook_contract::ua_url::UaUrl>() else {
+                notes.push(BackendMsg::InvalidDiscoveredUaUrl);
+                continue;
+            };
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let mut direct_notes = Vec::new();
+            let result = tokio::time::timeout(
+                remaining,
+                find_servers_at(client, &url, binding, &mut direct_notes),
+            )
+            .await;
+            notes.extend(direct_notes);
+            match result {
+                Ok(Ok(servers)) if !servers.is_empty() => {
+                    responded = true;
+                    // The URL may belong to an LDS that also lists other
+                    // servers: take only the entry for THIS mDNS service
+                    // (by URI, else the one reachable at the URL, else the
+                    // first) instead of folding every server into one row.
+                    let wanted_uri = application_uri.trim().to_ascii_lowercase();
+                    let index = servers
+                        .iter()
+                        .position(|server| {
+                            !wanted_uri.is_empty()
+                                && server.application_uri.trim().to_ascii_lowercase() == wanted_uri
+                        })
+                        .or_else(|| {
+                            servers.iter().position(|server| {
+                                server
+                                    .endpoints
+                                    .iter()
+                                    .any(|e| e.url.same_endpoint(&parsed_url))
+                            })
+                        })
+                        .unwrap_or(0);
+                    let server = servers.into_iter().nth(index).expect("index in range");
+                    push_unique(&mut discovery_urls, parsed_url);
+                    if application_uri.is_empty() {
+                        application_uri = server.application_uri;
+                    }
+                    if application_name.is_empty() {
+                        application_name = server.application_name;
+                    }
+                    for endpoint in server.endpoints {
+                        push_unique(&mut discovery_urls, endpoint.url);
+                    }
+                    break;
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => notes.push(BackendMsg::MdnsVerifyFailed {
+                    url: url.clone(),
+                    cause: Box::new(error),
+                }),
+                Err(_) => {
+                    notes.push(BackendMsg::MdnsVerifyTimeout { url: url.clone() });
+                    break;
+                }
+            }
+        }
+
+        if !responded {
+            continue;
+        }
+        if application_uri.is_empty() {
+            application_uri = service.instance_name.clone();
+        }
+        if application_name.is_empty() {
+            application_name = application_uri.clone();
+        }
+        verified.push(UaNetworkInfo {
+            application_name,
+            application_uri,
+            discovery_urls,
+        });
+    }
+
+    Searched {
+        found: verified,
+        notes,
+    }
+}
+
+#[cfg(test)]
+fn same_url(left: &str, right: &str) -> bool {
+    match (
+        left.parse::<opclook_contract::ua_url::UaUrl>(),
+        right.parse::<opclook_contract::ua_url::UaUrl>(),
+    ) {
+        (Ok(left), Ok(right)) => left.same_endpoint(&right),
+        _ => false,
+    }
+}
+
+fn push_unique(
+    list: &mut Vec<opclook_contract::ua_url::UaUrl>,
+    value: opclook_contract::ua_url::UaUrl,
+) {
+    if !list.iter().any(|existing| existing.same_endpoint(&value)) {
+        list.push(value);
+    }
+}
+
+/// Merge one discovery result into the aggregate list. Entries are deduplicated
+/// by application URI and, when the URI is absent, by discovery URL; endpoints
+/// (URLs) are unioned.
+pub(super) fn merge_network_info(found: &mut Vec<UaNetworkInfo>, incoming: UaNetworkInfo) {
+    let app_key = incoming.application_uri.trim().to_ascii_lowercase();
+    let url_keys: Vec<_> = incoming
+        .discovery_urls
+        .iter()
+        .map(|url| url.identity())
+        .collect();
+
+    let mut target = None;
+    if !app_key.is_empty() {
+        target = found.iter().position(|existing| {
+            let existing_key = existing.application_uri.trim().to_ascii_lowercase();
+            !existing_key.is_empty() && existing_key == app_key
+        });
+    }
+    if target.is_none() {
+        target = found.iter().position(|existing| {
+            existing
+                .discovery_urls
+                .iter()
+                .any(|url| url_keys.contains(&url.identity()))
+        });
+    }
+
+    match target {
+        Some(index) => {
+            let existing = &mut found[index];
+            for url in incoming.discovery_urls {
+                push_unique(&mut existing.discovery_urls, url);
+            }
+            if existing.application_name.trim().is_empty() {
+                existing.application_name = incoming.application_name;
+            }
+            if existing.application_uri.trim().is_empty() {
+                existing.application_uri = incoming.application_uri;
+            }
+        }
+        None => {
+            if !incoming.discovery_urls.is_empty() || !incoming.application_uri.is_empty() {
+                found.push(incoming);
+            }
+        }
+    }
+}
+
+/// Builds a `Client` for one-shot discovery (`FindServers`/`FindServersOnNetwork`/
+/// `GetEndpoints`). Shares the app PKI store so client/server certs are kept in one place.
+///
+/// The library request deadline is set to [`UA_SEARCH_TIMEOUT`]; the one-shot
+/// helpers below wrap the whole call in the larger [`DISCOVERY_GUARD_TIMEOUT`].
+/// This ordering matters: on a slow/absent response the library times the
+/// request out itself and its `get_endpoints`/`find_servers` code closes the
+/// temporary secure channel and drains the event loop before returning, so the
+/// channel is not dropped mid-response. The outer guard is only a hard stop for
+/// a wedged connect.
+pub(super) fn build_discovery_client() -> Result<opcua::client::Client, BackendMsg> {
+    let pki = pki_dir();
+    super::session::build_client(
+        ClientBuilder::new()
+            .application_name("OPC DA/UA Test Client")
+            .application_uri("urn:opcda-egui")
+            .product_uri("urn:opcda-egui")
+            .create_sample_keypair(true)
+            .trust_server_certs(true)
+            .pki_dir(pki)
+            .session_retry_limit(0)
+            .request_timeout(UA_SEARCH_TIMEOUT),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    fn record(id: u32, name: &str, url: &str) -> ServerOnNetwork {
+        ServerOnNetwork {
+            record_id: id,
+            server_name: name.into(),
+            discovery_url: url.into(),
+            server_capabilities: None,
+        }
+    }
+
+    /// Runs `poll_lds_urls` with scripted answers; returns what it asked.
+    fn poll(
+        urls: &[&str],
+        mut answers: Vec<Result<Vec<ServerOnNetwork>, LdsError>>,
+    ) -> (LdsSearch, Vec<String>) {
+        answers.reverse();
+        let answers = Arc::new(Mutex::new(answers));
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let (answers_in, asked_in) = (Arc::clone(&answers), Arc::clone(&asked));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("test runtime");
+        let search = runtime.block_on(poll_lds_urls(urls, move |url| {
+            asked_in.lock().unwrap().push(url);
+            let next = answers_in.lock().unwrap().pop();
+            async move { next.expect("an unexpected extra request") }
+        }));
+        let asked = asked.lock().unwrap().clone();
+        (search, asked)
+    }
+
+    const IP: &str = "opc.tcp://127.0.0.1:4840";
+    const NAME: &str = "opc.tcp://localhost:4840";
+
+    #[test]
+    fn loopback_spellings_are_recognised() {
+        for url in [
+            "opc.tcp://localhost:4840",
+            "opc.tcp://LOCALHOST:4840/",
+            "opc.tcp://127.0.0.1:4840",
+            "opc.tcp://127.1.2.3:4840/path",
+            "opc.tcp://[::1]:4840",
+        ] {
+            assert!(is_loopback_url(url), "{url}");
+        }
+        for url in [
+            "opc.tcp://192.168.1.10:4840",
+            "opc.tcp://plc-1:4840",
+            "opc.tcp://[fe80::1]:4840",
+            "opc.tcp://1127.0.0.1:4840",
+        ] {
+            assert!(!is_loopback_url(url), "{url}");
+        }
+    }
+
+    #[test]
+    fn an_answering_loopback_lds_is_not_polled_a_second_time() {
+        let (search, asked) = poll(
+            &[IP, NAME],
+            vec![Ok(vec![record(1, "Srv", "opc.tcp://pc:4841")])],
+        );
+        assert_eq!(
+            asked,
+            vec![IP.to_string()],
+            "localhost is the same endpoint"
+        );
+        assert_eq!(search.found.len(), 1);
+        assert!(search.notes.is_empty());
+    }
+
+    #[test]
+    fn a_loopback_that_is_not_an_lds_or_times_out_costs_one_request() {
+        let (search, asked) = poll(&[IP, NAME], vec![Err(LdsError::Unsupported)]);
+        assert_eq!(asked.len(), 1);
+        assert!(search.notes.is_empty(), "not an LDS is the expected case");
+
+        let (search, asked) = poll(&[IP, NAME], vec![Err(LdsError::Timeout)]);
+        assert_eq!(
+            asked.len(),
+            1,
+            "a second timeout would only double the wait"
+        );
+        assert_eq!(search.notes.len(), 1);
+        assert!(
+            crate::i18n::backend_text(crate::i18n::Lang::En, &search.notes[0]).contains(IP),
+            "{:?}",
+            search.notes
+        );
+    }
+
+    #[test]
+    fn an_unreachable_first_spelling_lets_the_alias_try() {
+        let (search, asked) = poll(
+            &[IP, NAME],
+            vec![
+                Err(LdsError::Failed("refused".into())),
+                Ok(vec![record(2, "Srv", "opc.tcp://pc:4841")]),
+            ],
+        );
+        assert_eq!(asked, vec![IP.to_string(), NAME.to_string()]);
+        assert_eq!(search.found.len(), 1);
+        assert!(
+            search.notes.is_empty(),
+            "the alias answered: {:?}",
+            search.notes
+        );
+    }
+
+    #[test]
+    fn nothing_listening_is_one_journal_line_not_one_per_spelling() {
+        let (search, asked) = poll(
+            &[IP, NAME],
+            vec![
+                Err(LdsError::Failed("refused".into())),
+                Err(LdsError::Failed("refused".into())),
+            ],
+        );
+        assert_eq!(asked.len(), 2);
+        assert!(search.found.is_empty());
+        assert_eq!(search.notes.len(), 1, "{:?}", search.notes);
+    }
+
+    #[test]
+    fn non_loopback_discovery_urls_are_each_asked() {
+        let (_, asked) = poll(
+            &["opc.tcp://10.0.0.5:4840", IP, NAME],
+            vec![Err(LdsError::Unsupported), Err(LdsError::Unsupported)],
+        );
+        assert_eq!(
+            asked,
+            vec!["opc.tcp://10.0.0.5:4840".to_string(), IP.to_string()]
+        );
+    }
+
+    #[test]
+    fn loopback_aliases_with_different_lds_ports_are_both_queried() {
+        let (result, asked) = poll(
+            &[
+                "opc.tcp://127.0.0.1:4840",
+                "opc.tcp://localhost:4840",
+                "opc.tcp://localhost:4850",
+            ],
+            vec![Err(LdsError::Unsupported), Err(LdsError::Unsupported)],
+        );
+        assert_eq!(
+            asked,
+            vec!["opc.tcp://127.0.0.1:4840", "opc.tcp://localhost:4850"]
+        );
+        assert!(result.notes.is_empty());
+    }
+
+    #[test]
+    fn invalid_discovery_url_is_reported_without_credentials() {
+        let (result, _) = poll(
+            &[IP],
+            vec![Ok(vec![record(1, "Bad", "opc.tcp://user:secret@host")])],
+        );
+        assert!(result.found.is_empty());
+        assert!(matches!(
+            &result.notes[..],
+            [BackendMsg::InvalidDiscoveredUaUrl]
+        ));
+        assert!(!format!("{:?}", result.notes).contains("secret"));
+    }
+
+    #[test]
+    fn url_identity_keeps_paths_queries_and_distinct_ports() {
+        assert!(same_url("opc.tcp://HOST/A", "opc.tcp://host:4840/A/"));
+        assert!(!same_url("opc.tcp://host/A", "opc.tcp://host/a"));
+        assert!(!same_url("opc.tcp://host/A?x=/", "opc.tcp://host/A?x="));
+        assert!(!same_url("opc.tcp://host:4840/A", "opc.tcp://host:4850/A"));
+        assert!(!same_url("opc.tcp://user:secret@host", "opc.tcp://host"));
+    }
+
+    #[test]
+    fn the_default_discovery_urls_start_with_the_numeric_loopback() {
+        assert_eq!(DISCOVERY_URLS[0], IP);
+        assert!(DISCOVERY_URLS.iter().all(|url| is_loopback_url(url)));
+    }
+
+    fn endpoint(url: &str, policy: &str, mode: &str) -> UaEndpointInfo {
+        UaEndpointInfo {
+            url: url.parse().unwrap(),
+            security_policy: crate::bff::model::AdvertisedPolicy::from_wire(policy),
+            security_mode: crate::bff::model::AdvertisedMode::from_wire(mode),
+        }
+    }
+
+    #[test]
+    fn an_lds_record_and_find_servers_describe_one_server() {
+        // FindServers: the application with its URI and the full endpoint list.
+        let mut servers = vec![UaServerInfo {
+            application_name: "Plant".into(),
+            application_uri: "urn:plant".into(),
+            endpoints: vec![endpoint("opc.tcp://pc:4841", "None", "None")],
+        }];
+        // FindServersOnNetwork: the same server by URL, no URI, and one more.
+        merge_server_info(
+            &mut servers,
+            server_from_record(&record(1, "Plant", "opc.tcp://PC:4841/")),
+        );
+        merge_server_info(
+            &mut servers,
+            server_from_record(&record(2, "Other", "opc.tcp://pc:4842")),
+        );
+        assert_eq!(servers.len(), 2, "{servers:?}");
+        assert_eq!(servers[0].application_uri, "urn:plant");
+        assert_eq!(servers[0].endpoints.len(), 1, "no duplicate endpoint");
+        assert_eq!(servers[1].application_name, "Other");
+    }
+
+    #[test]
+    fn security_details_replace_a_bare_lds_url() {
+        let mut servers = vec![server_from_record(&record(1, "Plant", "opc.tcp://pc:4841"))];
+        merge_server_info(
+            &mut servers,
+            UaServerInfo {
+                application_name: "Plant".into(),
+                application_uri: "urn:plant".into(),
+                endpoints: vec![endpoint("opc.tcp://pc:4841", "None", "None")],
+            },
+        );
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].application_uri, "urn:plant");
+        assert_eq!(servers[0].endpoints.len(), 1);
+        assert_eq!(
+            servers[0].endpoints[0].security_policy.known(),
+            Some(crate::bff::model::UaSecurityPolicy::None)
+        );
+    }
+
+    #[test]
+    fn records_without_a_discovery_url_get_a_synthetic_uri() {
+        let info = network_info_from_record(&record(7, "NoUrl", ""));
+        assert_eq!(info.application_uri, "urn:lds-server-7");
+        assert!(info.discovery_urls.is_empty());
+        let info = network_info_from_record(&record(8, "Srv", "opc.tcp://pc:4841"));
+        assert!(
+            info.application_uri.is_empty(),
+            "the URL is never a fake URI"
+        );
+    }
+}

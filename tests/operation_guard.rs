@@ -8,7 +8,12 @@ use std::path::{Path, PathBuf};
 fn first_party_sources(root: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     collect_rs(&root.join("src").join("app"), &mut files);
-    collect_rs(&root.join("src").join("bff"), &mut files);
+    collect_rs(&root.join("crates/backend/src/bff"), &mut files);
+    collect_rs(&root.join("crates/contract/src"), &mut files);
+    assert!(
+        files.len() >= 25,
+        "operation guard did not find expected sources"
+    );
     files
 }
 

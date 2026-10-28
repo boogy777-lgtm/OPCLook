@@ -1,6 +1,7 @@
 use crate::i18n::{Lang, Tr};
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::io::Write;
 use std::path::Path;
 
@@ -11,27 +12,30 @@ pub enum Level {
     Error,
 }
 
-/// An optionally-localized journal message. When `l10n` is present, `text`
-/// holds the Russian rendering (kept for file export and `text` readers) and
-/// `render()` formats the message for the current `Lang` on the fly.
+/// A journal message is either literal text or a localization key with arguments.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum JournalMessage {
+    Plain(String),
+    Localized { key: Tr, args: Vec<String> },
+}
+
 #[derive(Clone, Debug)]
 pub struct Entry {
     pub time: DateTime<Local>,
     pub level: Level,
-    pub text: String,
-    pub l10n: Option<(Tr, Vec<String>)>,
+    pub message: JournalMessage,
 }
 
 #[derive(Debug)]
 pub struct Journal {
-    entries: Vec<Entry>,
+    entries: VecDeque<Entry>,
     max_entries: usize,
 }
 
 impl Default for Journal {
     fn default() -> Self {
         Self {
-            entries: Vec::new(),
+            entries: VecDeque::new(),
             max_entries: 5000,
         }
     }
@@ -39,33 +43,30 @@ impl Default for Journal {
 
 impl Journal {
     pub fn add(&mut self, level: Level, text: impl Into<String>) {
-        let text = text.into();
-        self.entries.push(Entry {
+        self.entries.push_back(Entry {
             time: Local::now(),
             level,
-            text,
-            l10n: None,
+            message: JournalMessage::Plain(text.into()),
         });
         if self.entries.len() > self.max_entries {
             let excess = self.entries.len() - self.max_entries;
-            self.entries.drain(0..excess);
+            self.entries.drain(..excess);
         }
     }
 
-    /// Add a localized entry: stores the Russian rendering as fallback text and
-    /// the key+args so it can be re-formatted for the current language at render
-    /// time (on-the-fly language switching).
+    /// Store the key and arguments for rendering in the current language.
     pub fn add_l(&mut self, level: Level, key: Tr, args: &[&dyn std::fmt::Display]) {
-        let rendered = crate::i18n::fmt(Lang::Ru, key, args);
-        self.entries.push(Entry {
+        self.entries.push_back(Entry {
             time: Local::now(),
             level,
-            text: rendered,
-            l10n: Some((key, args.iter().map(|a| a.to_string()).collect())),
+            message: JournalMessage::Localized {
+                key,
+                args: args.iter().map(|a| a.to_string()).collect(),
+            },
         });
         if self.entries.len() > self.max_entries {
             let excess = self.entries.len() - self.max_entries;
-            self.entries.drain(0..excess);
+            self.entries.drain(..excess);
         }
     }
 
@@ -93,7 +94,7 @@ impl Journal {
         self.add(Level::Error, text);
     }
 
-    pub fn entries(&self) -> &[Entry] {
+    pub fn entries(&self) -> &VecDeque<Entry> {
         &self.entries
     }
 
@@ -129,17 +130,15 @@ impl Journal {
             if text.is_empty() {
                 continue;
             }
-            self.entries.push(Entry {
+            self.entries.push_back(Entry {
                 time: Local::now(),
                 level: Level::Info,
-                text: text.to_string(),
-                l10n: None,
+                message: JournalMessage::Plain(text.to_string()),
             });
             count += 1;
-        }
-        if self.entries.len() > self.max_entries {
-            let excess = self.entries.len() - self.max_entries;
-            self.entries.drain(0..excess);
+            if self.entries.len() > self.max_entries {
+                self.entries.pop_front();
+            }
         }
         Ok(count)
     }
@@ -149,13 +148,13 @@ impl Entry {
     /// Render an entry for the given language (localized entries are
     /// re-formatted on the fly; raw entries return their stored text).
     pub fn render(&self, lang: Lang) -> String {
-        match &self.l10n {
-            Some((key, args)) => {
+        match &self.message {
+            JournalMessage::Localized { key, args } => {
                 let disp: Vec<&dyn std::fmt::Display> =
                     args.iter().map(|s| s as &dyn std::fmt::Display).collect();
                 crate::i18n::fmt(lang, *key, &disp)
             }
-            None => self.text.clone(),
+            JournalMessage::Plain(text) => text.clone(),
         }
     }
 }
@@ -181,12 +180,76 @@ mod tests {
         j.add(Level::Info, "fourth");
         assert_eq!(j.entries().len(), 4);
         assert_eq!(j.entries()[0].level, Level::Info);
-        assert_eq!(j.entries()[0].text, "first");
+        assert_eq!(j.entries()[0].render(Lang::Ru), "first");
         assert_eq!(j.entries()[1].level, Level::Warning);
-        assert_eq!(j.entries()[1].text, "second");
+        assert_eq!(j.entries()[1].render(Lang::Ru), "second");
         assert_eq!(j.entries()[2].level, Level::Error);
-        assert_eq!(j.entries()[2].text, "third");
+        assert_eq!(j.entries()[2].render(Lang::Ru), "third");
         assert_eq!(j.entries()[3].level, Level::Info);
+    }
+
+    #[test]
+    fn localized_entries_switch_languages_and_export_without_a_fallback_copy() {
+        let dir = std::env::temp_dir().join("opclook-journal-localized");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut journal = Journal::default();
+        let mut count = 42;
+        journal.info_l(Tr::JournalLoaded, &[&count]);
+        count = 99;
+        journal.warn("literal");
+        assert_eq!(count, 99);
+        assert_eq!(
+            journal.entries()[0].message,
+            JournalMessage::Localized {
+                key: Tr::JournalLoaded,
+                args: vec!["42".into()]
+            }
+        );
+        for (lang, expected) in [
+            (Lang::Ru, "Журнал загружен: 42 строк"),
+            (Lang::En, "Journal loaded: 42 lines"),
+            (Lang::Zh, "日志已加载: 42 行"),
+        ] {
+            assert_eq!(journal.entries()[0].render(lang), expected);
+            assert_eq!(journal.entries()[1].render(lang), "literal");
+            let path = dir.join(format!("{lang:?}.log"));
+            journal.save_localized(&path, lang).unwrap();
+            let saved = std::fs::read_to_string(&path).unwrap();
+            assert!(saved.lines().next().unwrap().ends_with(expected));
+            assert!(saved.lines().nth(1).unwrap().ends_with("literal"));
+            let mut loaded = Journal::default();
+            assert_eq!(loaded.load(&path).unwrap(), 2);
+            assert!(matches!(
+                &loaded.entries()[0].message,
+                JournalMessage::Plain(_)
+            ));
+            assert!(loaded.entries()[0].render(Lang::En).ends_with(expected));
+        }
+        let path = dir.join("default.log");
+        journal.save(&path).unwrap();
+        assert!(
+            std::fs::read_to_string(path)
+                .unwrap()
+                .contains("Журнал загружен: 42 строк")
+        );
+    }
+
+    #[test]
+    fn localized_arguments_are_captured_once_when_added() {
+        struct CountDisplays(std::cell::Cell<usize>);
+        impl std::fmt::Display for CountDisplays {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                self.0.set(self.0.get() + 1);
+                write!(f, "captured")
+            }
+        }
+        let argument = CountDisplays(std::cell::Cell::new(0));
+        let mut journal = Journal::default();
+        journal.info_l(Tr::JournalSaved, &[&argument]);
+        assert_eq!(argument.0.get(), 1);
+        assert!(journal.entries()[0].render(Lang::En).contains("captured"));
+        assert_eq!(argument.0.get(), 1);
     }
 
     #[test]
@@ -222,12 +285,12 @@ mod tests {
         assert_eq!(j.entries().len(), capacity);
         // Oldest two entries dropped (0 and 1) -> first kept is "entry 2".
         assert_eq!(
-            j.entries().first().unwrap().text.as_str(),
-            &format!("entry {}", 2)
+            j.entries().front().unwrap().render(Lang::Ru),
+            format!("entry {}", 2)
         );
         assert_eq!(
-            j.entries().last().unwrap().text.as_str(),
-            &format!("entry {}", capacity + 1)
+            j.entries().back().unwrap().render(Lang::Ru),
+            format!("entry {}", capacity + 1)
         );
     }
 
@@ -295,9 +358,9 @@ mod tests {
         let count = j.load(&path).unwrap();
         assert_eq!(count, 3, "blank lines are skipped");
         assert_eq!(j.entries().len(), 3);
-        assert_eq!(j.entries()[0].text, "line one");
-        assert_eq!(j.entries()[1].text, "line two");
-        assert_eq!(j.entries()[2].text, "line three");
+        assert_eq!(j.entries()[0].render(Lang::Ru), "line one");
+        assert_eq!(j.entries()[1].render(Lang::Ru), "line two");
+        assert_eq!(j.entries()[2].render(Lang::Ru), "line three");
     }
 
     #[test]
@@ -319,8 +382,8 @@ mod tests {
         assert_eq!(j.entries().len(), j.max_entries);
         // Oldest 10 dropped, first kept matches the 11th line.
         assert_eq!(
-            j.entries().first().unwrap().text.as_str(),
-            &format!("e{}", 10)
+            j.entries().front().unwrap().render(Lang::Ru),
+            format!("e{}", 10)
         );
     }
 
@@ -342,7 +405,7 @@ mod tests {
         assert_eq!(count, 3);
         // Saved lines carry a timestamp prefix, so the original text is a suffix
         // of each loaded entry's text.
-        let texts: Vec<&str> = back.entries().iter().map(|e| e.text.as_str()).collect();
+        let texts: Vec<String> = back.entries().iter().map(|e| e.render(Lang::Ru)).collect();
         assert!(texts[0].ends_with("alpha"), "got {texts:?}");
         assert!(texts[1].ends_with("beta"), "got {texts:?}");
         assert!(texts[2].ends_with("gamma"), "got {texts:?}");

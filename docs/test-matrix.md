@@ -40,7 +40,7 @@
 | Route planning: on-link, gateway, IPv4/IPv6, reject default/multicast/broadcast | ✅ | `on_link_*`, `off_link_*`, `ipv6_*`, `loopback_multicast_and_broadcast_targets_are_rejected` — `src/da_route.rs` |
 | Route conflict и refcount `(IP, adapter)` | ✅ | `route_decision_*`, `refcount_releases_only_after_the_last_owner` — `src/da_route.rs` |
 | Local/loopback DA не требует адаптера/helper | ✅ | `local_targets_do_not_require_an_adapter` — `src/da_route.rs` |
-| Helper: named pipe, ACL, token, PID/SID, audit, cleanup | ✅ (код) | `nethelper/src/main.rs`; ручная UAC-проверка — см. `docs/network-binding.md` |
+| Helper: named pipe, ACL, PID/SID, audit, cleanup | ✅ (код) | `nethelper/src/main.rs`; ручная UAC-проверка — см. `docs/network-binding.md` |
 | Elevated add/verify/remove helper | ⛔ | требует UAC/администратора и реального интерфейса; команды в `docs/network-binding.md` |
 | Live DA через второй хост/VM | ⛔ | нет Kepware/второго DA-хоста в среде; не считается выполненным |
 

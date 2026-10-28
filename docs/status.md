@@ -1,57 +1,13 @@
-# Статус
+# Текущий статус
 
-**Текущая работа:** пункты аудита `docs/audit-2026-10-27.md` закрыты и сведены
-в `main` (PR #3, PR #4); статус каждого пункта — в таблице аудита,
-подробности потоков — `docs/reports/{ua,app,rest}.md` и `docs/devlog.md`.
+Базовая версия всех крейтов — Rust 1.99; `rust-toolchain.toml` и оба задания CI закрепляют 1.99.1. Windows i686 workspace all-targets typecheck прошёл на 1.99.1 с test-only пропуском ресурсов и manifest; Windows runtime не проверялся. Статус CI для точного HEAD — в [PR #8 checks](https://github.com/boogy777-lgtm/OPCLook/pull/8/checks).
 
-| Поток | Пункты | Состояние |
-|---|---|---|
-| X1 Linux-стенд | `scripts/check-linux.sh` | сведено |
-| UA backend | U1–U5, U8, U12, U13, U15 | сведено |
-| rest | A9, U15 (UI), U13 (подписи), F1 | сведено (PR #4) |
-| App/UI | U5–U7, U9–U11, U13, U14, D4, D5, A1–A13, K1, K2 | сведено |
-| DA | D1, D2, D3, D6, D7 | сведено; COM-часть проверяется только CI под Windows |
-| Отзыв владельца | V1, V2, K3, V3 | сведено (PR #5) |
-| Отзыв владельца | P1 (теги большого дерева не обновлялись) | сведено (PR #6) |
-| UI-полировка | UI1–UI10 (потоки table, nav, theme) | ветка `ui/polish`, PR в main |
+Рефакторинг по темам A–H и исправления B1–B20 реализованы. GUI и headless CLI используют общий Engine; контракт, backend и локализация выделены в отдельные крейты. Текущая матрица решений, проверок и внешних ограничений — в [refactoring-status.md](refactoring-status.md); исходные замечания сохранены в [refactoring-plan.md](refactoring-plan.md) и [аудите](audit-2026-10-27.md) как история, а не текущий список задач.
 
-**Открыто (пробелы):**
-- F1: что именно упало в единичном прогоне Windows-CI в PR #3, не подтверждено
-  (лога не было); найденная гонка `CoInitializeSecurity` закрыта в 0e475a4.
+Локальный `scripts/check-linux.sh` завершился успешно для кода `c5762583f96635b37bc8924295703fde9bdccc8b` (до миграции Rust последующие изменения касались только документации): GUI, backend, Engine, contract, locale и CLI, включая живой sample UA и два B15 proxy-теста. После очистки кэша GUI повторно прошли all-target check, обычная сборка GUI/CLI и все GUI test targets. Rust 1.95.0 выполнил Windows i686 workspace all-targets typecheck с `--locked --offline` и test-only пропуском GUI-ресурсов и helper manifest; это не выполнение Windows. Подробные результаты — в [матрице](refactoring-status.md).
 
-**Решения владельца (2026-10-27):**
-- Клиент обнаружения (`bff/ua/discovery.rs::build_discovery_client`) остаётся с
-  `trust_server_certs(true)`: сертификаты серверов, к которым он обращался при
-  поиске, сохраняются в общем PKI-хранилище `trusted`. Не менять.
-- Коммит `8319e34` (14 пунктов потока app) остаётся как есть; историю `main` не
-  переписываем.
+Windows CI содержит native unit tests. Состояние финального HEAD показывает [PR #8 checks](https://github.com/boogy777-lgtm/OPCLook/pull/8/checks); merge требует зелёных проверок точного HEAD. Физические DA, UAC, привилегированный helper и маршруты требуют внешнего стенда.
 
-**UI1–UI10 после сведения (измерено, Linux):** 588 passed, 0 failed, 24 ignored.
-Отчёты потоков — `docs/reports/ui-{table,nav,theme}.md`.
+Пять сцен до F, после F и после H отрендерены и просмотрены; детали и результаты измерения CPU/аллокаций — в [отчёте](reports/refactor-frame-baseline.md). Живой физический OPC DA, Windows UAC, helper pipe и реальные маршруты требуют внешнего стенда. Поздние unsolicited данные игнорируются при отключении и подключении, но после нового соединения старое unsolicited событие не несёт эпоху и не всегда отличимо от нового.
 
-**Отзыв владельца (V1, V2, K3, V3), измерено на Linux:** 534 passed, 0 failed,
-24 ignored. Не скомпилировано на Linux: ветка `Value::Struct` в
-`bff/da_variant.rs::default_vt` — проверит CI под Windows.
-
-**Сводная проверка (измерено, Linux):** `scripts/check-linux.sh` на сведённой
-ветке — 500 passed, 0 failed, 24 ignored; после потока `rest` (A9, U15, U13, F1) —
-522 passed, 0 failed, 24 ignored.
-
-**Linux-проверка (X1):** `scripts/check-linux.sh` — `fmt`, `check --all-targets`,
-`test --lib` и интеграционные тесты на `x86_64-unknown-linux-gnu`.
-Измерено: 364 passed, 0 failed, 23 ignored (lib 242 passed; tests/*.rs 122
-passed, 23 ignored — 22 требуют живой DA/UA-сервер, 1 Windows-only инвентарь
-адаптеров). На Linux DA-воркер — заглушка, отвечающая `Error` на каждую команду.
-
-**Блокеры:** Windows-тулчейна в облачной среде нет — финальная сборка и
-`cargo test` только в CI на PR. Push и слияние в main разрешены человеком (2026-10-27).
-
-**Не проверено компиляцией (X1, Windows-сборка `i686-pc-windows-msvc`):**
-- `Cargo.toml`: `windows`/`windows-core` перенесены в `[target.'cfg(windows)'.dependencies]`,
-  добавлен `[target.'cfg(not(windows))'.dependencies] eframe` с `x11`; `Cargo.lock` пополнен
-  зависимостями Linux-бэкенда (удалений нет).
-- `src/bff/vt.rs` (новый): `vt_name` вынесена из `da_variant.rs` без изменений;
-  `da_variant.rs` делает `pub use super::vt::vt_name;` (путь `da_variant::vt_name` прежний).
-- `src/bff/mod.rs`, `src/opc/mod.rs`: `#[cfg(windows)]` на модули `da`, `da_variant`, `opc::bindings`.
-- `src/bff/mdns.rs`, `src/da_route.rs`: только `cfg_attr(not(windows), allow(dead_code…))`.
-- Всё это на Windows должно собираться как раньше, но не скомпилировано — проверит CI.
+Следующая работа по теме, каталогу действий и интерфейсу описана в [плане для нового чата](next-ui-command-plan.md); её пункты ещё не реализованы.

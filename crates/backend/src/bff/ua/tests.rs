@@ -1,0 +1,1448 @@
+use super::SCAN_SUBNET_TOO_LARGE;
+use super::discovery::merge_network_info;
+use super::io::parse_relative_path;
+use super::scanner::{merge_scan_batch, run_scan_job, scan_server_key, scan_targets};
+use super::security::{
+    SECURITY_MODE_AUTO, SECURITY_MODE_SIGN, SECURITY_MODE_SIGN_AND_ENCRYPT, SECURITY_POLICY_AUTO,
+    SECURITY_POLICY_BASIC256_SHA256, SECURITY_POLICY_NONE, resolve_security, security_error,
+};
+use super::values::{data_change_filter, ua_type_name, value_to_ua_variant, variant_to_value};
+use super::worker::{CommandQueue, is_control_command};
+use crate::bff::model::{
+    BackendMsg, Command, CommandKind, EndpointSpec, EventKind, Protocol, UaEndpointInfo,
+    UaNetworkInfo, UaSecurityMode, UaSecurityPolicy, UaServerInfo, Value, WriteRequest,
+};
+use crate::bff::net::NetworkBinding;
+use crate::constants::{DEFAULT_UA_PORT, SCAN_CONFIRM_THRESHOLD};
+use crate::i18n::{Lang, backend_text};
+use crate::net::SubnetSpec;
+use chrono::TimeZone;
+use opclook_contract::model::{ItemKey, ScanId};
+use opcua::types::VariantScalarTypeId as Vt;
+use opcua::types::{
+    DataChangeFilter, DataChangeTrigger, DeadbandType, EndpointDescription, LocalizedText,
+    MessageSecurityMode, NodeId, QualifiedName, StatusCode, UAString, UserTokenPolicy,
+    UserTokenType, Variant, VariantScalarTypeId,
+};
+use std::net::IpAddr;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::time::Duration;
+
+fn roundtrip_with_type(value: &Value, ty: Vt) -> Variant {
+    value_to_ua_variant(value, Some(ty)).expect("typed conversion")
+}
+
+#[test]
+fn typed_boolean() {
+    assert_eq!(
+        roundtrip_with_type(&Value::Bool(true), Vt::Boolean),
+        Variant::Boolean(true)
+    );
+    assert_eq!(
+        roundtrip_with_type(&Value::I64(1), Vt::Boolean),
+        Variant::Boolean(true)
+    );
+    assert_eq!(
+        roundtrip_with_type(&Value::I64(0), Vt::Boolean),
+        Variant::Boolean(false)
+    );
+    assert_eq!(
+        roundtrip_with_type(&Value::Str("да".to_string()), Vt::Boolean),
+        Variant::Boolean(true)
+    );
+    assert!(value_to_ua_variant(&Value::Str("nope".to_string()), Some(Vt::Boolean)).is_err());
+}
+
+#[test]
+fn typed_integer_widths() {
+    assert_eq!(
+        roundtrip_with_type(&Value::I64(5), Vt::SByte),
+        Variant::SByte(5)
+    );
+    assert_eq!(
+        roundtrip_with_type(&Value::I64(-5), Vt::Int16),
+        Variant::Int16(-5)
+    );
+    assert_eq!(
+        roundtrip_with_type(&Value::I64(7), Vt::Byte),
+        Variant::Byte(7)
+    );
+    assert_eq!(
+        roundtrip_with_type(&Value::I64(300), Vt::UInt16),
+        Variant::UInt16(300)
+    );
+    assert_eq!(
+        roundtrip_with_type(&Value::I64(123456), Vt::Int32),
+        Variant::Int32(123456)
+    );
+    assert_eq!(
+        roundtrip_with_type(&Value::I64(42), Vt::UInt32),
+        Variant::UInt32(42)
+    );
+    assert_eq!(
+        roundtrip_with_type(&Value::I64(i64::MIN), Vt::Int64),
+        Variant::Int64(i64::MIN)
+    );
+    assert_eq!(
+        roundtrip_with_type(&Value::U64(u64::MAX), Vt::UInt64),
+        Variant::UInt64(u64::MAX)
+    );
+}
+
+#[test]
+fn typed_integer_out_of_range() {
+    assert!(value_to_ua_variant(&Value::I64(300), Some(Vt::SByte)).is_err());
+    assert!(value_to_ua_variant(&Value::I64(65536), Some(Vt::UInt16)).is_err());
+    assert!(value_to_ua_variant(&Value::I64(-1), Some(Vt::UInt64)).is_err());
+    assert!(value_to_ua_variant(&Value::I64(-1), Some(Vt::Byte)).is_err());
+}
+
+#[test]
+fn typed_float() {
+    assert_eq!(
+        roundtrip_with_type(&Value::F64(1.5), Vt::Float),
+        Variant::Float(1.5)
+    );
+    assert_eq!(
+        roundtrip_with_type(&Value::F64(-2.25), Vt::Double),
+        Variant::Double(-2.25)
+    );
+}
+
+#[test]
+fn typed_string_and_text() {
+    assert_eq!(
+        roundtrip_with_type(&Value::Str("hi".to_string()), Vt::String),
+        Variant::String(UAString::from("hi"))
+    );
+    assert_eq!(
+        roundtrip_with_type(&Value::I64(7), Vt::String),
+        Variant::String(UAString::from("7"))
+    );
+    assert_eq!(
+        roundtrip_with_type(&Value::Str("текс".to_string()), Vt::LocalizedText),
+        Variant::LocalizedText(Box::new(LocalizedText::new("", "текс")))
+    );
+}
+
+#[test]
+fn typed_bytes() {
+    assert_eq!(
+        roundtrip_with_type(&Value::Bytes(vec![1, 2, 3]), Vt::ByteString),
+        Variant::ByteString(opcua::types::ByteString::from(vec![1, 2, 3]))
+    );
+    assert_eq!(
+        roundtrip_with_type(&Value::Str("ab".to_string()), Vt::ByteString),
+        Variant::ByteString(opcua::types::ByteString::from(vec![b'a', b'b']))
+    );
+}
+
+#[test]
+fn typed_date_time() {
+    let dt = chrono::Utc.with_ymd_and_hms(2026, 5, 4, 3, 2, 1).unwrap();
+    match roundtrip_with_type(&Value::DateTime(dt), Vt::DateTime) {
+        Variant::DateTime(b) => assert_eq!(b.as_chrono(), dt),
+        other => panic!("expected DateTime variant, got {other:?}"),
+    }
+    let parsed = roundtrip_with_type(
+        &Value::Str("2026-05-04T03:02:01Z".to_string()),
+        Vt::DateTime,
+    );
+    assert!(matches!(parsed, Variant::DateTime(_)));
+}
+
+#[test]
+fn typed_array_of_int32() {
+    let value = Value::Array(vec![Value::I64(1), Value::I64(2), Value::I64(-3)]);
+    match roundtrip_with_type(&value, Vt::Int32) {
+        Variant::Array(a) => {
+            assert_eq!(a.value_type, Vt::Int32);
+            assert_eq!(
+                a.values,
+                vec![Variant::Int32(1), Variant::Int32(2), Variant::Int32(-3)]
+            );
+        }
+        other => panic!("expected Array, got {other:?}"),
+    }
+}
+
+#[test]
+fn typed_array_of_boolean() {
+    let value = Value::Array(vec![Value::Bool(true), Value::Bool(false)]);
+    match roundtrip_with_type(&value, Vt::Boolean) {
+        Variant::Array(a) => assert_eq!(
+            a.values,
+            vec![Variant::Boolean(true), Variant::Boolean(false)]
+        ),
+        other => panic!("expected Array, got {other:?}"),
+    }
+}
+
+#[test]
+fn typed_array_range_error_propagates() {
+    let value = Value::Array(vec![Value::I64(1), Value::I64(99999)]);
+    assert!(value_to_ua_variant(&value, Some(Vt::Byte)).is_err());
+}
+
+#[test]
+fn unknown_type_infers_from_value() {
+    // No data_type -> infer types from the Value variants (legacy behavior).
+    assert_eq!(
+        value_to_ua_variant(&Value::I64(5), None).unwrap(),
+        Variant::Int64(5)
+    );
+    assert_eq!(
+        value_to_ua_variant(&Value::Bool(true), None).unwrap(),
+        Variant::Boolean(true)
+    );
+    assert_eq!(
+        value_to_ua_variant(&Value::F64(1.5), None).unwrap(),
+        Variant::Double(1.5)
+    );
+    assert_eq!(
+        value_to_ua_variant(&Value::Str("x".to_string()), None).unwrap(),
+        Variant::String(UAString::from("x"))
+    );
+}
+
+#[test]
+fn ua_type_name_mapping() {
+    assert_eq!(ua_type_name(Vt::Boolean), "Boolean");
+    assert_eq!(ua_type_name(Vt::Int32), "Int32");
+    assert_eq!(ua_type_name(Vt::UInt64), "UInt64");
+    assert_eq!(ua_type_name(Vt::Float), "Float");
+    assert_eq!(ua_type_name(Vt::LocalizedText), "LocalizedText");
+    assert_eq!(ua_type_name(VariantScalarTypeId::Guid), "Other");
+}
+
+fn cmd(kind: CommandKind) -> Command {
+    Command {
+        request_id: None,
+        owner: crate::bff::model::SessionId::FIRST.into(),
+        protocol: Protocol::OpcUa,
+        kind,
+    }
+}
+
+#[test]
+fn control_command_classification() {
+    assert!(!is_control_command(&CommandKind::Read {
+        keys: vec![ItemKey::new(1).unwrap()]
+    }));
+    assert!(!is_control_command(&CommandKind::Test));
+    assert!(is_control_command(&CommandKind::Browse {
+        node_id: "".into(),
+        filter: crate::bff::model::NodeClassFilter::All,
+        view_id: None
+    }));
+    assert!(is_control_command(&CommandKind::Connect {
+        endpoint: EndpointSpec::ua("opc.tcp://x")
+    }));
+    assert!(is_control_command(&CommandKind::AddItems { items: vec![] }));
+    assert!(is_control_command(&CommandKind::Write {
+        request: WriteRequest {
+            key: ItemKey::new(1).unwrap(),
+            value: Value::I64(1),
+            type_hint: None
+        }
+    }));
+    assert!(is_control_command(&CommandKind::RemoveItems {
+        keys: vec![]
+    }));
+    assert!(is_control_command(&CommandKind::Disconnect));
+    assert!(is_control_command(&CommandKind::ConfigureUaSubscription {
+        publishing_interval_ms: 1000,
+        deadband: 0.0
+    }));
+}
+
+#[test]
+fn deadband_filter_off_by_default() {
+    // 0 / negative deadband -> no filter (deliver on every change).
+    assert!(data_change_filter(0.0).is_null());
+    assert!(data_change_filter(-1.0).is_null());
+}
+
+#[test]
+fn deadband_filter_builds_absolute() {
+    // Off (0 / negative) means no filter -> delivers on every change.
+    assert!(data_change_filter(0.0).is_null());
+    assert!(data_change_filter(-1.0).is_null());
+
+    // A positive deadband becomes a non-empty absolute DataChangeFilter.
+    assert!(
+        !data_change_filter(2.5).is_null(),
+        "absolute deadband must attach a filter"
+    );
+}
+
+#[test]
+fn parsed_absolute_deadband_matches() {
+    // The semantic parser (no EURange needed for absolute) confirms the
+    // reader applies an absolute deadband of the requested magnitude.
+    let parsed = opcua::types::ParsedDataChangeFilter::parse(
+        DataChangeFilter {
+            trigger: DataChangeTrigger::StatusValue,
+            deadband_type: DeadbandType::Absolute as u32,
+            deadband_value: 2.5,
+        },
+        None,
+    )
+    .expect("absolute deadband parses without EURange");
+    assert!(matches!(
+        parsed.deadband,
+        opcua::types::Deadband::Absolute(v) if v == 2.5
+    ));
+}
+
+#[test]
+fn subscription_monitoring_parameters_shape() {
+    // ItemKey is the client handle; single-slot queue discarding the oldest
+    // value; sampling follows the publishing interval (-1), not "as fast as
+    // the server can" (0).
+    let params = super::session::monitoring_parameters(ItemKey::new(42).unwrap(), 0.0, true);
+    assert_eq!(params.client_handle, 42);
+    assert_eq!(params.sampling_interval, -1.0);
+    assert_eq!(params.queue_size, 1);
+    assert!(params.discard_oldest);
+    assert!(params.filter.is_null(), "no deadband, no filter");
+
+    let with_deadband = super::session::monitoring_parameters(ItemKey::new(7).unwrap(), 2.5, true);
+    assert!(!with_deadband.filter.is_null());
+    let retry = super::session::monitoring_parameters(ItemKey::new(7).unwrap(), 2.5, false);
+    assert!(
+        retry.filter.is_null(),
+        "the filterless retry carries no filter"
+    );
+    assert_eq!(retry.sampling_interval, -1.0);
+}
+
+#[test]
+fn controls_jump_over_reads_without_losing_them() {
+    let mut queue = CommandQueue::default();
+    for command in [
+        cmd(CommandKind::Read {
+            keys: vec![ItemKey::new(1).unwrap()],
+        }),
+        cmd(CommandKind::Read {
+            keys: vec![ItemKey::new(2).unwrap()],
+        }),
+        cmd(CommandKind::Browse {
+            node_id: "i=85".into(),
+            filter: crate::bff::model::NodeClassFilter::All,
+            view_id: None,
+        }),
+        cmd(CommandKind::Read {
+            keys: vec![ItemKey::new(3).unwrap()],
+        }),
+        cmd(CommandKind::AddItems { items: vec![] }),
+    ] {
+        queue.push_command(command);
+    }
+    let mut order = Vec::new();
+    while let Some(command) = queue.pop_command() {
+        order.push(match command.kind {
+            CommandKind::Browse { .. } => "browse".to_string(),
+            CommandKind::AddItems { .. } => "add".to_string(),
+            CommandKind::Read { keys } => {
+                format!("read{}", keys.first().map(|key| key.get()).unwrap_or(0))
+            }
+            _ => "?".to_string(),
+        });
+    }
+    // Control commands first (in their relative order), then every read, still in
+    // order: nothing is dropped, so no response-backed read is lost.
+    assert_eq!(order, vec!["browse", "add", "read1", "read2", "read3"]);
+}
+
+#[test]
+fn variant_to_value_maps_new_types() {
+    assert_eq!(
+        variant_to_value(&Variant::NodeId(Box::new(NodeId::new(2, "MyVar")))),
+        Value::NodeId("ns=2;s=MyVar".to_string())
+    );
+    assert_eq!(
+        variant_to_value(&Variant::QualifiedName(Box::new(QualifiedName::new(
+            2, "MyVar"
+        )))),
+        Value::QualifiedName {
+            namespace_index: 2,
+            name: "MyVar".to_string()
+        }
+    );
+    assert_eq!(
+        variant_to_value(&Variant::LocalizedText(Box::new(LocalizedText::new(
+            "ru",
+            "текст"
+        )))),
+        Value::LocalizedText {
+            locale: "ru".to_string(),
+            text: "текст".to_string()
+        }
+    );
+    assert_eq!(
+        variant_to_value(&Variant::StatusCode(StatusCode::Bad)),
+        Value::Other(format!("0x{:08X}", StatusCode::Bad.bits()))
+    );
+    // ByteString -> Bytes is preserved.
+    assert_eq!(
+        variant_to_value(&Variant::ByteString(opcua::types::ByteString::from(vec![
+            1, 2, 3
+        ]))),
+        Value::Bytes(vec![1, 2, 3])
+    );
+}
+
+#[test]
+fn variant_to_value_flattens_multi_dim_array() {
+    use opcua::types::Array as UaArray;
+    let flat = vec![
+        Variant::Int32(1),
+        Variant::Int32(2),
+        Variant::Int32(3),
+        Variant::Int32(4),
+    ];
+    let array = UaArray {
+        value_type: VariantScalarTypeId::Int32,
+        values: flat,
+        dimensions: Some(vec![2, 2]),
+    };
+    let value = variant_to_value(&Variant::Array(Box::new(array)));
+    match value {
+        Value::Array(outer) => {
+            assert_eq!(outer.len(), 2);
+            match &outer[0] {
+                Value::Array(inner) => {
+                    assert_eq!(inner, &vec![Value::I64(1), Value::I64(2)])
+                }
+                other => panic!("expected inner array, got {other:?}"),
+            }
+        }
+        other => panic!("expected array, got {other:?}"),
+    }
+}
+
+#[test]
+fn typed_write_supports_new_scalar_types() {
+    assert_eq!(
+        value_to_ua_variant(
+            &Value::NodeId("ns=2;s=MyVar".to_string()),
+            Some(VariantScalarTypeId::NodeId)
+        )
+        .unwrap(),
+        Variant::NodeId(Box::new(NodeId::new(2, "MyVar")))
+    );
+    assert!(matches!(
+        value_to_ua_variant(
+            &Value::NodeId("not-a-node".to_string()),
+            Some(VariantScalarTypeId::NodeId)
+        ),
+        Err(_)
+    ));
+    assert_eq!(
+        value_to_ua_variant(
+            &Value::QualifiedName {
+                namespace_index: 2,
+                name: "MyVar".to_string()
+            },
+            Some(VariantScalarTypeId::QualifiedName),
+        )
+        .unwrap(),
+        Variant::QualifiedName(Box::new(QualifiedName::new(2, "MyVar")))
+    );
+    assert_eq!(
+        value_to_ua_variant(
+            &Value::LocalizedText {
+                locale: "en".to_string(),
+                text: "hi".to_string()
+            },
+            Some(VariantScalarTypeId::LocalizedText),
+        )
+        .unwrap(),
+        Variant::LocalizedText(Box::new(LocalizedText::new("en", "hi")))
+    );
+    // Structured/encoded types are rejected with a clear error.
+    assert!(
+        value_to_ua_variant(
+            &Value::Str("x".to_string()),
+            Some(VariantScalarTypeId::ExtensionObject)
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn infer_write_supports_new_value_types() {
+    assert_eq!(
+        value_to_ua_variant(&Value::NodeId("i=85".to_string()), None).unwrap(),
+        Variant::NodeId(Box::new(NodeId::new(0, 85u32)))
+    );
+    assert_eq!(
+        value_to_ua_variant(
+            &Value::QualifiedName {
+                namespace_index: 3,
+                name: "N".to_string()
+            },
+            None
+        )
+        .unwrap(),
+        Variant::QualifiedName(Box::new(QualifiedName::new(3, "N")))
+    );
+    assert!(match value_to_ua_variant(
+        &Value::LocalizedText {
+            locale: "ru".to_string(),
+            text: "привет".to_string()
+        },
+        None,
+    )
+    .unwrap()
+    {
+        Variant::LocalizedText(l) => {
+            l.locale.to_string() == "ru" && l.text.to_string() == "привет"
+        }
+        _ => false,
+    });
+}
+
+#[test]
+fn nested_array_write_is_rejected() {
+    let value = Value::Array(vec![Value::Array(vec![Value::I64(1)])]);
+    assert!(value_to_ua_variant(&value, Some(VariantScalarTypeId::Int32)).is_err());
+    assert!(value_to_ua_variant(&value, None).is_err());
+}
+
+#[test]
+fn relative_path_parsing() {
+    let elements = parse_relative_path("0:Objects/2:MyVar").unwrap();
+    assert_eq!(elements.len(), 2);
+    assert_eq!(elements[0].target_name.namespace_index, 0);
+    assert_eq!(elements[0].target_name.name.to_string(), "Objects");
+    assert_eq!(elements[1].target_name.namespace_index, 2);
+    assert_eq!(elements[1].target_name.name.to_string(), "MyVar");
+    assert!(parse_relative_path("").is_err());
+    assert!(parse_relative_path("Objects/").is_ok());
+}
+
+fn ep(url: &str, policy: &str, mode: &str) -> UaEndpointInfo {
+    UaEndpointInfo {
+        url: url.parse().unwrap(),
+        security_policy: crate::bff::model::AdvertisedPolicy::from_wire(policy),
+        security_mode: crate::bff::model::AdvertisedMode::from_wire(mode),
+    }
+}
+
+fn eps() -> Vec<UaEndpointInfo> {
+    vec![
+        ep("opc.tcp://h:4840", "Basic256Sha256", "SignAndEncrypt"),
+        ep("opc.tcp://h:4840", "Basic256Sha256", "Sign"),
+        ep(
+            "opc.tcp://h:4840",
+            "http://opcfoundation.org/UA/SecurityPolicy#None",
+            "None",
+        ),
+    ]
+}
+
+#[test]
+fn auto_prefers_none_then_basic256_sha256() {
+    // Auto/Auto with a None endpoint present -> picks None first.
+    let (uri, mode) = resolve_security(SECURITY_POLICY_AUTO, SECURITY_MODE_AUTO, &eps()).unwrap();
+    assert!(
+        uri.ends_with("#None"),
+        "Auto must prefer None policy, got {uri}"
+    );
+    assert_eq!(mode, MessageSecurityMode::None);
+
+    // Without a None endpoint -> falls to Basic256Sha256 Sign (preferred over
+    // SignAndEncrypt).
+    let no_none: Vec<UaEndpointInfo> = eps()
+        .into_iter()
+        .filter(|e| e.security_policy.known() != Some(crate::bff::model::UaSecurityPolicy::None))
+        .collect();
+    let (uri, mode) = resolve_security(SECURITY_POLICY_AUTO, SECURITY_MODE_AUTO, &no_none).unwrap();
+    assert!(uri.ends_with("#Basic256Sha256"), "got {uri}");
+    assert_eq!(mode, MessageSecurityMode::Sign);
+}
+
+#[test]
+fn auto_sign_mode_matches_over_encrypt() {
+    // Auto policy + Sign mode: only the Sign endpoint matches.
+    let items: Vec<UaEndpointInfo> = eps()
+        .into_iter()
+        .filter(|e| e.security_mode.known() == Some(crate::bff::model::UaSecurityMode::Sign))
+        .collect();
+    let (uri, mode) = resolve_security(SECURITY_POLICY_AUTO, SECURITY_MODE_SIGN, &items).unwrap();
+    assert_eq!(mode, MessageSecurityMode::Sign);
+    assert!(uri.ends_with("#Basic256Sha256"));
+}
+
+#[test]
+fn explicit_policy_and_mode_are_honored() {
+    let (uri, mode) = resolve_security(
+        SECURITY_POLICY_BASIC256_SHA256,
+        SECURITY_MODE_SIGN_AND_ENCRYPT,
+        &eps(),
+    )
+    .unwrap();
+    assert!(uri.ends_with("#Basic256Sha256"));
+    assert_eq!(mode, MessageSecurityMode::SignAndEncrypt);
+}
+
+#[test]
+fn explicit_unsupported_choice_is_an_error_not_a_fallback() {
+    // The server offers None/None, Sign, SignAndEncrypt only for Basic256.
+    // Basic256 + Sign must not silently resolve to anything else.
+    let only_none = vec![ep("opc.tcp://h:4840", "None", "None")];
+    let err =
+        resolve_security(UaSecurityPolicy::Basic256, UaSecurityMode::Sign, &only_none).unwrap_err();
+    assert!(err.contains("not offered"), "got: {err}");
+    assert!(
+        err.contains("None/None"),
+        "detail must list advertised endpoints: {err}"
+    );
+}
+
+#[test]
+fn explicit_mode_not_offered_is_an_error() {
+    let only_none = vec![ep("opc.tcp://h:4840", "None", "None")];
+    let err = resolve_security(
+        SECURITY_POLICY_AUTO,
+        UaSecurityMode::SignAndEncrypt,
+        &only_none,
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("mode SignAndEncrypt is not offered"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn explicit_policy_not_offered_is_an_error() {
+    let only_none = vec![ep("opc.tcp://h:4840", "None", "None")];
+    let err = resolve_security(
+        UaSecurityPolicy::Basic256Sha256,
+        SECURITY_MODE_AUTO,
+        &only_none,
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("policy Basic256Sha256 is not offered"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn invalid_policy_mode_combination_is_an_error() {
+    let err =
+        resolve_security(SECURITY_POLICY_NONE, SECURITY_MODE_SIGN_AND_ENCRYPT, &eps()).unwrap_err();
+    assert!(err.contains("policy None"), "got: {err}");
+    assert!(err.contains("requires mode None"), "got: {err}");
+}
+
+#[test]
+fn empty_endpoint_list_is_an_error() {
+    let err = resolve_security(SECURITY_POLICY_AUTO, SECURITY_MODE_AUTO, &[]).unwrap_err();
+    assert!(err.contains("no security endpoints"), "got: {err}");
+}
+
+#[test]
+fn unknown_advertised_policy_is_an_error_not_none() {
+    // A server policy outside the typed class must never collapse to None.
+    let unknown = vec![ep(
+        "opc.tcp://h:4840",
+        "http://example.org/SecurityPolicy#Custom",
+        "Sign",
+    )];
+    let err = resolve_security(SECURITY_POLICY_AUTO, SECURITY_MODE_AUTO, &unknown).unwrap_err();
+    assert!(
+        err.contains("recognized security policy/mode"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn concrete_mode_with_auto_policy_picks_first_matching() {
+    let only_encrypt: Vec<UaEndpointInfo> = eps()
+        .into_iter()
+        .filter(|e| {
+            e.security_mode.known() == Some(crate::bff::model::UaSecurityMode::SignAndEncrypt)
+        })
+        .collect();
+    let (uri, mode) = resolve_security(
+        SECURITY_POLICY_AUTO,
+        SECURITY_MODE_SIGN_AND_ENCRYPT,
+        &only_encrypt,
+    )
+    .unwrap();
+    assert_eq!(mode, MessageSecurityMode::SignAndEncrypt);
+    assert!(uri.ends_with("#Basic256Sha256"), "got {uri}");
+}
+
+#[test]
+fn security_error_keeps_the_detail_inside_the_localized_wrapper() {
+    let message = security_error("policy Basic256 / mode Sign is not offered");
+    assert_eq!(
+        message,
+        BackendMsg::SecurityResolveFailed {
+            detail: "policy Basic256 / mode Sign is not offered".to_string()
+        }
+    );
+    for lang in Lang::ALL {
+        let text = backend_text(lang, &message);
+        assert!(
+            text.contains("policy Basic256 / mode Sign is not offered"),
+            "{lang}: {text}"
+        );
+    }
+}
+
+fn network_info(name: &str, uri: &str, urls: &[&str]) -> UaNetworkInfo {
+    UaNetworkInfo {
+        application_name: name.to_string(),
+        application_uri: uri.to_string(),
+        discovery_urls: urls.iter().map(|url| url.parse().unwrap()).collect(),
+    }
+}
+
+#[test]
+fn network_results_merge_by_application_uri_and_union_urls() {
+    let mut found = vec![network_info(
+        "LDS",
+        "urn:example:server",
+        &["opc.tcp://10.0.0.5:4840"],
+    )];
+    merge_network_info(
+        &mut found,
+        network_info(
+            "mDNS",
+            "urn:example:server",
+            &["opc.tcp://10.0.0.5:4840", "opc.tcp://[fe80::5]:4840"],
+        ),
+    );
+    assert_eq!(found.len(), 1);
+    assert_eq!(
+        found[0]
+            .discovery_urls
+            .iter()
+            .map(|url| url.as_str())
+            .collect::<Vec<_>>(),
+        vec!["opc.tcp://10.0.0.5:4840", "opc.tcp://[fe80::5]:4840"]
+    );
+}
+
+#[test]
+fn network_results_merge_by_discovery_url_when_uri_is_missing() {
+    let mut found = vec![network_info("LDS", "", &["opc.tcp://host:4840/"])];
+    merge_network_info(
+        &mut found,
+        network_info("mDNS", "", &["opc.tcp://HOST:4840"]),
+    );
+    assert_eq!(found.len(), 1);
+    assert_eq!(
+        found[0]
+            .discovery_urls
+            .iter()
+            .map(|url| url.as_str())
+            .collect::<Vec<_>>(),
+        vec!["opc.tcp://host:4840/"]
+    );
+}
+
+#[test]
+fn network_results_keep_distinct_servers() {
+    let mut found = vec![network_info(
+        "A",
+        "urn:example:a",
+        &["opc.tcp://10.0.0.5:4840"],
+    )];
+    merge_network_info(
+        &mut found,
+        network_info("B", "urn:example:b", &["opc.tcp://10.0.0.6:4840"]),
+    );
+    assert_eq!(found.len(), 2);
+}
+
+fn scan_binding(local: &str) -> NetworkBinding {
+    NetworkBinding::new(
+        local.parse().unwrap(),
+        std::num::NonZeroU32::new(7),
+        std::num::NonZeroU32::new(8),
+        None,
+    )
+}
+
+#[test]
+fn scan_targets_are_loopback_first_and_deduplicated() {
+    let binding = scan_binding("192.168.1.10");
+    let subnet = SubnetSpec::new("192.168.1.10".parse::<IpAddr>().unwrap(), 30).unwrap();
+    let targets = scan_targets(
+        &binding,
+        Some(subnet),
+        "192.168.1.10".parse::<IpAddr>().unwrap(),
+    );
+    let ips: Vec<IpAddr> = targets.iter().map(|target| target.ip).collect();
+    assert_eq!(
+        ips,
+        vec![
+            "127.0.0.1".parse::<IpAddr>().unwrap(),
+            "192.168.1.10".parse::<IpAddr>().unwrap(),
+            "192.168.1.9".parse::<IpAddr>().unwrap(),
+        ]
+    );
+    assert!(targets[0].binding.is_loopback());
+    assert!(!targets[1].binding.is_loopback());
+    assert_eq!(
+        targets
+            .iter()
+            .filter(|t| t.ip == "192.168.1.10".parse::<IpAddr>().unwrap())
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn scan_targets_include_ipv6_loopback_only_for_ipv6() {
+    let v4 = scan_binding("10.0.0.5");
+    let v4_targets = scan_targets(&v4, None, "10.0.0.5".parse::<IpAddr>().unwrap());
+    assert_eq!(v4_targets[0].ip, "127.0.0.1".parse::<IpAddr>().unwrap());
+    assert!(!v4_targets.iter().any(|target| target.ip.is_ipv6()));
+
+    let v6 = scan_binding("2001:db8::5");
+    let v6_targets = scan_targets(&v6, None, "2001:db8::5".parse::<IpAddr>().unwrap());
+    assert_eq!(v6_targets[0].ip, "127.0.0.1".parse::<IpAddr>().unwrap());
+    assert_eq!(v6_targets[1].ip, "::1".parse::<IpAddr>().unwrap());
+    assert_eq!(v6_targets[2].ip, "2001:db8::5".parse::<IpAddr>().unwrap());
+    assert!(v6_targets[1].binding.is_loopback());
+}
+
+#[test]
+fn scan_targets_follow_ipv6_subnet_family() {
+    let binding = scan_binding("10.0.0.5");
+    let subnet = SubnetSpec::new("2001:db8::5".parse::<IpAddr>().unwrap(), 126).unwrap();
+    let targets = scan_targets(
+        &binding,
+        Some(subnet),
+        "10.0.0.5".parse::<IpAddr>().unwrap(),
+    );
+    assert_eq!(targets[0].ip, "127.0.0.1".parse::<IpAddr>().unwrap());
+    assert_eq!(targets[1].ip, "::1".parse::<IpAddr>().unwrap());
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.ip == "2001:db8::5".parse::<IpAddr>().unwrap())
+    );
+}
+
+#[test]
+fn over_large_subnet_is_rejected_with_the_error_token() {
+    let subnet = SubnetSpec::new("10.0.0.0".parse().unwrap(), 19).unwrap();
+    assert!(subnet.usable_count() > SCAN_CONFIRM_THRESHOLD);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(run_scan_job(
+        ScanId::new(9).unwrap(),
+        NetworkBinding::loopback(),
+        Some(subnet),
+        "127.0.0.1".parse::<IpAddr>().unwrap(),
+        DEFAULT_UA_PORT,
+        Arc::new(AtomicBool::new(false)),
+        &tx,
+    ));
+    drop(tx);
+    let events: Vec<EventKind> = rx.try_iter().map(|event| event.kind).collect();
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        EventKind::UaScanFinished {
+            scan_id,
+            found,
+            end,
+        } => {
+            assert_eq!(scan_id.get(), 9);
+            assert_eq!(*found, 0);
+            let crate::bff::model::ScanEnd::Failed(message) = end else {
+                panic!("expected failure")
+            };
+            let error = backend_text(Lang::En, message);
+            assert!(
+                error.starts_with(SCAN_SUBNET_TOO_LARGE),
+                "unexpected error: {error}"
+            );
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+}
+
+#[test]
+fn cancelled_scan_finishes_without_checking_addresses() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let cancel = Arc::new(AtomicBool::new(true));
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(run_scan_job(
+        ScanId::new(10).unwrap(),
+        NetworkBinding::loopback(),
+        None,
+        "127.0.0.1".parse::<IpAddr>().unwrap(),
+        DEFAULT_UA_PORT,
+        cancel,
+        &tx,
+    ));
+    drop(tx);
+    let events: Vec<EventKind> = rx.try_iter().map(|event| event.kind).collect();
+    assert!(matches!(
+        events.first(),
+        Some(EventKind::UaScanProgress {
+            scan_id,
+            total: 1,
+            checked: 0,
+            found: 0
+        }) if scan_id.get() == 10
+    ));
+    assert!(matches!(
+        events.last(),
+        Some(EventKind::UaScanFinished {
+            scan_id,
+            found: 0,
+            end: crate::bff::model::ScanEnd::Cancelled
+        }) if scan_id.get() == 10
+    ));
+}
+
+#[test]
+fn loopback_tcp_without_opc_ua_is_not_a_scan_result() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            // Accept the TCP precheck and close immediately: open port, no UA.
+            if let Ok((stream, _)) = listener.accept().await {
+                drop(stream);
+            }
+        });
+        let (tx, rx) = std::sync::mpsc::channel();
+        tokio::time::timeout(
+            Duration::from_secs(15),
+            run_scan_job(
+                ScanId::new(11).unwrap(),
+                NetworkBinding::loopback(),
+                None,
+                "127.0.0.1".parse::<IpAddr>().unwrap(),
+                port,
+                Arc::new(AtomicBool::new(false)),
+                &tx,
+            ),
+        )
+        .await
+        .expect("scan must finish");
+        drop(tx);
+        let _ = server.await;
+        let events: Vec<EventKind> = rx.try_iter().map(|event| event.kind).collect();
+        assert!(matches!(
+            events.first(),
+            Some(EventKind::UaScanProgress {
+                scan_id,
+                total: 1,
+                checked: 0,
+                found: 0
+            }) if scan_id.get() == 11
+        ));
+        assert!(matches!(
+            events.last(),
+            Some(EventKind::UaScanFinished {
+                scan_id,
+                found: 0,
+                end: crate::bff::model::ScanEnd::Completed
+            }) if scan_id.get() == 11
+        ));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, EventKind::UaScanFound { .. })),
+            "an open TCP port without OPC UA must not be reported"
+        );
+    });
+}
+
+#[test]
+fn scan_server_keys_prefer_application_uri_then_url() {
+    let by_uri = UaServerInfo {
+        application_name: "A".to_string(),
+        application_uri: "urn:Example:A".to_string(),
+        endpoints: vec![UaEndpointInfo {
+            url: "opc.tcp://10.0.0.5:4840".parse().unwrap(),
+            security_policy: crate::bff::model::AdvertisedPolicy::Unspecified,
+            security_mode: crate::bff::model::AdvertisedMode::Unspecified,
+        }],
+    };
+    assert_eq!(
+        scan_server_key(&by_uri),
+        super::scanner::ScanServerKey::Uri("urn:example:a".to_string())
+    );
+
+    let by_url = UaServerInfo {
+        application_uri: String::new(),
+        ..by_uri
+    };
+    assert!(matches!(
+        scan_server_key(&by_url),
+        super::scanner::ScanServerKey::Url(_)
+    ));
+}
+
+#[test]
+fn scanner_preserves_distinct_url_resources() {
+    let endpoint = |url: &str| UaEndpointInfo {
+        url: url.parse().unwrap(),
+        security_policy: crate::bff::model::AdvertisedPolicy::Known(
+            crate::bff::model::UaSecurityPolicy::None,
+        ),
+        security_mode: crate::bff::model::AdvertisedMode::Known(
+            crate::bff::model::UaSecurityMode::None,
+        ),
+    };
+    let server = |endpoints| UaServerInfo {
+        application_name: "A".into(),
+        application_uri: "urn:A".into(),
+        endpoints,
+    };
+    let mut seen = std::collections::HashMap::new();
+    merge_scan_batch(
+        &mut seen,
+        vec![server(vec![endpoint("opc.tcp://HOST/A?x=/")])],
+    );
+    let (fresh, _) = merge_scan_batch(
+        &mut seen,
+        vec![server(vec![
+            endpoint("opc.tcp://host:4840/A/?x=/"),
+            endpoint("opc.tcp://host/a?x=/"),
+            endpoint("opc.tcp://host/A?x="),
+        ])],
+    );
+    assert_eq!(fresh[0].endpoints.len(), 2);
+}
+
+#[test]
+fn scanner_preserves_security_variants_at_one_url() {
+    let endpoint = |policy: &str, mode: &str| UaEndpointInfo {
+        url: "opc.tcp://host:4840".parse().unwrap(),
+        security_policy: crate::bff::model::AdvertisedPolicy::from_wire(policy),
+        security_mode: crate::bff::model::AdvertisedMode::from_wire(mode),
+    };
+    let server = |endpoints| UaServerInfo {
+        application_name: "A".into(),
+        application_uri: "urn:A".into(),
+        endpoints,
+    };
+    let mut seen = std::collections::HashMap::new();
+    merge_scan_batch(&mut seen, vec![server(vec![endpoint("None", "None")])]);
+    let (fresh, _) = merge_scan_batch(
+        &mut seen,
+        vec![server(vec![
+            endpoint("None", "None"),
+            endpoint("FuturePolicy", "Sign"),
+        ])],
+    );
+    assert_eq!(fresh[0].endpoints.len(), 1);
+    assert!(
+        matches!(&fresh[0].endpoints[0].security_policy, crate::bff::model::AdvertisedPolicy::Unknown(value) if value == "FuturePolicy")
+    );
+}
+
+#[test]
+fn unknown_or_missing_advertised_security_is_never_coerced_to_none() {
+    let padded = crate::bff::model::AdvertisedPolicy::from_wire("  FuturePolicy  ");
+    assert!(
+        matches!(padded, crate::bff::model::AdvertisedPolicy::Unknown(value) if value == "  FuturePolicy  ")
+    );
+    let unknown = ep("opc.tcp://host", "FuturePolicy", "Sign");
+    assert!(
+        matches!(&unknown.security_policy, crate::bff::model::AdvertisedPolicy::Unknown(value) if value == "FuturePolicy")
+    );
+    assert!(resolve_security(SECURITY_POLICY_AUTO, SECURITY_MODE_AUTO, &[unknown]).is_err());
+    let foreign_none = ep(
+        "opc.tcp://host",
+        "https://example.invalid/policy#None",
+        "None",
+    );
+    assert!(
+        matches!(&foreign_none.security_policy, crate::bff::model::AdvertisedPolicy::Unknown(value) if value == "https://example.invalid/policy#None")
+    );
+    assert!(resolve_security(SECURITY_POLICY_AUTO, SECURITY_MODE_AUTO, &[foreign_none]).is_err());
+    let mut impossible = ep("opc.tcp://host", "None", "None");
+    impossible.security_policy = crate::bff::model::AdvertisedPolicy::Known(UaSecurityPolicy::Auto);
+    assert!(resolve_security(SECURITY_POLICY_AUTO, SECURITY_MODE_AUTO, &[impossible]).is_err());
+    let missing = ep("opc.tcp://host", "", "");
+    assert!(resolve_security(SECURITY_POLICY_AUTO, SECURITY_MODE_AUTO, &[missing]).is_err());
+    assert_eq!(
+        super::security::advertised_mode(opcua::types::MessageSecurityMode::Invalid),
+        crate::bff::model::AdvertisedMode::Unknown("Invalid".into())
+    );
+}
+
+#[test]
+fn scanner_unions_endpoints_for_the_same_application_uri() {
+    let endpoint = |url: &str| UaEndpointInfo {
+        url: url.parse().unwrap(),
+        security_policy: crate::bff::model::AdvertisedPolicy::from_wire("None"),
+        security_mode: crate::bff::model::AdvertisedMode::from_wire("None"),
+    };
+    let first = UaServerInfo {
+        application_name: "CODESYS".to_string(),
+        application_uri: "urn:CODESYS".to_string(),
+        endpoints: vec![endpoint("opc.tcp://127.0.0.1:4840")],
+    };
+    let second = UaServerInfo {
+        application_name: "CODESYS".to_string(),
+        application_uri: "urn:CODESYS".to_string(),
+        endpoints: vec![
+            endpoint("opc.tcp://127.0.0.1:4840"),
+            endpoint("opc.tcp://NTBK700582:4840"),
+        ],
+    };
+    let mut seen = std::collections::HashMap::new();
+    let (fresh, new_servers) = merge_scan_batch(&mut seen, vec![first]);
+    assert_eq!(new_servers, 1);
+    assert_eq!(fresh.len(), 1);
+    let (fresh, new_servers) = merge_scan_batch(&mut seen, vec![second]);
+    assert_eq!(new_servers, 0, "the same ApplicationUri is one server");
+    assert_eq!(fresh.len(), 1);
+    assert_eq!(fresh[0].endpoints.len(), 1);
+    assert_eq!(
+        fresh[0].endpoints[0].url.as_str(),
+        "opc.tcp://NTBK700582:4840"
+    );
+    let merged = seen.values().next().unwrap();
+    assert_eq!(merged.endpoints.len(), 2);
+}
+
+#[test]
+fn connect_description_reuses_advertised_user_token_policy() {
+    // CODESYS advertises the anonymous policy as "Anonymous", not the crate
+    // default "anonymous". The connect endpoint must keep the server's policy.
+    let server = EndpointDescription {
+        endpoint_url: UAString::from("opc.tcp://codesys-host:4840"),
+        security_policy_uri: UAString::from("http://opcfoundation.org/UA/SecurityPolicy#None"),
+        security_mode: MessageSecurityMode::None,
+        user_identity_tokens: Some(vec![UserTokenPolicy {
+            policy_id: UAString::from("Anonymous"),
+            token_type: UserTokenType::Anonymous,
+            ..Default::default()
+        }]),
+        ..Default::default()
+    };
+
+    let description = super::session::endpoint_description_for(
+        std::slice::from_ref(&server),
+        "opc.tcp://127.0.0.1:4840",
+        "http://opcfoundation.org/UA/SecurityPolicy#None",
+        MessageSecurityMode::None,
+    );
+
+    // The user's URL wins, the server's token policy is reused.
+    assert_eq!(
+        description.endpoint_url.as_ref(),
+        "opc.tcp://127.0.0.1:4840"
+    );
+    let policy = description
+        .find_policy(UserTokenType::Anonymous)
+        .expect("anonymous policy");
+    assert_eq!(policy.policy_id.as_ref(), "Anonymous");
+}
+
+#[test]
+fn connect_description_falls_back_to_default_anonymous_policy() {
+    let description = super::session::endpoint_description_for(
+        &[],
+        "opc.tcp://127.0.0.1:4840",
+        "http://opcfoundation.org/UA/SecurityPolicy#None",
+        MessageSecurityMode::None,
+    );
+
+    assert_eq!(
+        description.endpoint_url.as_ref(),
+        "opc.tcp://127.0.0.1:4840"
+    );
+    assert_eq!(
+        description
+            .find_policy(UserTokenType::Anonymous)
+            .expect("anonymous policy")
+            .policy_id
+            .as_ref(),
+        "anonymous"
+    );
+}
+
+#[test]
+fn x509_identity_requires_actual_advertised_certificate_token() {
+    let description = EndpointDescription {
+        user_identity_tokens: Some(vec![UserTokenPolicy {
+            policy_id: UAString::from("Anonymous"),
+            token_type: UserTokenType::Anonymous,
+            ..Default::default()
+        }]),
+        ..Default::default()
+    };
+    let mut endpoint = EndpointSpec::ua("opc.tcp://codesys-host:4840");
+    endpoint.ua_use_certificate = true;
+    let err = match super::session::resolve_identity_token(&endpoint, &description) {
+        Err(message) => message,
+        Ok(_) => panic!("a signed endpoint is not evidence of an X509 user-token policy"),
+    };
+    assert_eq!(err, BackendMsg::UaCertLoginUnsupported);
+}
+
+#[test]
+fn status_text_names_the_status_and_keeps_the_hex_code() {
+    use super::session::status_text;
+    let text = status_text(StatusCode::BadNodeIdUnknown);
+    assert!(text.starts_with("BadNodeIdUnknown"), "{text}");
+    assert!(text.contains("0x80340000"), "{text}");
+}
+
+#[test]
+fn only_filter_status_codes_count_as_filter_refusals() {
+    use super::session::is_filter_refusal;
+    for status in [
+        StatusCode::BadFilterNotAllowed,
+        StatusCode::BadMonitoredItemFilterInvalid,
+        StatusCode::BadMonitoredItemFilterUnsupported,
+    ] {
+        assert!(is_filter_refusal(status), "{status}");
+    }
+    for status in [
+        StatusCode::BadNodeIdUnknown,
+        StatusCode::BadAttributeIdInvalid,
+        StatusCode::BadTooManyMonitoredItems,
+        StatusCode::Good,
+    ] {
+        assert!(!is_filter_refusal(status), "{status}");
+    }
+}
+
+#[test]
+fn rejected_items_come_back_as_errors_in_request_order() {
+    use super::session::merge_add_results;
+    use crate::bff::model::{ItemInfo, ItemSpec};
+    use std::collections::HashMap;
+    let items = [
+        ItemSpec {
+            key: ItemKey::new(7).unwrap(),
+            item_id: "ns=2;s=A".to_string(),
+        },
+        ItemSpec {
+            key: ItemKey::new(3).unwrap(),
+            item_id: "ns=2;s=B".to_string(),
+        },
+        ItemSpec {
+            key: ItemKey::new(9).unwrap(),
+            item_id: "ns=2;s=C".to_string(),
+        },
+    ];
+    let info = |writable| ItemInfo {
+        data_type: None,
+        type_id: None,
+        writable,
+    };
+    let infos = HashMap::from([
+        (ItemKey::new(7).unwrap(), info(true)),
+        (ItemKey::new(3).unwrap(), info(false)),
+        (ItemKey::new(9).unwrap(), info(true)),
+    ]);
+    let rejected = HashMap::from([(
+        ItemKey::new(3).unwrap(),
+        BackendMsg::raw("BadNodeIdUnknown (0x80340000)"),
+    )]);
+    let merged = merge_add_results(&items, infos, &rejected);
+    let keys: Vec<_> = merged.iter().map(|(k, _)| k.get()).collect();
+    assert_eq!(keys, [7, 3, 9]);
+    assert!(merged[0].1.is_ok());
+    assert_eq!(
+        merged[1].1.as_ref().unwrap_err(),
+        &BackendMsg::raw("BadNodeIdUnknown (0x80340000)")
+    );
+    assert!(merged[2].1.is_ok());
+}
+
+#[test]
+fn create_results_are_paired_with_their_items_and_bad_statuses_are_failures() {
+    use super::session::{ItemFailure, create_outcomes};
+    let results = [
+        (StatusCode::Good, 11),
+        (StatusCode::BadNodeIdUnknown, 0),
+        (StatusCode::BadFilterNotAllowed, 0),
+    ];
+    // Four items asked, three results answered: the fourth is a failure, not "ok".
+    let outcomes = create_outcomes(&[KEY_10, KEY_20, KEY_30, KEY_40], &results);
+    assert_eq!(outcomes.len(), 4);
+    assert!(matches!(outcomes[0], (KEY_10, Ok(11))));
+    assert!(matches!(
+        &outcomes[1],
+        (KEY_20, Err(failure)) if backend_text(Lang::En, &failure.text()).starts_with("BadNodeIdUnknown")
+    ));
+    assert!(matches!(
+        &outcomes[2],
+        (KEY_30, Err(failure)) if failure.is_filter_refusal()
+    ));
+    assert!(matches!(&outcomes[3], (KEY_40, Err(ItemFailure::Call(_)))));
+}
+
+#[test]
+fn missing_node_statuses_are_recognised() {
+    use super::session::is_missing_node;
+    assert!(is_missing_node(StatusCode::BadNodeIdUnknown));
+    assert!(is_missing_node(StatusCode::BadNodeIdInvalid));
+    assert!(is_missing_node(StatusCode::BadAttributeIdInvalid));
+    assert!(!is_missing_node(StatusCode::Good));
+    assert!(!is_missing_node(StatusCode::BadUserAccessDenied));
+    assert!(!is_missing_node(StatusCode::BadNotReadable));
+}
+
+#[test]
+fn variables_filter_keeps_folders_navigable() {
+    use super::io::browse_node_class_mask;
+    assert_eq!(
+        browse_node_class_mask(crate::bff::model::NodeClassFilter::All),
+        0,
+        "no filter = every class"
+    );
+    assert_eq!(
+        browse_node_class_mask(crate::bff::model::NodeClassFilter::Objects),
+        1,
+        "objects only"
+    );
+    let mask = browse_node_class_mask(crate::bff::model::NodeClassFilter::Variables);
+    assert_eq!(mask & 2, 2, "variables are listed");
+    assert_eq!(mask & 1, 1, "folders (objects) are listed too");
+    assert_eq!(mask & !3, 0, "methods, types and views stay hidden");
+}
+
+#[test]
+fn aes_policies_resolve_to_their_wire_uris() {
+    let offered = vec![
+        ep(
+            "opc.tcp://h:4840",
+            "http://opcfoundation.org/UA/SecurityPolicy#Aes128_Sha256_RsaOaep",
+            "SignAndEncrypt",
+        ),
+        ep(
+            "opc.tcp://h:4840",
+            "http://opcfoundation.org/UA/SecurityPolicy#Aes256_Sha256_RsaPss",
+            "SignAndEncrypt",
+        ),
+    ];
+    let (uri, mode) = resolve_security(
+        UaSecurityPolicy::Aes256Sha256RsaPss,
+        UaSecurityMode::SignAndEncrypt,
+        &offered,
+    )
+    .unwrap();
+    assert!(uri.ends_with("#Aes256_Sha256_RsaPss"), "{uri}");
+    assert_eq!(mode, MessageSecurityMode::SignAndEncrypt);
+    let (uri, _) = resolve_security(
+        UaSecurityPolicy::Aes128Sha256RsaOaep,
+        UaSecurityMode::Auto,
+        &offered,
+    )
+    .unwrap();
+    assert!(uri.ends_with("#Aes128_Sha256_RsaOaep"), "{uri}");
+    // A server that only offers Aes is reachable with Auto/Auto as well (the
+    // last-resort "first recognized endpoint" rule), instead of "no usable
+    // endpoint".
+    assert!(resolve_security(SECURITY_POLICY_AUTO, SECURITY_MODE_AUTO, &offered).is_ok());
+}
+
+#[test]
+fn session_info_states_how_the_channel_is_protected() {
+    use super::security::security_summary;
+    let ru = |message: BackendMsg| backend_text(Lang::Ru, &message);
+    let none = ru(security_summary(
+        "opc.tcp://h:4840",
+        "None",
+        MessageSecurityMode::None,
+        false,
+    ));
+    assert!(none.contains("без шифрования"), "{none}");
+    assert!(!none.contains("TLS"), "OPC UA is not TLS: {none}");
+    let sign = ru(security_summary(
+        "opc.tcp://h:4840",
+        "Basic256Sha256",
+        MessageSecurityMode::Sign,
+        false,
+    ));
+    assert!(sign.contains("не шифруются"), "{sign}");
+    let full = ru(security_summary(
+        "opc.tcp://h:4840",
+        "Basic256Sha256",
+        MessageSecurityMode::SignAndEncrypt,
+        false,
+    ));
+    assert!(full.contains("подпись и шифрование"), "{full}");
+    assert!(!full.contains("без шифрования"));
+    let hinted = ru(security_summary(
+        "opc.tcp://h:4840",
+        "None",
+        MessageSecurityMode::None,
+        true,
+    ));
+    assert!(hinted.contains("предлагает защищённое"), "{hinted}");
+}
+
+#[test]
+fn auto_reports_when_it_chose_no_protection_over_a_secure_endpoint() {
+    use super::security::auto_chose_unprotected_over_secure as chose;
+    let both = vec![
+        ep("opc.tcp://h:4840", "None", "None"),
+        ep("opc.tcp://h:4840", "Basic256Sha256", "SignAndEncrypt"),
+    ];
+    let only_none = vec![ep("opc.tcp://h:4840", "None", "None")];
+    let auto = (UaSecurityPolicy::Auto, UaSecurityMode::Auto);
+    assert!(chose(auto.0, auto.1, MessageSecurityMode::None, &both));
+    assert!(
+        !chose(auto.0, auto.1, MessageSecurityMode::None, &only_none),
+        "nothing better was offered"
+    );
+    assert!(
+        !chose(auto.0, auto.1, MessageSecurityMode::Sign, &both),
+        "a protected channel needs no warning"
+    );
+    assert!(
+        !chose(
+            UaSecurityPolicy::None,
+            UaSecurityMode::None,
+            MessageSecurityMode::None,
+            &both
+        ),
+        "an explicit None is the user's decision"
+    );
+}
+
+#[test]
+fn integer_writes_reject_fractional_and_out_of_range_floats() {
+    use opcua::types::VariantScalarTypeId as Vt;
+    for value in [3.7, f64::NAN, f64::INFINITY, 9_223_372_036_854_775_808.0] {
+        assert!(value_to_ua_variant(&Value::F64(value), Some(Vt::Int64)).is_err());
+    }
+    for value in [3.7, -1.0, f64::INFINITY, 18_446_744_073_709_551_616.0] {
+        assert!(value_to_ua_variant(&Value::F64(value), Some(Vt::UInt64)).is_err());
+    }
+    assert!(value_to_ua_variant(&Value::U64(u64::MAX), Some(Vt::Int64)).is_err());
+    assert!(value_to_ua_variant(&Value::F64(f64::MAX), Some(Vt::Float)).is_err());
+}
+
+const KEY_10: ItemKey = ItemKey::new(10).unwrap();
+const KEY_20: ItemKey = ItemKey::new(20).unwrap();
+const KEY_30: ItemKey = ItemKey::new(30).unwrap();
+const KEY_40: ItemKey = ItemKey::new(40).unwrap();

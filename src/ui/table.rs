@@ -1,3 +1,9 @@
+mod cells;
+use cells::{
+    FieldLine, draw_field_line, empty_table_prompt, paint_change_flash, quality_pill, quality_tint,
+    value_text_cell, value_toggle,
+};
+
 use super::actions::{ColumnDir, TableAction, TreeDragPayload};
 use super::colors::{green, quality_color, yellow};
 use super::files::save_tree_csv;
@@ -16,11 +22,10 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
     let lang = app.lang();
     // Paint the whole central area opaquely with the panel background so the
     // central region never shows a black seam while the left panel is resized.
-    let central_frame = egui::Frame::central_panel(&ui.style()).fill(ui.style().visuals.panel_fill);
+    let central_frame = egui::Frame::central_panel(ui.style()).fill(ui.style().visuals.panel_fill);
     let _panel = egui::CentralPanel::default()
         .frame(central_frame)
         .show(ui, |ui| {
-            let lang = lang;
             // Session tab strip lives at the top of the central tags panel, not in
             // a window-wide top panel. It belongs to the tags area, so it stays
             // reachable even when the left nav/tree is collapsed.
@@ -39,7 +44,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                 ui.dnd_drop_zone::<TreeDragPayload, _>(drop_frame, |ui| {
                     ui.set_min_height(drop_height);
                     let mut actions = Vec::new();
-                    let mut columns: Vec<ColumnId> = app.settings.columns.visible().collect();
+                    let mut columns: Vec<ColumnId> = app.settings.view.columns.visible().collect();
 
                     if columns.is_empty() {
                         columns.push(ColumnId::Status);
@@ -71,7 +76,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                             egui::RichText::new(fmt(
                                 lang,
                                 Tr::SignalsCount,
-                                &[&visible.len().to_string(), &selected_count.to_string()],
+                                &[&visible.len(), &selected_count],
                             ))
                             .weak(),
                         );
@@ -242,7 +247,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                         return;
                                     }
                                     body.rows(text_height, lines.len(), |mut row| {
-                                        let show_colors = app.settings.options.show_colors;
+                                        let show_colors = app.settings.view.options.show_colors;
                                         let now = std::time::Instant::now();
                                         // `index` is the visible position (selection and
                                         // keyboard work on it); `position` is in `rows`.
@@ -285,7 +290,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                             }
                                             None => return,
                                         };
-                                        let Some(signal) = app.rows.get(position) else {
+                                        let Some(signal) = app.rows().get(position) else {
                                             return;
                                         };
                                         let key = signal.key;
@@ -302,7 +307,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                             ui,
                                                             show_colors,
                                                             signal.pending,
-                                                            signal.quality.kind,
+                                                            signal.quality.kind(),
                                                         );
                                                         ui.colored_label(color, "●");
                                                     });
@@ -311,7 +316,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                     row.col(|ui| {
                                                         if signal.value.is_expandable() {
                                                             let expanded = app
-                                                                .expanded_values
+                                                                .expanded_values()
                                                                 .contains(&(key, Vec::new()));
                                                             toggle_rect = Some(value_toggle(
                                                                 ui,
@@ -356,11 +361,11 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                             is_numeric_value(&signal.value);
                                                         value_text_cell(
                                                             ui,
-                                                            signal.value.to_string(),
+                                                            signal.value_text(),
                                                             numeric,
                                                             color,
                                                         )
-                                                        .on_hover_text(&signal.quality.text);
+                                                        .on_hover_text(signal.quality.text());
                                                     });
                                                 }
                                                 ColumnId::Quality => {
@@ -370,12 +375,12 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                                 ui,
                                                                 true,
                                                                 signal.pending,
-                                                                signal.quality.kind,
+                                                                signal.quality.kind(),
                                                             )
                                                         });
                                                         quality_pill(
                                                             ui,
-                                                            &signal.quality.text,
+                                                            signal.quality.text(),
                                                             tint,
                                                         );
                                                     });
@@ -485,7 +490,6 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
             set_tags_rect_for_test(dropped_zone.response.rect);
 
             let actions = dropped_zone.inner;
-            let dropped = dropped;
 
             // Visual feedback while a tag tree payload hovers over the table.
             let hovering = dropped_zone
@@ -509,317 +513,72 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                 app.add_dropped_tree(payload.session, payload.node_ids.clone());
             }
 
-            for action in actions {
-                match action {
-                    TableAction::SelectSingle(index) => app.select_only(index),
-                    TableAction::SelectToggle(index) => app.select_toggle(index),
-                    TableAction::SelectExtend(index) => app.select_extend_to(index),
-                    TableAction::Write(key) => {
-                        let keys = app.selected_rows_for_context(key);
-                        app.open_write_dialog(keys);
-                    }
-                    TableAction::Remove(key) => {
-                        if app.selected_rows.contains(&key) {
-                            app.remove_selected_rows();
-                        } else {
-                            app.selected_rows.clear();
-                            app.selected_rows.insert(key);
-                            app.remove_selected_rows();
-                        }
-                    }
-                    TableAction::CopyValue(key) => {
-                        if let Some(row) = app.rows.iter().find(|r| r.key == key) {
-                            ui.ctx().copy_text(row.value.to_string());
-                            app.status = tr(app.lang(), Tr::ValueCopied).to_string();
-                        }
-                    }
-                    TableAction::CopyFullName(key) => {
-                        if let Some(row) = app.rows.iter().find(|r| r.key == key) {
-                            ui.ctx().copy_text(row.item_id.clone());
-                            app.status = tr(app.lang(), Tr::FullNameCopied).to_string();
-                        }
-                    }
-                    TableAction::ToggleValue(key, path) => app.toggle_value(key, path),
-                    TableAction::SelectAll => app.select_all_rows(),
-                    TableAction::ClearSelection => app.clear_selection(),
-                    TableAction::SaveCsv => save_tree_csv(app),
-                    TableAction::MoveColumn(column, dir) => {
-                        let order = app.settings.resolved_order();
-                        let Some(index) = order.iter().position(|c| *c == column) else {
-                            continue;
-                        };
-                        let before = match dir {
-                            ColumnDir::Left if index > 0 => index - 1,
-                            ColumnDir::Right if index + 1 < order.len() => index + 2,
-                            _ => continue,
-                        };
-                        if app.settings.move_column_to_insert(column, before) {
-                            app.settings.save();
-                            let title = tr(app.lang(), column.title_tr());
-                            app.status = if dir == ColumnDir::Left {
-                                fmt(app.lang(), Tr::ColumnMovedLeft, &[&title])
-                            } else {
-                                fmt(app.lang(), Tr::ColumnMovedRight, &[&title])
-                            };
-                        }
-                    }
-                    TableAction::DropColumn(column, before) => {
-                        if app.settings.move_column_to_insert(column, before) {
-                            app.settings.save();
-                            let title = tr(app.lang(), column.title_tr());
-                            app.status = fmt(app.lang(), Tr::MovedFormat, &[&title]);
-                        }
-                    }
-                }
-            }
+            apply_table_actions(app, ui, actions);
         });
 }
-/// Height reserved for the empty-table prompt (hint, second line, button).
-const EMPTY_PROMPT_HEIGHT: f32 = 110.0;
-
-/// UI10: the prompt of an empty table, centred in `area`. Without an active
-/// session it offers «Connect (Ctrl+N)» (returns true when pressed); with one
-/// it says how to fill the table. Never keeps the keyboard focus, so Enter and
-/// the arrows stay with the table / tree.
-fn empty_table_prompt(
-    ui: &mut egui::Ui,
-    lang: crate::i18n::Lang,
-    area: egui::Rect,
-    has_session: bool,
-) -> bool {
-    let rect = egui::Rect::from_center_size(
-        area.center(),
-        egui::vec2(area.width(), EMPTY_PROMPT_HEIGHT.min(area.height())),
-    );
-    let mut connect = false;
-    ui.scope_builder(
-        egui::UiBuilder::new()
-            .max_rect(rect)
-            .layout(egui::Layout::top_down(egui::Align::Center)),
-        |ui| {
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(tr(lang, Tr::TableEmptyInner))
-                        .size(18.0)
-                        .color(ui.visuals().weak_text_color()),
-                )
-                .selectable(false),
-            );
-            ui.add_space(6.0);
-            let second = if has_session {
-                Tr::TableEmptyDragHint
-            } else {
-                Tr::TableEmptyKeys
-            };
-            ui.add(
-                egui::Label::new(egui::RichText::new(tr(lang, second)).weak()).selectable(false),
-            );
-            if !has_session {
-                ui.add_space(12.0);
-                let button = ui.add(
-                    egui::Button::new(tr(lang, Tr::TableEmptyConnect))
-                        .min_size(egui::vec2(180.0, 28.0)),
-                );
-                // A pressed button must not keep egui's focus: Enter would press
-                // it again (the table owns Enter).
-                if button.has_focus() {
-                    button.surrender_focus();
-                }
-                connect = button.clicked();
+fn apply_table_actions(app: &mut App, ui: &mut egui::Ui, actions: Vec<TableAction>) {
+    for action in actions {
+        match action {
+            TableAction::SelectSingle(index) => app.select_only(index),
+            TableAction::SelectToggle(index) => app.select_toggle(index),
+            TableAction::SelectExtend(index) => app.select_extend_to(index),
+            TableAction::Write(key) => {
+                let keys = app.selected_rows_for_context(key);
+                app.open_write_dialog(keys);
             }
-        },
-    );
-    connect
-}
-
-/// UI4: the accent-coloured glow behind a value that has just changed. `flash`
-/// runs from 1.0 (just changed) to 0.0; while it fades the table keeps asking
-/// for new frames, so the glow dies out smoothly even with no other input.
-fn paint_change_flash(ui: &egui::Ui, flash: f32) {
-    if flash <= 0.0 {
-        return;
-    }
-    let accent = ui.visuals().selection.bg_fill;
-    ui.painter().rect_filled(
-        ui.max_rect(),
-        2.0,
-        accent.gamma_multiply(CHANGE_FLASH_MAX_ALPHA * flash),
-    );
-    ui.ctx().request_repaint();
-}
-
-/// The glow's opacity right after a change.
-const CHANGE_FLASH_MAX_ALPHA: f32 = 0.8;
-
-/// Gap between a right-aligned number and the right edge of its cell.
-const NUMBER_RIGHT_PADDING: f32 = 8.0;
-
-/// UI5: a value in the «Value» column. A number is monospace and sticks to the
-/// right edge of the cell; strings, structure summaries, dates and the rest
-/// keep the left edge.
-fn value_text_cell(
-    ui: &mut egui::Ui,
-    text: impl Into<String>,
-    numeric: bool,
-    color: egui::Color32,
-) -> egui::Response {
-    let text = text.into();
-    if numeric {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // A little air before the next column (the quality pill).
-            ui.add_space(NUMBER_RIGHT_PADDING);
-            ui.label(egui::RichText::new(text).monospace().color(color))
-        })
-        .inner
-    } else {
-        ui.label(egui::RichText::new(text).color(color))
-    }
-}
-
-/// UI2: the color a quality is shown in: yellow while the first value is still
-/// pending, else the quality's color; the neutral text color when the
-/// «show colors» option is off.
-fn quality_tint(
-    ui: &egui::Ui,
-    show_colors: bool,
-    pending: bool,
-    kind: crate::bff::model::QualityKind,
-) -> egui::Color32 {
-    if !show_colors {
-        ui.visuals().weak_text_color()
-    } else if pending {
-        yellow()
-    } else {
-        quality_color(kind)
-    }
-}
-
-/// UI2: a quality as a small rounded pill: the quality's color on a soft
-/// background of the same color. `tint` is `None` when colors are switched off:
-/// then the pill is neutral.
-fn quality_pill(ui: &mut egui::Ui, text: &str, tint: Option<egui::Color32>) {
-    let (fg, bg) = match tint {
-        Some(color) => (color, color.gamma_multiply(QUALITY_PILL_BG_STRENGTH)),
-        None => (
-            ui.visuals().text_color(),
-            ui.visuals().widgets.noninteractive.weak_bg_fill,
-        ),
-    };
-    egui::Frame::new()
-        .fill(bg)
-        .corner_radius(8)
-        .inner_margin(egui::Margin::symmetric(6, 1))
-        .show(ui, |ui| {
-            ui.add(
-                egui::Label::new(egui::RichText::new(text).color(fg).size(12.0))
-                    .selectable(false)
-                    .truncate(),
-            );
-        });
-}
-
-/// How strongly the quality color shows through in the pill's background.
-const QUALITY_PILL_BG_STRENGTH: f32 = 0.18;
-
-/// One expanded field of a row value, borrowed from its [`TableLine`].
-struct FieldLine<'a> {
-    key: crate::bff::model::ItemKey,
-    path: &'a [u32],
-    depth: usize,
-    name: &'a str,
-    value_text: &'a str,
-    type_text: &'a str,
-    expandable: bool,
-    expanded: bool,
-    numeric: bool,
-}
-
-/// The expander of a structured value (same look as the tag tree): a painted
-/// triangle that turns smoothly between closed and open. Returns its rect: the
-/// table row owns the pointer, so the caller turns a row click inside this rect
-/// into expand / collapse. The accessible name says what a click does.
-fn value_toggle(
-    ui: &mut egui::Ui,
-    lang: crate::i18n::Lang,
-    id: egui::Id,
-    expanded: bool,
-) -> egui::Rect {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
-    let name = tr(
-        lang,
-        if expanded {
-            Tr::TableValueCollapse
-        } else {
-            Tr::TableValueExpand
-        },
-    );
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
-    let openness = ui.ctx().animate_bool(id, expanded);
-    let color = if response.hovered() {
-        ui.visuals().strong_text_color()
-    } else {
-        ui.visuals().text_color()
-    };
-    super::paint::paint_expander(ui.painter(), rect, openness, color);
-    rect
-}
-
-/// V3: a field / element line under an expanded row: indented name with its
-/// own expander, the field value and, for a nested structure, its type name.
-/// Clicking it selects the row it belongs to.
-fn draw_field_line(
-    row: &mut egui_extras::TableRow<'_, '_>,
-    columns: &[ColumnId],
-    lang: crate::i18n::Lang,
-    field: &FieldLine<'_>,
-    index: usize,
-    actions: &mut Vec<TableAction>,
-) {
-    let mut toggle_rect = None;
-    for column in columns {
-        match column {
-            ColumnId::FullName => {
-                row.col(|ui| {
-                    ui.add_space(field.depth as f32 * 16.0);
-                    if field.expandable {
-                        toggle_rect = Some(value_toggle(
-                            ui,
-                            lang,
-                            egui::Id::NULL.with(("value_toggle", field.key, field.path)),
-                            field.expanded,
-                        ));
+            TableAction::Remove(key) => {
+                if app.selected_rows.contains(&key) {
+                    app.remove_selected_rows();
+                } else {
+                    app.selected_rows.clear();
+                    app.selected_rows.insert(key);
+                    app.remove_selected_rows();
+                }
+            }
+            TableAction::CopyValue(key) => {
+                if let Some(row) = app.rows().iter().find(|r| r.key == key) {
+                    ui.ctx().copy_text(row.value.to_string());
+                    app.status = tr(app.lang(), Tr::ValueCopied).to_string();
+                }
+            }
+            TableAction::CopyFullName(key) => {
+                if let Some(row) = app.rows().iter().find(|r| r.key == key) {
+                    ui.ctx().copy_text(row.item_id.clone());
+                    app.status = tr(app.lang(), Tr::FullNameCopied).to_string();
+                }
+            }
+            TableAction::ToggleValue(key, path) => app.toggle_value(key, path),
+            TableAction::SelectAll => app.select_all_rows(),
+            TableAction::ClearSelection => app.clear_selection(),
+            TableAction::SaveCsv => save_tree_csv(app),
+            TableAction::MoveColumn(column, dir) => {
+                let order = app.settings.resolved_order();
+                let Some(index) = order.iter().position(|c| *c == column) else {
+                    continue;
+                };
+                let before = match dir {
+                    ColumnDir::Left if index > 0 => index - 1,
+                    ColumnDir::Right if index + 1 < order.len() => index + 2,
+                    _ => continue,
+                };
+                if app.settings.move_column_to_insert(column, before) {
+                    app.persist_settings();
+                    let title = tr(app.lang(), column.title_tr());
+                    app.status = if dir == ColumnDir::Left {
+                        fmt(app.lang(), Tr::ColumnMovedLeft, &[&title])
                     } else {
-                        ui.add_space(16.0 + ui.spacing().item_spacing.x);
-                    }
-                    ui.label(egui::RichText::new(field.name).weak());
-                });
+                        fmt(app.lang(), Tr::ColumnMovedRight, &[&title])
+                    };
+                }
             }
-            ColumnId::Value => {
-                row.col(|ui| {
-                    let color = ui.visuals().text_color();
-                    value_text_cell(ui, field.value_text, field.numeric, color);
-                });
-            }
-            ColumnId::Type => {
-                row.col(|ui| {
-                    ui.label(egui::RichText::new(field.type_text).weak());
-                });
-            }
-            _ => {
-                row.col(|_ui| {});
+            TableAction::DropColumn(column, before) => {
+                if app.settings.move_visible_column_to_insert(column, before) {
+                    app.persist_settings();
+                    let title = tr(app.lang(), column.title_tr());
+                    app.status = fmt(app.lang(), Tr::MovedFormat, &[&title]);
+                }
             }
         }
-    }
-    let response = row.response();
-    let on_toggle = toggle_rect.is_some_and(|rect: egui::Rect| {
-        response
-            .interact_pointer_pos()
-            .is_some_and(|pos| rect.expand(2.0).contains(pos))
-    });
-    if response.clicked() && on_toggle {
-        actions.push(TableAction::ToggleValue(field.key, field.path.to_vec()));
-    } else if response.clicked() {
-        actions.push(TableAction::SelectSingle(index));
     }
 }
 

@@ -59,10 +59,10 @@ fn node(id: &str, name: &str, kind: NodeKind, has_children: bool) -> BrowseNode 
 fn ui1_tree_expander_is_painted_and_toggles() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
-    let branch = app.seed_tree_item(1, None, 0, node("b", "Ветка", NodeKind::Branch, true));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
+    let branch = app.seed_tree_item(sid(1), None, 0, node("b", "Ветка", NodeKind::Branch, true));
     app.seed_tree_item(
-        1,
+        sid(1),
         Some(branch),
         1,
         node("c", "Сигнал", NodeKind::Item, false),
@@ -80,8 +80,8 @@ fn ui1_tree_expander_is_painted_and_toggles() {
         h.state()
             .sessions
             .iter()
-            .find(|s| s.id == 1)
-            .and_then(|s| s.tree.iter().find(|t| t.id == branch))
+            .find(|s| s.id == sid(1))
+            .and_then(|s| s.tree().iter().find(|t| t.id == branch))
             .map(|t| t.expanded)
     };
     assert_eq!(expanded(&h), Some(true));
@@ -99,8 +99,8 @@ fn ui1_tree_expander_is_painted_and_toggles() {
 fn ui1_tree_row_click_selects_and_expander_does_not() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
-    let branch = app.seed_tree_item(1, None, 0, node("b", "Ветка", NodeKind::Branch, true));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
+    let branch = app.seed_tree_item(sid(1), None, 0, node("b", "Ветка", NodeKind::Branch, true));
     let mut h = harness(app);
     h.run_steps(3);
 
@@ -110,7 +110,7 @@ fn ui1_tree_row_click_selects_and_expander_does_not() {
 
     h.get_by_label("Ветка").click();
     h.run_steps(3);
-    assert_eq!(h.state().selected_tree, Some((1, branch)));
+    assert_eq!(h.state().selected_tree, Some((sid(1), branch)));
 }
 
 // ---------------------------------------------------------------- UI3
@@ -123,14 +123,14 @@ const CLOSE_TAB: &str = "Скрыть вкладку (контейнер сох�
 fn two_endpoints_of_one_server() -> App {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua(URL));
+    app.seed_session(sid(1), EndpointSpec::ua(URL));
     let mut secure = EndpointSpec::ua(URL);
-    secure.ua_security_policy = Some(UaSecurityPolicy::Basic256Sha256);
-    secure.ua_security_mode = Some(UaSecurityMode::SignAndEncrypt);
-    app.seed_session(2, secure);
-    app.seed_row(1, "ns=2;s=A", "OnlyPlain", Value::I64(1));
-    app.seed_row(2, "ns=2;s=B", "OnlySecure", Value::I64(2));
-    app.activate_session(1);
+    secure.ua_security_policy = UaSecurityPolicy::Basic256Sha256;
+    secure.ua_security_mode = UaSecurityMode::SignAndEncrypt;
+    app.seed_session(sid(2), secure);
+    app.seed_row(sid(1), "ns=2;s=A", "OnlyPlain", Value::I64(1));
+    app.seed_row(sid(2), "ns=2;s=B", "OnlySecure", Value::I64(2));
+    app.activate_session(sid(1));
     app
 }
 
@@ -170,12 +170,12 @@ fn ui3_two_endpoints_of_one_server_are_distinguishable_tabs() {
 fn ui3_clicking_a_tab_switches_the_session() {
     let mut h = harness(two_endpoints_of_one_server());
     h.run_steps(4);
-    assert_eq!(h.state().active_session, Some(1));
+    assert_eq!(h.state().active_session, Some(sid(1)));
     assert!(h.query_by_label_contains("OnlyPlain").is_some());
 
     central(h.query_all_by_label("UA: 127.0.0.1:4840 · Подпись и шифрование"))[0].click();
     h.run_steps(4);
-    assert_eq!(h.state().active_session, Some(2));
+    assert_eq!(h.state().active_session, Some(sid(2)));
     assert!(h.query_by_label_contains("OnlySecure").is_some());
     assert!(h.query_by_label_contains("OnlyPlain").is_none());
 }
@@ -210,10 +210,10 @@ fn ui3_close_button_shows_on_active_tab_and_on_hover() {
     pointer_click(&h, target);
     h.run_steps(3);
     let state = h.state();
-    assert!(state.sessions.iter().any(|s| s.id == 1 && s.visible));
-    assert!(state.sessions.iter().any(|s| s.id == 2 && !s.visible));
+    assert!(state.sessions.iter().any(|s| s.id == sid(1) && s.visible));
+    assert!(state.sessions.iter().any(|s| s.id == sid(2) && !s.visible));
     assert_eq!(state.sessions.len(), 2, "the container itself survives");
-    assert_eq!(state.rows.len(), 2, "its rows survive");
+    assert_eq!(state.rows().len(), 2, "its rows survive");
 }
 
 /// UI3: once the pointer leaves, the inactive tab's × goes away again.
@@ -252,17 +252,17 @@ fn ui3_tab_tooltip_has_full_security_and_state() {
 fn ui3_disconnected_tab_is_still_a_clickable_named_tab() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    app.seed_session(2, EndpointSpec::da("", "Beta.Server"));
-    if let Some(s) = app.sessions.iter_mut().find(|s| s.id == 2) {
+    app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    app.seed_session(sid(2), EndpointSpec::da("", "Beta.Server"));
+    if let Some(s) = app.sessions.iter_mut().find(|s| s.id == sid(2)) {
         s.state = SessionState::Disconnected;
     }
-    app.activate_session(1);
+    app.activate_session(sid(1));
     let mut h = harness(app);
     h.run_steps(3);
     h.get_by_label("DA: Beta.Server").click();
     h.run_steps(3);
-    assert_eq!(h.state().active_session, Some(2));
+    assert_eq!(h.state().active_session, Some(sid(2)));
 }
 
 // ---------------------------------------------------------------- UI6
@@ -276,9 +276,9 @@ fn left<'a>(nodes: impl Iterator<Item = egui_kittest::Node<'a>>) -> Vec<egui_kit
 fn connected_with_tree() -> (App, u64, u64) {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
-    let branch = app.seed_tree_item(1, None, 0, node("b", "Ветка", NodeKind::Branch, true));
-    let item = app.seed_tree_item(1, None, 0, node("i", "Сигнал", NodeKind::Item, false));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
+    let branch = app.seed_tree_item(sid(1), None, 0, node("b", "Ветка", NodeKind::Branch, true));
+    let item = app.seed_tree_item(sid(1), None, 0, node("i", "Сигнал", NodeKind::Item, false));
     (app, branch, item)
 }
 
@@ -317,7 +317,7 @@ fn ui6_tree_actions_are_icons_with_the_old_names() {
 #[test]
 fn ui6_tree_action_icons_are_disabled_without_a_connection() {
     let (mut app, _, _) = connected_with_tree();
-    if let Some(s) = app.sessions.iter_mut().find(|s| s.id == 1) {
+    if let Some(s) = app.sessions.iter_mut().find(|s| s.id == sid(1)) {
         s.state = SessionState::Disconnected;
     }
     let mut h = harness(app);
@@ -350,9 +350,9 @@ fn ui6_tree_action_icons_act() {
     // «Добавить» with a branch selected shows the explanation, not a crash.
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
-    let b = app.seed_tree_item(1, None, 0, node("b", "Ветка", NodeKind::Branch, true));
-    app.set_tree_focus(1, b);
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
+    let b = app.seed_tree_item(sid(1), None, 0, node("b", "Ветка", NodeKind::Branch, true));
+    app.set_tree_focus(sid(1), b);
     let mut h = harness(app);
     h.run_steps(3);
     left(h.query_all_by_label("Добавить"))[0].click();
@@ -367,9 +367,9 @@ fn ui6_tree_action_icons_act() {
 fn ui6_clicking_a_server_row_selects_it() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Alpha.Server"));
-    app.seed_session(2, EndpointSpec::da("", "Beta.Server"));
-    app.activate_session(1);
+    app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
+    app.seed_session(sid(2), EndpointSpec::da("", "Beta.Server"));
+    app.activate_session(sid(1));
     let mut h = harness(app);
     h.run_steps(4);
 
@@ -377,12 +377,12 @@ fn ui6_clicking_a_server_row_selects_it() {
     assert_eq!(beta.len(), 1, "one server row «Beta.Server»");
     beta[0].click();
     h.run_steps(3);
-    assert_eq!(h.state().active_session, Some(2));
+    assert_eq!(h.state().active_session, Some(sid(2)));
     let alpha = left(h.query_all_by_label("Alpha.Server"));
     assert_eq!(alpha.len(), 1);
     alpha[0].click();
     h.run_steps(3);
-    assert_eq!(h.state().active_session, Some(1));
+    assert_eq!(h.state().active_session, Some(sid(1)));
 }
 
 // ---------------------------------------------------------------- UI10
@@ -390,7 +390,7 @@ fn ui6_clicking_a_server_row_selects_it() {
 fn connected_with_empty_tree() -> App {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     app
 }
 
@@ -459,4 +459,8 @@ fn ui10_no_sessions_offers_connect_like_ctrl_n() {
     h.key_press_modifiers(Modifiers::COMMAND, egui::Key::N);
     h.run_steps(3);
     assert!(h.state().dialogs.connect.open, "Ctrl+N opens the dialog");
+}
+
+fn sid(raw: u64) -> opcda_egui::bff::model::SessionId {
+    opcda_egui::bff::model::SessionId::new(raw).unwrap()
 }

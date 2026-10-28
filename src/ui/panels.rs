@@ -8,8 +8,8 @@ use crate::i18n::{Tr, fmt, tr};
 use crate::journal::Level;
 
 pub(super) fn bottom_panels(app: &mut App, ui: &mut egui::Ui) {
-    let show_script = app.settings.options.show_script;
-    let show_log = app.settings.options.show_log;
+    let show_script = app.settings.view.options.show_script;
+    let show_log = app.settings.view.options.show_log;
     if !show_script && !show_log {
         return;
     }
@@ -126,31 +126,46 @@ pub(super) fn journal_view(app: &mut App, ui: &mut egui::Ui) {
         if ui.small_button(tr(lang, Tr::LoadJournal)).clicked() {
             load_journal(app);
         }
-        ui.label(fmt(
-            lang,
-            Tr::EntriesCount,
-            &[&app.journal.entries().len().to_string()],
-        ));
+        ui.label(fmt(lang, Tr::EntriesCount, &[&app.journal.entries().len()]));
     });
     egui::ScrollArea::vertical()
         .id_salt("journal_scroll")
         .stick_to_bottom(true)
         .auto_shrink([false, false])
-        .show(ui, |ui| {
-            for entry in app.journal.entries() {
-                let color = match entry.level {
-                    Level::Info => ui.visuals().text_color(),
-                    Level::Warning => yellow(),
-                    Level::Error => red(),
-                };
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        egui::RichText::new(entry.time.format("%H:%M:%S%.3f").to_string())
-                            .monospace()
-                            .weak(),
-                    );
-                    ui.label(egui::RichText::new(entry.render(lang)).color(color));
-                });
-            }
-        });
+        .show_rows(
+            ui,
+            ui.text_style_height(&egui::TextStyle::Body),
+            app.journal.entries().len(),
+            |ui, range| {
+                for index in range {
+                    let Some(entry) = app.journal.entries().get(index) else {
+                        continue;
+                    };
+                    let color = match entry.level {
+                        Level::Info => ui.visuals().text_color(),
+                        Level::Warning => yellow(),
+                        Level::Error => red(),
+                    };
+                    let message = entry.render(lang);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(entry.time.format("%H:%M:%S%.3f").to_string())
+                                .monospace()
+                                .weak(),
+                        )
+                        .on_hover_ui(|ui| {
+                            ui.label(&message);
+                        });
+                        let first_line = message.lines().next().unwrap_or("");
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(first_line).color(color))
+                                .truncate(),
+                        )
+                        .on_hover_ui(|ui| {
+                            ui.label(&message);
+                        });
+                    });
+                }
+            },
+        );
 }

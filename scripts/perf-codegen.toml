@@ -1,0 +1,12 @@
+[profile.dev.package.async-opcua-core-namespace]
+codegen-units=1
+[profile.dev.package.read-fonts]
+codegen-units=1
+[profile.dev.build-override]
+codegen-units=1
+[profile.dev.package.vello_cpu]
+codegen-units=1
+[profile.dev.package.opclook-locale]
+codegen-units=1
+[profile.dev.package.opclook-engine]
+codegen-units=1

@@ -10,10 +10,10 @@
 //! graceful-close semantics (Session::disconnect -> CloseSession +
 //! CloseSecureChannel, then wait for the session event loop) are what close the
 //! sockets, so the observable socket count is the regression signal.
-use opcda_egui::bff::Gateway;
 use opcda_egui::bff::model::{
     Command, CommandKind, EndpointSpec, Event, EventKind, ItemSpec, Protocol,
 };
+use opclook_backend::bff::Gateway;
 use std::time::{Duration, Instant};
 
 const DEFAULT_URL: &str = "opc.tcp://127.0.0.1:4840";
@@ -40,12 +40,12 @@ fn wait_for(
     predicate: impl Fn(&EventKind) -> bool,
 ) -> Option<Event> {
     let request_id = command.request_id;
-    let session = command.session;
+    let owner = command.owner;
     gateway.send(command).expect("gateway send");
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         while let Some(event) = gateway.try_recv() {
-            if event.request_id != request_id || event.session != session {
+            if event.origin != request_id.into() || event.owner != owner {
                 continue;
             }
             if predicate(&event.kind) {
@@ -61,8 +61,10 @@ fn connect(gateway: &Gateway, session: u64) -> Event {
     wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Connect {
                 endpoint: EndpointSpec::ua(test_url()),
@@ -78,8 +80,10 @@ fn disconnect(gateway: &Gateway, session: u64) -> Event {
     wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Disconnect,
         },
@@ -106,12 +110,14 @@ fn run_cycle(gateway: &Gateway, session: u64, cycle: u32) {
     let browse = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Browse {
                 node_id: "i=85".to_string(),
-                filter: None,
+                filter: opcda_egui::bff::model::NodeClassFilter::All,
                 view_id: None,
             },
         },
@@ -130,13 +136,15 @@ fn run_cycle(gateway: &Gateway, session: u64, cycle: u32) {
     }
 
     // Keys unique per cycle so event matching never crosses runs.
-    let k1 = (cycle * 2 + 1) as u32;
-    let k2 = (cycle * 2 + 2) as u32;
+    let k1 = opcda_egui::bff::model::ItemKey::new((cycle * 2 + 1) as u32).unwrap();
+    let k2 = opcda_egui::bff::model::ItemKey::new((cycle * 2 + 2) as u32).unwrap();
     let add = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::AddItems {
                 items: vec![
@@ -172,8 +180,10 @@ fn run_cycle(gateway: &Gateway, session: u64, cycle: u32) {
     let read = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Read { keys: vec![k1, k2] },
         },
@@ -209,8 +219,10 @@ fn run_search(gateway: &Gateway, session: u64, index: u32) {
     let found = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::SearchUaServers {
                 host: "127.0.0.1".to_string(),
@@ -234,7 +246,7 @@ fn run_search(gateway: &Gateway, session: u64, index: u32) {
                 "search {index}: no servers found on 127.0.0.1"
             );
         }
-        EventKind::Error { message, .. } => panic!("search {index}: failed: {message}"),
+        EventKind::Error { message, .. } => panic!("search {index}: failed: {message:?}"),
         other => panic!("search {index}: unexpected event: {other:?}"),
     }
 }

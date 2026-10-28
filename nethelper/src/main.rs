@@ -1,5 +1,10 @@
 #![windows_subsystem = "windows"]
+#![deny(clippy::undocumented_unsafe_blocks)]
 
+mod winutil;
+use winutil::{Impersonation, LocalAllocation, OwnedHandle};
+
+use opclook_contract::helper_ipc::{PROTOCOL_VERSION, Request, Route};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -9,8 +14,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use windows::Win32::Foundation::{
-    CloseHandle, ERROR_OBJECT_ALREADY_EXISTS, ERROR_PIPE_CONNECTED, ERROR_SUCCESS, GetLastError,
-    HANDLE, HLOCAL, LocalFree,
+    ERROR_OBJECT_ALREADY_EXISTS, ERROR_PIPE_CONNECTED, ERROR_SUCCESS, GetLastError, HANDLE,
 };
 use windows::Win32::NetworkManagement::IpHelper::{
     ConvertInterfaceLuidToIndex, CreateIpForwardEntry2, DeleteIpForwardEntry2, IP_ADDRESS_PREFIX,
@@ -25,8 +29,8 @@ use windows::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
 };
 use windows::Win32::Security::{
-    GetTokenInformation, PSECURITY_DESCRIPTOR, PSID, RevertToSelf, SECURITY_ATTRIBUTES,
-    TOKEN_QUERY, TOKEN_USER, TokenUser,
+    GetTokenInformation, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
+    TokenUser,
 };
 use windows::Win32::Storage::FileSystem::{FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX};
 use windows::Win32::System::Pipes::{
@@ -38,29 +42,9 @@ use windows::Win32::System::Threading::{
 };
 use windows::core::{PCWSTR, PWSTR};
 
-const PROTOCOL_VERSION: u32 = 1;
 const DEFAULT_LIFETIME_SECS: u32 = 3600;
 const MAX_LIFETIME_SECS: u32 = 86_400;
 const PIPE_CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
-
-#[derive(Debug, Serialize, Deserialize)]
-struct PipeMessage {
-    version: u32,
-    token: String,
-    op: String,
-    #[serde(default)]
-    target: Option<String>,
-    #[serde(default)]
-    prefix: Option<u8>,
-    #[serde(default)]
-    interface_luid: Option<u64>,
-    #[serde(default)]
-    next_hop: Option<String>,
-    #[serde(default)]
-    lifetime_secs: Option<u32>,
-    #[serde(default)]
-    client_pid: Option<u32>,
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct PipeReply {
@@ -73,12 +57,16 @@ struct PipeReply {
 struct CreatedRoute {
     target: IpAddr,
     interface_luid: u64,
+    prefix: u8,
+    next_hop: IpAddr,
 }
 
 fn route_key(route: &RouteSpec) -> CreatedRoute {
     CreatedRoute {
         target: route.target,
         interface_luid: route.interface_luid,
+        prefix: route.prefix,
+        next_hop: route.next_hop,
     }
 }
 
@@ -115,38 +103,36 @@ impl Audit {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut pipe = None;
-    let mut token = None;
     let mut parent = None;
     let mut index = 1;
     while index + 1 < args.len() {
         match args[index].as_str() {
             "--pipe" => pipe = Some(args[index + 1].clone()),
-            "--token" => token = Some(args[index + 1].clone()),
             "--parent" => parent = args[index + 1].parse::<u32>().ok(),
             _ => {}
         }
         index += 2;
     }
-    let (Some(pipe), Some(token), Some(parent)) = (pipe, token, parent) else {
+    let (Some(pipe), Some(parent)) = (pipe, parent) else {
         return;
     };
     let audit = Audit::new();
     audit.log("start", &format!("pipe={pipe} parent={parent}"));
 
-    if let Err(error) = run(&pipe, &token, parent, &audit) {
+    if let Err(error) = run(&pipe, parent, &audit) {
         audit.log("error", &error);
     }
     audit.log("exit", "pipe closed, helper exiting");
 }
 
-fn run(pipe: &str, token: &str, parent: u32, audit: &Audit) -> Result<(), String> {
+fn run(pipe: &str, parent: u32, audit: &Audit) -> Result<(), String> {
     let own_sid = current_process_sid()?;
     let user_sid = own_sid.to_string();
     let (handle, security) = create_pipe(pipe, &user_sid)?;
     let _security = security;
-    wait_for_client(handle)?;
-
+    // SAFETY: CreateNamedPipeW transferred this unique handle to the File.
     let file = unsafe { std::fs::File::from_raw_handle(handle.0 as _) };
+    wait_for_client(&file)?;
     let mut reader = BufReader::new(file);
     let mut writer = reader
         .get_ref()
@@ -185,24 +171,19 @@ fn run(pipe: &str, token: &str, parent: u32, audit: &Audit) -> Result<(), String
         if trimmed.is_empty() {
             continue;
         }
-        let message: PipeMessage = match serde_json::from_str(trimmed) {
+        let message: Request = match serde_json::from_str(trimmed) {
             Ok(message) => message,
             Err(error) => {
                 let _ = reply(&mut writer, false, Some(&format!("invalid JSON: {error}")));
                 continue;
             }
         };
-        if message.version != PROTOCOL_VERSION {
+        if message.version() != PROTOCOL_VERSION {
             let _ = reply(&mut writer, false, Some("protocol version mismatch"));
             continue;
         }
-        if message.token != token {
-            let _ = reply(&mut writer, false, Some("invalid token"));
-            audit.log("reject", "invalid token");
-            break;
-        }
         if !authenticated {
-            if message.op != "hello" || message.client_pid != Some(parent) {
+            if !valid_hello(&message, parent) {
                 let _ = reply(&mut writer, false, Some("hello required"));
                 audit.log("reject", "bad hello");
                 break;
@@ -212,8 +193,12 @@ fn run(pipe: &str, token: &str, parent: u32, audit: &Audit) -> Result<(), String
             audit.log("hello", &format!("client pid {client_pid}"));
             continue;
         }
-        match message.op.as_str() {
-            "add" => match add_route(&message) {
+        match message {
+            Request::Add {
+                route,
+                lifetime_secs,
+                ..
+            } => match add_route(&route, lifetime_secs) {
                 Ok(route) => {
                     created.insert(route_key(&route), route);
                     audit.log(
@@ -234,15 +219,15 @@ fn run(pipe: &str, token: &str, parent: u32, audit: &Audit) -> Result<(), String
                     let _ = reply(&mut writer, false, Some(&error));
                 }
             },
-            "refresh" => match refresh_route(&message, &created) {
+            Request::Refresh {
+                route,
+                lifetime_secs,
+                ..
+            } => match refresh_route(&route, lifetime_secs, &created) {
                 Ok(()) => {
                     audit.log(
                         "refresh",
-                        &format!(
-                            "target={} luid={}",
-                            message.target.as_deref().unwrap_or(""),
-                            message.interface_luid.unwrap_or(0)
-                        ),
+                        &format!("target={} luid={}", route.target, route.interface_luid),
                     );
                     let _ = reply(&mut writer, true, None);
                 }
@@ -251,12 +236,9 @@ fn run(pipe: &str, token: &str, parent: u32, audit: &Audit) -> Result<(), String
                     let _ = reply(&mut writer, false, Some(&error));
                 }
             },
-            "remove" => match remove_route(&message, &mut created) {
+            Request::Remove { route, .. } => match remove_route(&route, &mut created) {
                 Ok(()) => {
-                    audit.log(
-                        "remove",
-                        &format!("target={}", message.target.as_deref().unwrap_or("")),
-                    );
+                    audit.log("remove", &format!("target={}", route.target));
                     let _ = reply(&mut writer, true, None);
                 }
                 Err(error) => {
@@ -264,11 +246,11 @@ fn run(pipe: &str, token: &str, parent: u32, audit: &Audit) -> Result<(), String
                     let _ = reply(&mut writer, false, Some(&error));
                 }
             },
-            "shutdown" => {
+            Request::Shutdown { .. } => {
                 let _ = reply(&mut writer, true, None);
                 break;
             }
-            _ => {
+            Request::Hello { .. } => {
                 let _ = reply(&mut writer, false, Some("unsupported operation"));
             }
         }
@@ -281,10 +263,15 @@ fn run(pipe: &str, token: &str, parent: u32, audit: &Audit) -> Result<(), String
             &format!("target={} luid={}", route.target, route.interface_luid),
         );
     }
+    // SAFETY: the File still owns this connected server pipe handle.
     unsafe {
         let _ = DisconnectNamedPipe(pipe_handle);
     }
     Ok(())
+}
+
+fn valid_hello(message: &Request, parent: u32) -> bool {
+    matches!(message, Request::Hello { version: PROTOCOL_VERSION, client_pid } if *client_pid == parent)
 }
 
 fn reply(writer: &mut std::fs::File, ok: bool, error: Option<&str>) -> Result<(), String> {
@@ -300,10 +287,11 @@ fn reply(writer: &mut std::fs::File, ok: bool, error: Option<&str>) -> Result<()
     writer.flush().map_err(|e| format!("flush reply: {e}"))
 }
 
-fn create_pipe(pipe: &str, user_sid: &str) -> Result<(HANDLE, PSECURITY_DESCRIPTOR), String> {
+fn create_pipe(pipe: &str, user_sid: &str) -> Result<(HANDLE, LocalAllocation), String> {
     let sddl = format!("D:(A;;GA;;;{user_sid})");
     let sddl_w = wide(&sddl);
     let mut descriptor = PSECURITY_DESCRIPTOR::default();
+    // SAFETY: SDDL is terminated and descriptor is a valid output pointer.
     unsafe {
         ConvertStringSecurityDescriptorToSecurityDescriptorW(
             PCWSTR(sddl_w.as_ptr()),
@@ -313,13 +301,16 @@ fn create_pipe(pipe: &str, user_sid: &str) -> Result<(HANDLE, PSECURITY_DESCRIPT
         )
         .map_err(|e| format!("security descriptor: {e}"))?;
     }
+    // SAFETY: conversion transfers its LocalAlloc-compatible descriptor.
+    let descriptor = unsafe { LocalAllocation::from_raw(descriptor.0) };
     let attributes = SECURITY_ATTRIBUTES {
         nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
-        lpSecurityDescriptor: descriptor.0,
+        lpSecurityDescriptor: descriptor.as_ptr(),
         bInheritHandle: false.into(),
     };
     let name = format!(r"\\.\pipe\{pipe}");
     let name_w = wide(&name);
+    // SAFETY: name and attributes, including the descriptor, remain live through the call.
     let handle = unsafe {
         CreateNamedPipeW(
             PCWSTR(name_w.as_ptr()),
@@ -333,83 +324,94 @@ fn create_pipe(pipe: &str, user_sid: &str) -> Result<(HANDLE, PSECURITY_DESCRIPT
         )
     };
     if handle.is_invalid() {
+        // SAFETY: read the calling thread's error immediately after CreateNamedPipeW.
         let error = unsafe { GetLastError() };
-        unsafe {
-            LocalFree(Some(HLOCAL(descriptor.0)));
-        }
         return Err(format!("CreateNamedPipeW failed with {}", error.0));
     }
     Ok((handle, descriptor))
 }
 
-fn wait_for_client(handle: HANDLE) -> Result<(), String> {
+fn wait_for_client(file: &std::fs::File) -> Result<(), String> {
     let (tx, rx) = std::sync::mpsc::channel();
-    let raw = handle.0 as usize;
-    std::thread::spawn(move || {
-        let handle = HANDLE(raw as _);
-        let result = unsafe { ConnectNamedPipe(handle, None) };
-        let _ = tx.send(result);
-    });
+    let pipe = file.try_clone().map_err(|e| format!("clone pipe: {e}"))?;
+    std::thread::Builder::new()
+        .name("pipe-connect".into())
+        .spawn(move || {
+            let handle = HANDLE(pipe.as_raw_handle());
+            // SAFETY: the thread owns the cloned pipe handle until the call returns.
+            let result = unsafe { ConnectNamedPipe(handle, None) };
+            let _ = tx.send(result);
+        })
+        .map_err(|e| format!("start pipe connector: {e}"))?;
     match rx.recv_timeout(PIPE_CONNECT_TIMEOUT) {
         Ok(Ok(())) => Ok(()),
-        Ok(Err(_)) => {
-            let error = unsafe { GetLastError() };
-            if error == ERROR_PIPE_CONNECTED {
-                Ok(())
-            } else {
-                Err(format!("ConnectNamedPipe failed with {}", error.0))
-            }
-        }
+        Ok(Err(error)) => pipe_connect_result(error),
         Err(_) => Err("client did not connect before the helper timeout".to_string()),
+    }
+}
+
+fn pipe_connect_result(error: windows::core::Error) -> Result<(), String> {
+    if error.code() == windows::core::HRESULT::from_win32(ERROR_PIPE_CONNECTED.0) {
+        Ok(())
+    } else {
+        Err(format!("ConnectNamedPipe failed: {error}"))
     }
 }
 
 fn client_process_id(handle: HANDLE) -> Result<u32, String> {
     let mut pid = 0u32;
+    // SAFETY: handle is the live server pipe and pid is writable.
     unsafe { GetNamedPipeClientProcessId(handle, &mut pid) }
         .map_err(|e| format!("GetNamedPipeClientProcessId: {e}"))?;
     Ok(pid)
 }
 
 fn client_sid(handle: HANDLE) -> Result<String, String> {
+    // SAFETY: handle is a connected server pipe held by the caller.
     unsafe { ImpersonateNamedPipeClient(handle) }
         .map_err(|e| format!("ImpersonateNamedPipeClient: {e}"))?;
-    let result = (|| {
-        let mut token = HANDLE::default();
-        unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, true, &mut token) }
-            .map_err(|e| format!("OpenThreadToken: {e}"))?;
-        let sid = token_sid(token);
-        unsafe {
-            let _ = CloseHandle(token);
-        }
-        sid
-    })();
-    unsafe {
-        let _ = RevertToSelf();
-    }
+    // SAFETY: ImpersonateNamedPipeClient just succeeded on this thread.
+    let impersonation = unsafe { Impersonation::from_current_thread() };
+    let mut token = HANDLE::default();
+    // SAFETY: the output pointer is valid and the current thread is impersonating.
+    unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, true, &mut token) }
+        .map_err(|e| format!("OpenThreadToken: {e}"))?;
+    // SAFETY: OpenThreadToken returned an owned handle.
+    let token = unsafe { OwnedHandle::from_raw(token) };
+    let result = token_sid(token.raw());
+    impersonation
+        .finish()
+        .map_err(|e| format!("RevertToSelf: {e}"))?;
     result
 }
 
 fn current_process_sid() -> Result<String, String> {
     let mut token = HANDLE::default();
+    // SAFETY: the current-process pseudo-handle is valid and token is writable.
     unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }
         .map_err(|e| format!("OpenProcessToken: {e}"))?;
-    let sid = token_sid(token);
-    unsafe {
-        let _ = CloseHandle(token);
-    }
-    sid
+    // SAFETY: OpenProcessToken returned an owned handle.
+    let token = unsafe { OwnedHandle::from_raw(token) };
+    token_sid(token.raw())
+}
+
+fn aligned_token_buffer(needed: u32) -> Vec<usize> {
+    let words = (needed as usize).div_ceil(std::mem::size_of::<usize>());
+    vec![0usize; words]
 }
 
 fn token_sid(token: HANDLE) -> Result<String, String> {
     let mut needed = 0u32;
+    // SAFETY: the token is live and the null-buffer query obtains the required size.
     unsafe {
         let _ = GetTokenInformation(token, TokenUser, None, 0, &mut needed);
     }
     if needed == 0 {
         return Err("GetTokenInformation returned no size".to_string());
     }
-    let mut buffer = vec![0u8; needed as usize];
+    // TOKEN_USER contains pointers; the storage must satisfy its alignment.
+    let mut buffer = aligned_token_buffer(needed);
+    // SAFETY: the aligned buffer has at least needed bytes and token is live.
     unsafe {
         GetTokenInformation(
             token,
@@ -420,24 +422,29 @@ fn token_sid(token: HANDLE) -> Result<String, String> {
         )
     }
     .map_err(|e| format!("GetTokenInformation(TokenUser): {e}"))?;
+    // SAFETY: successful TokenUser query initialized TOKEN_USER in aligned storage.
     let user = unsafe { &*(buffer.as_ptr() as *const TOKEN_USER) };
     sid_to_string(user.User.Sid)
 }
 
 fn sid_to_string(sid: PSID) -> Result<String, String> {
     let mut text = PWSTR::null();
+    // SAFETY: sid belongs to the live token buffer and text is writable.
     unsafe { ConvertSidToStringSidW(sid, &mut text) }
         .map_err(|e| format!("ConvertSidToStringSidW: {e}"))?;
-    let result = unsafe { text.to_string() }.map_err(|e| format!("SID text: {e}"));
-    unsafe {
-        LocalFree(Some(HLOCAL(text.0 as _)));
+    // SAFETY: conversion transferred its LocalAlloc-compatible string.
+    let _text_owner = unsafe { LocalAllocation::from_raw(text.0.cast()) };
+    if text.is_null() {
+        return Err("SID text is null".to_string());
     }
-    result
+    // SAFETY: conversion returned a non-null NUL-terminated SID string.
+    unsafe { text.to_string() }.map_err(|e| format!("SID text: {e}"))
 }
 
-fn add_route(message: &PipeMessage) -> Result<RouteSpec, String> {
-    let route = validate_route(message)?;
+fn add_route(message: &Route, lifetime_secs: u32) -> Result<RouteSpec, String> {
+    let route = validate_route(message, lifetime_secs)?;
     let row = route_row(&route)?;
+    // SAFETY: row is fully initialized and borrowed for the call.
     let result = unsafe { CreateIpForwardEntry2(&row) };
     if result == ERROR_SUCCESS {
         Ok(route)
@@ -452,27 +459,31 @@ fn add_route(message: &PipeMessage) -> Result<RouteSpec, String> {
 }
 
 fn remove_route(
-    message: &PipeMessage,
+    message: &Route,
     created: &mut HashMap<CreatedRoute, RouteSpec>,
 ) -> Result<(), String> {
-    let route = validate_route(message)?;
+    let route = validate_route(message, DEFAULT_LIFETIME_SECS)?;
     let key = route_key(&route);
-    let Some(removed) = created.remove(&key) else {
+    let Some(removed) = created.get(&key).copied() else {
         return Err("route is not owned by this helper".to_string());
     };
-    delete_created(removed)
+    delete_created(removed)?;
+    created.remove(&key);
+    Ok(())
 }
 
 fn refresh_route(
-    message: &PipeMessage,
+    message: &Route,
+    lifetime_secs: u32,
     created: &HashMap<CreatedRoute, RouteSpec>,
 ) -> Result<(), String> {
-    let route = validate_route(message)?;
+    let route = validate_route(message, lifetime_secs)?;
     let key = route_key(&route);
     if !created.contains_key(&key) {
         return Err("route is not owned by this helper".to_string());
     }
     let row = route_row(&route)?;
+    // SAFETY: row is fully initialized and borrowed for the call.
     let result = unsafe { SetIpForwardEntry2(&row) };
     if result == ERROR_SUCCESS {
         Ok(())
@@ -483,6 +494,7 @@ fn refresh_route(
 
 fn delete_created(route: RouteSpec) -> Result<(), String> {
     let row = route_row(&route)?;
+    // SAFETY: row is fully initialized and borrowed for the call.
     let result = unsafe { DeleteIpForwardEntry2(&row) };
     if result == ERROR_SUCCESS {
         Ok(())
@@ -500,30 +512,20 @@ struct RouteSpec {
     lifetime_secs: u32,
 }
 
-fn validate_route(message: &PipeMessage) -> Result<RouteSpec, String> {
-    let target: IpAddr = message
-        .target
-        .as_deref()
-        .ok_or_else(|| "missing target".to_string())?
-        .parse()
-        .map_err(|_| "invalid target address".to_string())?;
+fn validate_route(message: &Route, lifetime_secs: u32) -> Result<RouteSpec, String> {
+    let target = message.target;
     if target.is_loopback() || target.is_unspecified() || is_multicast_or_broadcast(target) {
         return Err("target must be a unicast host address".to_string());
     }
     let expected_prefix = if target.is_ipv4() { 32 } else { 128 };
-    if message.prefix != Some(expected_prefix) {
+    if message.prefix != expected_prefix {
         return Err(format!("prefix must be exactly /{expected_prefix}"));
     }
-    let interface_luid = message
-        .interface_luid
-        .filter(|luid| *luid != 0)
-        .ok_or_else(|| "missing interface LUID".to_string())?;
-    let next_hop: IpAddr = message
-        .next_hop
-        .as_deref()
-        .ok_or_else(|| "missing next hop".to_string())?
-        .parse()
-        .map_err(|_| "invalid next hop".to_string())?;
+    let interface_luid = message.interface_luid;
+    if interface_luid == 0 {
+        return Err("missing interface LUID".into());
+    }
+    let next_hop = message.next_hop;
     if next_hop.is_ipv4() != target.is_ipv4() {
         return Err("next hop family does not match the target".to_string());
     }
@@ -531,10 +533,7 @@ fn validate_route(message: &PipeMessage) -> Result<RouteSpec, String> {
     if !unspecified && (next_hop.is_multicast() || next_hop.is_loopback()) {
         return Err("next hop must be on-link, a gateway or the unspecified address".to_string());
     }
-    let lifetime_secs = message
-        .lifetime_secs
-        .unwrap_or(DEFAULT_LIFETIME_SECS)
-        .clamp(1, MAX_LIFETIME_SECS);
+    let lifetime_secs = lifetime_secs.clamp(1, MAX_LIFETIME_SECS);
     Ok(RouteSpec {
         target,
         prefix: expected_prefix,
@@ -549,6 +548,7 @@ fn route_row(route: &RouteSpec) -> Result<MIB_IPFORWARD_ROW2, String> {
         Value: route.interface_luid,
     };
     let mut index = 0u32;
+    // SAFETY: luid is initialized and index is a valid output pointer.
     let result = unsafe { ConvertInterfaceLuidToIndex(&luid, &mut index) };
     if result != ERROR_SUCCESS {
         return Err(format!(
@@ -557,6 +557,7 @@ fn route_row(route: &RouteSpec) -> Result<MIB_IPFORWARD_ROW2, String> {
         ));
     }
     let mut row = MIB_IPFORWARD_ROW2::default();
+    // SAFETY: row is writable and has the expected Windows structure type.
     unsafe { InitializeIpForwardEntry(&mut row) };
     row.InterfaceLuid = luid;
     row.InterfaceIndex = index;
@@ -620,4 +621,130 @@ fn is_multicast_or_broadcast(ip: IpAddr) -> bool {
 
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+
+    #[test]
+    fn hello_requires_expected_pid_and_version() {
+        assert!(valid_hello(
+            &Request::Hello {
+                version: PROTOCOL_VERSION,
+                client_pid: 123
+            },
+            123
+        ));
+        assert!(!valid_hello(
+            &Request::Hello {
+                version: PROTOCOL_VERSION,
+                client_pid: 124
+            },
+            123
+        ));
+        assert!(!valid_hello(
+            &Request::Hello {
+                version: PROTOCOL_VERSION + 1,
+                client_pid: 123
+            },
+            123
+        ));
+        assert!(!valid_hello(
+            &Request::Shutdown {
+                version: PROTOCOL_VERSION
+            },
+            123
+        ));
+    }
+
+    #[test]
+    fn typed_route_validation_preserves_restrictions() {
+        let route = Route {
+            target: "192.0.2.1".parse().unwrap(),
+            prefix: 32,
+            interface_luid: 7,
+            next_hop: "0.0.0.0".parse().unwrap(),
+        };
+        assert_eq!(validate_route(&route, 0).unwrap().lifetime_secs, 1);
+        assert_eq!(
+            validate_route(&route, u32::MAX).unwrap().lifetime_secs,
+            MAX_LIFETIME_SECS
+        );
+        assert!(
+            validate_route(
+                &Route {
+                    prefix: 24,
+                    ..route
+                },
+                1
+            )
+            .is_err()
+        );
+        assert!(
+            validate_route(
+                &Route {
+                    interface_luid: 0,
+                    ..route
+                },
+                1
+            )
+            .is_err()
+        );
+        assert!(
+            validate_route(
+                &Route {
+                    target: "127.0.0.1".parse().unwrap(),
+                    ..route
+                },
+                1
+            )
+            .is_err()
+        );
+        assert!(
+            validate_route(
+                &Route {
+                    next_hop: "::1".parse().unwrap(),
+                    ..route
+                },
+                1
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn token_storage_is_aligned_and_large_enough() {
+        for needed in [1, 7, 17, 100] {
+            let buffer = aligned_token_buffer(needed);
+            assert_eq!(
+                buffer.as_ptr() as usize % std::mem::align_of::<TOKEN_USER>(),
+                0
+            );
+            assert!(std::mem::size_of_val(buffer.as_slice()) >= needed as usize);
+        }
+    }
+
+    #[test]
+    fn route_ownership_distinguishes_next_hop() {
+        let route = RouteSpec {
+            target: "192.0.2.1".parse().unwrap(),
+            prefix: 32,
+            interface_luid: 7,
+            next_hop: "192.0.2.2".parse().unwrap(),
+            lifetime_secs: 10,
+        };
+        let mut other = route;
+        other.next_hop = "192.0.2.3".parse().unwrap();
+        assert_ne!(route_key(&route), route_key(&other));
+    }
+
+    #[test]
+    fn already_connected_uses_error_from_pipe_thread() {
+        let error =
+            windows::core::Error::from(windows::core::HRESULT::from_win32(ERROR_PIPE_CONNECTED.0));
+        assert!(pipe_connect_result(error).is_ok());
+        let error = windows::core::Error::from(windows::core::HRESULT::from_win32(5));
+        assert!(pipe_connect_result(error).is_err());
+    }
 }

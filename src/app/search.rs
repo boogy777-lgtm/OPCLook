@@ -7,24 +7,6 @@ use crate::net::{NetworkLease, SubnetSpec};
 
 impl App {
     pub fn discover_da(&mut self, host: String) {
-        let prepared = match self.prepare_da_route_for_host(&host) {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                let message = error.localized(self.lang());
-                let d = &mut self.dialogs.connect;
-                if d.da_auto_pending > 0 {
-                    d.da_auto_pending = d.da_auto_pending.saturating_sub(1);
-                    if d.da_auto_pending == 0 {
-                        d.da_pending = false;
-                    }
-                } else {
-                    d.da_pending = false;
-                }
-                d.error = Some(message.clone());
-                self.journal.error(message);
-                return;
-            }
-        };
         self.dialogs.connect.da_pending = true;
         self.dialogs.connect.error = None;
         let host_suffix = if host.is_empty() {
@@ -33,27 +15,32 @@ impl App {
             fmt(self.lang(), Tr::ServerHostSuffix, &[&host])
         };
         self.journal.info_l(Tr::ReqServerList, &[&host_suffix]);
-        self.send_with(
-            0,
-            Protocol::OpcDa,
+        if let Err(error) = self.send_da_prepared(
+            Owner::Discovery,
             CommandKind::Discover { host: host.clone() },
-            PendingCtx::Host(host.clone()),
-        );
-        self.hold_da_route(0, &host, prepared);
+            PendingCtx::Host(host),
+        ) {
+            let message = error.localized(self.lang());
+            let d = &mut self.dialogs.connect;
+            d.da_auto_pending = d.da_auto_pending.saturating_sub(1);
+            if d.da_auto_pending == 0 {
+                d.da_pending = false;
+            }
+            d.error = Some(message.clone());
+            self.journal.error(message);
+        }
     }
 
-    /// Start a direct DA host search, invalidating all previous popup
-    /// discovery requests. Used by the Search button and host-field Enter.
+    /// Start a direct DA host search, superseding previous DA discovery only.
+    /// Used by the Search button and host-field Enter.
     pub fn restart_da_discovery(&mut self, host: String) {
-        self.clear_pending_requests(0);
-        self.release_da_discovery_routes();
+        self.engine
+            .discard_discovery_operation(crate::bff::model::Operation::Discover);
         let d = &mut self.dialogs.connect;
         d.da_pending = false;
         d.da_auto_pending = 0;
         d.da_servers.clear();
-        d.da_server_hosts.clear();
         d.da_selected = None;
-        d.da_selected_host = None;
         self.discover_da(host);
     }
 
@@ -61,10 +48,9 @@ impl App {
     /// DA host from settings/history (best effort). Results are merged as the
     /// per-host `Servers` events arrive.
     pub fn discover_da_all(&mut self) {
-        // A new user search owns a new set of request IDs and result rows.
-        // Late replies from the previous search may not overwrite them.
-        self.clear_pending_requests(0);
-        self.release_da_discovery_routes();
+        // A new DA search supersedes only DA discovery, not UA requests.
+        self.engine
+            .discard_discovery_operation(crate::bff::model::Operation::Discover);
         // Without an explicitly selected adapter only this computer is
         // discovered; remote search/connect is an explicit error instead of a
         // silent fallback to the default route.
@@ -84,12 +70,39 @@ impl App {
         hosts.dedup();
         self.dialogs.connect.da_auto_pending = 1 + hosts.len();
         self.dialogs.connect.da_servers.clear();
-        self.dialogs.connect.da_server_hosts.clear();
         self.dialogs.connect.da_selected = None;
-        self.dialogs.connect.da_selected_host = None;
         self.discover_da(String::new());
         for host in hosts {
             self.discover_da(host);
+        }
+    }
+
+    /// A new discovery owns fresh request IDs and cannot accept old replies.
+    fn begin_ua_search(&mut self) {
+        let active = std::mem::replace(&mut self.dialogs.connect.ua_search, UaSearch::Idle);
+        match active {
+            UaSearch::SingleHost { request } | UaSearch::Network { request } => {
+                self.engine.discard_pending(Owner::Discovery, request)
+            }
+            UaSearch::Auto {
+                pending: AutoPending::Host(request) | AutoPending::Network(request),
+            } => self.engine.discard_pending(Owner::Discovery, request),
+            UaSearch::Auto {
+                pending: AutoPending::Both { host, network },
+            } => {
+                self.engine.discard_pending(Owner::Discovery, host);
+                self.engine.discard_pending(Owner::Discovery, network);
+            }
+            UaSearch::Subnet { scan_id } => {
+                merge_ua_scan_servers(&mut self.dialogs.connect);
+                self.send(
+                    Owner::Discovery,
+                    Protocol::OpcUa,
+                    CommandKind::CancelUaScan { scan_id },
+                );
+            }
+            UaSearch::ConfirmSubnet { .. } => self.dialogs.connect.ua_scan_error = None,
+            UaSearch::Idle => {}
         }
     }
 
@@ -97,6 +110,7 @@ impl App {
     /// host means "this computer + local network" -> a combined search that
     /// merges mDNS/LDS and the local UA discovery endpoints.
     pub fn search_ua_servers(&mut self) {
+        self.begin_ua_search();
         let host = self.dialogs.connect.ua_search_host.trim().to_string();
         if host.is_empty() {
             self.search_ua_all();
@@ -109,24 +123,26 @@ impl App {
         let Some(bind) = self.search_binding(&host) else {
             self.dialogs.connect.error =
                 Some(tr(self.lang(), Tr::SelectAdapterRequired).to_string());
-            self.dialogs.connect.ua_searching = false;
             return;
         };
-        self.dialogs.connect.ua_searching = true;
+        self.dialogs.connect.invalidate_ua_results();
         self.dialogs.connect.ua_search_results.clear();
         self.dialogs.connect.ua_result_epoch = self.dialogs.connect.ua_result_epoch.wrapping_add(1);
         self.dialogs.connect.error = None;
         self.journal
             .info_l(Tr::SearchingUaHost, &[&host, &port.to_string()]);
-        self.send(
-            0,
+        match self.send(
+            Owner::Discovery,
             Protocol::OpcUa,
             CommandKind::SearchUaServers {
                 host,
                 port,
                 bind: Some(bind),
             },
-        );
+        ) {
+            Some(request) => self.dialogs.connect.ua_search = UaSearch::SingleHost { request },
+            None => self.dialogs.connect.error = Some(self.status.clone()),
+        }
     }
 
     /// Combined "empty host" UA search: `FindServersOnNetwork` (mDNS/LDS) plus
@@ -135,66 +151,100 @@ impl App {
     /// Partial results accumulate and are merged when all sub-searches
     /// complete.
     pub fn search_ua_all(&mut self) {
+        self.begin_ua_search();
         let Ok(lds) = self.lds_target_from_dialog() else {
-            self.dialogs.connect.ua_searching = false;
-            self.dialogs.connect.ua_network_searching = false;
             return;
         };
         let bind = self.current_network_binding();
-        // An explicitly named LDS is asked even when no adapter is chosen.
-        let network = bind.is_some() || lds.is_some();
         let d = &mut self.dialogs.connect;
-        d.ua_searching = true;
-        d.ua_network_searching = network;
         d.error = None;
+        d.invalidate_ua_results();
         d.ua_search_results.clear();
         d.ua_result_epoch = d.ua_result_epoch.wrapping_add(1);
         d.ua_network_results.clear();
         d.ua_discovered_endpoints.clear();
-        let commands = ua_all_commands(bind, lds);
-        d.ua_auto_pending = commands.len();
-        for kind in commands {
-            self.send(0, Protocol::OpcUa, kind);
+        let mut host = None;
+        let mut network = None;
+        for kind in ua_all_commands(bind, lds) {
+            let is_network = matches!(kind, CommandKind::SearchUaNetwork { .. });
+            match self.send(Owner::Discovery, Protocol::OpcUa, kind) {
+                Some(request) if is_network => network = Some(request),
+                Some(request) => host = Some(request),
+                None => self.dialogs.connect.error = Some(self.status.clone()),
+            }
         }
+        self.dialogs.connect.ua_search = match (host, network) {
+            (Some(host), Some(network)) => UaSearch::Auto {
+                pending: AutoPending::Both { host, network },
+            },
+            (Some(id), None) => UaSearch::Auto {
+                pending: AutoPending::Host(id),
+            },
+            (None, Some(id)) => UaSearch::Auto {
+                pending: AutoPending::Network(id),
+            },
+            (None, None) => UaSearch::Idle,
+        };
     }
 
     /// The dialog's optional LDS host as a search target. `Ok(None)` when the
     /// field is empty. An unusable text or a missing adapter (for a non-local
     /// host) leaves a localized error in the dialog and returns `Err`. The
     /// text is remembered in the settings.
-    fn lds_target_from_dialog(&mut self) -> Result<Option<LdsTarget>, ()> {
+    fn lds_target_from_dialog(&mut self) -> Result<Option<LdsTarget>, LdsInputError> {
         let text = self.dialogs.connect.ua_lds_host.trim().to_string();
         let parsed = match parse_lds_host(&text) {
             Ok(parsed) => parsed,
-            Err(()) => {
+            Err(_) => {
                 self.dialogs.connect.error = Some(tr(self.lang(), Tr::LdsHostInvalid).to_string());
-                return Err(());
+                return Err(LdsInputError::InvalidHost);
             }
         };
         let Some((host, port)) = parsed else {
-            self.settings.set_ua_lds_host("");
+            if let Err(notice) = self.settings.set_ua_lds_host("") {
+                self.report_settings_notice(notice);
+            }
             return Ok(None);
         };
         let Some(bind) = self.search_binding(&host) else {
             self.dialogs.connect.error =
                 Some(tr(self.lang(), Tr::SelectAdapterRequired).to_string());
-            return Err(());
+            return Err(LdsInputError::AdapterRequired);
         };
-        self.settings.set_ua_lds_host(&text);
+        if let Err(notice) = self.settings.set_ua_lds_host(&text) {
+            self.report_settings_notice(notice);
+        }
         Ok(Some(LdsTarget { host, port, bind }))
     }
 
-    /// Fold one completed sub-search into the combined UA auto-search. Called
-    /// from the event handlers while `ua_auto_pending > 0`.
-    pub(super) fn ua_auto_step_done(&mut self, update: impl FnOnce(&mut ConnectDialog)) {
-        update(&mut self.dialogs.connect);
+    /// Consume one correlated auto-search reply, exactly once.
+    pub(super) fn ua_auto_step_done(
+        &mut self,
+        request: RequestId,
+        update: impl FnOnce(&mut ConnectDialog),
+    ) -> bool {
+        let next = match &self.dialogs.connect.ua_search {
+            UaSearch::Auto {
+                pending: AutoPending::Both { host, network },
+            } if *host == request => Some(AutoPending::Network(*network)),
+            UaSearch::Auto {
+                pending: AutoPending::Both { host, network },
+            } if *network == request => Some(AutoPending::Host(*host)),
+            UaSearch::Auto {
+                pending: AutoPending::Host(id) | AutoPending::Network(id),
+            } if *id == request => None,
+            _ => return false,
+        };
         let d = &mut self.dialogs.connect;
-        d.ua_auto_pending = d.ua_auto_pending.saturating_sub(1);
-        if d.ua_auto_pending == 0 {
-            d.ua_searching = false;
-            d.ua_network_searching = false;
-            merge_ua_results(d);
-        }
+        update(d);
+        d.ua_search = match next {
+            Some(pending) => UaSearch::Auto { pending },
+            None => {
+                merge_ua_results(d);
+                UaSearch::Idle
+            }
+        };
+        true
     }
 
     /// Request `GetEndpoints` discovery for the current dialog URL so the
@@ -203,7 +253,7 @@ impl App {
     pub fn discover_ua_endpoints(&mut self) -> bool {
         let lang = self.lang();
         let url = self.dialogs.connect.ua_url.trim().to_string();
-        if !url.starts_with("opc.tcp://") {
+        if url.parse::<crate::bff::model::UaUrl>().is_err() {
             self.dialogs.connect.error = Some(tr(lang, Tr::HintUaUrl).to_string());
             return false;
         }
@@ -237,19 +287,24 @@ impl App {
         }
         // Search results may contain different servers. Validate only the
         // selected URL, never a different server's security capabilities.
+        let selected_url = d.ua_url.parse::<crate::bff::model::UaUrl>().ok();
         let selected: Vec<_> = d
             .ua_discovered_endpoints
             .iter()
-            .filter(|endpoint| endpoint.url == d.ua_url.trim())
+            .filter(|endpoint| {
+                selected_url
+                    .as_ref()
+                    .is_some_and(|url| endpoint.url.same_endpoint(url))
+            })
             .cloned()
             .collect();
         if !selected.is_empty() {
-            if let Err(detail) = crate::bff::ua::resolve_security(
+            if let Err(error) = crate::bff::ua::validate_ua_security(
                 d.ua_security_policy,
                 d.ua_security_mode,
                 &selected,
             ) {
-                d.error = Some(fmt(lang, Tr::SecurityResolveFailed, &[&detail]));
+                d.error = Some(crate::i18n::backend_text(lang, &error));
                 return false;
             }
         }
@@ -262,7 +317,7 @@ impl App {
     pub fn validate_ua_identity(&mut self) -> bool {
         let lang = self.lang();
         let d = &mut self.dialogs.connect;
-        if d.ua_identity_index == 1 && d.ua_user.trim().is_empty() {
+        if d.ua_identity == UaIdentity::UserName && d.ua_user.trim().is_empty() {
             d.error = Some(tr(lang, Tr::UaUserNameRequired).to_string());
             false
         } else {
@@ -275,18 +330,16 @@ impl App {
     /// With an "LDS host" in the dialog that host's LDS is asked (and mDNS when
     /// an adapter is chosen); without one, this computer's own LDS and mDNS.
     pub fn search_ua_network(&mut self) {
+        self.begin_ua_search();
         let Ok(lds) = self.lds_target_from_dialog() else {
-            self.dialogs.connect.ua_network_searching = false;
             return;
         };
         let bind = self.current_network_binding();
         if bind.is_none() && lds.is_none() {
             let message = tr(self.lang(), Tr::SelectAdapterRequired).to_string();
-            self.dialogs.connect.ua_network_searching = false;
             self.dialogs.connect.error = Some(message);
             return;
         }
-        self.dialogs.connect.ua_network_searching = true;
         self.dialogs.connect.ua_result_epoch = self.dialogs.connect.ua_result_epoch.wrapping_add(1);
         self.dialogs.connect.error = None;
         match &lds {
@@ -296,11 +349,14 @@ impl App {
             }
             None => self.journal.info_l(Tr::SearchingUaNetwork, &[]),
         }
-        self.send(
-            0,
+        match self.send(
+            Owner::Discovery,
             Protocol::OpcUa,
             CommandKind::SearchUaNetwork { bind, lds },
-        );
+        ) {
+            Some(request) => self.dialogs.connect.ua_search = UaSearch::Network { request },
+            None => self.dialogs.connect.error = Some(self.status.clone()),
+        }
     }
 
     /// Start the N+1 subnet scan for the current lease. An over-large subnet is
@@ -309,11 +365,8 @@ impl App {
         let lang = self.lang();
         // A new scan supersedes a running one; its events are ignored once the
         // new scan id replaces the old one.
-        if self.dialogs.connect.ua_subnet_searching || self.dialogs.connect.ua_scan_id.is_some() {
-            self.cancel_ua_subnet_scan();
-        }
+        self.begin_ua_search();
         let Some(lease) = self.network.lease.clone() else {
-            self.dialogs.connect.ua_scan_confirm = None;
             self.dialogs.connect.error = Some(tr(lang, Tr::SelectAdapterRequired).to_string());
             return;
         };
@@ -328,9 +381,7 @@ impl App {
             if subnet.needs_confirmation() {
                 let count = subnet.usable_count();
                 let d = &mut self.dialogs.connect;
-                d.ua_subnet_searching = false;
-                d.ua_scan_id = None;
-                d.ua_scan_confirm = Some(count);
+                d.ua_search = UaSearch::ConfirmSubnet { count };
                 d.ua_scan_total = 0;
                 d.ua_scan_checked = 0;
                 d.ua_scan_found = 0;
@@ -353,9 +404,13 @@ impl App {
     /// confirmation explicitly narrows the run to loopback + the local address
     /// (the prompt says exactly that).
     pub fn confirm_ua_subnet_scan(&mut self) {
-        let Some(_) = self.dialogs.connect.ua_scan_confirm.take() else {
+        if !matches!(
+            self.dialogs.connect.ua_search,
+            UaSearch::ConfirmSubnet { .. }
+        ) {
             return;
-        };
+        }
+        self.dialogs.connect.ua_search = UaSearch::Idle;
         let lang = self.lang();
         let Some(lease) = self.network.lease.clone() else {
             self.dialogs.connect.error = Some(tr(lang, Tr::SelectAdapterRequired).to_string());
@@ -365,50 +420,68 @@ impl App {
     }
 
     fn launch_ua_subnet_scan(&mut self, lease: &NetworkLease, subnet: Option<SubnetSpec>) {
-        let scan_id = self.next_scan;
-        self.next_scan += 1;
+        let Some(scan_id) = self.next_scan else {
+            let message = tr(self.lang(), Tr::ScanIdsExhausted).to_string();
+            self.dialogs.connect.ua_scan_error = Some(message.clone());
+            self.journal.error(message);
+            return;
+        };
+        self.next_scan = scan_id.successor();
         let binding = lease.network_binding();
         let local_ip = lease.local_ip();
         let d = &mut self.dialogs.connect;
-        d.ua_scan_id = Some(scan_id);
-        d.ua_subnet_searching = true;
+        d.ua_search = UaSearch::Subnet { scan_id };
         d.ua_scan_checked = 0;
         d.ua_scan_total = 0;
         d.ua_scan_found = 0;
         d.ua_scan_error = None;
-        d.ua_scan_confirm = None;
         d.ua_scan_servers.clear();
+        d.invalidate_ua_results();
         d.ua_search_results.clear();
         d.ua_result_epoch = d.ua_result_epoch.wrapping_add(1);
         d.ua_network_results.clear();
         d.ua_discovered_endpoints.clear();
-        d.ua_auto_pending = 0;
         d.error = None;
         self.journal.info_l(Tr::SearchingUaSubnet, &[]);
-        self.send(
-            0,
-            Protocol::OpcUa,
-            CommandKind::ScanUaNetwork {
-                scan_id,
-                bind: binding,
-                subnet,
-                local_ip,
-            },
-        );
+        if self
+            .send(
+                Owner::Discovery,
+                Protocol::OpcUa,
+                CommandKind::ScanUaNetwork {
+                    scan_id,
+                    bind: binding,
+                    subnet,
+                    local_ip,
+                },
+            )
+            .is_none()
+        {
+            self.dialogs.connect.ua_search = UaSearch::Idle;
+            self.dialogs.connect.ua_scan_error = Some(self.status.clone());
+        }
     }
 
     /// Stop the running subnet scan, keeping the partial results already
     /// received and dropping the spinner immediately.
     pub fn cancel_ua_subnet_scan(&mut self) {
-        let pending_confirm = self.dialogs.connect.ua_scan_confirm.take().is_some();
-        let scan_id = self.dialogs.connect.ua_scan_id.take();
-        self.dialogs.connect.ua_subnet_searching = false;
+        let pending_confirm = matches!(
+            self.dialogs.connect.ua_search,
+            UaSearch::ConfirmSubnet { .. }
+        );
+        let scan_id = self.dialogs.connect.ua_search.scan_id();
+        if self.dialogs.connect.ua_search.subnet_active() {
+            self.dialogs.connect.ua_search = UaSearch::Idle;
+        }
         merge_ua_scan_servers(&mut self.dialogs.connect);
         if pending_confirm {
             self.dialogs.connect.ua_scan_error = None;
         }
         if let Some(scan_id) = scan_id {
-            self.send(0, Protocol::OpcUa, CommandKind::CancelUaScan { scan_id });
+            self.send(
+                Owner::Discovery,
+                Protocol::OpcUa,
+                CommandKind::CancelUaScan { scan_id },
+            );
         }
     }
 }
@@ -425,6 +498,7 @@ pub(super) fn merge_ua_scan_servers(dialog: &mut ConnectDialog) {
 /// Deduplicate one scan result by application URI and, when the URI is missing
 /// or distinct, by endpoint URL. Endpoints of a duplicate are unioned.
 fn merge_ua_server(dialog: &mut ConnectDialog, server: crate::bff::model::UaServerInfo) {
+    dialog.invalidate_ua_results();
     let app_uri = server.application_uri.trim();
     let mut existing = if app_uri.is_empty() {
         None
@@ -441,9 +515,10 @@ fn merge_ua_server(dialog: &mut ConnectDialog, server: crate::bff::model::UaServ
         existing = dialog.ua_search_results.iter().position(|s| {
             (app_uri.is_empty() || s.application_uri.trim().is_empty())
                 && s.endpoints.iter().any(|existing| {
-                    server.endpoints.iter().any(|incoming| {
-                        normalized_ua_url(&existing.url) == normalized_ua_url(&incoming.url)
-                    })
+                    server
+                        .endpoints
+                        .iter()
+                        .any(|incoming| existing.url.same_endpoint(&incoming.url))
                 })
         });
     }
@@ -451,10 +526,12 @@ fn merge_ua_server(dialog: &mut ConnectDialog, server: crate::bff::model::UaServ
         Some(index) => {
             let existing = &mut dialog.ua_search_results[index];
             if existing.application_name.trim().is_empty() {
-                existing.application_name = server.application_name.clone();
+                existing
+                    .application_name
+                    .clone_from(&server.application_name);
             }
             if existing.application_uri.trim().is_empty() {
-                existing.application_uri = server.application_uri.clone();
+                existing.application_uri.clone_from(&server.application_uri);
             }
             for endpoint in server.endpoints {
                 if !existing
@@ -470,16 +547,12 @@ fn merge_ua_server(dialog: &mut ConnectDialog, server: crate::bff::model::UaServ
     }
 }
 
-fn normalized_ua_url(url: &str) -> String {
-    url.trim().trim_end_matches('/').to_ascii_lowercase()
-}
-
 /// Same URL can advertise several distinct security configurations.
 fn same_ua_endpoint(
     left: &crate::bff::model::UaEndpointInfo,
     right: &crate::bff::model::UaEndpointInfo,
 ) -> bool {
-    normalized_ua_url(&left.url) == normalized_ua_url(&right.url)
+    left.url.same_endpoint(&right.url)
         && left.security_policy == right.security_policy
         && left.security_mode == right.security_mode
 }
@@ -506,6 +579,7 @@ pub(super) fn merge_ua_servers(
 /// stored as a URI.
 pub(super) fn merge_ua_results(dialog: &mut ConnectDialog) {
     use crate::bff::model::UaServerInfo;
+    dialog.invalidate_ua_results();
     let mut merged: Vec<UaServerInfo> = std::mem::take(&mut dialog.ua_search_results);
     for network in std::mem::take(&mut dialog.ua_network_results) {
         let endpoints = network
@@ -514,8 +588,8 @@ pub(super) fn merge_ua_results(dialog: &mut ConnectDialog) {
             .filter(|url| !url.trim().is_empty())
             .map(|url| crate::bff::model::UaEndpointInfo {
                 url: url.clone(),
-                security_policy: String::new(),
-                security_mode: String::new(),
+                security_policy: crate::bff::model::AdvertisedPolicy::Unspecified,
+                security_mode: crate::bff::model::AdvertisedMode::Unspecified,
             })
             .collect::<Vec<_>>();
         if network.application_uri.trim().is_empty() && endpoints.is_empty() {
@@ -534,7 +608,6 @@ pub(super) fn merge_ua_results(dialog: &mut ConnectDialog) {
         merge_ua_server(dialog, server);
     }
     dialog.ua_network_results.clear();
-    dialog.ua_auto_pending = 0;
     refresh_ua_combos(dialog);
 }
 
@@ -546,7 +619,7 @@ pub(super) fn refresh_ua_combos(dialog: &mut ConnectDialog) {
     for server in &dialog.ua_search_results {
         for e in &server.endpoints {
             let key = (
-                e.url.clone(),
+                e.url.identity(),
                 e.security_policy.clone(),
                 e.security_mode.clone(),
             );
@@ -561,47 +634,39 @@ pub(super) fn refresh_ua_combos(dialog: &mut ConnectDialog) {
 /// Parse the LDS host field: empty -> `Ok(None)`; otherwise `host[:port]` (an
 /// IPv6 literal in brackets, an optional `opc.tcp://` prefix and trailing `/`
 /// are tolerated). The port defaults to 4840.
-pub(crate) fn parse_lds_host(text: &str) -> Result<Option<(String, u16)>, ()> {
-    let mut rest = text.trim();
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LdsInputError {
+    InvalidHost,
+    AdapterRequired,
+}
+
+pub(crate) fn parse_lds_host(text: &str) -> Result<Option<(String, u16)>, LdsInputError> {
+    let rest = text.trim();
     if rest.is_empty() {
         return Ok(None);
     }
-    if rest.len() >= 10 && rest[..10].eq_ignore_ascii_case("opc.tcp://") {
-        rest = &rest[10..];
-    }
-    let rest = rest.trim_end_matches('/');
-    let parse_port = |port: &str| -> Result<u16, ()> {
-        match port.parse::<u16>() {
-            Ok(port) if port > 0 => Ok(port),
-            _ => Err(()),
-        }
-    };
-    let (host, port) = if let Some(inner) = rest.strip_prefix('[') {
-        let (host, tail) = inner.split_once(']').ok_or(())?;
-        if host.parse::<std::net::Ipv6Addr>().is_err() {
-            return Err(());
-        }
-        match tail.strip_prefix(':') {
-            Some(port) => (host.to_string(), parse_port(port)?),
-            None if tail.is_empty() => (host.to_string(), DEFAULT_UA_PORT),
-            None => return Err(()),
-        }
+    let candidate = if rest
+        .get(..10)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("opc.tcp://"))
+    {
+        rest.to_owned()
     } else if rest.parse::<std::net::Ipv6Addr>().is_ok() {
-        (rest.to_string(), DEFAULT_UA_PORT)
-    } else if let Some((host, port)) = rest.rsplit_once(':') {
-        (host.to_string(), parse_port(port)?)
+        format!("opc.tcp://[{rest}]")
     } else {
-        (rest.to_string(), DEFAULT_UA_PORT)
+        format!("opc.tcp://{rest}")
     };
-    let valid_host = !host.is_empty()
-        && host
+    let url = candidate
+        .parse::<crate::bff::model::UaUrl>()
+        .map_err(|_| LdsInputError::InvalidHost)?;
+    if !url.is_authority_only()
+        || !url
+            .host()
             .chars()
-            .all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | ':'));
-    if valid_host {
-        Ok(Some((host, port)))
-    } else {
-        Err(())
+            .all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | ':'))
+    {
+        return Err(LdsInputError::InvalidHost);
     }
+    Ok(Some((url.host().to_owned(), url.port())))
 }
 
 /// The requests of the combined "empty host" UA search: LDS/mDNS when an
@@ -622,4 +687,61 @@ pub(crate) fn ua_all_commands(
         bind: Some(NetworkBinding::loopback()),
     });
     commands
+}
+
+#[cfg(test)]
+mod scan_id_tests {
+    use super::*;
+    use crate::net::{AdapterAddress, AdapterId, AdapterInfo, AdapterSelection, AdapterState};
+
+    #[test]
+    fn last_scan_id_is_issued_once_and_exhaustion_is_visible() {
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        let ip = "127.0.0.1".parse().unwrap();
+        let address = AdapterAddress {
+            ip,
+            prefix: 8,
+            scope_id: None,
+        };
+        let lease = NetworkLease {
+            generation: 1,
+            requested: AdapterSelection::None,
+            adapter: AdapterInfo {
+                id: AdapterId::UNSPECIFIED,
+                name: "test".into(),
+                description: String::new(),
+                state: AdapterState::Up,
+                if_type: 0,
+                addresses: vec![address],
+                gateways: vec![],
+                if_index: None,
+                ipv6_if_index: None,
+                luid: 0,
+                metric: 0,
+                is_physical: false,
+                is_loopback: true,
+            },
+            local_address: address,
+            subnet: SubnetSpec::new(ip, 8).unwrap(),
+        };
+        assert!(ScanId::new(0).is_none());
+        app.next_scan = ScanId::new(u64::MAX);
+        app.launch_ua_subnet_scan(&lease, None);
+        assert_eq!(
+            app.dialogs.connect.ua_search.scan_id(),
+            ScanId::new(u64::MAX)
+        );
+        assert!(app.next_scan.is_none());
+        app.dialogs.connect.ua_search = UaSearch::Idle;
+        let before = app.journal.entries().len();
+        app.launch_ua_subnet_scan(&lease, None);
+        assert!(app.dialogs.connect.ua_search.scan_id().is_none());
+        assert!(!app.dialogs.connect.ua_search.subnet_active());
+        assert_eq!(
+            app.dialogs.connect.ua_scan_error.as_deref(),
+            Some(tr(app.lang(), Tr::ScanIdsExhausted))
+        );
+        assert_eq!(app.journal.entries().len(), before + 1);
+    }
 }

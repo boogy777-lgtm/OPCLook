@@ -10,7 +10,7 @@
 //! re-implementing connect/wait helpers. The trait is intentionally test-only;
 //! production code keeps the concrete `Gateway` facade.
 
-use opcda_egui::bff::{Command, Event, Gateway};
+use opclook_backend::bff::{Command, Event, Gateway};
 use std::time::{Duration, Instant};
 
 /// A single functional block with explicit input and output handles.
@@ -37,7 +37,7 @@ impl Dfb for Gateway {
     type Output = Event;
 
     fn input(&mut self, input: Self::Input) -> Result<(), String> {
-        self.send(input)
+        self.send(input).map_err(|error| error.to_string())
     }
 
     fn output(&mut self, timeout: Duration) -> Option<Self::Output> {

@@ -15,7 +15,7 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
         .write
         .keys
         .first()
-        .and_then(|key| app.rows.iter().find(|r| r.key == *key));
+        .and_then(|key| app.rows().iter().find(|r| r.key == *key));
     let (protocol, name, current, canonical, data_type, writable) = match first {
         Some(row) => {
             let protocol = app
@@ -43,7 +43,7 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
     let mut close = false;
     // When a confirm dialog sits on top, it owns Esc/Enter; the write dialog
     // must remain inert to those keys so only the topmost dialog responds.
-    let confirm_open = app.dialogs.confirm.open;
+    let confirm_open = app.dialogs.confirm.is_some();
     {
         let dialog = &mut app.dialogs.write;
         egui::Window::new(tr(lang, Tr::ChangeSignalValue))
@@ -113,7 +113,7 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
                     ui.colored_label(red(), error);
                 }
                 {
-                    let confirm_on = app.settings.options.confirm_write;
+                    let confirm_on = app.settings.view.options.confirm_write;
                     if confirm_on {
                         ui.label(egui::RichText::new(tr(lang, Tr::ConfirmAfterWrite)).weak());
                     }

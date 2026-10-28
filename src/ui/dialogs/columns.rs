@@ -109,10 +109,10 @@ pub(super) fn columns_dialog(app: &mut App, ui: &mut egui::Ui) {
                     let grip = grip_resp.on_hover_text(tr(lang, Tr::ColumnsDragHandle));
                     paint_column_grip(ui, grip_rect, is_dragged);
                     grip.dnd_set_drag_payload(column);
-                    let mut visible = app.settings.columns.is_visible(column);
+                    let mut visible = app.settings.view.columns.is_visible(column);
                     let cb = ui.checkbox(&mut visible, tr(lang, column.title_tr()));
                     if cb.changed() {
-                        app.settings.columns.set_visible(column, visible);
+                        app.settings.view.columns.set_visible(column, visible);
                         changed = true;
                     }
                     if cb.has_focus() || cb.clicked() || grip.hovered() {
@@ -176,7 +176,7 @@ pub(super) fn columns_dialog(app: &mut App, ui: &mut egui::Ui) {
             }
             if let Some((dropped, gap_idx)) = drop_at {
                 if app.settings.move_column_to_insert(dropped, gap_idx) {
-                    order = app.settings.columns.order.clone();
+                    order.clone_from(&app.settings.view.columns.order);
                     changed = true;
                     moved = Some((dropped, gap_idx));
                     focus_col = Some(dropped);
@@ -205,8 +205,8 @@ pub(super) fn columns_dialog(app: &mut App, ui: &mut egui::Ui) {
             ui.horizontal(|ui| {
                 if ui.button(tr(lang, Tr::Reset)).clicked() {
                     order = ColumnId::ALL.to_vec();
-                    app.settings.columns.reset();
-                    app.settings.column_order = None;
+                    app.settings.view.columns.reset();
+                    app.settings.view.column_order = None;
                     changed = true;
                 }
                 if ui.button(tr(lang, Tr::Apply)).clicked() {
@@ -224,7 +224,7 @@ pub(super) fn columns_dialog(app: &mut App, ui: &mut egui::Ui) {
         // directly from our local `order` so the moved row reorders immediately
         // and the table behind the dialog re-renders with it.
         app.settings.persist_column_order(&order);
-        app.settings.save();
+        app.persist_settings();
     }
     if close {
         app.dialogs.columns.open = false;

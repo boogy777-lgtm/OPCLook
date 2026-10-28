@@ -1,7 +1,7 @@
-use opcda_egui::bff::Gateway;
 use opcda_egui::bff::model::{
     Command, CommandKind, EndpointSpec, Event, EventKind, ItemSpec, Protocol, Value, WriteRequest,
 };
+use opclook_backend::bff::Gateway;
 use std::process::Command as ScCommand;
 use std::time::{Duration, Instant};
 
@@ -41,12 +41,12 @@ fn wait_for(
     predicate: impl Fn(&EventKind) -> bool,
 ) -> Option<Event> {
     let request_id = command.request_id;
-    let session = command.session;
+    let owner = command.owner;
     gateway.send(command).expect("gateway send");
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         while let Some(event) = gateway.try_recv() {
-            if event.request_id != request_id || event.session != session {
+            if event.origin != request_id.into() || event.owner != owner {
                 continue;
             }
             if predicate(&event.kind) {
@@ -90,8 +90,10 @@ fn da_write_roundtrip() {
         match wait_for(
             &gateway,
             Command {
-                request_id: next_id(),
-                session,
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+                owner: opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                ),
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::Connect {
                     endpoint: EndpointSpec::da("", &prog_id),
@@ -116,12 +118,14 @@ fn da_write_roundtrip() {
         let browse = wait_for(
             &gateway,
             Command {
-                request_id: next_id(),
-                session,
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+                owner: opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                ),
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::Browse {
                     node_id: String::new(),
-                    filter: None,
+                    filter: opcda_egui::bff::model::NodeClassFilter::All,
                     view_id: None,
                 },
             },
@@ -149,12 +153,14 @@ fn da_write_roundtrip() {
         let add = wait_for(
             &gateway,
             Command {
-                request_id: next_id(),
-                session,
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+                owner: opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                ),
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::AddItems {
                     items: vec![ItemSpec {
-                        key: 1,
+                        key: opcda_egui::bff::model::ItemKey::new(1).unwrap(),
                         item_id: item_id.clone(),
                     }],
                 },
@@ -172,7 +178,7 @@ fn da_write_roundtrip() {
                     info.writable
                 ),
                 Err(e) => {
-                    println!("SKIP: could not add DA item {item_id}: {e}");
+                    println!("SKIP: could not add DA item {item_id}: {e:?}");
                     return;
                 }
             },
@@ -185,10 +191,14 @@ fn da_write_roundtrip() {
         let read = wait_for(
             &gateway,
             Command {
-                request_id: next_id(),
-                session,
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+                owner: opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                ),
                 protocol: Protocol::OpcDa,
-                kind: CommandKind::Read { keys: vec![1] },
+                kind: CommandKind::Read {
+                    keys: vec![opcda_egui::bff::model::ItemKey::new(1).unwrap()],
+                },
             },
             Duration::from_secs(30),
             |kind| matches!(kind, EventKind::Values { .. }),
@@ -211,12 +221,14 @@ fn da_write_roundtrip() {
         let write_ok = wait_for(
             &gateway,
             Command {
-                request_id: next_id(),
-                session,
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+                owner: opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                ),
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::Write {
                     request: WriteRequest {
-                        key: 1,
+                        key: opcda_egui::bff::model::ItemKey::new(1).unwrap(),
                         value: original.value.clone(),
                         type_hint: None,
                     },
@@ -238,8 +250,10 @@ fn da_write_roundtrip() {
     let _ = wait_for(
         &gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcDa,
             kind: CommandKind::Disconnect,
         },

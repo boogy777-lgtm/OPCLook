@@ -15,16 +15,16 @@
   Исключение — доказуемо безошибочный случай: `.expect("почему не упадёт")`.
 - Ответы серверов OPC, файлы CSV/настроек — враждебный вход: `get()` вместо
   `[i]`, `checked_*`/`saturating_*`, ограниченные аллокации и рекурсия.
-- `unsafe` только в COM/WinAPI-обвязке (`src/bff/da.rs`, `src/bff/da_variant.rs`,
-  `src/net.rs`, `src/bff/net.rs`, `src/bff/mdns.rs`, `src/da_route.rs`,
+- `unsafe` только в COM/WinAPI-обвязке (`crates/backend/src/bff/da.rs`, `crates/backend/src/bff/da_variant.rs`, `crates/backend/src/bff/com.rs`,
+  `crates/backend/src/net/windows.rs`, `crates/backend/src/winutil.rs`, `crates/backend/src/bff/net.rs`, `crates/backend/src/bff/mdns.rs`, `src/da_route.rs`,
   `nethelper/`), каждый блок с `// SAFETY:`.
 - Отравленный lock не фатален: `lock().unwrap_or_else(PoisonError::into_inner)`.
 - Каждый фикс бага приходит с регрессионным тестом, который падал до фикса.
 
 ## Не обсуждается
-- UI не знает протоколов: только `Command`/`Event` (`src/bff/model.rs`).
+- UI не знает протоколов: только `Command`/`Event` (`crates/contract/src/model.rs`).
 - Ни одна сессия не может заблокировать другие сессии.
-- Все видимые пользователю строки — в `src/i18n.rs` (RU/EN/ZH), без хардкода
+- Все видимые пользователю строки — в `crates/locale/src/lib.rs` (RU/EN/ZH), без хардкода
   в `src/ui/**` и `src/app/**` (`tests/no_hardcoded_ui_strings.rs`).
 - Ничего не теряется молча: ошибка видна пользователю (журнал или диалог),
   `eprintln!` в release-сборке невидим и не считается сообщением.

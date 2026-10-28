@@ -127,7 +127,7 @@ pub(super) fn menu(app: &mut App, ui: &mut egui::Ui) {
                     .on_hover_text(tr(lang, Tr::HintCtrlA))
                     .clicked()
                 {
-                    app.selected_rows = app.rows.iter().map(|row| row.key).collect();
+                    app.selected_rows = app.rows().iter().map(|row| row.key).collect();
                     ui.close();
                 }
                 if ui.button(tr(lang, Tr::ClearSelection)).clicked() {
@@ -166,33 +166,33 @@ pub(super) fn menu(app: &mut App, ui: &mut egui::Ui) {
                 ui.separator();
                 if ui
                     .checkbox(
-                        &mut app.settings.options.show_script,
+                        &mut app.settings.view.options.show_script,
                         tr(lang, Tr::ShowScript),
                     )
                     .clicked()
                 {
-                    app.settings.save();
+                    app.persist_settings();
                 }
                 if ui
                     .checkbox(
-                        &mut app.settings.options.show_log,
+                        &mut app.settings.view.options.show_log,
                         tr(lang, Tr::ShowJournal),
                     )
                     .clicked()
                 {
-                    app.settings.save();
+                    app.persist_settings();
                 }
             });
 
             ui.menu_button(tr(lang, Tr::MenuJournal), |ui| {
                 if ui
                     .checkbox(
-                        &mut app.settings.options.show_log,
+                        &mut app.settings.view.options.show_log,
                         tr(lang, Tr::ShowWorkJournal),
                     )
                     .clicked()
                 {
-                    app.settings.save();
+                    app.persist_settings();
                 }
                 ui.separator();
                 if ui.button(tr(lang, Tr::Clear)).clicked() {

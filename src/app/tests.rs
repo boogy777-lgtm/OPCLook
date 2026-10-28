@@ -5,14 +5,14 @@ use super::*;
 use crate::bff::model::{
     BackendMsg, BrowseNode, EndpointSpec, EventKind, NodeKind, Operation, WriteRequest,
 };
-use crate::constants::{RECONNECT_MAX_ATTEMPTS, RECONNECT_MAX_DELAY_SECS};
+use crate::constants::{RECONNECT_MAX_ATTEMPTS, RECONNECT_MAX_DELAY};
 use crate::i18n::Lang;
 use crate::settings::Options;
 
 #[test]
 fn reconnect_delay_doubles_exponentially() {
     // Attempts 1..=7 double: 1, 2, 4, ... 64 would be next but the ceiling
-    // (RECONNECT_MAX_DELAY_SECS = 60) applies from attempt 7 on.
+    // (RECONNECT_MAX_DELAY = 60) applies from attempt 7 on.
     let expected = [1u64, 2, 4, 8, 16, 32, 60, 60, 60];
     for (attempt, secs) in expected.iter().enumerate() {
         assert_eq!(
@@ -30,13 +30,13 @@ fn reconnect_delay_has_a_ceiling_for_every_attempt() {
     // U10: the old loop reached 2^19 s (about 6 days) at attempt 20.
     for attempt in 1..=RECONNECT_MAX_ATTEMPTS {
         assert!(
-            reconnect_delay(attempt).as_secs() <= RECONNECT_MAX_DELAY_SECS,
+            reconnect_delay(attempt).as_secs() <= RECONNECT_MAX_DELAY.as_secs(),
             "attempt {attempt}"
         );
     }
     assert_eq!(
         reconnect_delay(RECONNECT_MAX_ATTEMPTS).as_secs(),
-        RECONNECT_MAX_DELAY_SECS
+        RECONNECT_MAX_DELAY.as_secs()
     );
 }
 
@@ -44,10 +44,10 @@ fn reconnect_delay_has_a_ceiling_for_every_attempt() {
 fn reconnect_delay_never_overflows() {
     // Beyond the 64-bit shift width the helper pins to the ceiling instead of
     // panicking.
-    assert_eq!(reconnect_delay(65).as_secs(), RECONNECT_MAX_DELAY_SECS);
+    assert_eq!(reconnect_delay(65).as_secs(), RECONNECT_MAX_DELAY.as_secs());
     assert_eq!(
         reconnect_delay(u32::MAX).as_secs(),
-        RECONNECT_MAX_DELAY_SECS
+        RECONNECT_MAX_DELAY.as_secs()
     );
 }
 
@@ -215,9 +215,12 @@ fn branch_node(node_id: &str, name: &str, has_children: bool) -> BrowseNode {
 fn add_children_handles_branch_with_only_nested_items() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        EndpointSpec::da("", "Srv.Test"),
+    );
     app.seed_tree_item(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         None,
         0,
         BrowseNode {
@@ -227,14 +230,24 @@ fn add_children_handles_branch_with_only_nested_items() {
             has_children: true,
         },
     );
-    app.set_tree_focus(1, 1);
+    app.set_tree_focus(crate::bff::model::SessionId::new(1).unwrap(), 1);
 
     app.add_selected_children();
 
     // Browse the start branch: it contains only a nested Branch (no Items).
-    feed_browse(&mut app, 1, "top", vec![branch_node("mid", "Mid", true)]);
+    feed_browse(
+        &mut app,
+        crate::bff::model::SessionId::new(1).unwrap(),
+        "top",
+        vec![branch_node("mid", "Mid", true)],
+    );
     // Browse the nested branch: it contains one Item.
-    feed_browse(&mut app, 1, "mid", vec![item_node("i1", "I1")]);
+    feed_browse(
+        &mut app,
+        crate::bff::model::SessionId::new(1).unwrap(),
+        "mid",
+        vec![item_node("i1", "I1")],
+    );
 
     let ids: Vec<&str> = app.rows.iter().map(|r| r.item_id.as_str()).collect();
     assert!(ids.contains(&"i1"), "nested item must be added: {ids:?}");
@@ -246,9 +259,12 @@ fn add_children_handles_branch_with_only_nested_items() {
 fn add_children_walks_three_levels_and_deduplicates() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        EndpointSpec::da("", "Srv.Test"),
+    );
     app.seed_tree_item(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         None,
         0,
         BrowseNode {
@@ -258,32 +274,37 @@ fn add_children_walks_three_levels_and_deduplicates() {
             has_children: true,
         },
     );
-    app.set_tree_focus(1, 1);
+    app.set_tree_focus(crate::bff::model::SessionId::new(1).unwrap(), 1);
     app.add_selected_children();
 
     // L0 -> L1 (with direct item) and L2.
     feed_browse(
         &mut app,
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         "l0",
         vec![branch_node("l1", "L1", true), branch_node("l2", "L2", true)],
     );
     // L1 -> item + L3.
     feed_browse(
         &mut app,
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         "l1",
         vec![item_node("d1", "D1"), branch_node("l3", "L3", true)],
     );
     // L2 -> duplicate d1 + new d2.
     feed_browse(
         &mut app,
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         "l2",
         vec![item_node("d1", "D1dup"), item_node("d2", "D2")],
     );
     // L3 -> deep item (3 levels below the start).
-    feed_browse(&mut app, 1, "l3", vec![item_node("deep", "Deep")]);
+    feed_browse(
+        &mut app,
+        crate::bff::model::SessionId::new(1).unwrap(),
+        "l3",
+        vec![item_node("deep", "Deep")],
+    );
 
     let mut ids: Vec<&str> = app.rows.iter().map(|r| r.item_id.as_str()).collect();
     ids.sort();
@@ -295,9 +316,12 @@ fn add_children_walks_three_levels_and_deduplicates() {
 fn add_children_cycles_are_guarded() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        EndpointSpec::da("", "Srv.Test"),
+    );
     app.seed_tree_item(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         None,
         0,
         BrowseNode {
@@ -307,14 +331,19 @@ fn add_children_cycles_are_guarded() {
             has_children: true,
         },
     );
-    app.set_tree_focus(1, 1);
+    app.set_tree_focus(crate::bff::model::SessionId::new(1).unwrap(), 1);
     app.add_selected_children();
 
     // A -> B ; B -> A (cycle) + item.
-    feed_browse(&mut app, 1, "a", vec![branch_node("b", "B", true)]);
     feed_browse(
         &mut app,
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
+        "a",
+        vec![branch_node("b", "B", true)],
+    );
+    feed_browse(
+        &mut app,
+        crate::bff::model::SessionId::new(1).unwrap(),
         "b",
         vec![branch_node("a", "A", true), item_node("x", "X")],
     );
@@ -330,9 +359,12 @@ fn add_children_cycles_are_guarded() {
 fn add_children_ignores_unrelated_browse_request_id() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        EndpointSpec::da("", "Srv.Test"),
+    );
     app.seed_tree_item(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         None,
         0,
         BrowseNode {
@@ -342,7 +374,7 @@ fn add_children_ignores_unrelated_browse_request_id() {
             has_children: true,
         },
     );
-    app.set_tree_focus(1, 1);
+    app.set_tree_focus(crate::bff::model::SessionId::new(1).unwrap(), 1);
     app.add_selected_children();
 
     let job_request = app
@@ -355,11 +387,16 @@ fn add_children_ignores_unrelated_browse_request_id() {
         })
         .expect("job browse in flight");
     // A manual browse of the same node gets its own request id.
-    let manual_request = app.browse(1, "a".to_string()).expect("manual browse sent");
+    let manual_request = app
+        .browse(
+            crate::bff::model::SessionId::new(1).unwrap(),
+            "a".to_string(),
+        )
+        .expect("manual browse sent");
     assert_ne!(job_request, manual_request);
 
     app.on_event_for_test_with_request(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         manual_request,
         EventKind::Browse {
             node_id: "a".to_string(),
@@ -376,7 +413,7 @@ fn add_children_ignores_unrelated_browse_request_id() {
     );
 
     app.on_event_for_test_with_request(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         job_request,
         EventKind::Browse {
             node_id: "a".to_string(),
@@ -391,9 +428,12 @@ fn add_children_ignores_unrelated_browse_request_id() {
 fn add_children_disconnect_cancels_job() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        EndpointSpec::da("", "Srv.Test"),
+    );
     app.seed_tree_item(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         None,
         0,
         BrowseNode {
@@ -403,18 +443,18 @@ fn add_children_disconnect_cancels_job() {
             has_children: true,
         },
     );
-    app.set_tree_focus(1, 1);
+    app.set_tree_focus(crate::bff::model::SessionId::new(1).unwrap(), 1);
     app.add_selected_children();
     assert!(app.add_children.is_some());
 
     // A disconnect during the job cancels it.
-    app.disconnect_session(1);
+    app.disconnect_session(crate::bff::model::SessionId::new(1).unwrap());
     assert!(app.add_children.is_none(), "disconnect must cancel the job");
     // A Disconnected event also cancels (non-triggered link loss path).
     app.add_selected_children();
     assert!(app.add_children.is_some());
     app.on_event_for_test_at(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         EventKind::Disconnected {
             reason: BackendMsg::raw("lost"),
         },
@@ -426,10 +466,13 @@ fn add_children_disconnect_cancels_job() {
 fn starting_new_job_replaces_previous_for_same_session() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::da("", "Srv.Test"));
+    app.seed_session(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        EndpointSpec::da("", "Srv.Test"),
+    );
     for node_id in ["a", "b"] {
         app.seed_tree_item(
-            1,
+            crate::bff::model::SessionId::new(1).unwrap(),
             None,
             0,
             BrowseNode {
@@ -440,11 +483,14 @@ fn starting_new_job_replaces_previous_for_same_session() {
             },
         );
     }
-    app.set_tree_focus(1, 1);
+    app.set_tree_focus(crate::bff::model::SessionId::new(1).unwrap(), 1);
     app.add_selected_children();
-    assert_eq!(app.add_children.as_ref().map(|j| j.session), Some(1));
+    assert_eq!(
+        app.add_children.as_ref().map(|j| j.session),
+        Some(crate::bff::model::SessionId::new(1).unwrap())
+    );
     // Starting another job for the same session replaces the in-flight one.
-    app.set_tree_focus(1, 2);
+    app.set_tree_focus(crate::bff::model::SessionId::new(1).unwrap(), 2);
     app.add_selected_children();
     assert!(app.add_children.is_some());
 }
@@ -468,7 +514,12 @@ fn da_search_preserves_host_for_duplicate_progid() {
     }
     assert_eq!(app.dialogs.connect.da_servers.len(), 2);
     assert_eq!(
-        app.dialogs.connect.da_server_hosts,
+        app.dialogs
+            .connect
+            .da_servers
+            .iter()
+            .map(|hit| hit.host.as_str())
+            .collect::<Vec<_>>(),
         vec!["plant-a", "plant-b"]
     );
     assert!(!app.dialogs.connect.da_pending);
@@ -496,13 +547,23 @@ fn standalone_lds_results_become_visible() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.on_event_for_test(EventKind::UaNetworkFound {
-        servers: vec![UaNetworkInfo {
-            application_name: "Simulator".to_string(),
-            application_uri: "urn:sim".to_string(),
-            discovery_urls: vec!["opc.tcp://127.0.0.1:4840".to_string()],
-        }],
-    });
+    app.record_dispatches_for_test();
+    app.dialogs.connect.ua_lds_host = "127.0.0.1".into();
+    app.search_ua_network();
+    let UaSearch::Network { request } = app.dialogs.connect.ua_search else {
+        panic!("network search")
+    };
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        request,
+        EventKind::UaNetworkFound {
+            servers: vec![UaNetworkInfo {
+                application_name: "Simulator".to_string(),
+                application_uri: "urn:sim".to_string(),
+                discovery_urls: vec!["opc.tcp://127.0.0.1:4840".parse().unwrap()],
+            }],
+        },
+    );
     assert_eq!(app.dialogs.connect.ua_search_results.len(), 1);
     assert_eq!(
         app.dialogs.connect.ua_search_results[0].application_uri,
@@ -521,19 +582,31 @@ fn security_validation_applies_to_selected_url_only() {
     app.dialogs.connect.ua_security_mode = UaSecurityMode::SignAndEncrypt;
     app.dialogs.connect.ua_discovered_endpoints = vec![
         UaEndpointInfo {
-            url: "opc.tcp://server-a:4840".to_string(),
-            security_policy: "None".to_string(),
-            security_mode: "None".to_string(),
+            url: "opc.tcp://server-a:4840".parse().unwrap(),
+            security_policy: crate::bff::model::AdvertisedPolicy::from_wire("None"),
+            security_mode: crate::bff::model::AdvertisedMode::from_wire("None"),
         },
         UaEndpointInfo {
-            url: "opc.tcp://server-b:4840".to_string(),
-            security_policy: "Basic256Sha256".to_string(),
-            security_mode: "SignAndEncrypt".to_string(),
+            url: "opc.tcp://server-b:4840".parse().unwrap(),
+            security_policy: crate::bff::model::AdvertisedPolicy::from_wire("Basic256Sha256"),
+            security_mode: crate::bff::model::AdvertisedMode::from_wire("SignAndEncrypt"),
         },
     ];
     assert!(!app.validate_ua_security());
     app.dialogs.connect.ua_url = "opc.tcp://server-b:4840".to_string();
     assert!(app.validate_ua_security());
+}
+
+fn start_recorded_auto(app: &mut App) -> (RequestId, RequestId) {
+    app.record_dispatches_for_test();
+    app.dialogs.connect.ua_lds_host = "127.0.0.1:4850".into();
+    app.search_ua_all();
+    match app.dialogs.connect.ua_search {
+        UaSearch::Auto {
+            pending: AutoPending::Both { host, network },
+        } => (host, network),
+        ref other => panic!("expected two requests, got {other:?}"),
+    }
 }
 
 #[test]
@@ -542,23 +615,35 @@ fn combined_ua_search_preserves_security_variants_at_same_url() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.dialogs.connect.ua_auto_pending = 2;
-    for (policy, mode) in [("None", "None"), ("Basic256Sha256", "SignAndEncrypt")] {
-        app.on_event_for_test(EventKind::UaServersFound {
-            host: "localhost".to_string(),
-            port: 4840,
-            servers: vec![UaServerInfo {
-                application_name: "Simulator".to_string(),
-                application_uri: "urn:sim".to_string(),
-                endpoints: vec![UaEndpointInfo {
-                    url: "opc.tcp://localhost:4840".to_string(),
-                    security_policy: policy.to_string(),
-                    security_mode: mode.to_string(),
-                }],
+    let (host, network) = start_recorded_auto(&mut app);
+    let servers = [("None", "None"), ("Basic256Sha256", "SignAndEncrypt")]
+        .into_iter()
+        .map(|(policy, mode)| UaServerInfo {
+            application_name: "Simulator".into(),
+            application_uri: "urn:sim".into(),
+            endpoints: vec![UaEndpointInfo {
+                url: "opc.tcp://localhost:4840".parse().unwrap(),
+                security_policy: crate::bff::model::AdvertisedPolicy::from_wire(policy),
+                security_mode: crate::bff::model::AdvertisedMode::from_wire(mode),
             }],
-        });
-    }
+        })
+        .collect();
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        host,
+        EventKind::UaServersFound {
+            host: "localhost".into(),
+            port: 4840,
+            servers,
+        },
+    );
     assert_eq!(app.dialogs.connect.ua_search_results.len(), 1);
+    assert_eq!(app.dialogs.connect.ua_search_results[0].endpoints.len(), 2);
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        network,
+        EventKind::UaNetworkFound { servers: vec![] },
+    );
     assert_eq!(app.dialogs.connect.ua_search_results[0].endpoints.len(), 2);
 }
 
@@ -568,27 +653,26 @@ fn combined_ua_search_shows_a_loopback_server_once_while_running() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    // LDS/mDNS + loopback; LDS has not answered yet. (An older build also asked
-    // `localhost`; a late reply for either spelling must still merge.)
-    app.dialogs.connect.ua_auto_pending = 3;
-    app.dialogs.connect.ua_searching = true;
-    for host in ["127.0.0.1", "localhost"] {
-        app.on_event_for_test(EventKind::UaServersFound {
-            host: host.to_string(),
+    let (host, _) = start_recorded_auto(&mut app);
+    let server = UaServerInfo {
+        application_name: "Simulator".into(),
+        application_uri: "urn:sim".into(),
+        endpoints: vec![UaEndpointInfo {
+            url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
+            security_policy: crate::bff::model::AdvertisedPolicy::from_wire("None"),
+            security_mode: crate::bff::model::AdvertisedMode::from_wire("None"),
+        }],
+    };
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        host,
+        EventKind::UaServersFound {
+            host: "127.0.0.1".into(),
             port: 4840,
-            servers: vec![UaServerInfo {
-                application_name: "Simulator".to_string(),
-                application_uri: "urn:sim".to_string(),
-                endpoints: vec![UaEndpointInfo {
-                    url: "opc.tcp://127.0.0.1:4840".to_string(),
-                    security_policy: "None".to_string(),
-                    security_mode: "None".to_string(),
-                }],
-            }],
-        });
-    }
-    // Still searching (LDS pending), yet the visible list is already merged.
-    assert_eq!(app.dialogs.connect.ua_auto_pending, 1);
+            servers: vec![server.clone(), server],
+        },
+    );
+    assert_eq!(app.dialogs.connect.ua_search.auto_pending_count(), 1);
     assert_eq!(app.dialogs.connect.ua_search_results.len(), 1);
     assert_eq!(app.dialogs.connect.ua_search_results[0].endpoints.len(), 1);
 }
@@ -599,37 +683,42 @@ fn lds_urls_merge_into_host_result_instead_of_being_dropped() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.dialogs.connect.ua_auto_pending = 2;
-    app.on_event_for_test(EventKind::UaServersFound {
-        host: "127.0.0.1".to_string(),
-        port: 4840,
-        servers: vec![UaServerInfo {
-            application_name: "Simulator".to_string(),
-            application_uri: "urn:sim".to_string(),
-            endpoints: vec![UaEndpointInfo {
-                url: "opc.tcp://127.0.0.1:4840".to_string(),
-                security_policy: "None".to_string(),
-                security_mode: "None".to_string(),
+    let (host, network) = start_recorded_auto(&mut app);
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        host,
+        EventKind::UaServersFound {
+            host: "127.0.0.1".into(),
+            port: 4840,
+            servers: vec![UaServerInfo {
+                application_name: "Simulator".into(),
+                application_uri: "urn:sim".into(),
+                endpoints: vec![UaEndpointInfo {
+                    url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
+                    security_policy: crate::bff::model::AdvertisedPolicy::from_wire("None"),
+                    security_mode: crate::bff::model::AdvertisedMode::from_wire("None"),
+                }],
             }],
-        }],
-    });
-    app.on_event_for_test(EventKind::UaNetworkFound {
-        servers: vec![
-            // Same server (same URI) advertised on the LAN address.
-            UaNetworkInfo {
-                application_name: "Simulator".to_string(),
-                application_uri: "urn:sim".to_string(),
-                discovery_urls: vec!["opc.tcp://10.0.0.5:4840".to_string()],
-            },
-            // LDS record without URI for the loopback URL: merged by URL,
-            // its name must not become a fake application URI.
-            UaNetworkInfo {
-                application_name: "Simulator (LDS)".to_string(),
-                application_uri: String::new(),
-                discovery_urls: vec!["opc.tcp://127.0.0.1:4840/".to_string()],
-            },
-        ],
-    });
+        },
+    );
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        network,
+        EventKind::UaNetworkFound {
+            servers: vec![
+                UaNetworkInfo {
+                    application_name: "Simulator".into(),
+                    application_uri: "urn:sim".into(),
+                    discovery_urls: vec!["opc.tcp://10.0.0.5:4840".parse().unwrap()],
+                },
+                UaNetworkInfo {
+                    application_name: "Simulator (LDS)".into(),
+                    application_uri: String::new(),
+                    discovery_urls: vec!["opc.tcp://127.0.0.1:4840/".parse().unwrap()],
+                },
+            ],
+        },
+    );
     let results = &app.dialogs.connect.ua_search_results;
     assert_eq!(results.len(), 1, "one server, not three rows: {results:?}");
     assert_eq!(results[0].application_uri, "urn:sim");
@@ -637,8 +726,7 @@ fn lds_urls_merge_into_host_result_instead_of_being_dropped() {
         results[0]
             .endpoints
             .iter()
-            .any(|e| e.url == "opc.tcp://10.0.0.5:4840"),
-        "the LAN URL reported only by LDS/mDNS must be kept"
+            .any(|e| e.url.as_str() == "opc.tcp://10.0.0.5:4840")
     );
 }
 
@@ -655,9 +743,9 @@ fn different_application_uris_are_never_merged_by_url() {
                 application_name: uri.to_string(),
                 application_uri: uri.to_string(),
                 endpoints: vec![UaEndpointInfo {
-                    url: "opc.tcp://shared:4840".to_string(),
-                    security_policy: String::new(),
-                    security_mode: String::new(),
+                    url: "opc.tcp://shared:4840".parse().unwrap(),
+                    security_policy: crate::bff::model::AdvertisedPolicy::Unspecified,
+                    security_mode: crate::bff::model::AdvertisedMode::Unspecified,
                 }],
             }],
         );
@@ -670,7 +758,10 @@ fn different_application_uris_are_never_merged_by_url() {
 fn tree_app() -> (egui::Context, App) {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_session(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        EndpointSpec::ua("opc.tcp://127.0.0.1:4840"),
+    );
     (ctx, app)
 }
 
@@ -697,7 +788,7 @@ fn item_id_named(app: &App, name: &str) -> u64 {
 fn u6_views_event_keeps_the_rest_of_the_tree() {
     let (_ctx, mut app) = tree_app();
     app.on_event_for_test_at(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         EventKind::Browse {
             node_id: String::new(),
             children: vec![
@@ -707,7 +798,7 @@ fn u6_views_event_keeps_the_rest_of_the_tree() {
         },
     );
     app.on_event_for_test_at(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         EventKind::Browse {
             node_id: "ns=1;s=R1".to_string(),
             children: vec![item_node("ns=1;s=C1", "C1")],
@@ -716,7 +807,7 @@ fn u6_views_event_keeps_the_rest_of_the_tree() {
     let r1 = item_id_named(&app, "R1");
 
     app.on_event_for_test_at(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         EventKind::Views {
             children: vec![
                 branch_node("ns=0;i=1", "View1", false),
@@ -730,12 +821,14 @@ fn u6_views_event_keeps_the_rest_of_the_tree() {
         ["Представления", "View1", "View2", "R1", "C1", "R2"],
         "R1's expanded child must survive the Views event"
     );
-    let r1_item = app.tree_item(1, r1).expect("R1 still present");
+    let r1_item = app
+        .tree_item(crate::bff::model::SessionId::new(1).unwrap(), r1)
+        .expect("R1 still present");
     assert!(r1_item.expanded && r1_item.loaded, "R1 keeps its state");
 
     // A second Views event replaces only the previous views.
     app.on_event_for_test_at(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         EventKind::Views {
             children: vec![branch_node("ns=0;i=3", "View3", false)],
         },
@@ -750,7 +843,7 @@ fn u6_views_event_keeps_the_rest_of_the_tree() {
 fn u7_browse_reply_goes_to_the_expanded_instance_of_a_duplicated_node_id() {
     let (_ctx, mut app) = tree_app();
     app.on_event_for_test_at(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         EventKind::Browse {
             node_id: String::new(),
             children: vec![
@@ -761,7 +854,7 @@ fn u7_browse_reply_goes_to_the_expanded_instance_of_a_duplicated_node_id() {
     );
     for parent in ["ns=1;s=P", "ns=1;s=Q"] {
         app.on_event_for_test_at(
-            1,
+            crate::bff::model::SessionId::new(1).unwrap(),
             EventKind::Browse {
                 node_id: parent.to_string(),
                 children: vec![branch_node("ns=1;s=SHARED", "Shared", true)],
@@ -777,9 +870,11 @@ fn u7_browse_reply_goes_to_the_expanded_instance_of_a_duplicated_node_id() {
     assert_eq!(shared.len(), 2, "same NodeId appears under P and Q");
 
     // The user expands the SECOND instance (under Q).
-    let request = app.browse_item(1, shared[1]).expect("dispatched");
+    let request = app
+        .browse_item(crate::bff::model::SessionId::new(1).unwrap(), shared[1])
+        .expect("dispatched");
     app.on_event_for_test_with_request(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         request,
         EventKind::Browse {
             node_id: "ns=1;s=SHARED".to_string(),
@@ -794,9 +889,13 @@ fn u7_browse_reply_goes_to_the_expanded_instance_of_a_duplicated_node_id() {
         .position(|t| t.id == shared[1])
         .expect("second instance");
     assert_eq!(leaf_pos, second_pos + 1, "leaf is under the 2nd instance");
-    let first = app.tree_item(1, shared[0]).expect("first instance");
+    let first = app
+        .tree_item(crate::bff::model::SessionId::new(1).unwrap(), shared[0])
+        .expect("first instance");
     assert!(!first.loaded && !first.expanded, "1st instance untouched");
-    let second = app.tree_item(1, shared[1]).expect("second instance");
+    let second = app
+        .tree_item(crate::bff::model::SessionId::new(1).unwrap(), shared[1])
+        .expect("second instance");
     assert!(second.loaded && second.expanded && !second.loading);
 }
 
@@ -804,18 +903,20 @@ fn u7_browse_reply_goes_to_the_expanded_instance_of_a_duplicated_node_id() {
 fn u7_reply_for_a_removed_item_is_dropped() {
     let (_ctx, mut app) = tree_app();
     app.on_event_for_test_at(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         EventKind::Browse {
             node_id: String::new(),
             children: vec![branch_node("ns=1;s=P", "P", true)],
         },
     );
     let p = item_id_named(&app, "P");
-    let request = app.browse_item(1, p).expect("dispatched");
+    let request = app
+        .browse_item(crate::bff::model::SessionId::new(1).unwrap(), p)
+        .expect("dispatched");
     // The tree is re-read meanwhile: the old item ids are gone.
-    app.reread_tree(1);
+    app.reread_tree(crate::bff::model::SessionId::new(1).unwrap());
     app.on_event_for_test_with_request(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         request,
         EventKind::Browse {
             node_id: "ns=1;s=P".to_string(),
@@ -834,25 +935,50 @@ fn u7_reply_for_a_removed_item_is_dropped() {
 fn u5_toggling_vars_only_rereads_the_tree_from_the_root() {
     let (_ctx, mut app) = tree_app();
     app.on_event_for_test_at(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         EventKind::Browse {
             node_id: String::new(),
             children: vec![branch_node("ns=1;s=P", "P", true)],
         },
     );
     assert_eq!(app.sessions[0].tree.len(), 1);
-    app.set_ua_browse_vars_only(1, true);
+    app.set_ua_browse_vars_only(crate::bff::model::SessionId::new(1).unwrap(), true);
     let view = &app.sessions[0];
-    assert!(view.ua_browse_vars_only);
+    assert_eq!(
+        view.ua().unwrap().ua_browse_filter,
+        crate::bff::model::NodeClassFilter::Variables
+    );
     assert!(view.tree.is_empty(), "stale tree dropped");
     assert!(view.root_loading, "root browse issued");
-    assert_eq!(app.pending_request_ids_for_test(1).len(), 1);
+    assert_eq!(
+        app.pending_request_ids_for_test(crate::bff::model::SessionId::new(1).unwrap())
+            .len(),
+        1
+    );
     // Setting the same value again must not browse again.
-    app.set_ua_browse_vars_only(1, true);
-    assert_eq!(app.pending_request_ids_for_test(1).len(), 1);
+    app.set_ua_browse_vars_only(crate::bff::model::SessionId::new(1).unwrap(), true);
+    assert_eq!(
+        app.pending_request_ids_for_test(crate::bff::model::SessionId::new(1).unwrap())
+            .len(),
+        1
+    );
 }
 
 // ---- U11: URL host parsing ----
+
+#[test]
+fn ua_url_userinfo_is_rejected_before_journal_or_session() {
+    let (_ctx, mut app) = tree_app();
+    let before = app.sessions.len();
+    assert!(!app.connect_endpoint(EndpointSpec::ua("opc.tcp://user:secret@host:4840")));
+    assert_eq!(app.sessions.len(), before);
+    assert!(
+        app.journal
+            .entries()
+            .iter()
+            .all(|entry| !entry.render(Lang::Ru).contains("secret"))
+    );
+}
 
 #[test]
 fn u11_ipv6_url_host_and_port_are_parsed() {
@@ -863,10 +989,7 @@ fn u11_ipv6_url_host_and_port_are_parsed() {
         Some("2001:db8::7")
     );
     assert_eq!(ua_url_host("opc.tcp://[::1]").as_deref(), Some("::1"));
-    assert_eq!(
-        ua_url_host("opc.tcp://user@plant:4840/x").as_deref(),
-        Some("plant")
-    );
+    assert_eq!(ua_url_host("opc.tcp://user@plant:4840/x").as_deref(), None);
     assert_eq!(ua_url_host("opc.tcp://:4840"), None);
 }
 
@@ -914,17 +1037,10 @@ fn u11_loopback_detection_covers_the_whole_127_block_and_v6() {
 
 // ---- D4 / D5: DA discovery routes ----
 
-fn hold_discovery(app: &mut App, host: &str) {
-    app.da_route_holds.push(DaRouteHold {
-        session: 0,
-        host: host.to_string(),
-        prepared: PreparedRoutes::default(),
-    });
-}
-
 fn pend_discover(app: &mut App, request_id: RequestId, host: &str) {
-    app.pending_requests.insert(
-        (0, request_id),
+    app.engine.insert_pending_for_test(
+        crate::bff::model::Owner::Discovery,
+        request_id,
         PendingRequest {
             operation: Operation::Discover,
             sent: Instant::now(),
@@ -937,20 +1053,37 @@ fn pend_discover(app: &mut App, request_id: RequestId, host: &str) {
 fn d4_discover_error_releases_only_the_failing_hosts_route() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    hold_discovery(&mut app, "pc-a");
-    hold_discovery(&mut app, "pc-b");
-    pend_discover(&mut app, 501, "pc-a");
-    pend_discover(&mut app, 502, "pc-b");
+    app.engine
+        .seed_da_route_for_test(
+            crate::bff::model::Owner::Discovery,
+            RequestId::new(501).unwrap(),
+        )
+        .unwrap();
+    app.engine
+        .seed_da_route_for_test(
+            crate::bff::model::Owner::Discovery,
+            RequestId::new(502).unwrap(),
+        )
+        .unwrap();
+    pend_discover(&mut app, RequestId::new(501).unwrap(), "pc-a");
+    pend_discover(&mut app, RequestId::new(502).unwrap(), "pc-b");
     app.on_event_for_test_with_request(
-        0,
-        501,
+        crate::bff::model::Owner::Discovery,
+        RequestId::new(501).unwrap(),
         EventKind::Error {
             operation: Operation::Discover,
             message: BackendMsg::raw("RPC unavailable"),
         },
     );
-    let hosts: Vec<&str> = app.da_route_holds.iter().map(|h| h.host.as_str()).collect();
-    assert_eq!(hosts, ["pc-b"], "the other search keeps its route");
+    assert!(
+        !app.engine
+            .has_discovery_route_for_test(RequestId::new(501).unwrap())
+    );
+    assert!(
+        app.engine
+            .has_discovery_route_for_test(RequestId::new(502).unwrap()),
+        "the other search keeps its route"
+    );
 }
 
 #[test]
@@ -958,21 +1091,37 @@ fn d5_closing_the_connect_dialog_releases_discovery_routes() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    hold_discovery(&mut app, "pc-a");
-    hold_discovery(&mut app, "pc-b");
-    // A session route (not a discovery one) must survive.
-    app.da_route_holds.push(DaRouteHold {
-        session: 9,
-        host: "pc-c".to_string(),
-        prepared: PreparedRoutes::default(),
-    });
+    app.engine
+        .seed_da_route_for_test(
+            crate::bff::model::Owner::Discovery,
+            RequestId::new(501).unwrap(),
+        )
+        .unwrap();
+    app.engine
+        .seed_da_route_for_test(
+            crate::bff::model::Owner::Discovery,
+            RequestId::new(502).unwrap(),
+        )
+        .unwrap();
+    app.engine
+        .seed_da_route_for_test(
+            crate::bff::model::SessionId::new(9).unwrap(),
+            RequestId::FIRST,
+        )
+        .unwrap();
     app.close_connect_dialog();
-    let left: Vec<(SessionId, &str)> = app
-        .da_route_holds
-        .iter()
-        .map(|h| (h.session, h.host.as_str()))
-        .collect();
-    assert_eq!(left, [(9, "pc-c")]);
+    assert!(
+        !app.engine
+            .has_discovery_route_for_test(RequestId::new(501).unwrap())
+    );
+    assert!(
+        !app.engine
+            .has_discovery_route_for_test(RequestId::new(502).unwrap())
+    );
+    assert!(
+        app.engine
+            .has_da_route(crate::bff::model::SessionId::new(9).unwrap())
+    );
 }
 
 // ---- U14: «Добавить по имени» waits for the resolution ----
@@ -987,12 +1136,16 @@ fn open_add_by_name(app: &mut App, session: SessionId, path: &str) {
 #[test]
 fn u14_dialog_stays_open_until_the_path_is_resolved() {
     let (_ctx, mut app) = tree_app();
-    open_add_by_name(&mut app, 1, "0:Objects/2:Sim/2:Tag1");
+    open_add_by_name(
+        &mut app,
+        crate::bff::model::SessionId::new(1).unwrap(),
+        "0:Objects/2:Sim/2:Tag1",
+    );
     let (session, request) = app.dialogs.add_signal.resolving.expect("waiting");
-    assert_eq!(session, 1);
+    assert_eq!(session, crate::bff::model::SessionId::new(1).unwrap());
     assert!(app.dialogs.add_signal.open, "dialog must stay open");
     app.on_event_for_test_with_request(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         request,
         EventKind::PathResolved {
             targets: vec!["ns=2;s=Tag1".to_string()],
@@ -1006,10 +1159,14 @@ fn u14_dialog_stays_open_until_the_path_is_resolved() {
 #[test]
 fn u14_resolve_error_is_shown_in_the_dialog_and_frees_pending() {
     let (_ctx, mut app) = tree_app();
-    open_add_by_name(&mut app, 1, "0:Objects/2:Nope");
+    open_add_by_name(
+        &mut app,
+        crate::bff::model::SessionId::new(1).unwrap(),
+        "0:Objects/2:Nope",
+    );
     let (_, request) = app.dialogs.add_signal.resolving.expect("waiting");
     app.on_event_for_test_with_request(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         request,
         EventKind::Error {
             operation: Operation::ResolveBrowsePath,
@@ -1025,10 +1182,14 @@ fn u14_resolve_error_is_shown_in_the_dialog_and_frees_pending() {
 #[test]
 fn u14_empty_target_list_reports_name_not_resolved_in_the_dialog() {
     let (_ctx, mut app) = tree_app();
-    open_add_by_name(&mut app, 1, "0:Objects/2:Nope");
+    open_add_by_name(
+        &mut app,
+        crate::bff::model::SessionId::new(1).unwrap(),
+        "0:Objects/2:Nope",
+    );
     let (_, request) = app.dialogs.add_signal.resolving.expect("waiting");
     app.on_event_for_test_with_request(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         request,
         EventKind::PathResolved {
             targets: Vec::new(),
@@ -1042,30 +1203,44 @@ fn u14_empty_target_list_reports_name_not_resolved_in_the_dialog() {
 #[test]
 fn u14_another_sessions_answer_is_not_consumed() {
     let (_ctx, mut app) = tree_app();
-    app.seed_session(2, EndpointSpec::ua("opc.tcp://127.0.0.1:4841"));
-    open_add_by_name(&mut app, 1, "0:Objects/2:Tag1");
+    app.seed_session(
+        crate::bff::model::SessionId::new(2).unwrap(),
+        EndpointSpec::ua("opc.tcp://127.0.0.1:4841"),
+    );
+    open_add_by_name(
+        &mut app,
+        crate::bff::model::SessionId::new(1).unwrap(),
+        "0:Objects/2:Tag1",
+    );
     let (_, request) = app.dialogs.add_signal.resolving.expect("waiting");
     // A reply with the same request id but from session 2 is unsolicited for
     // this dialog: it is dropped and the wait continues.
     app.on_event_for_test_with_request(
-        2,
+        crate::bff::model::SessionId::new(2).unwrap(),
         request,
         EventKind::PathResolved {
             targets: vec!["ns=2;s=Other".to_string()],
         },
     );
     assert!(app.rows.is_empty());
-    assert_eq!(app.dialogs.add_signal.resolving, Some((1, request)));
+    assert_eq!(
+        app.dialogs.add_signal.resolving,
+        Some((crate::bff::model::SessionId::new(1).unwrap(), request))
+    );
 }
 
 #[test]
 fn u14_cancelled_dialog_ignores_the_late_answer() {
     let (_ctx, mut app) = tree_app();
-    open_add_by_name(&mut app, 1, "0:Objects/2:Tag1");
+    open_add_by_name(
+        &mut app,
+        crate::bff::model::SessionId::new(1).unwrap(),
+        "0:Objects/2:Tag1",
+    );
     let (_, request) = app.dialogs.add_signal.resolving.expect("waiting");
     app.close_add_signal_dialog();
     app.on_event_for_test_with_request(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         request,
         EventKind::PathResolved {
             targets: vec!["ns=2;s=Tag1".to_string()],
@@ -1077,8 +1252,12 @@ fn u14_cancelled_dialog_ignores_the_late_answer() {
 #[test]
 fn u14_disconnect_frees_a_waiting_dialog_with_an_error() {
     let (_ctx, mut app) = tree_app();
-    open_add_by_name(&mut app, 1, "0:Objects/2:Tag1");
-    app.disconnect_session(1);
+    open_add_by_name(
+        &mut app,
+        crate::bff::model::SessionId::new(1).unwrap(),
+        "0:Objects/2:Tag1",
+    );
+    app.disconnect_session(crate::bff::model::SessionId::new(1).unwrap());
     assert_eq!(app.dialogs.add_signal.resolving, None);
     assert!(app.dialogs.add_signal.error.is_some());
 }
@@ -1180,22 +1359,37 @@ fn k1_request_timeout_honours_the_setting_with_floors() {
 #[test]
 fn k1_fresh_requests_do_not_expire() {
     let (_ctx, mut app) = tree_app();
-    app.browse(1, String::new());
-    app.age_pending_requests_for_test(1, 20);
+    app.engine.insert_pending_for_test(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        RequestId::new(501).unwrap(),
+        PendingRequest {
+            operation: Operation::Browse,
+            sent: Instant::now(),
+            ctx: PendingCtx::None,
+        },
+    );
+    app.age_pending_requests_for_test(crate::bff::model::SessionId::new(1).unwrap(), 20);
     app.tick_for_test();
-    assert_eq!(app.pending_request_ids_for_test(1).len(), 1);
+    assert_eq!(
+        app.pending_request_ids_for_test(crate::bff::model::SessionId::new(1).unwrap())
+            .len(),
+        1
+    );
     assert_eq!(no_reply_lines(&app), 0);
 }
 
 #[test]
 fn k1_unanswered_root_browse_stops_the_spinner_and_reports() {
     let (_ctx, mut app) = tree_app();
-    app.browse(1, String::new());
+    app.browse(crate::bff::model::SessionId::new(1).unwrap(), String::new());
     assert!(app.sessions[0].root_loading);
-    app.age_pending_requests_for_test(1, 3600);
+    app.age_pending_requests_for_test(crate::bff::model::SessionId::new(1).unwrap(), 3600);
     app.tick_for_test();
     assert!(!app.sessions[0].root_loading, "spinner must stop");
-    assert!(app.pending_request_ids_for_test(1).is_empty());
+    assert!(
+        app.pending_request_ids_for_test(crate::bff::model::SessionId::new(1).unwrap())
+            .is_empty()
+    );
     assert_eq!(no_reply_lines(&app), 1, "{:?}", journal_lines(&app));
 }
 
@@ -1203,16 +1397,16 @@ fn k1_unanswered_root_browse_stops_the_spinner_and_reports() {
 fn k1_unanswered_node_expand_resets_only_the_loading_flags() {
     let (_ctx, mut app) = tree_app();
     app.on_event_for_test_at(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         EventKind::Browse {
             node_id: String::new(),
             children: vec![branch_node("ns=1;s=P", "P", true)],
         },
     );
     let item = item_id_named(&app, "P");
-    app.browse_item(1, item);
+    app.browse_item(crate::bff::model::SessionId::new(1).unwrap(), item);
     assert!(app.sessions[0].tree[0].loading);
-    app.age_pending_requests_for_test(1, 3600);
+    app.age_pending_requests_for_test(crate::bff::model::SessionId::new(1).unwrap(), 3600);
     app.tick_for_test();
     assert!(!app.sessions[0].tree[0].loading);
     assert!(!app.sessions[0].tree[0].loaded, "can be expanded again");
@@ -1221,19 +1415,28 @@ fn k1_unanswered_node_expand_resets_only_the_loading_flags() {
 #[test]
 fn k1_unanswered_read_frees_the_poll_slot_once() {
     let (_ctx, mut app) = tree_app();
-    app.seed_row(1, "Tag1", "Tag1", Value::I64(1));
+    app.seed_row(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        "Tag1",
+        "Tag1",
+        Value::I64(1),
+    );
     app.sessions[0].read_in_flight = true;
     app.send(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         Protocol::OpcUa,
         CommandKind::Read {
             keys: vec![app.rows[0].key],
         },
     );
-    app.age_pending_requests_for_test(1, 3600);
+    app.age_pending_requests_for_test(crate::bff::model::SessionId::new(1).unwrap(), 3600);
     app.tick_for_test();
     assert!(
-        !app.sessions[0].read_in_flight || app.pending_request_ids_for_test(1).len() == 1,
+        !app.sessions[0].read_in_flight
+            || app
+                .pending_request_ids_for_test(crate::bff::model::SessionId::new(1).unwrap())
+                .len()
+                == 1,
         "the slot is free (a new poll may already be in flight)"
     );
     assert_eq!(no_reply_lines(&app), 1, "one message, not two");
@@ -1242,12 +1445,13 @@ fn k1_unanswered_read_frees_the_poll_slot_once() {
 #[test]
 fn k1_late_reply_after_expiry_is_dropped() {
     let (_ctx, mut app) = tree_app();
-    app.browse(1, String::new());
-    let request = app.pending_request_ids_for_test(1)[0];
-    app.age_pending_requests_for_test(1, 3600);
+    app.browse(crate::bff::model::SessionId::new(1).unwrap(), String::new());
+    let request =
+        app.pending_request_ids_for_test(crate::bff::model::SessionId::new(1).unwrap())[0];
+    app.age_pending_requests_for_test(crate::bff::model::SessionId::new(1).unwrap(), 3600);
     app.tick_for_test();
     app.on_event_for_test_with_request(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         request,
         EventKind::Browse {
             node_id: String::new(),
@@ -1284,31 +1488,33 @@ fn k1_unanswered_connect_from_the_dialog_shows_the_error_there() {
 fn k1_unanswered_connect_tells_the_worker_to_drop_the_session() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.settings.options.diagnostic_trace = true;
-    let _ = app.connect_from_dialog(EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.engine.limit_dispatch_for_test(2);
+    assert!(app.connect_from_dialog(EndpointSpec::ua("opc.tcp://127.0.0.1:4840")));
     let session = app.sessions.last().expect("session").id;
-    let before = journal_lines(&app).len();
     app.age_pending_requests_for_test(session, 3600);
     app.tick_for_test();
-    let disconnect = operation_label(Lang::Ru, Operation::Disconnect);
-    let sent_disconnect = journal_lines(&app)[before..]
+    app.tick_for_test();
+    let commands = app.engine.dispatched_for_test();
+    let disconnects: Vec<_> = commands
         .iter()
-        .any(|line| line.contains("→ #") && line.contains(&disconnect));
-    assert!(
-        sent_disconnect,
-        "an abandoned Connect must be followed by Disconnect: {:?}",
-        journal_lines(&app)
-    );
-    // Its reply is not awaited: nothing stays pending for the session.
+        .filter(|command| matches!(command.kind, CommandKind::Disconnect))
+        .collect();
+    assert_eq!(disconnects.len(), 1);
+    assert_eq!(disconnects[0].owner, Owner::Session(session));
+    assert_eq!(disconnects[0].request_id, None);
     assert!(app.pending_request_ids_for_test(session).is_empty());
 }
 
 #[test]
 fn k1_unanswered_resolve_name_unblocks_the_add_signal_dialog() {
     let (_ctx, mut app) = tree_app();
-    open_add_by_name(&mut app, 1, "0:Objects/2:Tag1");
+    open_add_by_name(
+        &mut app,
+        crate::bff::model::SessionId::new(1).unwrap(),
+        "0:Objects/2:Tag1",
+    );
     assert!(app.dialogs.add_signal.resolving.is_some());
-    app.age_pending_requests_for_test(1, 3600);
+    app.age_pending_requests_for_test(crate::bff::model::SessionId::new(1).unwrap(), 3600);
     app.tick_for_test();
     assert_eq!(app.dialogs.add_signal.resolving, None);
     assert!(app.dialogs.add_signal.open);
@@ -1318,23 +1524,31 @@ fn k1_unanswered_resolve_name_unblocks_the_add_signal_dialog() {
 #[test]
 fn k1_unanswered_add_items_leaves_the_waiting_state() {
     let (_ctx, mut app) = tree_app();
-    app.add_items(1, vec![("ns=2;s=Tag1".to_string(), "Tag1".to_string())]);
+    app.add_items(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        vec![("ns=2;s=Tag1".to_string(), "Tag1".to_string())],
+    );
     assert!(app.rows[0].pending);
-    app.age_pending_requests_for_test(1, 3600);
+    app.age_pending_requests_for_test(crate::bff::model::SessionId::new(1).unwrap(), 3600);
     app.tick_for_test();
     assert!(!app.rows[0].pending, "row must stop waiting");
-    assert_eq!(app.rows[0].quality.kind, QualityKind::Bad);
+    assert_eq!(app.rows[0].quality.kind(), QualityKind::Bad);
 }
 
 #[test]
 fn k1_unanswered_write_completes_the_batch_as_failed() {
     let (_ctx, mut app) = tree_app();
-    app.seed_row(1, "Tag1", "Tag1", Value::I64(1));
+    app.seed_row(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        "Tag1",
+        "Tag1",
+        Value::I64(1),
+    );
     let key = app.rows[0].key;
-    app.pending_writes = 1;
-    app.write_total = 1;
+    app.write_batch.pending = 1;
+    app.write_batch.total = 1;
     app.send_with(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         Protocol::OpcUa,
         CommandKind::Write {
             request: WriteRequest {
@@ -1345,29 +1559,40 @@ fn k1_unanswered_write_completes_the_batch_as_failed() {
         },
         PendingCtx::WriteKey(key),
     );
-    app.age_pending_requests_for_test(1, 3600);
+    app.age_pending_requests_for_test(crate::bff::model::SessionId::new(1).unwrap(), 3600);
     app.tick_for_test();
-    assert_eq!(app.pending_writes, 0);
-    assert_eq!(app.write_err, 1);
-    assert!(app.last_write_summary.is_some());
+    assert_eq!(app.write_batch.pending, 0);
+    assert_eq!(app.write_batch.errors, 1);
+    assert!(app.write_batch.summary.is_some());
 }
 
 #[test]
 fn k1_disconnect_and_subscription_expire_silently() {
     let (_ctx, mut app) = tree_app();
-    app.send(1, Protocol::OpcUa, CommandKind::Disconnect);
     app.send(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
+        Protocol::OpcUa,
+        CommandKind::Disconnect,
+    );
+    app.send(
+        crate::bff::model::SessionId::new(1).unwrap(),
         Protocol::OpcUa,
         CommandKind::ConfigureUaSubscription {
             publishing_interval_ms: 1000,
             deadband: 0.0,
         },
     );
-    assert_eq!(app.pending_request_ids_for_test(1).len(), 2);
-    app.age_pending_requests_for_test(1, 3600);
+    assert_eq!(
+        app.pending_request_ids_for_test(crate::bff::model::SessionId::new(1).unwrap())
+            .len(),
+        2
+    );
+    app.age_pending_requests_for_test(crate::bff::model::SessionId::new(1).unwrap(), 3600);
     app.tick_for_test();
-    assert!(app.pending_request_ids_for_test(1).is_empty());
+    assert!(
+        app.pending_request_ids_for_test(crate::bff::model::SessionId::new(1).unwrap())
+            .is_empty()
+    );
     assert_eq!(no_reply_lines(&app), 0);
     assert_eq!(app.sessions[0].state, SessionState::Connected);
 }
@@ -1382,10 +1607,11 @@ fn trace_lines(app: &App) -> Vec<String> {
 #[test]
 fn k2_trace_is_off_by_default() {
     let (_ctx, mut app) = tree_app();
-    app.browse(1, String::new());
-    let request = app.pending_request_ids_for_test(1)[0];
+    app.browse(crate::bff::model::SessionId::new(1).unwrap(), String::new());
+    let request =
+        app.pending_request_ids_for_test(crate::bff::model::SessionId::new(1).unwrap())[0];
     app.on_event_for_test_with_request(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         request,
         EventKind::Browse {
             node_id: String::new(),
@@ -1398,14 +1624,15 @@ fn k2_trace_is_off_by_default() {
 #[test]
 fn k2_trace_logs_request_reply_latency_and_dropped_replies() {
     let (_ctx, mut app) = tree_app();
-    app.settings.options.diagnostic_trace = true;
-    app.browse(1, String::new());
-    let request = app.pending_request_ids_for_test(1)[0];
+    app.settings.view.options.diagnostic_trace = true;
+    app.browse(crate::bff::model::SessionId::new(1).unwrap(), String::new());
+    let request =
+        app.pending_request_ids_for_test(crate::bff::model::SessionId::new(1).unwrap())[0];
     let lines = trace_lines(&app);
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert!(lines[0].contains(&format!("#{request}")), "{lines:?}");
     app.on_event_for_test_with_request(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         request,
         EventKind::Browse {
             node_id: String::new(),
@@ -1417,7 +1644,7 @@ fn k2_trace_logs_request_reply_latency_and_dropped_replies() {
     assert!(lines[1].contains("мс"), "latency is shown: {lines:?}");
     // The same reply again has no outstanding request: reported as dropped.
     app.on_event_for_test_with_request(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         request,
         EventKind::Browse {
             node_id: String::new(),
@@ -1461,7 +1688,7 @@ fn write_request(key: ItemKey) -> WriteRequest {
 
 fn start_batch(app: &mut App, keys: &[ItemKey]) {
     app.perform_write(PendingWrites {
-        session: 1,
+        session: crate::bff::model::SessionId::new(1).unwrap(),
         protocol: Protocol::OpcUa,
         requests: keys.iter().copied().map(write_request).collect(),
         type_label: "Int".to_string(),
@@ -1471,19 +1698,34 @@ fn start_batch(app: &mut App, keys: &[ItemKey]) {
 #[test]
 fn a11_overlapping_write_batches_add_up() {
     let (_ctx, mut app) = tree_app();
-    let a = app.seed_row(1, "A", "A", Value::I64(0));
-    let b = app.seed_row(1, "B", "B", Value::I64(0));
-    let c = app.seed_row(1, "C", "C", Value::I64(0));
+    let a = app.seed_row(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        "A",
+        "A",
+        Value::I64(0),
+    );
+    let b = app.seed_row(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        "B",
+        "B",
+        Value::I64(0),
+    );
+    let c = app.seed_row(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        "C",
+        "C",
+        Value::I64(0),
+    );
     start_batch(&mut app, &[a, b]);
     start_batch(&mut app, &[c]); // starts while the first batch is running
-    assert_eq!((app.pending_writes, app.write_total), (3, 3));
-    let ids = app.pending_request_ids_for_test(1);
+    assert_eq!((app.write_batch.pending, app.write_batch.total), (3, 3));
+    let ids = app.pending_request_ids_for_test(crate::bff::model::SessionId::new(1).unwrap());
     assert_eq!(ids.len(), 3);
     for (index, id) in ids.iter().enumerate() {
-        assert!(app.last_write_summary.is_none(), "not done after {index}");
+        assert!(app.write_batch.summary.is_none(), "not done after {index}");
         let key = [a, b, c][index];
         app.on_event_for_test_with_request(
-            1,
+            crate::bff::model::SessionId::new(1).unwrap(),
             *id,
             EventKind::Wrote {
                 key,
@@ -1491,10 +1733,18 @@ fn a11_overlapping_write_batches_add_up() {
             },
         );
     }
-    assert_eq!(app.pending_writes, 0);
-    assert_eq!((app.write_ok, app.write_err, app.write_total), (3, 0, 3));
+    assert_eq!(app.write_batch.pending, 0);
+    assert_eq!(
+        (
+            app.write_batch.ok,
+            app.write_batch.errors,
+            app.write_batch.total
+        ),
+        (3, 0, 3)
+    );
     assert!(
-        app.last_write_summary
+        app.write_batch
+            .summary
             .as_deref()
             .is_some_and(|s| s.contains('3'))
     );
@@ -1503,11 +1753,16 @@ fn a11_overlapping_write_batches_add_up() {
 #[test]
 fn a11_counters_restart_after_a_finished_batch() {
     let (_ctx, mut app) = tree_app();
-    let a = app.seed_row(1, "A", "A", Value::I64(0));
+    let a = app.seed_row(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        "A",
+        "A",
+        Value::I64(0),
+    );
     start_batch(&mut app, &[a]);
-    let id = app.pending_request_ids_for_test(1)[0];
+    let id = app.pending_request_ids_for_test(crate::bff::model::SessionId::new(1).unwrap())[0];
     app.on_event_for_test_with_request(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         id,
         EventKind::Wrote {
             key: a,
@@ -1516,7 +1771,11 @@ fn a11_counters_restart_after_a_finished_batch() {
     );
     start_batch(&mut app, &[a]);
     assert_eq!(
-        (app.pending_writes, app.write_total, app.write_ok),
+        (
+            app.write_batch.pending,
+            app.write_batch.total,
+            app.write_batch.ok
+        ),
         (1, 1, 0)
     );
 }
@@ -1524,13 +1783,23 @@ fn a11_counters_restart_after_a_finished_batch() {
 #[test]
 fn a11_writes_lost_with_the_session_complete_the_batch_as_failed() {
     let (_ctx, mut app) = tree_app();
-    let a = app.seed_row(1, "A", "A", Value::I64(0));
-    let b = app.seed_row(1, "B", "B", Value::I64(0));
+    let a = app.seed_row(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        "A",
+        "A",
+        Value::I64(0),
+    );
+    let b = app.seed_row(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        "B",
+        "B",
+        Value::I64(0),
+    );
     start_batch(&mut app, &[a, b]);
-    app.disconnect_session(1);
-    assert_eq!(app.pending_writes, 0, "no reply can arrive any more");
-    assert_eq!((app.write_ok, app.write_err), (0, 2));
-    assert!(app.last_write_summary.is_some());
+    app.disconnect_session(crate::bff::model::SessionId::new(1).unwrap());
+    assert_eq!(app.write_batch.pending, 0, "no reply can arrive any more");
+    assert_eq!((app.write_batch.ok, app.write_batch.errors), (0, 2));
+    assert!(app.write_batch.summary.is_some());
 }
 
 // ---------------------------------------------------------------------------
@@ -1637,6 +1906,10 @@ fn a9_backend_events_are_rendered_in_the_interface_language() {
 #[test]
 fn u15_lds_host_text_is_parsed_with_the_default_port() {
     use super::search::parse_lds_host;
+    assert_eq!(
+        parse_lds_host("aaaaaaaaaé"),
+        Ok(Some(("aaaaaaaaaé".to_string(), 4840)))
+    );
     assert_eq!(parse_lds_host(""), Ok(None));
     assert_eq!(parse_lds_host("   "), Ok(None));
     assert_eq!(
@@ -1666,7 +1939,11 @@ fn u15_lds_host_text_is_parsed_with_the_default_port() {
         "ho/st",
         ":4840",
     ] {
-        assert_eq!(parse_lds_host(bad), Err(()), "{bad:?}");
+        assert_eq!(
+            parse_lds_host(bad),
+            Err(super::search::LdsInputError::InvalidHost),
+            "{bad:?}"
+        );
     }
 }
 
@@ -1726,18 +2003,18 @@ fn u15_the_combined_search_counts_one_pending_step_per_request() {
     app.open_connect_dialog();
     app.search_ua_all();
     let d = &app.dialogs.connect;
-    assert!(d.ua_searching);
-    assert!(!d.ua_network_searching, "no adapter, no LDS host");
-    assert_eq!(d.ua_auto_pending, 1);
+    assert!(d.ua_search.host_searching());
+    assert!(!d.ua_search.network_searching(), "no adapter, no LDS host");
+    assert_eq!(d.ua_search.auto_pending_count(), 1);
 
     app.dialogs.connect.ua_lds_host = "127.0.0.1:4850".to_string();
     app.search_ua_all();
     let d = &app.dialogs.connect;
     assert!(
-        d.ua_network_searching,
+        d.ua_search.network_searching(),
         "a named LDS is asked without an adapter"
     );
-    assert_eq!(d.ua_auto_pending, 2);
+    assert_eq!(d.ua_search.auto_pending_count(), 2);
 }
 
 #[test]
@@ -1747,9 +2024,9 @@ fn u15_the_lds_host_is_remembered_and_restored() {
     app.open_connect_dialog();
     app.dialogs.connect.ua_lds_host = " localhost:4850 ".to_string();
     app.search_ua_network();
-    assert!(app.dialogs.connect.ua_network_searching);
+    assert!(app.dialogs.connect.ua_search.network_searching());
     assert!(app.dialogs.connect.error.is_none());
-    assert_eq!(app.settings.ua_lds_host, "localhost:4850");
+    assert_eq!(app.settings.ua.ua_lds_host, "localhost:4850");
 
     app.close_connect_dialog();
     app.open_connect_dialog();
@@ -1758,7 +2035,7 @@ fn u15_the_lds_host_is_remembered_and_restored() {
     // Clearing the field forgets it.
     app.dialogs.connect.ua_lds_host.clear();
     app.search_ua_network();
-    assert_eq!(app.settings.ua_lds_host, "");
+    assert_eq!(app.settings.ua.ua_lds_host, "");
 }
 
 #[test]
@@ -1771,7 +2048,7 @@ fn u15_a_remote_lds_host_needs_an_adapter_and_a_bad_text_is_reported() {
 
     app.dialogs.connect.ua_lds_host = "lds.plant.local".to_string();
     app.search_ua_network();
-    assert!(!app.dialogs.connect.ua_network_searching);
+    assert!(!app.dialogs.connect.ua_search.network_searching());
     assert_eq!(
         app.dialogs.connect.error.as_deref(),
         Some("Select a network adapter")
@@ -1779,11 +2056,11 @@ fn u15_a_remote_lds_host_needs_an_adapter_and_a_bad_text_is_reported() {
 
     app.dialogs.connect.ua_lds_host = "host:0".to_string();
     app.search_ua_network();
-    assert!(!app.dialogs.connect.ua_network_searching);
+    assert!(!app.dialogs.connect.ua_search.network_searching());
     let error = app.dialogs.connect.error.clone().unwrap_or_default();
     assert!(error.contains("LDS host"), "{error}");
     assert_eq!(
-        app.settings.ua_lds_host, "",
+        app.settings.ua.ua_lds_host, "",
         "an unusable text is not saved"
     );
 
@@ -1819,11 +2096,21 @@ fn u15_lds_texts_exist_in_every_language() {
 #[test]
 fn p1_poll_only_rows_are_polled_while_push_is_active() {
     let (_ctx, mut app) = tree_app();
-    app.seed_row(1, "ns=2;s=A", "A", Value::I64(1));
-    let b = app.seed_row(1, "ns=2;s=B", "B", Value::I64(2));
+    app.seed_row(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        "ns=2;s=A",
+        "A",
+        Value::I64(1),
+    );
+    let b = app.seed_row(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        "ns=2;s=B",
+        "B",
+        Value::I64(2),
+    );
     app.sessions[0].root_loading = false;
     app.on_event_for_test_at(
-        1,
+        crate::bff::model::SessionId::new(1).unwrap(),
         EventKind::SubscriptionState {
             state: SubscriptionState::Active,
         },
@@ -1835,7 +2122,10 @@ fn p1_poll_only_rows_are_polled_while_push_is_active() {
         "everything is pushed: no Read"
     );
 
-    app.on_event_for_test_at(1, EventKind::PollOnly { keys: vec![b] });
+    app.on_event_for_test_at(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        EventKind::PollOnly { keys: vec![b] },
+    );
     assert!(app.rows.iter().any(|r| r.key == b && r.poll_only));
     app.tick_for_test();
     assert!(app.sessions[0].read_in_flight, "the poll-only row is read");
@@ -1845,8 +2135,643 @@ fn p1_poll_only_rows_are_polled_while_push_is_active() {
 #[test]
 fn p1_reconnect_clears_poll_only() {
     let (_ctx, mut app) = tree_app();
-    let b = app.seed_row(1, "ns=2;s=B", "B", Value::I64(2));
-    app.on_event_for_test_at(1, EventKind::PollOnly { keys: vec![b] });
-    app.register_rows_for_test(1);
+    let b = app.seed_row(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        "ns=2;s=B",
+        "B",
+        Value::I64(2),
+    );
+    app.on_event_for_test_at(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        EventKind::PollOnly { keys: vec![b] },
+    );
+    app.register_rows_for_test(crate::bff::model::SessionId::new(1).unwrap());
     assert!(app.rows.iter().all(|r| !r.poll_only));
+}
+
+#[test]
+fn remove_active_session_activates_nearest_right_neighbor() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    for id in 1..=4 {
+        app.seed_session(
+            crate::bff::model::SessionId::new(id).unwrap(),
+            EndpointSpec::da("", &format!("Srv{id}")),
+        );
+    }
+    app.active_session = Some(crate::bff::model::SessionId::new(2).unwrap());
+    app.remove_session(crate::bff::model::SessionId::new(2).unwrap());
+    assert_eq!(
+        app.active_session,
+        Some(crate::bff::model::SessionId::new(3).unwrap())
+    );
+}
+
+#[test]
+fn session_ids_stop_after_maximum_and_report_exhaustion() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.next_session = Some(crate::bff::model::SessionId::new(u64::MAX).unwrap());
+    assert!(app.connect_endpoint(EndpointSpec::ua("opc.tcp://127.0.0.1:4840")));
+    assert_eq!(
+        app.sessions.last().unwrap().id,
+        crate::bff::model::SessionId::new(u64::MAX).unwrap()
+    );
+    assert!(app.next_session.is_none());
+    let count = app.sessions.len();
+    assert!(!app.connect_endpoint(EndpointSpec::ua("opc.tcp://127.0.0.1:4841")));
+    assert_eq!(app.sessions.len(), count);
+    assert_eq!(app.status, tr(app.lang(), Tr::SessionIdsExhausted));
+}
+
+#[test]
+fn item_ids_stop_after_maximum_and_keep_earlier_items() {
+    let (_ctx, mut app) = tree_app();
+    assert!(ItemKey::new(0).is_none());
+    app.next_key = ItemKey::new(u32::MAX);
+    app.add_items(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        vec![("one".into(), "one".into()), ("two".into(), "two".into())],
+    );
+    assert_eq!(app.rows.len(), 1);
+    assert_eq!(app.rows[0].key.get(), u32::MAX);
+    assert!(app.next_key.is_none());
+    assert_eq!(app.status, tr(app.lang(), Tr::ItemIdsExhausted));
+    app.add_items(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        vec![("three".into(), "three".into())],
+    );
+    assert_eq!(app.rows.len(), 1);
+}
+
+#[test]
+fn partial_write_then_closed_worker_finishes_batch() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        EndpointSpec::ua("opc.tcp://127.0.0.1:4840"),
+    );
+    app.engine.limit_dispatch_for_test(1);
+    app.perform_write(PendingWrites {
+        session: crate::bff::model::SessionId::new(1).unwrap(),
+        protocol: Protocol::OpcUa,
+        requests: vec![
+            WriteRequest {
+                key: ItemKey::new(1).unwrap(),
+                value: Value::Bool(true),
+                type_hint: None,
+            },
+            WriteRequest {
+                key: ItemKey::new(2).unwrap(),
+                value: Value::Bool(true),
+                type_hint: None,
+            },
+        ],
+        type_label: String::new(),
+    });
+    assert_eq!(app.write_batch.pending, 0);
+    assert_eq!(app.write_batch.total, 1);
+    assert_eq!(app.write_batch.errors, 1);
+    assert!(app.write_batch.summary.is_some());
+}
+
+#[test]
+fn closed_worker_marks_link_lost_and_finishes_pending_write() {
+    let (_ctx, mut app) = tree_app();
+    let session = SessionId::new(1).unwrap();
+    app.seed_row(session, "Tag1", "Tag1", Value::I64(1));
+    let key = app.rows[0].key;
+    app.seed_tree_item(session, None, 0, branch_node("node", "node", true));
+    app.sessions[0].tree[0].loading = true;
+    app.sessions[0].root_loading = true;
+    app.sessions[0].read_in_flight = true;
+    app.sessions[0].ua_mut().unwrap().subscription = SubscriptionState::Active;
+    app.engine.limit_dispatch_for_test(1);
+    app.write_batch.pending = 1;
+    app.write_batch.total = 1;
+    let request = app.send_with(
+        session,
+        Protocol::OpcUa,
+        CommandKind::Write {
+            request: WriteRequest {
+                key,
+                value: Value::I64(2),
+                type_hint: None,
+            },
+        },
+        PendingCtx::WriteKey(key),
+    );
+    assert!(request.is_some());
+    assert!(
+        app.send(
+            session,
+            Protocol::OpcUa,
+            CommandKind::Read { keys: vec![key] }
+        )
+        .is_none()
+    );
+    let view = &app.sessions[0];
+    assert_eq!(view.state, SessionState::Disconnected);
+    assert_eq!(view.reconnect, ReconnectState::Stopped);
+    assert!(!view.read_in_flight && !view.root_loading && !view.tree[0].loading);
+    assert_eq!(view.ua().unwrap().subscription, SubscriptionState::Inactive);
+    assert_eq!(app.rows[0].quality.kind(), QualityKind::Bad);
+    assert!(app.pending_request_ids_for_test(session).is_empty());
+    assert_eq!((app.write_batch.pending, app.write_batch.errors), (0, 1));
+    assert!(app.write_batch.summary.is_some());
+}
+
+#[test]
+fn late_unsolicited_data_cannot_revive_a_lost_or_connecting_link() {
+    let (_ctx, mut app) = tree_app();
+    let session = SessionId::new(1).unwrap();
+    let key = app.seed_row(session, "tag", "tag", Value::I64(1));
+    app.disconnect_session(session);
+    for state in [SessionState::Disconnected, SessionState::Connecting] {
+        app.sessions[0].state = state;
+        app.on_event_for_test_at(
+            session,
+            EventKind::Values {
+                values: vec![(
+                    key,
+                    crate::bff::model::DataValue {
+                        value: Value::I64(99),
+                        quality: crate::bff::model::Quality::from_da(0xc0),
+                        timestamp: None,
+                        reason: None,
+                    },
+                )],
+            },
+        );
+        app.on_event_for_test_at(
+            session,
+            EventKind::SubscriptionState {
+                state: SubscriptionState::Active,
+            },
+        );
+        app.on_event_for_test_at(session, EventKind::PollOnly { keys: vec![key] });
+        assert_eq!(app.rows[0].value, Value::I64(1));
+        assert_eq!(app.rows[0].quality.kind(), QualityKind::Bad);
+        assert!(!app.rows[0].poll_only);
+        assert_eq!(
+            app.sessions[0].ua().unwrap().subscription,
+            SubscriptionState::Inactive
+        );
+    }
+}
+
+#[test]
+fn exhausted_request_does_not_leave_browse_add_or_search_waiting() {
+    let (_ctx, mut app) = tree_app();
+    app.engine.exhaust_requests_for_test();
+    assert!(
+        app.browse(crate::bff::model::SessionId::new(1).unwrap(), String::new())
+            .is_none()
+    );
+    assert!(!app.sessions[0].root_loading);
+    assert!(!app.add_items(
+        crate::bff::model::SessionId::new(1).unwrap(),
+        vec![("ns=2;s=Rejected".into(), "Rejected".into())]
+    ));
+    assert!(!app.rows.iter().any(|row| row.item_id == "ns=2;s=Rejected"));
+    app.dialogs.connect.ua_search_host = "localhost".into();
+    app.search_ua_servers();
+    assert!(!app.dialogs.connect.ua_search.host_searching());
+    assert!(app.dialogs.connect.error.is_some());
+}
+
+#[test]
+fn exhausted_reconnect_preserves_pending_and_existing_state() {
+    let (_ctx, mut app) = tree_app();
+    app.engine.limit_dispatch_for_test(1);
+    let request = app
+        .send(
+            crate::bff::model::SessionId::new(1).unwrap(),
+            Protocol::OpcUa,
+            CommandKind::Read { keys: vec![] },
+        )
+        .unwrap();
+    app.engine.exhaust_requests_for_test();
+    let before = app.sessions[0].state;
+    app.reconnect_session(crate::bff::model::SessionId::new(1).unwrap());
+    assert_eq!(app.sessions[0].state, before);
+    assert!(
+        app.engine
+            .has_pending(crate::bff::model::SessionId::new(1).unwrap(), request)
+    );
+}
+
+#[test]
+fn unsolicited_values_and_read_error_do_not_clear_pending_read_in_ui() {
+    let (_ctx, mut app) = tree_app();
+    let session = crate::bff::model::SessionId::FIRST;
+    app.sync_fixture_sessions();
+    app.engine.limit_dispatch_for_test(1);
+    let request = app
+        .send(session, Protocol::OpcUa, CommandKind::Read { keys: vec![] })
+        .unwrap();
+    app.project_session(session);
+    app.on_event_for_test_at(session, EventKind::Values { values: vec![] });
+    assert!(app.sessions[0].read_in_flight);
+    app.on_event_for_test_at(
+        session,
+        EventKind::Error {
+            operation: Operation::Read,
+            message: BackendMsg::raw("push error"),
+        },
+    );
+    assert!(app.sessions[0].read_in_flight);
+    assert!(app.engine.has_pending(session, request));
+    app.on_event_for_test_with_request(session, request, EventKind::Values { values: vec![] });
+    assert!(!app.sessions[0].read_in_flight);
+}
+
+#[test]
+fn ua_search_replacement_preserves_independent_da_pending_and_rejects_stale_reply() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.record_dispatches_for_test();
+    let da = app
+        .send(
+            Owner::Discovery,
+            Protocol::OpcDa,
+            CommandKind::Discover {
+                host: String::new(),
+            },
+        )
+        .unwrap();
+    app.dialogs.connect.ua_search_host = "localhost".into();
+    app.search_ua_servers();
+    let UaSearch::SingleHost { request: old } = app.dialogs.connect.ua_search else {
+        panic!("single search")
+    };
+    app.search_ua_servers();
+    let UaSearch::SingleHost { request: current } = app.dialogs.connect.ua_search else {
+        panic!("replacement search")
+    };
+    let pending = app.pending_request_ids_for_test(Owner::Discovery);
+    assert!(pending.contains(&da));
+    assert!(pending.contains(&current));
+    assert!(!pending.contains(&old));
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        old,
+        EventKind::UaServersFound {
+            host: "localhost".into(),
+            port: 4840,
+            servers: vec![crate::bff::model::UaServerInfo {
+                application_name: "stale".into(),
+                application_uri: "urn:stale".into(),
+                endpoints: vec![],
+            }],
+        },
+    );
+    assert!(app.dialogs.connect.ua_search_results.is_empty());
+    assert_eq!(
+        app.dialogs.connect.ua_search,
+        UaSearch::SingleHost { request: current }
+    );
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        current,
+        EventKind::UaServersFound {
+            host: "localhost".into(),
+            port: 4840,
+            servers: vec![],
+        },
+    );
+    assert_eq!(app.dialogs.connect.ua_search, UaSearch::Idle);
+    assert!(
+        app.pending_request_ids_for_test(Owner::Discovery)
+            .contains(&da)
+    );
+}
+
+#[test]
+fn ua_auto_partial_dispatch_failure_finishes_after_accepted_reply() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.engine.limit_dispatch_for_test(1);
+    app.dialogs.connect.ua_lds_host = "localhost".into();
+    app.search_ua_all();
+    let UaSearch::Auto {
+        pending: AutoPending::Network(request),
+    } = app.dialogs.connect.ua_search
+    else {
+        panic!("accepted network request")
+    };
+    assert!(app.dialogs.connect.error.is_some());
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        request,
+        EventKind::UaNetworkFound { servers: vec![] },
+    );
+    assert_eq!(app.dialogs.connect.ua_search, UaSearch::Idle);
+}
+
+#[test]
+fn ua_auto_timeout_and_single_network_error_clear_search() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.record_dispatches_for_test();
+    app.search_ua_all();
+    app.age_pending_requests_for_test(Owner::Discovery, 3600);
+    app.tick_for_test();
+    assert_eq!(app.dialogs.connect.ua_search, UaSearch::Idle);
+    assert!(app.dialogs.connect.error.is_some());
+    app.dialogs.connect.ua_lds_host = "localhost".into();
+    app.search_ua_network();
+    let UaSearch::Network { request } = app.dialogs.connect.ua_search else {
+        panic!("network request")
+    };
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        request,
+        EventKind::Error {
+            operation: Operation::SearchNetwork,
+            message: BackendMsg::raw("failed"),
+        },
+    );
+    assert_eq!(app.dialogs.connect.ua_search, UaSearch::Idle);
+    assert!(app.dialogs.connect.error.is_some());
+}
+
+#[test]
+fn ua_auto_failure_keeps_partial_results_and_single_error_clears_spinner() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    let (host, network) = start_recorded_auto(&mut app);
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        host,
+        EventKind::UaServersFound {
+            host: "localhost".into(),
+            port: 4840,
+            servers: vec![crate::bff::model::UaServerInfo {
+                application_name: "partial".into(),
+                application_uri: "urn:partial".into(),
+                endpoints: vec![],
+            }],
+        },
+    );
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        network,
+        EventKind::Error {
+            operation: Operation::SearchNetwork,
+            message: BackendMsg::raw("network failed"),
+        },
+    );
+    assert_eq!(app.dialogs.connect.ua_search, UaSearch::Idle);
+    assert_eq!(app.dialogs.connect.ua_search_results.len(), 1);
+    assert!(app.dialogs.connect.error.is_some());
+    app.dialogs.connect.ua_search_host = "localhost".into();
+    app.search_ua_servers();
+    let UaSearch::SingleHost { request } = app.dialogs.connect.ua_search else {
+        panic!("host request")
+    };
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        request,
+        EventKind::Error {
+            operation: Operation::SearchServers,
+            message: BackendMsg::raw("host failed"),
+        },
+    );
+    assert_eq!(app.dialogs.connect.ua_search, UaSearch::Idle);
+    assert!(app.dialogs.connect.error.is_some());
+}
+
+#[test]
+fn new_da_discovery_keeps_queued_ua_timeout() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.record_dispatches_for_test();
+    app.dialogs.connect.ua_search_host = "localhost".into();
+    app.search_ua_servers();
+    app.age_pending_requests_for_test(Owner::Discovery, 3600);
+    app.engine.expire_requests(
+        Instant::now(),
+        app.settings.view.options.operation_timeout_secs,
+    );
+    app.restart_da_discovery(String::new());
+    app.on_event_for_test(EventKind::Error {
+        operation: Operation::Discover,
+        message: BackendMsg::raw("DA failed"),
+    });
+    app.dialogs.connect.error = None;
+    app.tick_for_test();
+    assert_eq!(app.dialogs.connect.ua_search, UaSearch::Idle);
+    assert!(app.dialogs.connect.error.is_some());
+}
+
+#[test]
+fn new_da_discovery_keeps_independent_ua_search_pending() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.record_dispatches_for_test();
+    app.dialogs.connect.ua_search_host = "localhost".into();
+    app.search_ua_servers();
+    let UaSearch::SingleHost { request } = app.dialogs.connect.ua_search else {
+        panic!("UA host request")
+    };
+    app.restart_da_discovery(String::new());
+    assert!(
+        app.pending_request_ids_for_test(Owner::Discovery)
+            .contains(&request)
+    );
+    assert_eq!(
+        app.dialogs.connect.ua_search,
+        UaSearch::SingleHost { request }
+    );
+    app.on_event_for_test_with_request(
+        Owner::Discovery,
+        request,
+        EventKind::UaServersFound {
+            host: "localhost".into(),
+            port: 4840,
+            servers: vec![],
+        },
+    );
+    assert_eq!(app.dialogs.connect.ua_search, UaSearch::Idle);
+}
+
+#[test]
+fn session_kind_tracks_endpoint_and_preserves_ua_selection_on_metadata_update() {
+    let id = crate::bff::model::SessionId::new(1).unwrap();
+    let mut view = SessionView::new(id, EndpointSpec::ua("opc.tcp://localhost:4840"), Lang::Ru);
+    let ua = view.ua_mut().unwrap();
+    ua.ua_view_id = Some("ns=1;s=view".into());
+    ua.ua_browse_filter = crate::bff::model::NodeClassFilter::Variables;
+    let mut updated = view.endpoint().clone();
+    updated.user = "user".into();
+    view.update_endpoint(updated);
+    assert_eq!(
+        view.ua().unwrap().ua_view_id.as_deref(),
+        Some("ns=1;s=view")
+    );
+    assert_eq!(
+        view.ua().unwrap().ua_browse_filter,
+        crate::bff::model::NodeClassFilter::Variables
+    );
+    view.update_endpoint(EndpointSpec::da("", "Server"));
+    assert_eq!(view.protocol(), Protocol::OpcDa);
+    assert_eq!(view.endpoint().protocol, view.protocol());
+    assert!(view.ua().is_none());
+    view.update_endpoint(EndpointSpec::ua("opc.tcp://localhost:4840"));
+    assert_eq!(view.endpoint().protocol, view.protocol());
+    let ua = view.ua().unwrap();
+    assert_eq!(ua.ua_view_id, None);
+    assert_eq!(ua.ua_browse_filter, crate::bff::model::NodeClassFilter::All);
+    assert_eq!(ua.subscription, SubscriptionState::Inactive);
+}
+
+#[test]
+fn failed_script_save_reports_error_without_success() {
+    let (_ctx, mut app) = tree_app();
+    app.settings.save_blocked = true;
+    app.journal.clear();
+    app.save_script();
+    let messages: Vec<_> = app
+        .journal
+        .entries()
+        .iter()
+        .map(|entry| entry.render(app.lang()))
+        .collect();
+    assert!(messages.iter().any(|message| {
+        message.contains(
+            tr(app.lang(), Tr::SettingsSaveBlocked)
+                .split("{0}")
+                .next()
+                .unwrap(),
+        )
+    }));
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message == tr(app.lang(), Tr::ScriptSaved))
+    );
+}
+
+#[test]
+fn startup_network_messages_follow_the_selected_language() {
+    let (_ctx, app) = tree_app();
+    for lang in Lang::ALL {
+        let rendered: Vec<_> = app
+            .journal
+            .entries()
+            .iter()
+            .map(|entry| entry.render(lang))
+            .collect();
+        assert!(rendered.contains(&opclook_locale::fmt(lang, Tr::NetworkCacheLoaded, &[&0])));
+        assert!(rendered.contains(&tr(lang, Tr::NetworkSelectionNone).to_string()));
+    }
+}
+
+#[test]
+fn exit_messages_include_localized_save_failure_and_shutdown_failure() {
+    use opclook_contract::model::{GatewayShutdown, ShutdownOutcome};
+    let (_ctx, mut app) = tree_app();
+    app.settings.save_blocked = true;
+    let save_error = app.save_settings();
+    assert!(save_error.is_some());
+    let normal = GatewayShutdown {
+        da: ShutdownOutcome::Joined,
+        ua: ShutdownOutcome::Joined,
+    };
+    assert!(super::exit_messages(None, Lang::En, normal).is_empty());
+    let failed = GatewayShutdown {
+        da: ShutdownOutcome::Panicked,
+        ua: ShutdownOutcome::Joined,
+    };
+    let messages = super::exit_messages(save_error, app.lang(), failed);
+    assert_eq!(messages.len(), 2);
+    assert!(
+        messages[0].contains(
+            tr(app.lang(), Tr::SettingsSaveBlocked)
+                .split("{0}")
+                .next()
+                .unwrap()
+        )
+    );
+}
+
+#[test]
+fn abnormal_shutdown_messages_are_localized_and_normal_shutdown_is_silent() {
+    use opclook_contract::model::{GatewayShutdown, ShutdownOutcome};
+    use opclook_locale::Lang;
+    let normal = GatewayShutdown {
+        da: ShutdownOutcome::Joined,
+        ua: ShutdownOutcome::Joined,
+    };
+    assert!(super::shutdown_messages(Lang::En, normal).is_empty());
+    let failed = GatewayShutdown {
+        da: ShutdownOutcome::Panicked,
+        ua: ShutdownOutcome::TimedOut,
+    };
+    for lang in Lang::ALL {
+        let messages = super::shutdown_messages(lang, failed);
+        assert_eq!(messages.len(), 2);
+        assert!(messages[0].contains("DA"));
+        assert!(messages[1].contains("UA"));
+    }
+    assert_ne!(
+        super::shutdown_messages(Lang::Ru, failed),
+        super::shutdown_messages(Lang::En, failed)
+    );
+    assert_ne!(
+        super::shutdown_messages(Lang::Zh, failed),
+        super::shutdown_messages(Lang::En, failed)
+    );
+}
+
+#[test]
+fn row_index_tracks_same_length_replacement() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    let session = SessionId::new(1).unwrap();
+    app.seed_session(session, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let old = app.seed_row(session, "old", "old", Value::Empty);
+    assert!(app.has_row_for_item(session, "old"));
+    let mut other = App::new_test(&ctx);
+    other.seed_session(session, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    other.seed_row(session, "new", "new", Value::Empty);
+    let mut replacement = other.rows.pop().unwrap();
+    replacement.key = ItemKey::new(100).unwrap();
+    app.rows_mut_for_test()[0] = replacement;
+    assert!(!app.has_row_for_item(session, "old"));
+    assert!(app.has_row_for_item(session, "new"));
+    assert_eq!(app.row_position(old), None);
+    assert_eq!(app.row_position(ItemKey::new(100).unwrap()), Some(0));
+}
+
+#[test]
+fn visible_tree_cache_updates_on_toggle() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    let session = SessionId::new(1).unwrap();
+    app.seed_session(session, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let node = |name: &str| BrowseNode {
+        node_id: name.into(),
+        name: name.into(),
+        kind: NodeKind::Branch,
+        has_children: true,
+    };
+    let root = app.seed_tree_item(session, None, 0, node("root"));
+    app.seed_tree_item(session, Some(root), 1, node("child"));
+    let view = &mut app.sessions[0];
+    let first = view.visible_tree_indices();
+    assert_eq!(first.as_slice(), &[0]);
+    assert!(std::rc::Rc::ptr_eq(&first, &view.visible_tree_indices()));
+    view.toggle_tree(root);
+    assert_eq!(view.visible_tree_indices().as_slice(), &[0, 1]);
+    view.toggle_tree(root);
+    assert_eq!(view.visible_tree_indices().as_slice(), &[0]);
 }

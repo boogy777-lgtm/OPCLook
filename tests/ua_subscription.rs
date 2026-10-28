@@ -5,10 +5,11 @@
 //! that a Write to a monitored node produces a pushed change.
 //!
 //! Run: `cargo test --test ua_subscription -- --ignored --nocapture`
-use opcda_egui::bff::Gateway;
+use opcda_egui::bff::model::ItemKey;
 use opcda_egui::bff::model::{
     BrowseNode, Command, CommandKind, EndpointSpec, EventKind, ItemSpec, NodeKind, Protocol, Value,
 };
+use opclook_backend::bff::Gateway;
 use std::time::{Duration, Instant};
 
 const DEFAULT_URL: &str = "opc.tcp://127.0.0.1:4840";
@@ -28,7 +29,7 @@ fn test_url() -> String {
 }
 
 /// Drain events for a session until `predicate` matches or the timeout expires.
-/// Push events carry request_id == 0, so the filter is purely on the EventKind.
+/// Push events carry Origin::Unsolicited, so the filter is purely on the EventKind.
 fn wait_for(
     gateway: &Gateway,
     session: u64,
@@ -38,7 +39,11 @@ fn wait_for(
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         while let Some(event) = gateway.try_recv() {
-            if event.session != session {
+            if event.owner
+                != opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                )
+            {
                 continue;
             }
             if predicate(&event.kind) {
@@ -53,8 +58,10 @@ fn wait_for(
 fn connect(gateway: &Gateway, session: u64) {
     gateway
         .send(Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Connect {
                 endpoint: EndpointSpec::ua(test_url()),
@@ -74,8 +81,10 @@ fn connect(gateway: &Gateway, session: u64) {
 fn send(gateway: &Gateway, session: u64, kind: CommandKind) {
     gateway
         .send(Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind,
         })
@@ -102,14 +111,14 @@ fn add_batch(
     ids: &[String],
     first_key: u32,
 ) -> Vec<(
-    u32,
+    ItemKey,
     Result<opcda_egui::bff::model::ItemInfo, opcda_egui::bff::model::BackendMsg>,
 )> {
     let specs: Vec<ItemSpec> = ids
         .iter()
         .enumerate()
         .map(|(i, id)| ItemSpec {
-            key: first_key + i as u32,
+            key: ItemKey::new(first_key + i as u32).unwrap(),
             item_id: id.clone(),
         })
         .collect();
@@ -130,7 +139,7 @@ fn browse_children(gateway: &Gateway, session: u64, node_id: &str) -> Vec<Browse
         session,
         CommandKind::Browse {
             node_id: node_id.to_string(),
-            filter: None,
+            filter: opcda_egui::bff::model::NodeClassFilter::All,
             view_id: None,
         },
     );
@@ -170,7 +179,7 @@ fn collect_variables(gateway: &Gateway, session: u64) -> Vec<String> {
 /// Find a Variable that is writable and actually holds a write (read-back equals
 /// the written value), so a Write reliably produces a subscription push the PLC
 /// does not instantly revert. Returns (key, node_id). Restores the original value.
-fn find_sticky_writable(gateway: &Gateway, session: u64) -> Option<(u32, String)> {
+fn find_sticky_writable(gateway: &Gateway, session: u64) -> Option<(ItemKey, String)> {
     let vars = collect_variables(gateway, session);
     if vars.is_empty() {
         return None;
@@ -178,9 +187,9 @@ fn find_sticky_writable(gateway: &Gateway, session: u64) -> Option<(u32, String)
     const FIRST_KEY: u32 = 100;
     let candidates: Vec<String> = vars.into_iter().take(60).collect();
     let results = add_batch(gateway, session, &candidates, FIRST_KEY);
-    let mut by_key: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
+    let mut by_key: std::collections::HashMap<ItemKey, String> = std::collections::HashMap::new();
     for (i, id) in candidates.iter().enumerate() {
-        by_key.insert(FIRST_KEY + i as u32, id.clone());
+        by_key.insert(ItemKey::new(FIRST_KEY + i as u32).unwrap(), id.clone());
     }
 
     for (key, result) in results {
@@ -218,8 +227,10 @@ fn find_sticky_writable(gateway: &Gateway, session: u64) -> Option<(u32, String)
             // Not sticky -> the PLC reverted it; restore and keep looking.
             gateway
                 .send(Command {
-                    request_id: next_id(),
-                    session,
+                    request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+                    owner: opcda_egui::bff::model::Owner::Session(
+                        opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                    ),
                     protocol: Protocol::OpcUa,
                     kind: CommandKind::Write {
                         request: opcda_egui::bff::model::WriteRequest {
@@ -241,7 +252,7 @@ fn find_sticky_writable(gateway: &Gateway, session: u64) -> Option<(u32, String)
 fn push_value(
     gateway: &Gateway,
     session: u64,
-    key: u32,
+    key: ItemKey,
     timeout: Duration,
 ) -> opcda_egui::bff::model::DataValue {
     let kind = wait_for(gateway, session, timeout, |kind| match kind {
@@ -264,7 +275,11 @@ fn push_value(
 /// unambiguous new-value push.
 fn drain_stale_pushes(gateway: &Gateway, session: u64) {
     while let Some(event) = gateway.try_recv() {
-        if event.session != session {
+        if event.owner
+            != opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            )
+        {
             continue;
         }
     }
@@ -273,7 +288,7 @@ fn drain_stale_pushes(gateway: &Gateway, session: u64) {
 /// Issue an explicit Read (the worker handles it independently of the push
 /// subscription) so we can observe the writable node's current value before
 /// mutating it in the test.
-fn read_value(gateway: &Gateway, session: u64, key: u32) -> Value {
+fn read_value(gateway: &Gateway, session: u64, key: ItemKey) -> Value {
     send(gateway, session, CommandKind::Read { keys: vec![key] });
     let kind = wait_for(
         gateway,
@@ -318,7 +333,7 @@ fn differing_value(v: &Value) -> Value {
     }
 }
 
-fn write(gateway: &Gateway, session: u64, key: u32, value: Value) {
+fn write(gateway: &Gateway, session: u64, key: ItemKey, value: Value) {
     send(
         gateway,
         session,
@@ -369,7 +384,7 @@ fn ua_subscription_pushes_values_without_reads_and_writes() {
         }
 
         // 1. Pure push: CurrentTime must arrive WITHOUT any manual Read.
-        let v1 = push_value(&gateway, session, 1, Duration::from_secs(5));
+        let v1 = push_value(&gateway, session, ItemKey::FIRST, Duration::from_secs(5));
         println!("PUSH time key=1 value={:?}", v1.value);
         assert!(
             matches!(v1.value, Value::DateTime(_)),
@@ -427,7 +442,7 @@ fn ua_subscription_resumes_after_reconnect() {
         assert!(r[0].1.is_ok(), "add failed: {:?}", r[0].1);
 
         // A pure push arrives on the first connection.
-        let v = push_value(&gateway, session, 1, Duration::from_secs(5));
+        let v = push_value(&gateway, session, ItemKey::FIRST, Duration::from_secs(5));
         println!("PRE_RECONNECT push key=1 value={:?}", v.value);
         assert!(matches!(v.value, Value::DateTime(_)));
 
@@ -444,7 +459,7 @@ fn ua_subscription_resumes_after_reconnect() {
         assert!(r[0].1.is_ok(), "re-add failed: {:?}", r[0].1);
 
         // Pushed updates must resume after reconnect.
-        let v2 = push_value(&gateway, session, 1, Duration::from_secs(5));
+        let v2 = push_value(&gateway, session, ItemKey::FIRST, Duration::from_secs(5));
         println!("POST_RECONNECT push key=1 value={:?}", v2.value);
         assert!(
             matches!(v2.value, Value::DateTime(_)),

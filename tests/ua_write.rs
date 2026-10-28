@@ -1,8 +1,9 @@
-use opcda_egui::bff::Gateway;
+use opcda_egui::bff::model::ItemKey;
 use opcda_egui::bff::model::{
     BrowseNode, Command, CommandKind, EndpointSpec, Event, EventKind, ItemSpec, NodeKind, Protocol,
     Value, WriteRequest,
 };
+use opclook_backend::bff::Gateway;
 use std::time::{Duration, Instant};
 
 const DEFAULT_URL: &str = "opc.tcp://127.0.0.1:4840";
@@ -32,12 +33,12 @@ fn wait_for(
     predicate: impl Fn(&EventKind) -> bool,
 ) -> Option<Event> {
     let request_id = command.request_id;
-    let session = command.session;
+    let owner = command.owner;
     gateway.send(command).expect("gateway send");
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         while let Some(event) = gateway.try_recv() {
-            if event.request_id != request_id || event.session != session {
+            if event.origin != request_id.into() || event.owner != owner {
                 continue;
             }
             if predicate(&event.kind) {
@@ -53,8 +54,10 @@ fn connect(gateway: &Gateway, session: u64) -> Event {
     wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Connect {
                 endpoint: EndpointSpec::ua(test_url()),
@@ -70,8 +73,10 @@ fn disconnect(gateway: &Gateway, session: u64) {
     let _ = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Disconnect,
         },
@@ -84,12 +89,14 @@ fn browse_children(gateway: &Gateway, session: u64, node_id: &str) -> Vec<Browse
     let event = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Browse {
                 node_id: node_id.to_string(),
-                filter: None,
+                filter: opcda_egui::bff::model::NodeClassFilter::All,
                 view_id: None,
             },
         },
@@ -146,15 +153,17 @@ fn add_items(gateway: &Gateway, session: u64, items: &[String]) -> Event {
         .iter()
         .enumerate()
         .map(|(i, id)| ItemSpec {
-            key: (i + 1) as u32,
+            key: ItemKey::new((i + 1) as u32).unwrap(),
             item_id: id.clone(),
         })
         .collect();
     wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::AddItems { items: specs },
         },
@@ -164,12 +173,14 @@ fn add_items(gateway: &Gateway, session: u64, items: &[String]) -> Event {
     .expect("add items timeout")
 }
 
-fn read_value(gateway: &Gateway, session: u64, key: u32) -> Value {
+fn read_value(gateway: &Gateway, session: u64, key: ItemKey) -> Value {
     let event = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Read { keys: vec![key] },
         },
@@ -190,12 +201,14 @@ fn read_value(gateway: &Gateway, session: u64, key: u32) -> Value {
     }
 }
 
-fn write_value(gateway: &Gateway, session: u64, key: u32, value: Value) {
+fn write_value(gateway: &Gateway, session: u64, key: ItemKey, value: Value) {
     let event = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
-            session,
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+            owner: opcda_egui::bff::model::Owner::Session(
+                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Write {
                 request: WriteRequest {
@@ -244,7 +257,7 @@ fn find_writable(
     gateway: &Gateway,
     session: u64,
     candidates: &[String],
-) -> Option<(u32, String, String, Value)> {
+) -> Option<(ItemKey, String, String, Value)> {
     // Add candidates as items (this resolves DataType + AccessLevel) and inspect each
     // for writable + known scalar type. For any writable candidate, qualify it further
     // with a trial write/read-back/restore so we only target a value that actually sticks.
@@ -257,9 +270,9 @@ fn find_writable(
         EventKind::AddItems { results } => results,
         other => panic!("unexpected add: {other:?}"),
     };
-    let mut by_key: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
+    let mut by_key: std::collections::HashMap<ItemKey, String> = std::collections::HashMap::new();
     for (i, id) in ids.iter().enumerate() {
-        by_key.insert((i + 1) as u32, id.clone());
+        by_key.insert(ItemKey::new((i + 1) as u32).unwrap(), id.clone());
     }
 
     for (key, info) in results {
@@ -294,8 +307,10 @@ fn find_writable(
         let wrote = wait_for(
             gateway,
             Command {
-                request_id: next_id(),
-                session,
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+                owner: opcda_egui::bff::model::Owner::Session(
+                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                ),
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Write {
                     request: WriteRequest {
@@ -320,8 +335,10 @@ fn find_writable(
             // Not sticky -> write back the original so we don't leave the value mutated.
             gateway
                 .send(Command {
-                    request_id: next_id(),
-                    session,
+                    request_id: opcda_egui::bff::model::RequestId::new(next_id()),
+                    owner: opcda_egui::bff::model::Owner::Session(
+                        opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                    ),
                     protocol: Protocol::OpcUa,
                     kind: CommandKind::Write {
                         request: WriteRequest {
@@ -372,8 +389,8 @@ fn ua_write_readback_and_restore() {
                     .clone()
                     .filter(|d| d.as_str() != "Other" && d.as_str() != "Unknown")
                     .expect("override node has no resolvable data type");
-                let value = read_value(&gateway, session, 1);
-                (1u32, override_node, data_type_name, value)
+                let value = read_value(&gateway, session, ItemKey::FIRST);
+                (ItemKey::FIRST, override_node, data_type_name, value)
             } else {
                 let (items, tree) = collect_items(&gateway, session, "i=85");
                 assert!(
