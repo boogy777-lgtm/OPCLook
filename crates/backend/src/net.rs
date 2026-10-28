@@ -892,8 +892,8 @@ mod windows_inventory {
     }
 
     unsafe fn from_raw_adapter(raw: &IP_ADAPTER_ADDRESSES_LH) -> AdapterInfo {
-        let name = unsafe { pwstr_to_string(raw.FriendlyName) };
-        let description = unsafe { pwstr_to_string(raw.Description) };
+        let name = unsafe { crate::winutil::wide_to_string(raw.FriendlyName) };
+        let description = unsafe { crate::winutil::wide_to_string(raw.Description) };
         let mut addresses = Vec::new();
         let mut unicast = raw.FirstUnicastAddress;
         while !unicast.is_null() {
@@ -1058,19 +1058,6 @@ mod windows_inventory {
     fn looks_like_loopback(name: &str, description: &str) -> bool {
         let haystack = format!("{} {}", name, description).to_ascii_lowercase();
         haystack.contains("loopback")
-    }
-
-    unsafe fn pwstr_to_string(value: windows::core::PWSTR) -> String {
-        if value.is_null() {
-            return String::new();
-        }
-        let mut len = 0usize;
-        let mut cursor = value.0;
-        while unsafe { *cursor } != 0 {
-            len += 1;
-            cursor = unsafe { cursor.add(1) };
-        }
-        String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(value.0, len) })
     }
 
     #[cfg(test)]

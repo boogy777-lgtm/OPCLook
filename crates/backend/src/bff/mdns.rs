@@ -237,6 +237,7 @@ pub(crate) fn dedupe_services(services: Vec<MdnService>) -> Vec<MdnService> {
 #[cfg(windows)]
 mod windows_impl {
     use super::*;
+    use crate::winutil::{SystemLibrary, wide_to_string};
     use std::collections::{HashMap, HashSet};
     use std::ffi::c_void;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -249,8 +250,7 @@ mod windows_impl {
         DNS_SERVICE_BROWSE_REQUEST_0, DNS_SERVICE_CANCEL, DNS_SERVICE_INSTANCE,
         DNS_SERVICE_RESOLVE_REQUEST, DNS_TYPE_PTR,
     };
-    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
-    use windows::core::{PCSTR, PCWSTR, PWSTR};
+    use windows::core::{PCWSTR, PWSTR};
 
     type BrowseFn = unsafe extern "system" fn(
         *const DNS_SERVICE_BROWSE_REQUEST,
@@ -264,6 +264,7 @@ mod windows_impl {
     type ResolveCancelFn = unsafe extern "system" fn(*const DNS_SERVICE_CANCEL) -> i32;
 
     struct DnsApi {
+        _library: SystemLibrary,
         browse: BrowseFn,
         browse_cancel: BrowseCancelFn,
         resolve: ResolveFn,
@@ -279,20 +280,18 @@ mod windows_impl {
     }
 
     fn load_dns_api() -> Option<DnsApi> {
-        let module_name = wide("dnsapi.dll");
-        let module = unsafe { LoadLibraryW(PCWSTR(module_name.as_ptr())) }.ok()?;
-        let browse = unsafe { GetProcAddress(module, PCSTR(b"DnsServiceBrowse\0".as_ptr())) }?;
-        let browse_cancel =
-            unsafe { GetProcAddress(module, PCSTR(b"DnsServiceBrowseCancel\0".as_ptr())) }?;
-        let resolve = unsafe { GetProcAddress(module, PCSTR(b"DnsServiceResolve\0".as_ptr())) }?;
-        let resolve_cancel =
-            unsafe { GetProcAddress(module, PCSTR(b"DnsServiceResolveCancel\0".as_ptr())) }?;
-        Some(DnsApi {
-            browse: unsafe { std::mem::transmute(browse) },
-            browse_cancel: unsafe { std::mem::transmute(browse_cancel) },
-            resolve: unsafe { std::mem::transmute(resolve) },
-            resolve_cancel: unsafe { std::mem::transmute(resolve_cancel) },
-        })
+        let library = SystemLibrary::load("dnsapi.dll")?;
+        // SAFETY: these signatures match the documented DNS-SD exports; the
+        // library is kept in DnsApi for the lifetime of the function pointers.
+        unsafe {
+            Some(DnsApi {
+                browse: library.symbol(c"DnsServiceBrowse")?,
+                browse_cancel: library.symbol(c"DnsServiceBrowseCancel")?,
+                resolve: library.symbol(c"DnsServiceResolve")?,
+                resolve_cancel: library.symbol(c"DnsServiceResolveCancel")?,
+                _library: library,
+            })
+        }
     }
 
     /// Results copied out of an API callback. No pointer escapes the callback.
@@ -365,19 +364,6 @@ mod windows_impl {
         value.encode_utf16().chain(std::iter::once(0)).collect()
     }
 
-    unsafe fn wide_ptr_to_string(value: PWSTR) -> String {
-        if value.is_null() {
-            return String::new();
-        }
-        let mut len = 0usize;
-        let mut cursor = value.0;
-        while unsafe { *cursor } != 0 {
-            len += 1;
-            cursor = unsafe { cursor.add(1) };
-        }
-        String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(value.0, len) })
-    }
-
     #[derive(Clone, Debug)]
     struct ResolvedService {
         instance_name: String,
@@ -404,7 +390,7 @@ mod windows_impl {
         while !current.is_null() {
             let entry = unsafe { &*current };
             if entry.wType == DNS_TYPE_PTR.0 {
-                let name = unsafe { wide_ptr_to_string(entry.Data.PTR.pNameHost) };
+                let name = unsafe { wide_to_string(entry.Data.PTR.pNameHost) };
                 if !name.is_empty() {
                     let _ = sink.tx.send(CallbackEvent::BrowseInstance(name));
                 }
@@ -436,8 +422,8 @@ mod windows_impl {
     }
 
     unsafe fn parse_service_instance(instance: &DNS_SERVICE_INSTANCE) -> ResolvedService {
-        let instance_name = unsafe { wide_ptr_to_string(instance.pszInstanceName) };
-        let host = unsafe { wide_ptr_to_string(instance.pszHostName) };
+        let instance_name = unsafe { wide_to_string(instance.pszInstanceName) };
+        let host = unsafe { wide_to_string(instance.pszHostName) };
         let mut addresses = Vec::new();
         if !instance.ip4Address.is_null() {
             let raw = unsafe { *instance.ip4Address };
@@ -450,8 +436,8 @@ mod windows_impl {
         let mut properties = Vec::new();
         if !instance.keys.is_null() && !instance.values.is_null() {
             for index in 0..instance.dwPropertyCount as usize {
-                let key = unsafe { wide_ptr_to_string(*instance.keys.add(index)) };
-                let value = unsafe { wide_ptr_to_string(*instance.values.add(index)) };
+                let key = unsafe { wide_to_string(*instance.keys.add(index)) };
+                let value = unsafe { wide_to_string(*instance.values.add(index)) };
                 if !key.is_empty() {
                     properties.push((key, value));
                 }
