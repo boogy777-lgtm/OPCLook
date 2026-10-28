@@ -348,8 +348,15 @@ where
 
 #[cfg(windows)]
 struct HelperClient {
+    transport: Option<HelperTransport>,
+}
+
+#[cfg(windows)]
+struct HelperTransport {
+    // Drop the pipe before shutting down the runtime so cancelled overlapped
+    // operations are completed and their handles released during shutdown.
+    pipe: tokio::net::windows::named_pipe::NamedPipeClient,
     runtime: tokio::runtime::Runtime,
-    pipe: Option<tokio::net::windows::named_pipe::NamedPipeClient>,
 }
 #[cfg(not(windows))]
 struct HelperClient;
@@ -359,14 +366,18 @@ impl HelperClient {
         message.version = DA_HELPER_PROTOCOL_VERSION;
         #[cfg(windows)]
         {
-            let Some(pipe) = self.pipe.as_mut() else {
+            let Some(transport) = self.transport.as_mut() else {
                 return Err("helper pipe closed".into());
             };
-            let result =
-                self.runtime
-                    .block_on(pipe_exchange(pipe, &message, Duration::from_secs(3)));
+            let result = transport.runtime.block_on(pipe_exchange(
+                &mut transport.pipe,
+                &message,
+                Duration::from_secs(3),
+            ));
             if result.is_err() {
-                self.pipe = None;
+                // Dropping both the pipe and its runtime drains cancelled I/O;
+                // keeping the runtime alive can retain the pipe's OS handle.
+                self.transport = None;
             }
             result
         }
@@ -887,8 +898,10 @@ impl HelperClient {
         };
         verify_pipe_server(&client, expected_pid)?;
         let mut client = Self {
-            runtime,
-            pipe: Some(client),
+            transport: Some(HelperTransport {
+                pipe: client,
+                runtime,
+            }),
         };
         client.call(PipeMessage {
             version: DA_HELPER_PROTOCOL_VERSION,
@@ -1233,7 +1246,7 @@ mod tests {
             })
             .unwrap_err();
         assert!(error.contains("timed out"));
-        assert!(client.pipe.is_none());
+        assert!(client.transport.is_none());
         assert!(closed_rx.recv_timeout(Duration::from_secs(2)).unwrap());
         server.join().unwrap();
     }

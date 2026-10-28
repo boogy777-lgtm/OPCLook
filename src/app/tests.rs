@@ -1168,7 +1168,15 @@ fn k1_request_timeout_honours_the_setting_with_floors() {
 #[test]
 fn k1_fresh_requests_do_not_expire() {
     let (_ctx, mut app) = tree_app();
-    app.browse(1, String::new());
+    app.engine.insert_pending_for_test(
+        1,
+        501,
+        PendingRequest {
+            operation: Operation::Browse,
+            sent: Instant::now(),
+            ctx: PendingCtx::None,
+        },
+    );
     app.age_pending_requests_for_test(1, 20);
     app.tick_for_test();
     assert_eq!(app.pending_request_ids_for_test(1).len(), 1);
