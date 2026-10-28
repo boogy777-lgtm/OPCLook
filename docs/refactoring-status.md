@@ -255,3 +255,10 @@ settings 46/46, взаимодействие меню языка 1/1 и Windows 
 lifetime count >= 3 × keepalive. Wire lifetime остаётся u32 секундами. Linux
 тест констант 1/1, Windows i686 workspace all-targets typecheck с test-only
 флагами и fmt прошли; Windows runtime и остальная типизация времени открыты.
+
+Settings хранит выбранный AdapterId и IpAddr в типизированном виде. Старые
+строковые поля читаются при загрузке, неверные значения становятся unselected,
+валидные записываются канонически; stale GUID по-прежнему сохраняется. Linux
+settings 46/46 и network-tab interactions 5 passed / 1 Windows-only ignored;
+Windows GUI all-targets typecheck с test-only отключением ресурсов прошёл.
+Реальный Windows inventory/маршруты и остальные пункты A/C открыты.

@@ -416,11 +416,9 @@ impl App {
         let mut changed = false;
         match resolution.state {
             SelectionState::Selected => {
-                let id_text = resolution.selection.adapter_id().map(|id| id.to_string());
-                let ip_text = resolution.local_ip.map(|ip| ip.to_string());
-                if self.settings.preferred_adapter != id_text
-                    || self.settings.selected_local_ip != ip_text
-                {
+                let id = resolution.selection.adapter_id();
+                let ip = resolution.local_ip;
+                if self.settings.preferred_adapter != id || self.settings.selected_local_ip != ip {
                     self.settings
                         .set_adapter_selection(resolution.selection.clone());
                     self.settings.set_selected_local_ip(resolution.local_ip);
@@ -430,15 +428,19 @@ impl App {
                     .resolve(resolution.selection.clone(), resolution.local_ip);
                 self.journal.info(format!(
                     "network selection: adapter={} ip={} binding={} lease_generation={}",
-                    id_text.unwrap_or_default(),
-                    ip_text.unwrap_or_default(),
+                    id.map(|value| value.to_string()).unwrap_or_default(),
+                    ip.map(|value| value.to_string()).unwrap_or_default(),
                     self.binding_summary(),
                     self.network.generation
                 ));
             }
             SelectionState::Stale => {
                 self.network.resolve(AdapterSelection::None, None);
-                let id = self.settings.preferred_adapter.clone().unwrap_or_default();
+                let id = self
+                    .settings
+                    .preferred_adapter
+                    .map(|value| value.to_string())
+                    .unwrap_or_default();
                 self.journal.warn(format!(
                     "network selection stale: saved adapter {id} is unavailable"
                 ));
@@ -519,8 +521,14 @@ impl App {
                     .resolve(resolution.selection.clone(), resolution.local_ip);
                 self.journal.info(format!(
                     "network selection: adapter={} ip={} binding={} lease_generation={}",
-                    self.settings.preferred_adapter.clone().unwrap_or_default(),
-                    self.settings.selected_local_ip.clone().unwrap_or_default(),
+                    self.settings
+                        .preferred_adapter
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                    self.settings
+                        .selected_local_ip
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
                     self.binding_summary(),
                     self.network.generation
                 ));
@@ -530,7 +538,7 @@ impl App {
                 let id = self
                     .settings
                     .preferred_adapter
-                    .clone()
+                    .map(|value| value.to_string())
                     .unwrap_or_else(|| "unknown".to_string());
                 self.journal.warn(format!(
                     "network selection stale: adapter {id} is unavailable"

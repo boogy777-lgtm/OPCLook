@@ -200,12 +200,12 @@ pub struct Settings {
     pub ua_lds_host: String,
     /// Preferred network adapter GUID. `None` means no adapter is selected.
     /// Old settings files without this field load as unselected.
-    #[serde(default)]
-    pub preferred_adapter: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_adapter_id")]
+    pub preferred_adapter: Option<AdapterId>,
     /// Local IP selected by the user when the adapter has several addresses.
     /// `None` lets the resolver pick the best address.
-    #[serde(default)]
-    pub selected_local_ip: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_ip_address")]
+    pub selected_local_ip: Option<IpAddr>,
     /// Snapshot of usable adapters from the last explicit «Обновить». Missing
     /// in an old settings file means an empty list until the user refreshes.
     #[serde(default)]
@@ -217,6 +217,20 @@ pub struct Settings {
     /// destroy the only copy, so `save()` refuses until the app restarts.
     #[serde(skip)]
     pub save_blocked: bool,
+}
+
+fn deserialize_adapter_id<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<AdapterId>, D::Error> {
+    let raw = Option::<String>::deserialize(deserializer)?;
+    Ok(raw.and_then(|value| AdapterId::parse(&value).ok()))
+}
+
+fn deserialize_ip_address<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<IpAddr>, D::Error> {
+    let raw = Option::<String>::deserialize(deserializer)?;
+    Ok(raw.and_then(|value| value.trim().parse().ok()))
 }
 
 fn deserialize_lang<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Lang, D::Error> {
@@ -478,45 +492,27 @@ impl Settings {
         self.column_order = Some(normalized);
     }
 
-    /// Effective adapter selection. A missing/invalid persisted GUID means no
-    /// adapter is selected; the user must choose one explicitly.
+    /// Effective adapter selection. Invalid persisted GUIDs load unselected.
     pub fn adapter_selection(&self) -> AdapterSelection {
         self.preferred_adapter
-            .as_deref()
-            .and_then(|raw| AdapterId::parse(raw).ok())
             .map(AdapterSelection::Adapter)
             .unwrap_or(AdapterSelection::None)
     }
 
-    /// The parsed preferred GUID, if the persisted value is valid.
     pub fn preferred_adapter_id(&self) -> Option<AdapterId> {
         self.preferred_adapter
-            .as_deref()
-            .and_then(|raw| AdapterId::parse(raw).ok())
     }
 
-    /// Persist a selection as a canonical GUID string (`None` = unselected).
     pub fn set_adapter_selection(&mut self, selection: AdapterSelection) {
-        self.preferred_adapter = selection.adapter_id().map(|id| id.to_string());
+        self.preferred_adapter = selection.adapter_id();
     }
 
-    /// The parsed preferred local IP, if the persisted value is valid.
     pub fn selected_local_ip(&self) -> Option<IpAddr> {
         self.selected_local_ip
-            .as_deref()
-            .and_then(|raw| raw.trim().parse::<IpAddr>().ok())
     }
 
-    /// Persist the preferred local IP (`None` = resolver chooses).
     pub fn set_selected_local_ip(&mut self, ip: Option<IpAddr>) {
-        self.selected_local_ip = ip.map(|ip| ip.to_string());
-    }
-
-    /// Canonicalize both network fields: valid GUID/IP keep their canonical
-    /// spelling; invalid/missing values become `None` (Auto / resolver choice).
-    pub fn normalize_network(&mut self) {
-        self.preferred_adapter = self.preferred_adapter_id().map(|id| id.to_string());
-        self.selected_local_ip = self.selected_local_ip().map(|ip| ip.to_string());
+        self.selected_local_ip = ip;
     }
 
     /// Store and persist the user's network choice.
@@ -527,7 +523,6 @@ impl Settings {
     ) {
         self.set_adapter_selection(selection);
         self.set_selected_local_ip(local_ip);
-        self.normalize_network();
         self.save();
     }
 }
@@ -1046,7 +1041,6 @@ mod tests {
             AdapterId::parse("aabbccdd-1122-3344-5566-77889900aabb").unwrap(),
         ));
         s.set_selected_local_ip(Some("192.168.1.21".parse().unwrap()));
-        s.normalize_network();
 
         let json = serde_json::to_string(&s).expect("serialize");
         let back: Settings = serde_json::from_str(&json).expect("deserialize");
@@ -1235,13 +1229,8 @@ mod tests {
         let mut s = Settings::default();
         s.set_adapter_selection(AdapterSelection::Adapter(id));
         s.set_selected_local_ip(Some(ip));
-        s.normalize_network();
-        // Canonical GUID spelling is stored (lower-case, no braces).
-        assert_eq!(
-            s.preferred_adapter.as_deref(),
-            Some("aabbccdd-1122-3344-5566-77889900aabb")
-        );
-        assert_eq!(s.selected_local_ip.as_deref(), Some("192.168.1.21"));
+        assert_eq!(s.preferred_adapter, Some(id));
+        assert_eq!(s.selected_local_ip, Some(ip));
         assert_eq!(s.adapter_selection(), AdapterSelection::Adapter(id));
         assert_eq!(s.selected_local_ip(), Some(ip));
 
@@ -1253,24 +1242,20 @@ mod tests {
 
     #[test]
     fn invalid_persisted_network_values_degrade_to_unselected() {
-        let mut s = Settings::default();
-        s.preferred_adapter = Some("not-a-guid".to_string());
-        s.selected_local_ip = Some("not-an-ip".to_string());
-        assert_eq!(s.adapter_selection(), AdapterSelection::None);
-        assert!(s.selected_local_ip().is_none());
-        s.normalize_network();
-        assert!(s.preferred_adapter.is_none());
-        assert!(s.selected_local_ip.is_none());
+        let invalid: Settings = serde_json::from_str(
+            r#"{"preferred_adapter":"not-a-guid","selected_local_ip":"not-an-ip"}"#,
+        )
+        .unwrap();
+        assert_eq!(invalid.adapter_selection(), AdapterSelection::None);
+        assert!(invalid.selected_local_ip().is_none());
 
-        // A valid but non-canonical GUID is rewritten in canonical form.
-        s.preferred_adapter = Some("{AABBCCDD-1122-3344-5566-77889900AABB}".to_string());
-        s.selected_local_ip = Some(" 10.0.0.5 ".to_string());
-        s.normalize_network();
+        let valid: Settings = serde_json::from_str(r#"{"preferred_adapter":"{AABBCCDD-1122-3344-5566-77889900AABB}","selected_local_ip":" 10.0.0.5 "}"#).unwrap();
+        let json = serde_json::to_value(valid).unwrap();
         assert_eq!(
-            s.preferred_adapter.as_deref(),
-            Some("aabbccdd-1122-3344-5566-77889900aabb")
+            json["preferred_adapter"],
+            "aabbccdd-1122-3344-5566-77889900aabb"
         );
-        assert_eq!(s.selected_local_ip.as_deref(), Some("10.0.0.5"));
+        assert_eq!(json["selected_local_ip"], "10.0.0.5");
     }
 
     fn cached_fixture() -> crate::net::CachedAdapter {

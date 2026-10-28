@@ -1557,8 +1557,8 @@ fn network_tab_stale_guid_has_zero_selection_and_forget_keeps_cache() {
             net_adapter(a, "Ethernet", true, true, &[("192.168.1.20", 24)]),
             net_adapter(b, "Wi-Fi", false, true, &[("10.0.0.5", 24)]),
         ]);
-        app.settings.preferred_adapter = Some(stale.to_string());
-        app.settings.selected_local_ip = Some("10.9.9.9".to_string());
+        app.settings.preferred_adapter = Some(opcda_egui::net::AdapterId::parse(stale).unwrap());
+        app.settings.selected_local_ip = Some("10.9.9.9".parse().unwrap());
         app.open_connect_dialog();
 
         let mut h = harness(app);
@@ -1646,8 +1646,8 @@ fn network_tab_one_ip_read_only_and_multiple_ip_combo() {
         );
         h.run_steps(5);
         assert_eq!(
-            h.state().settings.selected_local_ip.as_deref(),
-            Some("10.0.0.5")
+            h.state().settings.selected_local_ip,
+            Some("10.0.0.5".parse().unwrap())
         );
         assert_eq!(
             h.state()
@@ -1669,8 +1669,8 @@ fn network_tab_one_ip_read_only_and_multiple_ip_combo() {
         h.get_by_label("10.0.0.6/24").click();
         h.run_steps(5);
         assert_eq!(
-            h.state().settings.selected_local_ip.as_deref(),
-            Some("10.0.0.6")
+            h.state().settings.selected_local_ip,
+            Some("10.0.0.6".parse().unwrap())
         );
         assert_eq!(
             h.state()
@@ -1829,7 +1829,10 @@ fn changing_adapter_does_not_rebind_active_sessions() {
             Some("10.0.0.5".parse().unwrap()),
             "future operations use the new adapter"
         );
-        assert_eq!(app.settings.selected_local_ip.as_deref(), Some("10.0.0.5"));
+        assert_eq!(
+            app.settings.selected_local_ip,
+            Some("10.0.0.5".parse().unwrap())
+        );
     });
 }
 

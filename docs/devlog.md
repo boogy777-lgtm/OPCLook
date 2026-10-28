@@ -264,3 +264,8 @@ Settings хранит типизированный Lang и сохраняет с
 Сервис DA использует общий Duration refresh; отношения lease и UA keepalive
 проверяются при компиляции. Linux тест констант 1/1, Windows typecheck прошли;
 прочие временные границы и полный gate остаются открыты.
+
+Сетевой выбор настроек хранит AdapterId/IpAddr и разбирает старые строки один
+раз при загрузке. Невалидные значения остаются unselected; stale GUID не
+удаляется автоматически. Linux settings 46/46, network-tab 5 passed / 1
+Windows-only ignored; Windows проверен по типам.
