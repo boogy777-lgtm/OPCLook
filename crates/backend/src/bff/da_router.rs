@@ -922,7 +922,13 @@ mod tests {
                 lds: None,
             },
         ));
-        router.dispatch(command(3, 1, CommandKind::CancelUaScan { scan_id: 1 }));
+        router.dispatch(command(
+            3,
+            1,
+            CommandKind::CancelUaScan {
+                scan_id: opclook_contract::model::ScanId::FIRST,
+            },
+        ));
         assert!(matches!(
             next(&rx).kind,
             EventKind::Error {

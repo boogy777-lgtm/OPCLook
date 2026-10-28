@@ -359,8 +359,13 @@ impl App {
     }
 
     fn launch_ua_subnet_scan(&mut self, lease: &NetworkLease, subnet: Option<SubnetSpec>) {
-        let scan_id = self.next_scan;
-        self.next_scan += 1;
+        let Some(scan_id) = self.next_scan else {
+            let message = tr(self.lang(), Tr::ScanIdsExhausted).to_string();
+            self.dialogs.connect.ua_scan_error = Some(message.clone());
+            self.journal.error(message);
+            return;
+        };
+        self.next_scan = scan_id.successor();
         let binding = lease.network_binding();
         let local_ip = lease.local_ip();
         let d = &mut self.dialogs.connect;
@@ -599,4 +604,59 @@ pub(crate) fn ua_all_commands(
         bind: Some(NetworkBinding::loopback()),
     });
     commands
+}
+
+#[cfg(test)]
+mod scan_id_tests {
+    use super::*;
+    use crate::net::{AdapterAddress, AdapterId, AdapterInfo, AdapterSelection, AdapterState};
+
+    #[test]
+    fn last_scan_id_is_issued_once_and_exhaustion_is_visible() {
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        let ip = "127.0.0.1".parse().unwrap();
+        let address = AdapterAddress {
+            ip,
+            prefix: 8,
+            scope_id: None,
+        };
+        let lease = NetworkLease {
+            generation: 1,
+            requested: AdapterSelection::None,
+            adapter: AdapterInfo {
+                id: AdapterId::UNSPECIFIED,
+                name: "test".into(),
+                description: String::new(),
+                state: AdapterState::Up,
+                if_type: 0,
+                addresses: vec![address],
+                gateways: vec![],
+                if_index: None,
+                ipv6_if_index: None,
+                luid: 0,
+                metric: 0,
+                is_physical: false,
+                is_loopback: true,
+            },
+            local_address: address,
+            subnet: SubnetSpec::new(ip, 8).unwrap(),
+        };
+        assert!(ScanId::new(0).is_none());
+        app.next_scan = ScanId::new(u64::MAX);
+        app.launch_ua_subnet_scan(&lease, None);
+        assert_eq!(app.dialogs.connect.ua_scan_id, ScanId::new(u64::MAX));
+        assert!(app.next_scan.is_none());
+        app.dialogs.connect.ua_scan_id = None;
+        app.dialogs.connect.ua_subnet_searching = false;
+        let before = app.journal.entries().len();
+        app.launch_ua_subnet_scan(&lease, None);
+        assert!(app.dialogs.connect.ua_scan_id.is_none());
+        assert!(!app.dialogs.connect.ua_subnet_searching);
+        assert_eq!(
+            app.dialogs.connect.ua_scan_error.as_deref(),
+            Some(tr(app.lang(), Tr::ScanIdsExhausted))
+        );
+        assert_eq!(app.journal.entries().len(), before + 1);
+    }
 }

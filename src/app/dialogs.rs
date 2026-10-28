@@ -1,5 +1,5 @@
 use crate::bff::model::{
-    ItemKey, Protocol, RequestId, ServerEntry, SessionId, UaSecurityMode, UaSecurityPolicy,
+    ItemKey, Protocol, RequestId, ScanId, ServerEntry, SessionId, UaSecurityMode, UaSecurityPolicy,
     WriteRequest,
 };
 use crate::settings::Options;
@@ -52,7 +52,7 @@ pub struct ConnectDialog {
     /// OPC UA subnet scan (N+1) state. `ua_scan_id` is the id of the only scan
     /// whose streaming events are accepted; events from older scans are ignored.
     pub ua_subnet_searching: bool,
-    pub ua_scan_id: Option<u64>,
+    pub ua_scan_id: Option<ScanId>,
     pub ua_scan_checked: usize,
     pub ua_scan_total: usize,
     pub ua_scan_found: usize,

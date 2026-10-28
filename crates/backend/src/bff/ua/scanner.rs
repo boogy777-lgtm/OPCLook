@@ -1,5 +1,5 @@
 use super::discovery::build_discovery_client;
-use crate::bff::model::{BackendMsg, Event, EventKind, UaEndpointInfo, UaServerInfo};
+use crate::bff::model::{BackendMsg, Event, EventKind, ScanId, UaEndpointInfo, UaServerInfo};
 use crate::bff::net::{BoundConnectorBuilder, NetworkBinding, endpoint_url_for, tcp_probe};
 use crate::constants::{
     DEFAULT_UA_PORT, SCAN_ADDRESS_TIMEOUT, SCAN_CONFIRM_THRESHOLD, SCAN_PARALLELISM,
@@ -25,7 +25,7 @@ pub(super) struct ScanHandle {
     task: JoinHandle<()>,
 }
 
-pub(super) type ScanRegistry = Arc<Mutex<HashMap<u64, ScanHandle>>>;
+pub(super) type ScanRegistry = Arc<Mutex<HashMap<ScanId, ScanHandle>>>;
 
 /// One address of an N+1 scan plus the binding that must carry its traffic.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -94,7 +94,7 @@ fn push_scan_target(targets: &mut Vec<ScanTarget>, seen: &mut HashSet<IpAddr>, i
     }
 }
 
-pub(super) fn cancel_scan(scans: &ScanRegistry, scan_id: u64) {
+pub(super) fn cancel_scan(scans: &ScanRegistry, scan_id: ScanId) {
     if let Some(scan) = scans
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -115,7 +115,7 @@ fn cancellation_survives_poisoned_scan_registry() {
         let cancel = Arc::new(AtomicBool::new(false));
         let task = tokio::spawn(std::future::pending());
         scans.lock().unwrap().insert(
-            42,
+            ScanId::new(42).unwrap(),
             ScanHandle {
                 cancel: Arc::clone(&cancel),
                 task,
@@ -127,7 +127,7 @@ fn cancellation_survives_poisoned_scan_registry() {
             panic!("poison registry");
         })
         .join();
-        cancel_scan(&scans, 42);
+        cancel_scan(&scans, ScanId::new(42).unwrap());
         assert!(cancel.load(Ordering::Relaxed));
         abort_all_scans(&scans).await;
     });
@@ -135,7 +135,7 @@ fn cancellation_survives_poisoned_scan_registry() {
 
 /// Register and spawn one scan without blocking the worker command loop.
 pub(super) fn start_scan_task(
-    scan_id: u64,
+    scan_id: ScanId,
     bind: NetworkBinding,
     subnet: Option<SubnetSpec>,
     local_ip: IpAddr,
@@ -190,7 +190,7 @@ pub(super) async fn abort_all_scans(scans: &ScanRegistry) {
 /// [`SCAN_PARALLELISM`] checks in flight; cancellation stops new work and lets
 /// the limited in-flight checks finish before the terminal event.
 pub(super) async fn run_scan_job(
-    scan_id: u64,
+    scan_id: ScanId,
     bind: NetworkBinding,
     subnet: Option<SubnetSpec>,
     local_ip: IpAddr,
@@ -455,7 +455,7 @@ fn send_scan_event(tx: &Sender<Event>, kind: EventKind) {
 
 fn send_scan_progress(
     tx: &Sender<Event>,
-    scan_id: u64,
+    scan_id: ScanId,
     total: usize,
     checked: usize,
     found: usize,
@@ -473,7 +473,7 @@ fn send_scan_progress(
 
 fn send_scan_finished(
     tx: &Sender<Event>,
-    scan_id: u64,
+    scan_id: ScanId,
     cancelled: bool,
     found: usize,
     error: Option<BackendMsg>,

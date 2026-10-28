@@ -7,7 +7,7 @@ use egui_kittest::{
 };
 use opcda_egui::app::{App, ReconnectState, SessionState};
 use opcda_egui::bff::model::{
-    BrowseNode, Command, CommandKind, EndpointSpec, EventKind, NodeKind, Protocol,
+    BrowseNode, Command, CommandKind, EndpointSpec, EventKind, NodeKind, Protocol, ScanId,
     SubscriptionState, UaSecurityMode, UaSecurityPolicy, Value,
 };
 use opcda_egui::settings::Settings;
@@ -953,28 +953,28 @@ fn ua_scan_events_ignore_stale_scan_ids() {
     app.open_connect_dialog();
     {
         let d = &mut app.dialogs.connect;
-        d.ua_scan_id = Some(2);
+        d.ua_scan_id = ScanId::new(2);
         d.ua_subnet_searching = true;
         d.ua_scan_total = 10;
     }
     app.on_event_for_test(EventKind::UaScanProgress {
-        scan_id: 1,
+        scan_id: ScanId::new(1).unwrap(),
         total: 5,
         checked: 5,
         found: 3,
     });
     app.on_event_for_test(EventKind::UaScanFound {
-        scan_id: 1,
+        scan_id: ScanId::new(1).unwrap(),
         servers: vec![scan_server()],
     });
     app.on_event_for_test(EventKind::UaScanFinished {
-        scan_id: 1,
+        scan_id: ScanId::new(1).unwrap(),
         cancelled: false,
         found: 3,
         error: None,
     });
     let d = &app.dialogs.connect;
-    assert_eq!(d.ua_scan_id, Some(2));
+    assert_eq!(d.ua_scan_id, ScanId::new(2));
     assert!(d.ua_subnet_searching);
     assert_eq!(d.ua_scan_checked, 0);
     assert_eq!(d.ua_scan_total, 10);
@@ -982,17 +982,17 @@ fn ua_scan_events_ignore_stale_scan_ids() {
     assert!(d.ua_search_results.is_empty());
 
     app.on_event_for_test(EventKind::UaScanProgress {
-        scan_id: 2,
+        scan_id: ScanId::new(2).unwrap(),
         total: 10,
         checked: 4,
         found: 1,
     });
     app.on_event_for_test(EventKind::UaScanFound {
-        scan_id: 2,
+        scan_id: ScanId::new(2).unwrap(),
         servers: vec![scan_server()],
     });
     app.on_event_for_test(EventKind::UaScanFinished {
-        scan_id: 2,
+        scan_id: ScanId::new(2).unwrap(),
         cancelled: false,
         found: 1,
         error: None,

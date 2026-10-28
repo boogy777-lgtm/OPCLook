@@ -95,6 +95,7 @@ translation_keys! {
     DiagnosticTraceCheck,
     NoReplyFromServer,
     RequestIdsExhausted,
+    ScanIdsExhausted,
     CsvServerAmbiguous,
     CsvServerEmpty,
     CjkFontMissing,
@@ -780,6 +781,7 @@ fn ru(key: Tr) -> &'static str {
         DiagnosticTraceCheck => "Диагностика: писать запросы и ответы в журнал",
         NoReplyFromServer => "Нет ответа от сервера за {0} с",
         RequestIdsExhausted => "Исчерпаны идентификаторы запросов",
+        ScanIdsExhausted => "Исчерпаны идентификаторы сканирования",
         CsvServerAmbiguous => {
             "Строка CSV пропущена: имени сервера «{0}» соответствует несколько подключений, укажите точное имя"
         }
@@ -1380,6 +1382,7 @@ fn en(key: Tr) -> &'static str {
         DiagnosticTraceCheck => "Diagnostics: log requests and replies",
         NoReplyFromServer => "No reply from the server within {0} s",
         RequestIdsExhausted => "Request identifiers exhausted",
+        ScanIdsExhausted => "Scan identifiers exhausted",
         CsvServerAmbiguous => {
             "CSV row skipped: server name \"{0}\" matches several connections, give the exact name"
         }
@@ -1970,6 +1973,7 @@ fn zh(key: Tr) -> &'static str {
         DiagnosticTraceCheck => "诊断：将请求和响应写入日志",
         NoReplyFromServer => "服务器 {0} 秒内无响应",
         RequestIdsExhausted => "请求标识符已耗尽",
+        ScanIdsExhausted => "扫描标识符已耗尽",
         CsvServerAmbiguous => "已跳过 CSV 行：服务器名“{0}”匹配多个连接，请指定准确名称",
         CsvServerEmpty => "已跳过 CSV 行：信号“{0}”未指定服务器",
         CjkFontMissing => "未找到可显示中文的字体（msyh.ttc、simsun.ttc）：界面文字可能显示为方块",

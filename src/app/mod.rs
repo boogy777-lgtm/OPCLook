@@ -1,5 +1,5 @@
 use crate::bff::model::{
-    BrowseNode, CommandKind, ItemKey, Operation, Protocol, Quality, QualityKind, SessionId,
+    BrowseNode, CommandKind, ItemKey, Operation, Protocol, Quality, QualityKind, ScanId, SessionId,
     SubscriptionState, Value,
 };
 use crate::bff::net::NetworkBinding;
@@ -93,7 +93,7 @@ pub struct App {
     next_session: SessionId,
     next_key: ItemKey,
     /// Monotonic id for streaming subnet scans (independent of request ids).
-    next_scan: u64,
+    next_scan: Option<ScanId>,
     /// Outstanding `(session, request_id)` pairs. Non-zero events are accepted
     /// only while their pair is present; the pair is removed on receipt. A
     /// session's entries are cleared whenever a new connect/disconnect lifecycle
@@ -241,7 +241,7 @@ impl App {
             add_children: None,
             next_session: 1,
             next_key: 1,
-            next_scan: 1,
+            next_scan: Some(ScanId::FIRST),
             cjk_font: CjkFont::NotProbed,
             row_index: row_index::RowIndex::default(),
         };

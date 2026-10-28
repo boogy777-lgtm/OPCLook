@@ -6,6 +6,39 @@ pub type SessionId = u64;
 pub type ItemKey = u32;
 pub type RequestId = u64;
 
+/// Identity of one streaming UA subnet scan. Zero is never a scan identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ScanId(std::num::NonZeroU64);
+
+impl ScanId {
+    pub const FIRST: Self = Self(std::num::NonZeroU64::MIN);
+
+    pub const fn new(value: u64) -> Option<Self> {
+        match std::num::NonZeroU64::new(value) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+
+    /// Returns None after the last possible ID, without wrapping or reuse.
+    pub const fn successor(self) -> Option<Self> {
+        match self.get().checked_add(1) {
+            Some(value) => Self::new(value),
+            None => None,
+        }
+    }
+}
+
+impl fmt::Display for ScanId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.get().fmt(f)
+    }
+}
+
 /// Canonical operation identity carried by `EventKind::Error`.
 ///
 /// The app matches on this enum (not on a string), so every operation that can
@@ -1425,7 +1458,7 @@ pub enum CommandKind {
     /// Streaming N+1 subnet scan: loopback first, then the local address and the
     /// subnet hosts. Results arrive as `UaScan*` events with `request_id: 0`.
     ScanUaNetwork {
-        scan_id: u64,
+        scan_id: ScanId,
         bind: crate::net::NetworkBinding,
         subnet: Option<crate::net::SubnetSpec>,
         local_ip: std::net::IpAddr,
@@ -1433,7 +1466,7 @@ pub enum CommandKind {
     /// Cooperative cancellation of a running subnet scan. The scan task sends
     /// its terminal `UaScanFinished` event on its own.
     CancelUaScan {
-        scan_id: u64,
+        scan_id: ScanId,
     },
     Connect {
         endpoint: EndpointSpec,
@@ -1548,21 +1581,21 @@ pub enum EventKind {
     },
     /// Live progress of a running N+1 subnet scan (streaming, `request_id: 0`).
     UaScanProgress {
-        scan_id: u64,
+        scan_id: ScanId,
         total: usize,
         checked: usize,
         found: usize,
     },
     /// Newly discovered servers from a running subnet scan (one or more batches).
     UaScanFound {
-        scan_id: u64,
+        scan_id: ScanId,
         servers: Vec<UaServerInfo>,
     },
     /// Terminal event of a subnet scan. `cancelled` distinguishes a user stop
     /// from a completed run; `error` carries a technical detail when the scan
     /// could not run at all (for example a subnet above the confirmation cap).
     UaScanFinished {
-        scan_id: u64,
+        scan_id: ScanId,
         cancelled: bool,
         found: usize,
         error: Option<BackendMsg>,
@@ -1688,7 +1721,7 @@ mod tests {
         assert_eq!(CommandKind::Test.operation(), Operation::Test);
         assert_eq!(
             CommandKind::ScanUaNetwork {
-                scan_id: 1,
+                scan_id: ScanId::FIRST,
                 bind: crate::net::NetworkBinding::loopback(),
                 subnet: None,
                 local_ip: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
@@ -1697,7 +1730,10 @@ mod tests {
             Operation::SearchNetwork
         );
         assert_eq!(
-            CommandKind::CancelUaScan { scan_id: 1 }.operation(),
+            CommandKind::CancelUaScan {
+                scan_id: ScanId::FIRST
+            }
+            .operation(),
             Operation::SearchNetwork
         );
     }

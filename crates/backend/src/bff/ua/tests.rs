@@ -17,6 +17,7 @@ use crate::constants::{DEFAULT_UA_PORT, SCAN_CONFIRM_THRESHOLD};
 use crate::i18n::{Lang, backend_text};
 use crate::net::SubnetSpec;
 use chrono::TimeZone;
+use opclook_contract::model::ScanId;
 use opcua::types::VariantScalarTypeId as Vt;
 use opcua::types::{
     DataChangeFilter, DataChangeTrigger, DeadbandType, EndpointDescription, LocalizedText,
@@ -834,7 +835,7 @@ fn over_large_subnet_is_rejected_with_the_error_token() {
         .build()
         .unwrap();
     runtime.block_on(run_scan_job(
-        9,
+        ScanId::new(9).unwrap(),
         NetworkBinding::loopback(),
         Some(subnet),
         "127.0.0.1".parse::<IpAddr>().unwrap(),
@@ -852,7 +853,7 @@ fn over_large_subnet_is_rejected_with_the_error_token() {
             found,
             error,
         } => {
-            assert_eq!(*scan_id, 9);
+            assert_eq!(scan_id.get(), 9);
             assert!(!cancelled);
             assert_eq!(*found, 0);
             let error = error
@@ -877,7 +878,7 @@ fn cancelled_scan_finishes_without_checking_addresses() {
         .build()
         .unwrap();
     runtime.block_on(run_scan_job(
-        10,
+        ScanId::new(10).unwrap(),
         NetworkBinding::loopback(),
         None,
         "127.0.0.1".parse::<IpAddr>().unwrap(),
@@ -890,20 +891,20 @@ fn cancelled_scan_finishes_without_checking_addresses() {
     assert!(matches!(
         events.first(),
         Some(EventKind::UaScanProgress {
-            scan_id: 10,
+            scan_id,
             total: 1,
             checked: 0,
             found: 0
-        })
+        }) if scan_id.get() == 10
     ));
     assert!(matches!(
         events.last(),
         Some(EventKind::UaScanFinished {
-            scan_id: 10,
+            scan_id,
             cancelled: true,
             found: 0,
             error: None
-        })
+        }) if scan_id.get() == 10
     ));
 }
 
@@ -928,7 +929,7 @@ fn loopback_tcp_without_opc_ua_is_not_a_scan_result() {
         tokio::time::timeout(
             Duration::from_secs(15),
             run_scan_job(
-                11,
+                ScanId::new(11).unwrap(),
                 NetworkBinding::loopback(),
                 None,
                 "127.0.0.1".parse::<IpAddr>().unwrap(),
@@ -945,20 +946,20 @@ fn loopback_tcp_without_opc_ua_is_not_a_scan_result() {
         assert!(matches!(
             events.first(),
             Some(EventKind::UaScanProgress {
-                scan_id: 11,
+                scan_id,
                 total: 1,
                 checked: 0,
                 found: 0
-            })
+            }) if scan_id.get() == 11
         ));
         assert!(matches!(
             events.last(),
             Some(EventKind::UaScanFinished {
-                scan_id: 11,
+                scan_id,
                 cancelled: false,
                 found: 0,
                 error: None
-            })
+            }) if scan_id.get() == 11
         ));
         assert!(
             !events
