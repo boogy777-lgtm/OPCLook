@@ -1,5 +1,8 @@
 #![windows_subsystem = "windows"]
 
+mod winutil;
+use winutil::{Impersonation, LocalAllocation, OwnedHandle};
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -9,8 +12,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use windows::Win32::Foundation::{
-    CloseHandle, ERROR_OBJECT_ALREADY_EXISTS, ERROR_PIPE_CONNECTED, ERROR_SUCCESS, GetLastError,
-    HANDLE, HLOCAL, LocalFree,
+    ERROR_OBJECT_ALREADY_EXISTS, ERROR_PIPE_CONNECTED, ERROR_SUCCESS, GetLastError, HANDLE,
 };
 use windows::Win32::NetworkManagement::IpHelper::{
     ConvertInterfaceLuidToIndex, CreateIpForwardEntry2, DeleteIpForwardEntry2, IP_ADDRESS_PREFIX,
@@ -25,8 +27,8 @@ use windows::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
 };
 use windows::Win32::Security::{
-    GetTokenInformation, PSECURITY_DESCRIPTOR, PSID, RevertToSelf, SECURITY_ATTRIBUTES,
-    TOKEN_QUERY, TOKEN_USER, TokenUser,
+    GetTokenInformation, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
+    TokenUser,
 };
 use windows::Win32::Storage::FileSystem::{FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX};
 use windows::Win32::System::Pipes::{
@@ -296,20 +298,7 @@ fn reply(writer: &mut std::fs::File, ok: bool, error: Option<&str>) -> Result<()
     writer.flush().map_err(|e| format!("flush reply: {e}"))
 }
 
-struct LocalDescriptor(PSECURITY_DESCRIPTOR);
-
-impl Drop for LocalDescriptor {
-    fn drop(&mut self) {
-        if !self.0.0.is_null() {
-            // SAFETY: the descriptor was allocated by ConvertStringSecurityDescriptorToSecurityDescriptorW.
-            unsafe {
-                let _ = LocalFree(Some(HLOCAL(self.0.0)));
-            }
-        }
-    }
-}
-
-fn create_pipe(pipe: &str, user_sid: &str) -> Result<(HANDLE, LocalDescriptor), String> {
+fn create_pipe(pipe: &str, user_sid: &str) -> Result<(HANDLE, LocalAllocation), String> {
     let sddl = format!("D:(A;;GA;;;{user_sid})");
     let sddl_w = wide(&sddl);
     let mut descriptor = PSECURITY_DESCRIPTOR::default();
@@ -322,10 +311,11 @@ fn create_pipe(pipe: &str, user_sid: &str) -> Result<(HANDLE, LocalDescriptor), 
         )
         .map_err(|e| format!("security descriptor: {e}"))?;
     }
-    let descriptor = LocalDescriptor(descriptor);
+    // SAFETY: conversion transfers its LocalAlloc-compatible descriptor.
+    let descriptor = unsafe { LocalAllocation::from_raw(descriptor.0) };
     let attributes = SECURITY_ATTRIBUTES {
         nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
-        lpSecurityDescriptor: descriptor.0.0,
+        lpSecurityDescriptor: descriptor.as_ptr(),
         bInheritHandle: false.into(),
     };
     let name = format!(r"\\.\pipe\{pipe}");
@@ -382,31 +372,24 @@ fn client_process_id(handle: HANDLE) -> Result<u32, String> {
 fn client_sid(handle: HANDLE) -> Result<String, String> {
     unsafe { ImpersonateNamedPipeClient(handle) }
         .map_err(|e| format!("ImpersonateNamedPipeClient: {e}"))?;
-    let result = (|| {
-        let mut token = HANDLE::default();
-        unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, true, &mut token) }
-            .map_err(|e| format!("OpenThreadToken: {e}"))?;
-        let sid = token_sid(token);
-        unsafe {
-            let _ = CloseHandle(token);
-        }
-        sid
-    })();
-    unsafe {
-        let _ = RevertToSelf();
-    }
-    result
+    // SAFETY: ImpersonateNamedPipeClient just succeeded on this thread.
+    let _impersonation = unsafe { Impersonation::from_current_thread() };
+    let mut token = HANDLE::default();
+    // SAFETY: the output pointer is valid and the current thread is impersonating.
+    unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, true, &mut token) }
+        .map_err(|e| format!("OpenThreadToken: {e}"))?;
+    // SAFETY: OpenThreadToken returned an owned handle.
+    let token = unsafe { OwnedHandle::from_raw(token) };
+    token_sid(token.raw())
 }
 
 fn current_process_sid() -> Result<String, String> {
     let mut token = HANDLE::default();
     unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }
         .map_err(|e| format!("OpenProcessToken: {e}"))?;
-    let sid = token_sid(token);
-    unsafe {
-        let _ = CloseHandle(token);
-    }
-    sid
+    // SAFETY: OpenProcessToken returned an owned handle.
+    let token = unsafe { OwnedHandle::from_raw(token) };
+    token_sid(token.raw())
 }
 
 fn aligned_token_buffer(needed: u32) -> Vec<usize> {
@@ -442,11 +425,13 @@ fn sid_to_string(sid: PSID) -> Result<String, String> {
     let mut text = PWSTR::null();
     unsafe { ConvertSidToStringSidW(sid, &mut text) }
         .map_err(|e| format!("ConvertSidToStringSidW: {e}"))?;
-    let result = unsafe { text.to_string() }.map_err(|e| format!("SID text: {e}"));
-    unsafe {
-        LocalFree(Some(HLOCAL(text.0 as _)));
+    // SAFETY: conversion transferred its LocalAlloc-compatible string.
+    let _text_owner = unsafe { LocalAllocation::from_raw(text.0.cast()) };
+    if text.is_null() {
+        return Err("SID text is null".to_string());
     }
-    result
+    // SAFETY: conversion returned a non-null NUL-terminated SID string.
+    unsafe { text.to_string() }.map_err(|e| format!("SID text: {e}"))
 }
 
 fn add_route(message: &PipeMessage) -> Result<RouteSpec, String> {
