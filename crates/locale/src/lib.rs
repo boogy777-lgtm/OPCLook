@@ -66,10 +66,26 @@ impl std::fmt::Display for Lang {
     }
 }
 
-/// Every translatable string in the application.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u16)]
-pub enum Tr {
+macro_rules! translation_keys {
+    ($( $(#[$meta:meta])* $key:ident, )*) => {
+        /// Every translatable string in the application.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        #[repr(u16)]
+        pub enum Tr { $( $(#[$meta])* $key, )* }
+
+        impl Tr {
+            /// Every key in declaration order, generated from the enum definition.
+            pub const ALL: &'static [Tr] = &[$(Tr::$key,)*];
+            pub const COUNT: usize = Self::ALL.len();
+
+            pub fn all() -> Vec<Tr> {
+                Self::ALL.to_vec()
+            }
+        }
+    };
+}
+
+translation_keys! {
     // ---- Top menu ----
     MenuClient,
     TraceDropped,
@@ -694,24 +710,6 @@ pub enum Tr {
     DaRouteVerify,
     DaRouteHelperRunning,
     DaRouteHelperIdle,
-}
-
-impl Tr {
-    /// Number of variants (the enum is fieldless `#[repr(u16)]`, so the last
-    /// variant's discriminant is `COUNT - 1`).
-    pub const COUNT: usize = Tr::DaRouteHelperIdle as usize + 1;
-
-    /// Every variant, in declaration order. Built from discriminants so the
-    /// list can never drift out of sync with the enum definition.
-    pub fn all() -> Vec<Tr> {
-        (0..Self::COUNT)
-            .map(|i| {
-                // SAFETY: i is a valid discriminant (0 <= i < COUNT), so this
-                // is always a valid `Tr` variant.
-                unsafe { std::mem::transmute::<u16, Tr>(i as u16) }
-            })
-            .collect()
-    }
 }
 
 /// Look up the translation for `key` in `lang`.
