@@ -392,8 +392,43 @@ struct ArrayDestroyObservation {
 }
 
 #[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReleaseOperation {
+    Unaccess,
+    Unlock,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy)]
+struct ReleaseFault {
+    fail_once: Option<ReleaseOperation>,
+    unaccess_calls: usize,
+    unlock_calls: usize,
+}
+
+#[cfg(test)]
 thread_local! {
     static ARRAY_DESTROY_OBSERVATION: std::cell::Cell<Option<ArrayDestroyObservation>> = const { std::cell::Cell::new(None) };
+    static ARRAY_RELEASE_FAULT: std::cell::Cell<Option<ReleaseFault>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn inject_release_failure(operation: ReleaseOperation) -> bool {
+    ARRAY_RELEASE_FAULT.with(|slot| {
+        let Some(mut fault) = slot.get() else {
+            return false;
+        };
+        match operation {
+            ReleaseOperation::Unaccess => fault.unaccess_calls += 1,
+            ReleaseOperation::Unlock => fault.unlock_calls += 1,
+        }
+        let fail = fault.fail_once == Some(operation);
+        if fail {
+            fault.fail_once = None;
+        }
+        slot.set(Some(fault));
+        fail
+    })
 }
 
 /// Owns a newly created SAFEARRAY until ownership is transferred to a VARIANT.
@@ -406,32 +441,45 @@ struct SafeArrayBuilder {
 }
 
 impl SafeArrayBuilder {
-    fn finish(mut self) -> *mut windows::Win32::System::Com::SAFEARRAY {
-        self.release_access();
+    fn finish(mut self) -> Result<*mut windows::Win32::System::Com::SAFEARRAY, BackendMsg> {
+        if !self.release_access() {
+            return Err(BackendMsg::DaArrayAccessFailed);
+        }
         let ptr = self.ptr;
         self.ptr = std::ptr::null_mut();
-        ptr
+        Ok(ptr)
     }
 
-    fn release_access(&mut self) {
-        // SAFETY: flags describe successful calls on this live array and each
-        // successful access/lock is balanced once before destruction or transfer.
-        unsafe {
-            if self.accessed {
-                let _ = SafeArrayUnaccessData(self.ptr);
+    fn release_access(&mut self) -> bool {
+        if self.accessed {
+            #[cfg(test)]
+            let fail = inject_release_failure(ReleaseOperation::Unaccess);
+            #[cfg(not(test))]
+            let fail = false;
+            // SAFETY: the flag records a successful access to this live array.
+            if !fail && unsafe { SafeArrayUnaccessData(self.ptr) }.is_ok() {
                 self.accessed = false;
             }
-            if self.locked {
-                let _ = SafeArrayUnlock(self.ptr);
+        }
+        if self.locked {
+            #[cfg(test)]
+            let fail = inject_release_failure(ReleaseOperation::Unlock);
+            #[cfg(not(test))]
+            let fail = false;
+            // SAFETY: the flag records a successful lock on this live array.
+            if !fail && unsafe { SafeArrayUnlock(self.ptr) }.is_ok() {
                 self.locked = false;
             }
         }
+        !self.accessed && !self.locked
     }
 }
 
 impl Drop for SafeArrayBuilder {
     fn drop(&mut self) {
-        self.release_access();
+        // Best effort: an OLE failure can leave the array locked, so a retry
+        // and destruction cannot guarantee recovery from a persistent failure.
+        let _ = self.release_access();
         if !self.ptr.is_null() {
             #[cfg(test)]
             let observed = if self.element_vt == 12 {
@@ -439,7 +487,8 @@ impl Drop for SafeArrayBuilder {
             } else {
                 None
             };
-            // SAFETY: this guard owns the array and has balanced both locks.
+            // SAFETY: this guard owns the array; OLE rejects destruction if
+            // a release failed and the array remains locked.
             let destroyed = unsafe { SafeArrayDestroy(self.ptr) };
             #[cfg(test)]
             if let Some((unlocked, first_is_bstr)) = observed {
@@ -582,7 +631,7 @@ fn build_array_variant(
     }
 
     build_result?;
-    let psa = array.finish();
+    let psa = array.finish()?;
     let mut variant = VARIANT::default();
     set_vt(&mut variant, outer_vt);
     let inner = variant_inner(&mut variant);
@@ -713,6 +762,47 @@ mod tests {
             let output = unsafe { variant_to_value(&variant) };
             assert_eq!(format!("{output:?}"), format!("{input:?}"));
             clear_variant(&mut variant);
+        }
+    }
+
+    #[test]
+    fn failed_release_rejects_transfer_and_drop_retries_before_destroy() {
+        for operation in [ReleaseOperation::Unaccess, ReleaseOperation::Unlock] {
+            ARRAY_RELEASE_FAULT.with(|slot| {
+                slot.set(Some(ReleaseFault {
+                    fail_once: Some(operation),
+                    unaccess_calls: 0,
+                    unlock_calls: 0,
+                }))
+            });
+            ARRAY_DESTROY_OBSERVATION
+                .with(|slot| slot.set(Some(ArrayDestroyObservation::default())));
+            let result = build_array_variant(
+                &Value::Array(vec![Value::Str("owned".into())]),
+                12,
+                0x2000 | 12,
+            );
+            assert!(matches!(result, Err(BackendMsg::DaArrayAccessFailed)));
+            let fault = ARRAY_RELEASE_FAULT.with(|slot| slot.take()).unwrap();
+            assert_eq!(
+                fault.unaccess_calls,
+                if operation == ReleaseOperation::Unaccess {
+                    2
+                } else {
+                    1
+                }
+            );
+            assert_eq!(
+                fault.unlock_calls,
+                if operation == ReleaseOperation::Unlock {
+                    2
+                } else {
+                    1
+                }
+            );
+            let observation = ARRAY_DESTROY_OBSERVATION.with(|slot| slot.take()).unwrap();
+            assert_eq!(observation.calls, 1);
+            assert!(observation.unlocked && observation.first_is_bstr && observation.destroyed);
         }
     }
 
