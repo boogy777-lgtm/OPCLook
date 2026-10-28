@@ -289,26 +289,52 @@ impl DaRouteStatus {
     }
 }
 
+/// Keeps the launched process object alive until the pipe peer is verified,
+/// preventing the operating system from recycling its process ID meanwhile.
+#[derive(Debug)]
+struct LaunchedProcess {
+    handle: usize,
+    pid: u32,
+}
+
+impl Drop for LaunchedProcess {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        if self.handle != 0 {
+            // SAFETY: this is the process handle returned by ShellExecuteExW,
+            // owned by this object and closed exactly once.
+            unsafe {
+                let _ = windows::Win32::Foundation::CloseHandle(
+                    windows::Win32::Foundation::HANDLE(self.handle as _),
+                );
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 struct HelperLaunch {
-    rx: std::sync::mpsc::Receiver<Result<(), HelperLaunchError>>,
+    rx: std::sync::mpsc::Receiver<Result<LaunchedProcess, HelperLaunchError>>,
     pipe: String,
-    token: String,
-    ready: bool,
+    process: Option<LaunchedProcess>,
 }
 
 impl HelperLaunch {
-    fn poll_launch(
-        &mut self,
-    ) -> Result<Result<(), HelperLaunchError>, std::sync::mpsc::TryRecvError> {
-        if self.ready {
-            return Ok(Ok(()));
+    fn poll_launch(&mut self) -> Result<bool, HelperLaunchError> {
+        if self.process.is_some() {
+            return Ok(true);
         }
-        let result = self.rx.try_recv();
-        if matches!(result, Ok(Ok(()))) {
-            self.ready = true;
+        match self.rx.try_recv() {
+            Ok(Ok(process)) => {
+                self.process = Some(process);
+                Ok(true)
+            }
+            Ok(Err(error)) => Err(error),
+            Err(std::sync::mpsc::TryRecvError::Empty) => Ok(false),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(HelperLaunchError::Failed(
+                "helper launcher exited".to_string(),
+            )),
         }
-        result
     }
 }
 
@@ -322,7 +348,6 @@ enum HelperLaunchError {
 #[derive(Debug, Serialize, Deserialize)]
 struct PipeMessage {
     version: u32,
-    token: String,
     op: String,
     #[serde(default)]
     target: Option<String>,
@@ -348,7 +373,6 @@ struct PipeReply {
 struct HelperClient {
     reader: BufReader<std::fs::File>,
     writer: std::fs::File,
-    token: String,
 }
 
 impl HelperClient {
@@ -365,7 +389,6 @@ impl HelperClient {
 
     fn call(&mut self, mut message: PipeMessage) -> Result<(), String> {
         message.version = DA_HELPER_PROTOCOL_VERSION;
-        message.token.clone_from(&self.token);
         self.send(&message)?;
         let mut line = String::new();
         self.reader
@@ -396,7 +419,6 @@ impl HelperClient {
     fn call_with_op(&mut self, op: &str, plan: RoutePlan) -> Result<(), String> {
         self.call(PipeMessage {
             version: DA_HELPER_PROTOCOL_VERSION,
-            token: String::new(),
             op: op.to_string(),
             target: Some(plan.target.to_string()),
             prefix: Some(plan.prefix),
@@ -410,7 +432,6 @@ impl HelperClient {
     fn remove(&mut self, plan: RoutePlan) -> Result<(), String> {
         self.call(PipeMessage {
             version: DA_HELPER_PROTOCOL_VERSION,
-            token: String::new(),
             op: "remove".to_string(),
             target: Some(plan.target.to_string()),
             prefix: Some(plan.prefix),
@@ -617,12 +638,13 @@ impl DaRouteManager {
             let Some(launch) = self.launch.as_mut() else {
                 return Ok(());
             };
-            let result = launch.poll_launch();
-            match result {
-                Ok(Ok(())) => {
+            match launch.poll_launch() {
+                Ok(true) => {
                     let pipe = launch.pipe.clone();
-                    let token = launch.token.clone();
-                    match HelperClient::connect(&pipe, &token, Duration::from_millis(250)) {
+                    let Some(process) = launch.process.as_ref() else {
+                        continue;
+                    };
+                    match HelperClient::connect(&pipe, process.pid, Duration::from_millis(250)) {
                         Ok(client) => {
                             self.launch = None;
                             self.helper = Some(client);
@@ -637,34 +659,16 @@ impl DaRouteManager {
                         }
                     }
                 }
-                Ok(Err(HelperLaunchError::Declined)) => {
+                Ok(false) => {}
+                Err(HelperLaunchError::Declined) => {
                     self.launch = None;
                     self.status = DaRouteStatus::HelperUnavailable;
                     return Err(DaRouteError::UacDeclined);
                 }
-                Ok(Err(HelperLaunchError::Failed(error))) => {
+                Err(HelperLaunchError::Failed(error)) => {
                     self.launch = None;
                     self.status = DaRouteStatus::HelperUnavailable;
                     return Err(DaRouteError::HelperUnavailable(error));
-                }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.launch = None;
-                    self.status = DaRouteStatus::HelperUnavailable;
-                    return Err(DaRouteError::HelperUnavailable(
-                        "helper launcher exited".to_string(),
-                    ));
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    let pipe = launch.pipe.clone();
-                    let token = launch.token.clone();
-                    if let Ok(client) =
-                        HelperClient::connect(&pipe, &token, Duration::from_millis(50))
-                    {
-                        self.launch = None;
-                        self.helper = Some(client);
-                        self.status = DaRouteStatus::HelperRunning;
-                        return Ok(());
-                    }
                 }
             }
             if Instant::now() >= deadline {
@@ -775,13 +779,7 @@ fn helper_exe() -> Result<PathBuf, DaRouteError> {
 fn spawn_helper() -> Result<HelperLaunch, DaRouteError> {
     let exe = helper_exe()?;
     let pipe = format!("opcda-nethelper-{}", random_hex(random_bytes()?));
-    let token = random_hex(random_bytes()?);
-    let args = format!(
-        "--pipe {} --token {} --parent {}",
-        pipe,
-        token,
-        std::process::id()
-    );
+    let args = format!("--pipe {} --parent {}", pipe, std::process::id());
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::Builder::new()
         .name("opcda-nethelper-launch".to_string())
@@ -793,51 +791,74 @@ fn spawn_helper() -> Result<HelperLaunch, DaRouteError> {
     Ok(HelperLaunch {
         rx,
         pipe,
-        token,
-        ready: false,
+        process: None,
     })
 }
 
 #[cfg(windows)]
-fn launch_elevated(exe: &std::path::Path, args: &str) -> Result<(), HelperLaunchError> {
-    use windows::Win32::UI::Shell::ShellExecuteW;
+fn launch_elevated(
+    exe: &std::path::Path,
+    args: &str,
+) -> Result<LaunchedProcess, HelperLaunchError> {
+    use windows::Win32::Foundation::ERROR_CANCELLED;
+    use windows::Win32::System::Threading::GetProcessId;
+    use windows::Win32::UI::Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW};
     use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
-    use windows::core::{HSTRING, PCWSTR};
-
+    use windows::core::{HRESULT, HSTRING, PCWSTR};
     let operation = HSTRING::from("runas");
     let file = HSTRING::from(exe.to_string_lossy().as_ref());
     let parameters = HSTRING::from(args);
-    let result = unsafe {
-        ShellExecuteW(
-            None,
-            PCWSTR(operation.as_ptr()),
-            PCWSTR(file.as_ptr()),
-            PCWSTR(parameters.as_ptr()),
-            PCWSTR::null(),
-            SW_HIDE,
-        )
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_NOCLOSEPROCESS,
+        lpVerb: PCWSTR(operation.as_ptr()),
+        lpFile: PCWSTR(file.as_ptr()),
+        lpParameters: PCWSTR(parameters.as_ptr()),
+        nShow: SW_HIDE.0,
+        ..Default::default()
     };
-    let code = result.0 as isize;
-    if code > 32 {
-        Ok(())
-    } else if code == 1223 {
-        Err(HelperLaunchError::Declined)
-    } else {
-        Err(HelperLaunchError::Failed(format!(
-            "ShellExecuteW(runas) failed with {code}"
-        )))
+    // SAFETY: the structure and all UTF-16 buffers remain valid through the call.
+    if let Err(error) = unsafe { ShellExecuteExW(&mut info) } {
+        return if error.code() == HRESULT::from_win32(ERROR_CANCELLED.0) {
+            Err(HelperLaunchError::Declined)
+        } else {
+            Err(HelperLaunchError::Failed(format!(
+                "ShellExecuteExW: {error}"
+            )))
+        };
     }
+    let handle = info.hProcess;
+    if handle.is_invalid() {
+        return Err(HelperLaunchError::Failed(
+            "launcher returned no process handle".to_string(),
+        ));
+    }
+    // SAFETY: ShellExecuteExW returned an owned process handle.
+    let pid = unsafe { GetProcessId(handle) };
+    let process = LaunchedProcess {
+        handle: handle.0 as usize,
+        pid,
+    };
+    if pid == 0 {
+        return Err(HelperLaunchError::Failed(
+            "could not identify helper process".to_string(),
+        ));
+    }
+    Ok(process)
 }
 
 #[cfg(not(windows))]
-fn launch_elevated(_exe: &std::path::Path, _args: &str) -> Result<(), HelperLaunchError> {
+fn launch_elevated(
+    _exe: &std::path::Path,
+    _args: &str,
+) -> Result<LaunchedProcess, HelperLaunchError> {
     Err(HelperLaunchError::Failed(
         "elevated launch is only supported on Windows".to_string(),
     ))
 }
 
 impl HelperClient {
-    fn connect(pipe: &str, token: &str, timeout: Duration) -> Result<Self, String> {
+    fn connect(pipe: &str, expected_pid: u32, timeout: Duration) -> Result<Self, String> {
         let name = format!(r"\\.\pipe\{pipe}");
         wait_for_pipe(&name, timeout)?;
         let file = std::fs::OpenOptions::new()
@@ -845,17 +866,16 @@ impl HelperClient {
             .write(true)
             .open(&name)
             .map_err(|e| format!("open {name}: {e}"))?;
+        verify_pipe_server(&file, expected_pid)?;
         let writer = file
             .try_clone()
             .map_err(|e| format!("clone pipe handle: {e}"))?;
         let mut client = Self {
             reader: BufReader::new(file),
             writer,
-            token: token.to_string(),
         };
         let hello = PipeMessage {
             version: DA_HELPER_PROTOCOL_VERSION,
-            token: String::new(),
             op: "hello".to_string(),
             target: None,
             prefix: None,
@@ -867,6 +887,30 @@ impl HelperClient {
         client.call(hello)?;
         Ok(client)
     }
+}
+
+fn validate_pipe_server(actual_pid: u32, expected_pid: u32) -> Result<(), String> {
+    if expected_pid == 0 || actual_pid != expected_pid {
+        return Err("unexpected helper pipe server".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn verify_pipe_server(file: &std::fs::File, expected_pid: u32) -> Result<(), String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::Pipes::GetNamedPipeServerProcessId;
+    let mut pid = 0;
+    // SAFETY: file owns a live pipe handle and pid points to writable storage.
+    unsafe { GetNamedPipeServerProcessId(HANDLE(file.as_raw_handle() as _), &mut pid) }
+        .map_err(|e| format!("GetNamedPipeServerProcessId: {e}"))?;
+    validate_pipe_server(pid, expected_pid)
+}
+
+#[cfg(not(windows))]
+fn verify_pipe_server(_file: &std::fs::File, _expected_pid: u32) -> Result<(), String> {
+    Err("helper pipe verification is Windows-only".to_string())
 }
 
 #[cfg(windows)]
@@ -1004,19 +1048,69 @@ fn sockaddr_ip(address: &windows::Win32::Networking::WinSock::SOCKADDR_INET) -> 
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    #[test]
+    fn pipe_server_process_is_verified_before_use() {
+        use std::os::windows::io::FromRawHandle;
+        use windows::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
+        use windows::Win32::System::Pipes::{
+            CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_WAIT,
+        };
+        use windows::core::{HSTRING, PCWSTR};
+        let name = format!(
+            r"\\.\pipe\opclook-peer-test-{}-{}",
+            std::process::id(),
+            super::random_hex(super::random_bytes().unwrap())
+        );
+        let wide = HSTRING::from(name.as_str());
+        // SAFETY: the name is valid, and the returned handle is transferred
+        // immediately into File for exactly-once closure.
+        let handle = unsafe {
+            CreateNamedPipeW(
+                PCWSTR(wide.as_ptr()),
+                PIPE_ACCESS_DUPLEX,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                1,
+                1024,
+                1024,
+                0,
+                None,
+            )
+        };
+        assert!(!handle.is_invalid());
+        let _server = unsafe { std::fs::File::from_raw_handle(handle.0 as _) };
+        let client = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(name)
+            .unwrap();
+        assert!(super::verify_pipe_server(&client, std::process::id()).is_ok());
+        assert!(super::verify_pipe_server(&client, std::process::id().wrapping_add(1)).is_err());
+    }
+
+    #[test]
+    fn pipe_server_identity_must_match_launched_process() {
+        assert!(super::validate_pipe_server(123, 123).is_ok());
+        assert!(super::validate_pipe_server(124, 123).is_err());
+        assert!(super::validate_pipe_server(0, 0).is_err());
+    }
+
     #[test]
     fn successful_launch_remains_ready_after_first_pipe_retry() {
         let (tx, rx) = std::sync::mpsc::channel();
-        tx.send(Ok(())).unwrap();
+        tx.send(Ok(super::LaunchedProcess {
+            handle: 0,
+            pid: 123,
+        }))
+        .unwrap();
         drop(tx);
         let mut launch = super::HelperLaunch {
             rx,
             pipe: String::new(),
-            token: String::new(),
-            ready: false,
+            process: None,
         };
-        assert!(matches!(launch.poll_launch(), Ok(Ok(()))));
-        assert!(matches!(launch.poll_launch(), Ok(Ok(()))));
+        assert!(matches!(launch.poll_launch(), Ok(true)));
+        assert!(matches!(launch.poll_launch(), Ok(true)));
     }
 
     use super::*;

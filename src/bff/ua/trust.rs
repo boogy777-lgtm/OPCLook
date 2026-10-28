@@ -320,6 +320,30 @@ mod tests {
     }
 
     #[test]
+    fn failed_lease_drop_keeps_recovery_marker() {
+        let pki = scratch("failed-drop");
+        let trusted = pki.join(TRUSTED_DIR);
+        std::fs::create_dir_all(&trusted).unwrap();
+        let file = trusted.join("not-a-file");
+        std::fs::create_dir(&file).unwrap();
+        let marker = pki.join(MARKER_FILE);
+        std::fs::write(&marker, file.to_string_lossy().as_bytes()).unwrap();
+        LEASES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(file.clone(), 1);
+        drop(TrustLease {
+            trusted_file: file.clone(),
+            marker: marker.clone(),
+        });
+        assert_eq!(read_marker(&marker), vec![file.to_string_lossy()]);
+        std::fs::remove_dir(&file).unwrap();
+        purge_leftovers(&pki);
+        assert!(!marker.exists());
+        let _ = std::fs::remove_dir_all(&pki);
+    }
+
+    #[test]
     fn failed_removal_retains_marker_for_retry() {
         let pki = scratch("failed-removal");
         let trusted = pki.join(TRUSTED_DIR);

@@ -93,6 +93,45 @@ fn push_scan_target(targets: &mut Vec<ScanTarget>, seen: &mut HashSet<IpAddr>, i
     }
 }
 
+pub(super) fn cancel_scan(scans: &ScanRegistry, scan_id: u64) {
+    if let Some(scan) = scans
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&scan_id)
+    {
+        scan.cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn cancellation_survives_poisoned_scan_registry() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let scans: ScanRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let task = tokio::spawn(std::future::pending());
+        scans.lock().unwrap().insert(
+            42,
+            ScanHandle {
+                cancel: Arc::clone(&cancel),
+                task,
+            },
+        );
+        let copy = Arc::clone(&scans);
+        let _ = std::thread::spawn(move || {
+            let _guard = copy.lock().unwrap();
+            panic!("poison registry");
+        })
+        .join();
+        cancel_scan(&scans, 42);
+        assert!(cancel.load(Ordering::Relaxed));
+        abort_all_scans(&scans).await;
+    });
+}
+
 /// Register and spawn one scan without blocking the worker command loop.
 pub(super) fn start_scan_task(
     scan_id: u64,

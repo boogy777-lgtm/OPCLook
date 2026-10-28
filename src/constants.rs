@@ -85,7 +85,7 @@ pub const DA_ROUTE_REFRESH_SECS: u64 = 1800;
 /// asks the user to retry. Never blocks on the UAC prompt itself.
 pub const DA_HELPER_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 /// Protocol version of the app <-> helper named-pipe messages.
-pub const DA_HELPER_PROTOCOL_VERSION: u32 = 1;
+pub const DA_HELPER_PROTOCOL_VERSION: u32 = 2;
 /// Environment variable used by tests/manual runs to point at a helper exe.
 pub const DA_HELPER_EXE_ENV: &str = "OPCDA_NETHELPER_EXE";
 
@@ -316,7 +316,7 @@ mod tests {
         assert!(DA_ROUTE_REFRESH_SECS > 0);
         assert!(DA_ROUTE_REFRESH_SECS < u64::from(DA_ROUTE_LIFETIME_SECS));
         assert!(!DA_HELPER_START_TIMEOUT.is_zero());
-        assert_eq!(DA_HELPER_PROTOCOL_VERSION, 1);
+        assert_eq!(DA_HELPER_PROTOCOL_VERSION, 2);
     }
 
     #[test]

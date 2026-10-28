@@ -19,7 +19,7 @@
 
 use super::discovery::{search_network_servers, search_servers};
 use super::io::{browse, browse_views, read, resolve_browse_path, test, write};
-use super::scanner::{ScanRegistry, abort_all_scans, start_scan_task};
+use super::scanner::{ScanRegistry, abort_all_scans, cancel_scan, start_scan_task};
 use super::session::{UaSession, connect};
 use crate::bff::model::{
     BackendMsg, Command, CommandKind, DataValue, EndpointSpec, Event, EventKind, Operation,
@@ -28,7 +28,6 @@ use crate::bff::model::{
 use crate::constants::{GRACEFUL_CLOSE_TIMEOUT, UA_HOST_RUNTIME_THREADS, UA_SESSION_BACKLOG_LIMIT};
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
-use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -240,15 +239,7 @@ impl Host {
                 start_scan_task(scan_id, bind, subnet, local_ip, &self.scans, &self.event_tx);
             }
             CommandKind::CancelUaScan { scan_id } => {
-                if let Some(scan) = self
-                    .scans
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .get(&scan_id)
-                    .map(|scan| Arc::clone(&scan.cancel))
-                {
-                    scan.store(true, Ordering::Relaxed);
-                }
+                cancel_scan(&self.scans, scan_id);
             }
             CommandKind::Connect { endpoint } => self.start_connect(request_id, session, endpoint),
             CommandKind::Disconnect => self.disconnect(command_for_disconnect(request_id, session)),

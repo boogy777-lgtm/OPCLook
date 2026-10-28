@@ -38,7 +38,7 @@ use windows::Win32::System::Threading::{
 };
 use windows::core::{PCWSTR, PWSTR};
 
-const PROTOCOL_VERSION: u32 = 1;
+const PROTOCOL_VERSION: u32 = 2;
 const DEFAULT_LIFETIME_SECS: u32 = 3600;
 const MAX_LIFETIME_SECS: u32 = 86_400;
 const PIPE_CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -46,7 +46,6 @@ const PIPE_CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 #[derive(Debug, Serialize, Deserialize)]
 struct PipeMessage {
     version: u32,
-    token: String,
     op: String,
     #[serde(default)]
     target: Option<String>,
@@ -119,31 +118,29 @@ impl Audit {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut pipe = None;
-    let mut token = None;
     let mut parent = None;
     let mut index = 1;
     while index + 1 < args.len() {
         match args[index].as_str() {
             "--pipe" => pipe = Some(args[index + 1].clone()),
-            "--token" => token = Some(args[index + 1].clone()),
             "--parent" => parent = args[index + 1].parse::<u32>().ok(),
             _ => {}
         }
         index += 2;
     }
-    let (Some(pipe), Some(token), Some(parent)) = (pipe, token, parent) else {
+    let (Some(pipe), Some(parent)) = (pipe, parent) else {
         return;
     };
     let audit = Audit::new();
     audit.log("start", &format!("pipe={pipe} parent={parent}"));
 
-    if let Err(error) = run(&pipe, &token, parent, &audit) {
+    if let Err(error) = run(&pipe, parent, &audit) {
         audit.log("error", &error);
     }
     audit.log("exit", "pipe closed, helper exiting");
 }
 
-fn run(pipe: &str, token: &str, parent: u32, audit: &Audit) -> Result<(), String> {
+fn run(pipe: &str, parent: u32, audit: &Audit) -> Result<(), String> {
     let own_sid = current_process_sid()?;
     let user_sid = own_sid.to_string();
     let (handle, security) = create_pipe(pipe, &user_sid)?;
@@ -199,11 +196,6 @@ fn run(pipe: &str, token: &str, parent: u32, audit: &Audit) -> Result<(), String
         if message.version != PROTOCOL_VERSION {
             let _ = reply(&mut writer, false, Some("protocol version mismatch"));
             continue;
-        }
-        if message.token != token {
-            let _ = reply(&mut writer, false, Some("invalid token"));
-            audit.log("reject", "invalid token");
-            break;
         }
         if !authenticated {
             if message.op != "hello" || message.client_pid != Some(parent) {
