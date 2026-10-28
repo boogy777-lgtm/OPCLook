@@ -73,12 +73,16 @@ struct PipeReply {
 struct CreatedRoute {
     target: IpAddr,
     interface_luid: u64,
+    prefix: u8,
+    next_hop: IpAddr,
 }
 
 fn route_key(route: &RouteSpec) -> CreatedRoute {
     CreatedRoute {
         target: route.target,
         interface_luid: route.interface_luid,
+        prefix: route.prefix,
+        next_hop: route.next_hop,
     }
 }
 
@@ -300,7 +304,20 @@ fn reply(writer: &mut std::fs::File, ok: bool, error: Option<&str>) -> Result<()
     writer.flush().map_err(|e| format!("flush reply: {e}"))
 }
 
-fn create_pipe(pipe: &str, user_sid: &str) -> Result<(HANDLE, PSECURITY_DESCRIPTOR), String> {
+struct LocalDescriptor(PSECURITY_DESCRIPTOR);
+
+impl Drop for LocalDescriptor {
+    fn drop(&mut self) {
+        if !self.0.0.is_null() {
+            // SAFETY: the descriptor was allocated by ConvertStringSecurityDescriptorToSecurityDescriptorW.
+            unsafe {
+                let _ = LocalFree(Some(HLOCAL(self.0.0)));
+            }
+        }
+    }
+}
+
+fn create_pipe(pipe: &str, user_sid: &str) -> Result<(HANDLE, LocalDescriptor), String> {
     let sddl = format!("D:(A;;GA;;;{user_sid})");
     let sddl_w = wide(&sddl);
     let mut descriptor = PSECURITY_DESCRIPTOR::default();
@@ -313,9 +330,10 @@ fn create_pipe(pipe: &str, user_sid: &str) -> Result<(HANDLE, PSECURITY_DESCRIPT
         )
         .map_err(|e| format!("security descriptor: {e}"))?;
     }
+    let descriptor = LocalDescriptor(descriptor);
     let attributes = SECURITY_ATTRIBUTES {
         nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
-        lpSecurityDescriptor: descriptor.0,
+        lpSecurityDescriptor: descriptor.0.0,
         bInheritHandle: false.into(),
     };
     let name = format!(r"\\.\pipe\{pipe}");
@@ -334,9 +352,6 @@ fn create_pipe(pipe: &str, user_sid: &str) -> Result<(HANDLE, PSECURITY_DESCRIPT
     };
     if handle.is_invalid() {
         let error = unsafe { GetLastError() };
-        unsafe {
-            LocalFree(Some(HLOCAL(descriptor.0)));
-        }
         return Err(format!("CreateNamedPipeW failed with {}", error.0));
     }
     Ok((handle, descriptor))
@@ -628,6 +643,20 @@ fn wide(text: &str) -> Vec<u16> {
 #[cfg(test)]
 mod regression_tests {
     use super::*;
+
+    #[test]
+    fn route_ownership_distinguishes_next_hop() {
+        let route = RouteSpec {
+            target: "192.0.2.1".parse().unwrap(),
+            prefix: 32,
+            interface_luid: 7,
+            next_hop: "192.0.2.2".parse().unwrap(),
+            lifetime_secs: 10,
+        };
+        let mut other = route;
+        other.next_hop = "192.0.2.3".parse().unwrap();
+        assert_ne!(route_key(&route), route_key(&other));
+    }
 
     #[test]
     fn already_connected_uses_error_from_pipe_thread() {

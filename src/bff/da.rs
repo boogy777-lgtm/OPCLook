@@ -451,6 +451,24 @@ fn send_error(
     );
 }
 
+/// Owns a newly registered group until the session takes responsibility for it.
+struct PendingServerGroup<'a> {
+    server: &'a IOPCServer,
+    handle: u32,
+    armed: bool,
+}
+
+impl Drop for PendingServerGroup<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            // SAFETY: AddGroup succeeded and this guard still owns its handle.
+            unsafe {
+                let _ = self.server.RemoveGroup(self.handle, true);
+            }
+        }
+    }
+}
+
 impl DaSession {
     fn connect(endpoint: super::model::EndpointSpec) -> Result<Self, BackendMsg> {
         let prog_id = endpoint.address.trim();
@@ -487,6 +505,11 @@ impl DaSession {
                     detail: e.to_string(),
                 })?;
         }
+        let mut pending_group = PendingServerGroup {
+            server: &server,
+            handle: group_handle,
+            armed: true,
+        };
         let group_unknown = group_unknown.ok_or(BackendMsg::DaGroupEmpty)?;
         let item_mgt: IOPCItemMgt = group_unknown.cast().map_err(|e| BackendMsg::DaNoItemMgt {
             detail: e.to_string(),
@@ -537,6 +560,8 @@ impl DaSession {
                 .as_ref(),
         );
 
+        pending_group.armed = false;
+        drop(pending_group);
         Ok(Self {
             endpoint,
             server,
@@ -833,11 +858,17 @@ impl DaSession {
                 let item_id = unsafe { browse.GetItemID(PCWSTR(name_w.as_ptr())) }
                     .ok()
                     .map(|p| {
-                        let s = unsafe { p.to_string().unwrap_or_default() };
-                        if !p.is_null() {
-                            unsafe { CoTaskMemFree(Some(p.0 as *const c_void)) };
+                        if p.is_null() {
+                            String::new()
+                        } else {
+                            // SAFETY: the server returned a non-null COM string; copy
+                            // it before freeing the CoTaskMem allocation.
+                            unsafe {
+                                let text = p.to_string().unwrap_or_default();
+                                CoTaskMemFree(Some(p.0 as *const c_void));
+                                text
+                            }
                         }
-                        s
                     })
                     .filter(|s| !s.is_empty())
                     .unwrap_or_else(|| name.clone());
@@ -1009,9 +1040,16 @@ fn class_details(list: &IOPCServerList, clsid: &GUID) -> Option<ServerEntry> {
         unsafe { windows::Win32::System::Com::ProgIDFromCLSID(clsid) }
             .ok()
             .map(|p| {
-                let text = unsafe { p.to_string().unwrap_or_default() };
-                unsafe { CoTaskMemFree(Some(p.0 as *const c_void)) };
-                text
+                if p.is_null() {
+                    String::new()
+                } else {
+                    // SAFETY: ProgIDFromCLSID returned a non-null COM string.
+                    unsafe {
+                        let text = p.to_string().unwrap_or_default();
+                        CoTaskMemFree(Some(p.0 as *const c_void));
+                        text
+                    }
+                }
             })
             .unwrap_or_default()
     } else {

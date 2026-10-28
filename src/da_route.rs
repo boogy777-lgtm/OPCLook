@@ -294,6 +294,22 @@ struct HelperLaunch {
     rx: std::sync::mpsc::Receiver<Result<(), HelperLaunchError>>,
     pipe: String,
     token: String,
+    ready: bool,
+}
+
+impl HelperLaunch {
+    fn poll_launch(
+        &mut self,
+    ) -> Result<Result<(), HelperLaunchError>, std::sync::mpsc::TryRecvError> {
+        if self.ready {
+            return Ok(Ok(()));
+        }
+        let result = self.rx.try_recv();
+        if matches!(result, Ok(Ok(()))) {
+            self.ready = true;
+        }
+        result
+    }
 }
 
 #[derive(Debug)]
@@ -601,19 +617,21 @@ impl DaRouteManager {
             let Some(launch) = self.launch.as_mut() else {
                 return Ok(());
             };
-            match launch.rx.try_recv() {
+            let result = launch.poll_launch();
+            match result {
                 Ok(Ok(())) => {
                     let pipe = launch.pipe.clone();
                     let token = launch.token.clone();
-                    self.launch = None;
                     match HelperClient::connect(&pipe, &token, Duration::from_millis(250)) {
                         Ok(client) => {
+                            self.launch = None;
                             self.helper = Some(client);
                             self.status = DaRouteStatus::HelperRunning;
                             return Ok(());
                         }
                         Err(_) if Instant::now() < deadline => {}
                         Err(error) => {
+                            self.launch = None;
                             self.status = DaRouteStatus::HelperUnavailable;
                             return Err(DaRouteError::HelperUnavailable(error));
                         }
@@ -642,6 +660,7 @@ impl DaRouteManager {
                     if let Ok(client) =
                         HelperClient::connect(&pipe, &token, Duration::from_millis(50))
                     {
+                        self.launch = None;
                         self.helper = Some(client);
                         self.status = DaRouteStatus::HelperRunning;
                         return Ok(());
@@ -767,7 +786,12 @@ fn spawn_helper() -> Result<HelperLaunch, DaRouteError> {
             let _ = tx.send(result);
         })
         .map_err(|e| DaRouteError::HelperUnavailable(format!("launcher thread: {e}")))?;
-    Ok(HelperLaunch { rx, pipe, token })
+    Ok(HelperLaunch {
+        rx,
+        pipe,
+        token,
+        ready: false,
+    })
 }
 
 #[cfg(windows)]
@@ -976,6 +1000,21 @@ fn sockaddr_ip(address: &windows::Win32::Networking::WinSock::SOCKADDR_INET) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn successful_launch_remains_ready_after_first_pipe_retry() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Ok(())).unwrap();
+        drop(tx);
+        let mut launch = super::HelperLaunch {
+            rx,
+            pipe: String::new(),
+            token: String::new(),
+            ready: false,
+        };
+        assert!(matches!(launch.poll_launch(), Ok(Ok(()))));
+        assert!(matches!(launch.poll_launch(), Ok(Ok(()))));
+    }
+
     use super::*;
     use crate::net::{AdapterAddress, AdapterState};
 
