@@ -122,19 +122,11 @@ impl SubnetSpec {
         }
         let network = match ip {
             IpAddr::V4(ip) => {
-                let mask = if prefix == 0 {
-                    0
-                } else {
-                    u32::MAX << (32 - u32::from(prefix))
-                };
+                let mask = u32::MAX.checked_shl(32 - u32::from(prefix)).unwrap_or(0);
                 IpAddr::V4(Ipv4Addr::from(u32::from(ip) & mask))
             }
             IpAddr::V6(ip) => {
-                let mask = if prefix == 0 {
-                    0
-                } else {
-                    u128::MAX << (128 - u32::from(prefix))
-                };
+                let mask = u128::MAX.checked_shl(128 - u32::from(prefix)).unwrap_or(0);
                 IpAddr::V6(Ipv6Addr::from(u128::from(ip) & mask))
             }
         };
@@ -194,19 +186,15 @@ impl SubnetSpec {
     pub fn contains(&self, ip: IpAddr) -> bool {
         match (self.network, ip) {
             (IpAddr::V4(net), IpAddr::V4(ip)) => {
-                let mask = if self.prefix == 0 {
-                    0
-                } else {
-                    u32::MAX << (32 - u32::from(self.prefix))
-                };
+                let mask = u32::MAX
+                    .checked_shl(32 - u32::from(self.prefix))
+                    .unwrap_or(0);
                 (u32::from(net) & mask) == (u32::from(ip) & mask)
             }
             (IpAddr::V6(net), IpAddr::V6(ip)) => {
-                let mask = if self.prefix == 0 {
-                    0
-                } else {
-                    u128::MAX << (128 - u32::from(self.prefix))
-                };
+                let mask = u128::MAX
+                    .checked_shl(128 - u32::from(self.prefix))
+                    .unwrap_or(0);
                 (u128::from(net) & mask) == (u128::from(ip) & mask)
             }
             _ => false,
@@ -245,9 +233,7 @@ impl SubnetSpec {
         };
         SubnetHosts {
             family,
-            next: first,
-            last,
-            done: false,
+            range: first..=last,
         }
     }
 
@@ -258,24 +244,14 @@ impl SubnetSpec {
 
 pub struct SubnetHosts {
     family: SubnetFamily,
-    next: u128,
-    last: u128,
-    done: bool,
+    range: std::ops::RangeInclusive<u128>,
 }
 
 impl Iterator for SubnetHosts {
     type Item = IpAddr;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.done || self.next > self.last {
-            return None;
-        }
-        let value = self.next;
-        if value == self.last {
-            self.done = true;
-        } else {
-            self.next += 1;
-        }
+        let value = self.range.next()?;
         Some(match self.family {
             SubnetFamily::V4 => IpAddr::V4(Ipv4Addr::from(value as u32)),
             SubnetFamily::V6 => IpAddr::V6(Ipv6Addr::from(value)),

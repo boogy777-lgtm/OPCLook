@@ -51,17 +51,17 @@ impl AdapterId {
             .unwrap_or(trimmed);
         let mut parts = body.split('-');
         let mut bytes = [0u8; 16];
-        let Ok(first) = next_hex(parts.next(), 4) else {
+        let Some(first) = next_hex::<4>(parts.next()) else {
             return Err(NetError::InvalidAdapterId(text.to_string()));
         };
         bytes[0..4].copy_from_slice(&first);
         for range in [4usize..6usize, 6..8, 8..10] {
-            let Ok(part) = next_hex(parts.next(), 2) else {
+            let Some(part) = next_hex::<2>(parts.next()) else {
                 return Err(NetError::InvalidAdapterId(text.to_string()));
             };
             bytes[range].copy_from_slice(&part);
         }
-        let Ok(last) = next_hex(parts.next(), 6) else {
+        let Some(last) = next_hex::<6>(parts.next()) else {
             return Err(NetError::InvalidAdapterId(text.to_string()));
         };
         bytes[10..16].copy_from_slice(&last);
@@ -72,22 +72,18 @@ impl AdapterId {
     }
 }
 
-fn next_hex(part: Option<&str>, bytes: usize) -> Result<Vec<u8>, ()> {
-    let Some(part) = part else {
-        return Err(());
-    };
-    if part.len() != bytes * 2 || !part.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(());
+fn next_hex<const N: usize>(part: Option<&str>) -> Option<[u8; N]> {
+    let part = part?;
+    if part.len() != N * 2 {
+        return None;
     }
-    let mut out = Vec::with_capacity(bytes);
-    for i in 0..bytes {
-        let hi = part.as_bytes()[i * 2];
-        let lo = part.as_bytes()[i * 2 + 1];
-        let hi = (hi as char).to_digit(16).ok_or(())?;
-        let lo = (lo as char).to_digit(16).ok_or(())?;
-        out.push(((hi << 4) | lo) as u8);
+    let mut out = [0; N];
+    for (slot, pair) in out.iter_mut().zip(part.as_bytes().chunks_exact(2)) {
+        let hi = char::from(*pair.first()?).to_digit(16)?;
+        let lo = char::from(*pair.get(1)?).to_digit(16)?;
+        *slot = ((hi << 4) | lo) as u8;
     }
-    Ok(out)
+    Some(out)
 }
 
 impl fmt::Display for AdapterId {
@@ -1253,6 +1249,9 @@ mod tests {
             "not-a-guid",
             "aabbccdd-1122-3344-5566",
             "zzbcccdd-1122-3344-5566-77889900aabb",
+            "ébbccdd-1122-3344-5566-77889900aabb",
+            "{aabbccdd-1122-3344-5566-77889900aabb",
+            "aabbccdd-1122-3344-5566-77889900aabb-extra",
         ] {
             assert!(AdapterId::parse(raw).is_err(), "accepted {raw:?}");
         }
@@ -1313,6 +1312,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(tail.hosts().collect::<Vec<_>>().len(), 2);
+    }
+
+    #[test]
+    fn subnet_zero_prefix_and_ipv6_max_iterator_boundaries() {
+        let v4 = SubnetSpec::new("192.0.2.1".parse().unwrap(), 0).unwrap();
+        assert_eq!(v4.network().to_string(), "0.0.0.0");
+        assert!(v4.contains("255.255.255.255".parse().unwrap()));
+        let v6 = SubnetSpec::new("2001:db8::1".parse().unwrap(), 0).unwrap();
+        assert_eq!(v6.network().to_string(), "::");
+        assert!(v6.contains("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff".parse().unwrap()));
+        let max = SubnetSpec::host("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff".parse().unwrap());
+        let mut hosts = max.hosts();
+        assert_eq!(hosts.next(), Some(max.network()));
+        assert_eq!(hosts.next(), None);
+        assert_eq!(hosts.next(), None);
     }
 
     #[test]
