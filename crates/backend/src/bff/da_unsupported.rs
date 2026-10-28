@@ -5,6 +5,7 @@
 //! answers every request that expects a reply with `EventKind::Error` — a
 //! command is never dropped silently and nothing panics.
 
+use super::da_router::{Route, route_of};
 use super::model::{BackendMsg, Command, CommandKind, Event, EventKind};
 use std::sync::mpsc::Sender;
 
@@ -29,21 +30,17 @@ pub(crate) fn spawn(event_tx: Sender<Event>) -> super::WorkerHandle {
 }
 
 fn reply(command: Command, tx: &Sender<Event>) {
-    match command.kind {
-        // Commands the Windows DA worker also answers with silence.
-        CommandKind::Disconnect
-        | CommandKind::ConfigureUaSubscription { .. }
-        | CommandKind::ScanUaNetwork { .. }
-        | CommandKind::CancelUaScan { .. } => {}
-        kind => {
-            let _ = tx.send(Event {
-                origin: command.request_id.into(),
-                owner: command.owner,
-                kind: EventKind::Error {
-                    operation: kind.operation(),
-                    message: BackendMsg::DaOnlyOnWindows,
-                },
-            });
-        }
+    if matches!(route_of(&command.kind), Route::Ignored)
+        || matches!(command.kind, CommandKind::Disconnect)
+    {
+        return;
     }
+    let _ = tx.send(Event {
+        origin: command.request_id.into(),
+        owner: command.owner,
+        kind: EventKind::Error {
+            operation: command.kind.operation(),
+            message: BackendMsg::DaOnlyOnWindows,
+        },
+    });
 }

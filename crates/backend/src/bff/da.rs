@@ -2,7 +2,9 @@
 
 use super::com::{CoAllocation, CoString, ComArray, OwnedVariant};
 use super::da_clsid::{ClsidLookup, DiscoveredClsids, is_local_host, resolve_clsid};
-use super::da_router::{DaHost, SESSION_JOIN_BUDGET, run_router};
+use super::da_router::{
+    DaHost, Route, SESSION_JOIN_BUDGET, no_connection_reply, route_of, run_router,
+};
 use super::da_status::{ServerStatusInfo, check_server_state, format_connect_info};
 use super::da_variant::{
     clear_variant, filetime_to_utc, variant_from_value, variant_to_value, vt_name,
@@ -82,30 +84,36 @@ struct WinDaHost;
 impl DaHost for WinDaHost {
     fn run_session(
         &self,
-        _session: SessionId,
+        session_id: SessionId,
         commands: &mut UnboundedReceiver<Command>,
         events: &Sender<Event>,
     ) {
         let _com = ComGuard::new();
-        let mut sessions: HashMap<SessionId, DaSession> = HashMap::new();
+        let mut session = None;
         while let Some(command) = commands.blocking_recv() {
+            if command.owner != session_id.into() {
+                if let Some(reply) = no_connection_reply(&command) {
+                    send(events, reply);
+                }
+                continue;
+            }
             let disconnect = matches!(command.kind, CommandKind::Disconnect);
-            handle_command(command, &mut sessions, events);
+            handle_command(command, &mut session, events);
             // Over after `Disconnect`, or after a failed `Connect` (no session
             // was stored); the router answers whatever is still queued.
-            if disconnect || sessions.is_empty() {
+            if disconnect || session.is_none() {
                 break;
             }
         }
         // Channel closed (gateway shutdown) or session over: drop the group.
-        for (_, session) in sessions {
+        if let Some((_, session)) = session {
             session.shutdown();
         }
     }
 
     fn run_discovery(&self, command: Command, events: &Sender<Event>) {
         let _com = ComGuard::new();
-        handle_command(command, &mut HashMap::new(), events);
+        handle_command(command, &mut None, events);
     }
 }
 
@@ -182,9 +190,19 @@ pub(crate) fn spawn(event_tx: Sender<Event>) -> super::WorkerHandle {
     }
 }
 
+fn owned_session_mut(
+    session: &mut Option<(SessionId, DaSession)>,
+    owner: SessionId,
+) -> Option<&mut DaSession> {
+    session
+        .as_mut()
+        .filter(|(id, _)| *id == owner)
+        .map(|(_, session)| session)
+}
+
 fn handle_command(
     command: Command,
-    sessions: &mut HashMap<SessionId, DaSession>,
+    session: &mut Option<(SessionId, DaSession)>,
     tx: &Sender<Event>,
 ) {
     let owner = command.owner;
@@ -224,6 +242,14 @@ fn handle_command(
         return;
     };
     let request_id = command.request_id;
+    match route_of(&command.kind) {
+        Route::Unsupported(operation, message) => {
+            send_error(tx, request_id, owner, operation, message);
+            return;
+        }
+        Route::Ignored => return,
+        _ => {}
+    }
     match command.kind {
         CommandKind::Discover { .. } => send_error(
             tx,
@@ -232,22 +258,8 @@ fn handle_command(
             Operation::Discover,
             BackendMsg::NoConnection,
         ),
-        CommandKind::SearchUaServers { .. } => send_error(
-            tx,
-            request_id,
-            session_id,
-            Operation::SearchServers,
-            BackendMsg::DaNoUaServerSearch,
-        ),
-        CommandKind::SearchUaNetwork { .. } => send_error(
-            tx,
-            request_id,
-            session_id,
-            Operation::SearchNetwork,
-            BackendMsg::DaNoUaNetworkSearch,
-        ),
         CommandKind::Connect { endpoint } => {
-            if sessions.contains_key(&session_id) {
+            if session.is_some() {
                 send_error(
                     tx,
                     request_id,
@@ -258,8 +270,8 @@ fn handle_command(
                 return;
             }
             match DaSession::connect(endpoint.clone()) {
-                Ok(session) => {
-                    let info = session.info.clone();
+                Ok(connected) => {
+                    let info = connected.info.clone();
                     send(
                         tx,
                         Event {
@@ -268,7 +280,7 @@ fn handle_command(
                             kind: EventKind::Connected { endpoint, info },
                         },
                     );
-                    sessions.insert(session_id, session);
+                    *session = Some((session_id, connected));
                 }
                 Err(message) => send(
                     tx,
@@ -284,7 +296,11 @@ fn handle_command(
             }
         }
         CommandKind::Disconnect => {
-            if let Some(session) = sessions.remove(&session_id) {
+            if session
+                .as_ref()
+                .is_some_and(|(owner, _)| *owner == session_id)
+                && let Some((_, session)) = session.take()
+            {
                 let reason = session.shutdown();
                 send(
                     tx,
@@ -300,7 +316,7 @@ fn handle_command(
             node_id,
             filter: _,
             view_id: _,
-        } => match sessions.get_mut(&session_id) {
+        } => match owned_session_mut(session, session_id) {
             Some(session) => match session.browse(&node_id) {
                 Ok(children) => send(
                     tx,
@@ -320,21 +336,7 @@ fn handle_command(
                 BackendMsg::NoConnection,
             ),
         },
-        CommandKind::BrowseViews => send_error(
-            tx,
-            request_id,
-            session_id,
-            Operation::BrowseViews,
-            BackendMsg::DaNoViews,
-        ),
-        CommandKind::ResolveBrowsePath { .. } => send_error(
-            tx,
-            request_id,
-            session_id,
-            Operation::ResolveBrowsePath,
-            BackendMsg::DaNoBrowsePath,
-        ),
-        CommandKind::AddItems { items } => match sessions.get_mut(&session_id) {
+        CommandKind::AddItems { items } => match owned_session_mut(session, session_id) {
             Some(session) => {
                 let results = session.add_items(&items);
                 send(
@@ -361,7 +363,7 @@ fn handle_command(
                 );
             }
         },
-        CommandKind::RemoveItems { keys } => match sessions.get_mut(&session_id) {
+        CommandKind::RemoveItems { keys } => match owned_session_mut(session, session_id) {
             Some(session) => {
                 session.remove_items(&keys);
                 send(
@@ -381,7 +383,7 @@ fn handle_command(
                 BackendMsg::NoConnection,
             ),
         },
-        CommandKind::Read { keys } => match sessions.get_mut(&session_id) {
+        CommandKind::Read { keys } => match owned_session_mut(session, session_id) {
             Some(session) => {
                 let values = session.read(&keys);
                 send(
@@ -408,7 +410,7 @@ fn handle_command(
                 );
             }
         },
-        CommandKind::Write { request } => match sessions.get_mut(&session_id) {
+        CommandKind::Write { request } => match owned_session_mut(session, session_id) {
             Some(session) => {
                 let key = request.key;
                 let result = session.write(request);
@@ -429,7 +431,7 @@ fn handle_command(
                 BackendMsg::NoConnection,
             ),
         },
-        CommandKind::Test => match sessions.get_mut(&session_id) {
+        CommandKind::Test => match owned_session_mut(session, session_id) {
             Some(session) => match session.test() {
                 Ok(message) => send(
                     tx,
@@ -449,10 +451,8 @@ fn handle_command(
                 BackendMsg::NoConnection,
             ),
         },
-        // UA-only push subscription configuration; DA keeps periodic polling.
-        CommandKind::ConfigureUaSubscription { .. } => {}
-        // UA-only streaming subnet scan; DA has no equivalent command.
-        CommandKind::ScanUaNetwork { .. } | CommandKind::CancelUaScan { .. } => {}
+        // Unsupported and ignored commands are handled by route_of above.
+        _ => {}
     }
 }
 

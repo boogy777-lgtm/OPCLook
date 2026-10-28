@@ -56,16 +56,14 @@ pub fn route_of(kind: &CommandKind) -> Route {
     match kind {
         CommandKind::Discover { .. } => Route::Discover,
         CommandKind::SearchUaServers { .. } => {
-            Route::Unsupported(Operation::SearchServers, BackendMsg::DaNoUaServerSearch)
+            Route::Unsupported(kind.operation(), BackendMsg::DaNoUaServerSearch)
         }
         CommandKind::SearchUaNetwork { .. } => {
-            Route::Unsupported(Operation::SearchNetwork, BackendMsg::DaNoUaNetworkSearch)
+            Route::Unsupported(kind.operation(), BackendMsg::DaNoUaNetworkSearch)
         }
-        CommandKind::BrowseViews => {
-            Route::Unsupported(Operation::BrowseViews, BackendMsg::DaNoViews)
-        }
+        CommandKind::BrowseViews => Route::Unsupported(kind.operation(), BackendMsg::DaNoViews),
         CommandKind::ResolveBrowsePath { .. } => {
-            Route::Unsupported(Operation::ResolveBrowsePath, BackendMsg::DaNoBrowsePath)
+            Route::Unsupported(kind.operation(), BackendMsg::DaNoBrowsePath)
         }
         // UA-only push subscription configuration; DA keeps periodic polling.
         CommandKind::ConfigureUaSubscription { .. } => Route::Ignored,
