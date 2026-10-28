@@ -3,18 +3,16 @@ use opcda_egui::bff::model::{Command, CommandKind, Protocol};
 use probe_support::Probe;
 use std::time::{Duration, Instant};
 
-fn main() {
+fn main() -> Result<(), String> {
     let probe = Probe::new();
-    probe
-        .send(Command {
-            request_id: 1,
-            session: 0,
-            protocol: Protocol::OpcDa,
-            kind: CommandKind::Discover {
-                host: String::new(),
-            },
-        })
-        .expect("probe send");
+    probe.send(Command {
+        request_id: 1,
+        session: 0,
+        protocol: Protocol::OpcDa,
+        kind: CommandKind::Discover {
+            host: String::new(),
+        },
+    })?;
 
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {
@@ -28,4 +26,5 @@ fn main() {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
+    Ok(())
 }

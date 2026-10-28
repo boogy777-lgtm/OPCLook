@@ -6,21 +6,19 @@ use opcda_egui::bff::model::{
 use probe_support::Probe;
 use std::time::{Duration, Instant};
 
-fn main() {
+fn main() -> Result<(), String> {
     let probe = Probe::new();
     let mut request = 1u64;
     let session = 7u64;
 
-    probe
-        .send(Command {
-            request_id: request,
-            session: 0,
-            protocol: Protocol::OpcDa,
-            kind: CommandKind::Discover {
-                host: String::new(),
-            },
-        })
-        .expect("probe send");
+    probe.send(Command {
+        request_id: request,
+        session: 0,
+        protocol: Protocol::OpcDa,
+        kind: CommandKind::Discover {
+            host: String::new(),
+        },
+    })?;
     request += 1;
 
     let Some(servers) = wait(&probe, Duration::from_secs(20), |event| {
@@ -30,28 +28,26 @@ fn main() {
         )
     }) else {
         println!("discover timeout");
-        return;
+        return Ok(());
     };
     let EventKind::Servers { servers, .. } = servers.kind else {
         println!("discover failed: {servers:?}");
-        return;
+        return Ok(());
     };
     let Some(ServerEntry { id, .. }) = servers.first() else {
         println!("no DA servers");
-        return;
+        return Ok(());
     };
     println!("Using server {id}");
 
-    probe
-        .send(Command {
-            request_id: request,
-            session,
-            protocol: Protocol::OpcDa,
-            kind: CommandKind::Connect {
-                endpoint: EndpointSpec::da(String::new(), id.clone()),
-            },
-        })
-        .expect("probe send");
+    probe.send(Command {
+        request_id: request,
+        session,
+        protocol: Protocol::OpcDa,
+        kind: CommandKind::Connect {
+            endpoint: EndpointSpec::da(String::new(), id.clone()),
+        },
+    })?;
     request += 1;
 
     let Some(connected) = wait(&probe, Duration::from_secs(20), |event| {
@@ -61,25 +57,23 @@ fn main() {
         )
     }) else {
         println!("connect timeout");
-        return;
+        return Ok(());
     };
     if !matches!(connected.kind, EventKind::Connected { .. }) {
         println!("connect failed: {:?}", connected.kind);
-        return;
+        return Ok(());
     }
 
-    probe
-        .send(Command {
-            request_id: request,
-            session,
-            protocol: Protocol::OpcDa,
-            kind: CommandKind::Browse {
-                node_id: String::new(),
-                filter: None,
-                view_id: None,
-            },
-        })
-        .expect("probe send");
+    probe.send(Command {
+        request_id: request,
+        session,
+        protocol: Protocol::OpcDa,
+        kind: CommandKind::Browse {
+            node_id: String::new(),
+            filter: None,
+            view_id: None,
+        },
+    })?;
     request += 1;
 
     let Some(root) = wait(&probe, Duration::from_secs(20), |event| {
@@ -89,11 +83,11 @@ fn main() {
         )
     }) else {
         println!("browse timeout");
-        return;
+        return Ok(());
     };
     let EventKind::Browse { children, .. } = root.kind else {
         println!("browse failed: {:?}", root.kind);
-        return;
+        return Ok(());
     };
     println!("Root nodes: {}", children.len());
     for node in children.iter().take(20) {
@@ -111,18 +105,16 @@ fn main() {
 
     if item.is_none() {
         if let Some(branch) = branch {
-            probe
-                .send(Command {
-                    request_id: request,
-                    session,
-                    protocol: Protocol::OpcDa,
-                    kind: CommandKind::Browse {
-                        node_id: branch.clone(),
-                        filter: None,
-                        view_id: None,
-                    },
-                })
-                .expect("probe send");
+            probe.send(Command {
+                request_id: request,
+                session,
+                protocol: Protocol::OpcDa,
+                kind: CommandKind::Browse {
+                    node_id: branch.clone(),
+                    filter: None,
+                    view_id: None,
+                },
+            })?;
             request += 1;
             if let Some(event) = wait(&probe, Duration::from_secs(20), |event| {
                 matches!(
@@ -146,23 +138,21 @@ fn main() {
 
     let Some((item_id, _name)) = item else {
         println!("no leaf found");
-        disconnect(&probe, session, request);
-        return;
+        disconnect(&probe, session, request)?;
+        return Ok(());
     };
 
-    probe
-        .send(Command {
-            request_id: request,
-            session,
-            protocol: Protocol::OpcDa,
-            kind: CommandKind::AddItems {
-                items: vec![ItemSpec {
-                    key: 1,
-                    item_id: item_id.clone(),
-                }],
-            },
-        })
-        .expect("probe send");
+    probe.send(Command {
+        request_id: request,
+        session,
+        protocol: Protocol::OpcDa,
+        kind: CommandKind::AddItems {
+            items: vec![ItemSpec {
+                key: 1,
+                item_id: item_id.clone(),
+            }],
+        },
+    })?;
     request += 1;
     if let Some(event) = wait(&probe, Duration::from_secs(20), |event| {
         matches!(
@@ -173,16 +163,14 @@ fn main() {
         println!("AddItems: {:?}", event.kind);
     }
 
-    probe
-        .send(Command {
-            request_id: request,
-            session,
-            protocol: Protocol::OpcDa,
-            kind: CommandKind::Read {
-                keys: vec![1 as ItemKey],
-            },
-        })
-        .expect("probe send");
+    probe.send(Command {
+        request_id: request,
+        session,
+        protocol: Protocol::OpcDa,
+        kind: CommandKind::Read {
+            keys: vec![1 as ItemKey],
+        },
+    })?;
     request += 1;
     if let Some(event) = wait(&probe, Duration::from_secs(20), |event| {
         matches!(
@@ -211,25 +199,25 @@ fn main() {
         }
     }
 
-    disconnect(&probe, session, request);
+    disconnect(&probe, session, request)?;
     std::thread::sleep(Duration::from_millis(500));
+    Ok(())
 }
 
-fn disconnect(probe: &Probe, session: u64, request: u64) {
-    probe
-        .send(Command {
-            request_id: request,
-            session,
-            protocol: Protocol::OpcDa,
-            kind: CommandKind::Disconnect,
-        })
-        .expect("probe send");
+fn disconnect(probe: &Probe, session: u64, request: u64) -> Result<(), String> {
+    probe.send(Command {
+        request_id: request,
+        session,
+        protocol: Protocol::OpcDa,
+        kind: CommandKind::Disconnect,
+    })?;
     let _ = wait(probe, Duration::from_secs(5), |event| {
         matches!(
             event.kind,
             EventKind::Disconnected { .. } | EventKind::Error { .. }
         )
     });
+    Ok(())
 }
 
 fn wait(probe: &Probe, timeout: Duration, predicate: impl Fn(&Event) -> bool) -> Option<Event> {
