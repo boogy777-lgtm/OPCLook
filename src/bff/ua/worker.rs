@@ -728,6 +728,30 @@ pub(super) fn is_control_command(kind: &CommandKind) -> bool {
     !matches!(kind, CommandKind::Read { .. } | CommandKind::Test)
 }
 
+enum InitialLoad<T> {
+    Finished(T),
+    Disconnect(Command),
+    Shutdown,
+}
+
+async fn wait_initial_load<F: std::future::Future>(
+    future: F,
+    inbox: &mut UnboundedReceiver<ActorMsg>,
+    queue: &mut CommandQueue,
+) -> InitialLoad<F::Output> {
+    tokio::pin!(future);
+    loop {
+        tokio::select! {
+            result = &mut future => return InitialLoad::Finished(result),
+            message = inbox.recv() => match message {
+                Some(ActorMsg::Shutdown) | None => return InitialLoad::Shutdown,
+                Some(ActorMsg::Command(command)) if matches!(command.kind, CommandKind::Disconnect) => return InitialLoad::Disconnect(command),
+                Some(message) => queue.push(message),
+            }
+        }
+    }
+}
+
 struct Actor {
     id: SessionId,
     generation: u64,
@@ -740,19 +764,46 @@ struct Actor {
 
 impl Actor {
     async fn run(mut self) {
-        // V3: before the first command, so the first values already decode.
-        if let Err(cause) = self.session.load_struct_types().await {
-            self.send_event(
-                0,
-                EventKind::Log {
-                    message: BackendMsg::StructTypesUnavailable {
-                        cause: Box::new(cause),
-                    },
-                },
-            );
-        }
+        // Initial type loading is optional, and must never hold Disconnect or
+        // shutdown hostage. Other work stays queued until it finishes.
+        let initial = wait_initial_load(
+            self.session.load_struct_types(),
+            &mut self.inbox,
+            &mut self.queue,
+        )
+        .await;
         let mut shutdown = false;
-        'serve: loop {
+        let mut already_closed = false;
+        match initial {
+            InitialLoad::Finished(Err(cause)) => {
+                self.send_event(
+                    0,
+                    EventKind::Log {
+                        message: BackendMsg::StructTypesUnavailable {
+                            cause: Box::new(cause),
+                        },
+                    },
+                );
+                if self.session.timed_out {
+                    self.inbox.close();
+                    self.session.close().await;
+                    self.send_event(
+                        0,
+                        EventKind::Disconnected {
+                            reason: BackendMsg::SessionClosedAfterTimeout,
+                        },
+                    );
+                    already_closed = true;
+                }
+            }
+            InitialLoad::Finished(Ok(())) => {}
+            InitialLoad::Disconnect(command) => {
+                self.handle(command).await;
+                already_closed = true;
+            }
+            InitialLoad::Shutdown => shutdown = true,
+        }
+        'serve: while !already_closed && !shutdown {
             // Take everything that is already waiting, so a control command
             // overtakes the reads queued before it.
             let mut inbox_closed = false;
@@ -1160,5 +1211,39 @@ pub(super) async fn timeout_drain<T>(
             Ok(value) => (Some(value), true),
             Err(_) => (None, true),
         },
+    }
+}
+
+#[cfg(test)]
+mod initial_load_regression {
+    use super::*;
+    use crate::bff::model::Protocol;
+
+    #[test]
+    fn disconnect_interrupts_pending_type_loading() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            tx.send(ActorMsg::Command(Command {
+                request_id: 8,
+                session: 1,
+                protocol: Protocol::OpcUa,
+                kind: CommandKind::Disconnect,
+            }))
+            .unwrap();
+            let mut queue = CommandQueue::default();
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                wait_initial_load(std::future::pending::<()>(), &mut rx, &mut queue),
+            )
+            .await;
+            assert!(matches!(
+                result,
+                Ok(InitialLoad::Disconnect(Command { request_id: 8, .. }))
+            ));
+        });
     }
 }

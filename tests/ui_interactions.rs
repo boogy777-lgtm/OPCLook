@@ -2171,6 +2171,23 @@ fn enter_opens_confirmation_without_accepting_it() {
     assert_eq!(h.state().pending_writes, 1);
 }
 
+#[test]
+fn modified_enter_cannot_accept_new_write_confirmation() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.settings.options.confirm_write = true;
+    seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+    let mut h = harness(app);
+    h.state_mut().select_only(0);
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    h.key_press_modifiers(Modifiers::SHIFT, Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().dialogs.confirm.open);
+    assert_eq!(h.state().pending_writes, 0);
+}
+
 /// K3: the write dialog opens with the current value selected, so typing
 /// replaces it (no mouse, no Backspace) and Enter writes the new value.
 #[test]

@@ -23,6 +23,8 @@ jobs:
       - name: Build and run library tests
         shell: bash
         run: scripts/ci-test.sh "Library tests failed" --lib --target i686-pc-windows-msvc -- --skip loopback_tcp_without_opc_ua_is_not_a_scan_result
+      - name: Net helper unit tests
+        run: cargo test -p opcda-nethelper --target i686-pc-windows-msvc
       - name: OPC UA loopback probe (diagnostic)
         continue-on-error: true
         run: cargo test --lib --target i686-pc-windows-msvc loopback_tcp_without_opc_ua_is_not_a_scan_result -- --nocapture

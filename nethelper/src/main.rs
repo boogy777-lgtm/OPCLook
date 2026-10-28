@@ -417,6 +417,11 @@ fn current_process_sid() -> Result<String, String> {
     sid
 }
 
+fn aligned_token_buffer(needed: u32) -> Vec<usize> {
+    let words = (needed as usize).div_ceil(std::mem::size_of::<usize>());
+    vec![0usize; words]
+}
+
 fn token_sid(token: HANDLE) -> Result<String, String> {
     let mut needed = 0u32;
     unsafe {
@@ -426,8 +431,7 @@ fn token_sid(token: HANDLE) -> Result<String, String> {
         return Err("GetTokenInformation returned no size".to_string());
     }
     // TOKEN_USER contains pointers; the storage must satisfy its alignment.
-    let words = (needed as usize).div_ceil(std::mem::size_of::<usize>());
-    let mut buffer = vec![0usize; words];
+    let mut buffer = aligned_token_buffer(needed);
     unsafe {
         GetTokenInformation(
             token,
@@ -475,10 +479,12 @@ fn remove_route(
 ) -> Result<(), String> {
     let route = validate_route(message)?;
     let key = route_key(&route);
-    let Some(removed) = created.remove(&key) else {
+    let Some(removed) = created.get(&key).copied() else {
         return Err("route is not owned by this helper".to_string());
     };
-    delete_created(removed)
+    delete_created(removed)?;
+    created.remove(&key);
+    Ok(())
 }
 
 fn refresh_route(
@@ -643,6 +649,18 @@ fn wide(text: &str) -> Vec<u16> {
 #[cfg(test)]
 mod regression_tests {
     use super::*;
+
+    #[test]
+    fn token_storage_is_aligned_and_large_enough() {
+        for needed in [1, 7, 17, 100] {
+            let buffer = aligned_token_buffer(needed);
+            assert_eq!(
+                buffer.as_ptr() as usize % std::mem::align_of::<TOKEN_USER>(),
+                0
+            );
+            assert!(std::mem::size_of_val(buffer.as_slice()) >= needed as usize);
+        }
+    }
 
     #[test]
     fn route_ownership_distinguishes_next_hop() {

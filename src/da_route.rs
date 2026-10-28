@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::path::PathBuf;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 /// A planned temporary host route.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -712,24 +712,28 @@ fn resolve_targets(host: &str) -> Result<Vec<IpAddr>, DaRouteError> {
     Ok(resolved)
 }
 
-fn random_bytes() -> [u8; 16] {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64;
-    let mut state = now
-        ^ (std::process::id() as u64) << 32
-        ^ COUNTER.fetch_add(0x9E37_79B9_7F4A_7C15, Ordering::Relaxed);
+#[cfg(windows)]
+fn random_bytes() -> Result<[u8; 16], DaRouteError> {
+    use windows::Win32::Security::Cryptography::{
+        BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom,
+    };
     let mut out = [0u8; 16];
-    for chunk in out.chunks_mut(8) {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        chunk.copy_from_slice(&state.to_le_bytes());
+    // SAFETY: the buffer is valid for its full length; the system-preferred
+    // provider requires no algorithm handle.
+    let status = unsafe { BCryptGenRandom(None, &mut out, BCRYPT_USE_SYSTEM_PREFERRED_RNG) };
+    if !status.is_ok() {
+        return Err(DaRouteError::HelperUnavailable(format!(
+            "BCryptGenRandom failed: {status:?}"
+        )));
     }
-    out
+    Ok(out)
+}
+
+#[cfg(not(windows))]
+fn random_bytes() -> Result<[u8; 16], DaRouteError> {
+    Err(DaRouteError::HelperUnavailable(
+        "secure helper launch is Windows-only".to_string(),
+    ))
 }
 
 fn random_hex(bytes: [u8; 16]) -> String {
@@ -770,8 +774,8 @@ fn helper_exe() -> Result<PathBuf, DaRouteError> {
 
 fn spawn_helper() -> Result<HelperLaunch, DaRouteError> {
     let exe = helper_exe()?;
-    let pipe = format!("opcda-nethelper-{}", random_hex(random_bytes()));
-    let token = random_hex(random_bytes());
+    let pipe = format!("opcda-nethelper-{}", random_hex(random_bytes()?));
+    let token = random_hex(random_bytes()?);
     let args = format!(
         "--pipe {} --token {} --parent {}",
         pipe,

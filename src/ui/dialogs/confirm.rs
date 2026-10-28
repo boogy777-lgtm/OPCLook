@@ -2,7 +2,7 @@ use super::dialog_spacing;
 use crate::app::App;
 use crate::i18n::{Tr, tr};
 
-pub(super) fn confirm_dialog(app: &mut App, ui: &mut egui::Ui) {
+pub(super) fn confirm_dialog(app: &mut App, ui: &mut egui::Ui, was_open: bool) {
     let ctx = ui.ctx().clone();
     if !app.dialogs.confirm.open {
         return;
@@ -23,8 +23,8 @@ pub(super) fn confirm_dialog(app: &mut App, ui: &mut egui::Ui) {
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(&ctx, |ui| {
             dialog_spacing(ui);
-            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
-            let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            let enter = was_open && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let esc = was_open && ui.input(|i| i.key_pressed(egui::Key::Escape));
             ui.label(text);
             ui.separator();
             ui.horizontal(|ui| {
