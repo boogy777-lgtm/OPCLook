@@ -249,7 +249,15 @@ pub(crate) fn value_to_ua_variant(
     }
 }
 
+/// The wire writer supports flat arrays. Keep both conversion paths aligned.
+fn ua_write_is_multidimensional(value: &Value) -> bool {
+    matches!(value, Value::Array(items) if items.iter().any(|item| matches!(item, Value::Array(_))))
+}
+
 fn infer_value_to_variant(value: &Value) -> Result<Variant, BackendMsg> {
+    if ua_write_is_multidimensional(value) {
+        return Err(BackendMsg::WriteMultiDim);
+    }
     Ok(match value {
         Value::Empty => Variant::Empty,
         Value::Bool(v) => Variant::Boolean(*v),
@@ -279,22 +287,21 @@ fn infer_value_to_variant(value: &Value) -> Result<Variant, BackendMsg> {
             Variant::LocalizedText(Box::new(LocalizedText::new(locale, text)))
         }
         Value::Array(items) => {
-            if items.iter().any(|i| matches!(i, Value::Array(_))) {
-                return Err(BackendMsg::WriteMultiDim);
-            }
             let values = items
                 .iter()
                 .map(infer_value_to_variant)
                 .collect::<Result<Vec<_>, _>>()?;
-            Variant::Array(Box::new(opcua::types::Array {
-                value_type: match values.first().map(|v| v.type_id()) {
-                    Some(VariantTypeId::Scalar(t)) => t,
-                    Some(VariantTypeId::Array(t, _)) => t,
-                    _ => VariantScalarTypeId::Double,
-                },
-                values,
-                dimensions: None,
-            }))
+            let value_type = match values.first().map(|v| v.type_id()) {
+                Some(VariantTypeId::Scalar(t)) => t,
+                Some(VariantTypeId::Array(t, _)) => t,
+                _ => VariantScalarTypeId::Double,
+            };
+            let array = opcua::types::Array::new(value_type, values).map_err(|error| {
+                BackendMsg::WriteArrayBuildFailed {
+                    detail: error.to_string(),
+                }
+            })?;
+            Variant::Array(Box::new(array))
         }
         Value::Other(v) => {
             return Err(BackendMsg::WriteOtherType {
@@ -317,6 +324,9 @@ fn scalar_value_to_variant(
     value: &Value,
     scalar: VariantScalarTypeId,
 ) -> Result<Variant, BackendMsg> {
+    if ua_write_is_multidimensional(value) {
+        return Err(BackendMsg::WriteMultiDim);
+    }
     let build_scalar = |value: &Value| -> Result<Variant, BackendMsg> {
         match scalar {
             VariantScalarTypeId::Boolean => {
@@ -534,9 +544,6 @@ fn scalar_value_to_variant(
 
     match value {
         Value::Array(items) => {
-            if items.iter().any(|i| matches!(i, Value::Array(_))) {
-                return Err(BackendMsg::WriteMultiDim);
-            }
             let values = items
                 .iter()
                 .map(&build_scalar)

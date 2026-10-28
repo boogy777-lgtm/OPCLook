@@ -551,6 +551,34 @@ fn added_node_is_reused_for_reads_and_writes() {
         matches!(&results[1].1, Err(BackendMsg::InvalidNodeId { .. })),
         "{results:?}"
     );
+    // Preserve error priority: an unknown item is reported before payload
+    // conversion; a subscribed item gets the shape error as a Wrote reply.
+    for (key, expected_missing) in [(ItemKey::new(2).unwrap(), true), (key, false)] {
+        let request = app.send(
+            session.into(),
+            CommandKind::Write {
+                request: crate::bff::model::WriteRequest {
+                    key,
+                    value: Value::Array(vec![Value::Array(vec![Value::I64(1)])]),
+                    type_hint: None,
+                },
+            },
+        );
+        let reply = app
+            .reply(request, Duration::from_secs(10))
+            .expect("write error reply");
+        match reply.kind {
+            EventKind::Wrote {
+                result: Err(BackendMsg::NodeNotSubscribed),
+                ..
+            } if expected_missing => {}
+            EventKind::Wrote {
+                result: Err(BackendMsg::WriteMultiDim),
+                ..
+            } if !expected_missing => {}
+            other => panic!("unexpected write error: {other:?}"),
+        }
+    }
     for value in [7.5, 9.5] {
         server.set("Level", Variant::Double(value));
         let id = app.send(
