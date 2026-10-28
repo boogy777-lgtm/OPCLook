@@ -4,9 +4,7 @@ use super::values::{parse_node, ua_data_value_typed, value_to_ua_variant};
 use crate::bff::model::{
     BackendMsg, BrowseNode, DataValue, ItemKey, NodeClassFilter, NodeKind, WriteRequest,
 };
-use crate::constants::{
-    BROWSE_MAX_REFERENCES_PER_NODE, IO_TIMEOUT, MAX_BROWSE_NODES, READ_MAX_ITEMS_PER_CALL,
-};
+use crate::constants::{BROWSE_MAX_REFERENCES_PER_NODE, IO_TIMEOUT, MAX_BROWSE_NODES};
 use opcua::types::{
     AttributeId, BrowseDescription, BrowseDirection, BrowsePath, BrowseResultMaskFlags,
     ContinuationPoint, DataValue as UaDataValue, NodeClass, NodeId, NumericRange, ObjectId,
@@ -321,40 +319,6 @@ pub(super) fn parse_relative_path(path: &str) -> Result<Vec<RelativePathElement>
     Ok(elements)
 }
 
-/// Reads values in sequential chunks of at most [`READ_MAX_ITEMS_PER_CALL`]
-/// `ReadValueId`s per service call and concatenates the results in request
-/// order. A single huge Read response can exceed the server's chunk budget
-/// (CODESYS `MaxChunkCount = 5` -> `0x80800000`), so each call must stay small.
-///
-/// On timeout the session is marked poisoned because a response may still be in
-/// flight; the caller closes it gracefully instead of reusing it.
-pub(super) async fn read_values_chunked(
-    session: &mut UaSession,
-    requests: &[ReadValueId],
-    timestamps: TimestampsToReturn,
-    max_age: f64,
-) -> Result<Vec<UaDataValue>, BackendMsg> {
-    let mut values = Vec::with_capacity(requests.len());
-    for chunk in requests.chunks(READ_MAX_ITEMS_PER_CALL.max(1)) {
-        let chunk_result =
-            timeout_drain(session.session.read(chunk, timestamps, max_age), IO_TIMEOUT).await;
-        let Ok(chunk_result) = chunk_result else {
-            session.timed_out = true;
-            return Err(BackendMsg::TimeoutRead);
-        };
-        match chunk_result {
-            Ok(mut chunk_values) => values.append(&mut chunk_values),
-            Err(e) => {
-                return Err(BackendMsg::UaServiceError {
-                    service: crate::bff::model::UaService::Read,
-                    detail: e.to_string(),
-                });
-            }
-        }
-    }
-    Ok(values)
-}
-
 pub(super) async fn read(session: &mut UaSession, keys: &[ItemKey]) -> Vec<(ItemKey, DataValue)> {
     let mut requests = Vec::new();
     let mut index_of: HashMap<ItemKey, usize> = HashMap::new();
@@ -378,7 +342,9 @@ pub(super) async fn read(session: &mut UaSession, keys: &[ItemKey]) -> Vec<(Item
             .collect();
     }
 
-    let values = match read_values_chunked(session, &requests, TimestampsToReturn::Both, 0.0).await
+    let values = match session
+        .read_values_chunked(&requests, TimestampsToReturn::Both, 0.0)
+        .await
     {
         Ok(values) => values,
         Err(message) => {
@@ -464,14 +430,14 @@ pub(super) async fn test(session: &mut UaSession) -> Result<BackendMsg, BackendM
         index_range: NumericRange::None,
         data_encoding: QualifiedName::null(),
     };
-    let result = read_values_chunked(
-        session,
-        std::slice::from_ref(&request),
-        TimestampsToReturn::Neither,
-        0.0,
-    )
-    .await
-    .map_err(|e| BackendMsg::context("test", e))?;
+    let result = session
+        .read_values_chunked(
+            std::slice::from_ref(&request),
+            TimestampsToReturn::Neither,
+            0.0,
+        )
+        .await
+        .map_err(|e| BackendMsg::context("test", e))?;
     match result.first() {
         Some(dv) if dv.status.map(|s| !s.is_bad()).unwrap_or(true) => Ok(BackendMsg::UaLinkOk),
         Some(dv) => Err(BackendMsg::UaBadStatus {
