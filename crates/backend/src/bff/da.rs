@@ -1,3 +1,5 @@
+#![deny(clippy::undocumented_unsafe_blocks)]
+
 use super::com::{CoAllocation, CoString, ComArray, OwnedVariant};
 use super::da_clsid::{ClsidLookup, DiscoveredClsids, is_local_host, resolve_clsid};
 use super::da_router::{DaHost, SESSION_JOIN_BUDGET, run_router};
@@ -40,6 +42,7 @@ struct ComGuard {
 
 impl ComGuard {
     fn new() -> Self {
+        // SAFETY: initialize COM for the current worker thread with no reserved pointer.
         let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
         Self {
             initialized: hr.is_ok(),
@@ -50,6 +53,7 @@ impl ComGuard {
 impl Drop for ComGuard {
     fn drop(&mut self) {
         if self.initialized {
+            // SAFETY: this thread successfully initialized COM and balances it once.
             unsafe { CoUninitialize() };
         }
     }
@@ -627,6 +631,7 @@ impl DaSession {
 
         let mut results_ptr: *mut tagOPCITEMRESULT = std::ptr::null_mut();
         let mut errors_ptr: *mut HRESULT = std::ptr::null_mut();
+        // SAFETY: definitions and output pointers remain valid for the COM call.
         let call = unsafe {
             self.item_mgt.AddItems(
                 defs.len() as u32,
@@ -652,6 +657,7 @@ impl DaSession {
         let results_ptr = results.as_ptr();
         let mut out = Vec::with_capacity(items.len());
         for (idx, item) in items.iter().enumerate() {
+            // SAFETY: AddItems returned one error per input when non-null.
             let err = unsafe { read_hresult(errors_ptr, idx) };
             if err.is_err() {
                 out.push((item.key, Err(BackendMsg::Raw(self.error_text(err)))));
@@ -661,6 +667,7 @@ impl DaSession {
                 out.push((item.key, Err(BackendMsg::DaEmptyResult)));
                 continue;
             }
+            // SAFETY: successful AddItems returned one result per input.
             let result = unsafe { &*results_ptr.add(idx) };
             let slot = ItemSlot {
                 server_handle: result.hServer,
@@ -688,6 +695,7 @@ impl DaSession {
             .collect();
         if !handles.is_empty() {
             let mut errors: *mut HRESULT = std::ptr::null_mut();
+            // SAFETY: handles and output pointer remain valid for RemoveItems.
             unsafe {
                 let _ = self.item_mgt.RemoveItems(
                     handles.len() as u32,
@@ -727,6 +735,7 @@ impl DaSession {
 
         let mut states: *mut tagOPCITEMSTATE = std::ptr::null_mut();
         let mut errors: *mut HRESULT = std::ptr::null_mut();
+        // SAFETY: handles and output pointers remain valid for Read.
         let call = unsafe {
             self.sync.Read(
                 OPC_DS_CACHE,
@@ -760,13 +769,16 @@ impl DaSession {
                 out.push((*key, DataValue::bad(BackendMsg::SignalNotSubscribed)));
                 continue;
             }
+            // SAFETY: handle_idx indexes the returned per-handle error array.
             let err = unsafe { read_hresult(errors, handle_idx) };
             if err.is_err() || states.is_null() {
                 out.push((*key, DataValue::bad(BackendMsg::Raw(self.error_text(err)))));
                 handle_idx += 1;
                 continue;
             }
+            // SAFETY: successful Read returned an initialized state for each handle.
             let state = unsafe { &mut *states.add(handle_idx) };
+            // SAFETY: the server returned an initialized VARIANT owned by the array.
             let value = unsafe { variant_to_value(&state.vDataValue) };
             out.push((
                 *key,
@@ -791,6 +803,7 @@ impl DaSession {
         let variant = OwnedVariant(variant_from_value(&request.value, request.type_hint)?);
         let handles = [slot.server_handle];
         let mut errors: *mut HRESULT = std::ptr::null_mut();
+        // SAFETY: handle, VARIANT, and output pointer remain live for Write.
         let call = unsafe {
             self.sync.Write(
                 1,
@@ -804,6 +817,7 @@ impl DaSession {
         match call {
             Err(e) => Err(BackendMsg::Raw(self.error_text(e.code()))),
             Ok(()) => {
+                // SAFETY: a successful single-item Write supplies one error if non-null.
                 let err = unsafe { read_hresult(errors, 0) };
                 if err.is_err() {
                     Err(BackendMsg::Raw(self.error_text(err)))
@@ -817,6 +831,7 @@ impl DaSession {
     fn browse(&mut self, node_id: &str) -> Result<Vec<BrowseNode>, BackendMsg> {
         let browse = self.browse.as_ref().ok_or(BackendMsg::DaNoBrowse)?;
         let empty = wide("");
+        // SAFETY: the browse interface and terminated root path are live.
         unsafe {
             browse
                 .ChangeBrowsePosition(OPC_BROWSE_TO, PCWSTR(empty.as_ptr()))
@@ -832,6 +847,7 @@ impl DaSession {
         };
         for segment in &path {
             let segment_w = wide(segment);
+            // SAFETY: the browse interface and terminated path segment are live.
             unsafe {
                 browse
                     .ChangeBrowsePosition(OPC_BROWSE_DOWN, PCWSTR(segment_w.as_ptr()))
@@ -842,6 +858,7 @@ impl DaSession {
             }
         }
 
+        // SAFETY: the browse interface remains live for the query.
         let organization: tagOPCNAMESPACETYPE =
             unsafe { browse.QueryOrganization() }.map_err(|e| BackendMsg::DaNamespaceFailed {
                 detail: e.to_string(),
@@ -851,6 +868,7 @@ impl DaSession {
         let mut seen = std::collections::HashSet::new();
 
         if organization != OPC_NS_FLAT {
+            // SAFETY: the live browse interface returns owned enumeration strings.
             if let Ok(branches) = unsafe { browse_enum(browse, OPC_BRANCH) } {
                 for name in branches {
                     if nodes.len() >= MAX_BROWSE_NODES {
@@ -871,12 +889,14 @@ impl DaSession {
             }
         }
 
+        // SAFETY: the live browse interface returns owned enumeration strings.
         if let Ok(leaves) = unsafe { browse_enum(browse, OPC_LEAF) } {
             for name in leaves {
                 if nodes.len() >= MAX_BROWSE_NODES {
                     break;
                 }
                 let name_w = wide(&name);
+                // SAFETY: name_w is a terminated string live throughout the call.
                 let item_id = unsafe { browse.GetItemID(PCWSTR(name_w.as_ptr())) }
                     .ok()
                     .map(|p| {
@@ -901,6 +921,7 @@ impl DaSession {
     }
 
     fn test(&mut self) -> Result<BackendMsg, BackendMsg> {
+        // SAFETY: the session owns a live server interface.
         let status = unsafe { self.server.GetStatus() }.map_err(|e| BackendMsg::DaLinkLost {
             detail: e.to_string(),
         })?;
@@ -918,6 +939,7 @@ impl DaSession {
             return "OK".to_string();
         }
         let mut message = format!("0x{:08X}", hr.0 as u32);
+        // SAFETY: the session owns a live server interface.
         if let Ok(text) = unsafe { self.server.GetErrorString(hr, 0) } {
             // SAFETY: GetErrorString transfers its nullable task allocation.
             if let Some(text) = unsafe { CoString::from_raw(text) } {
@@ -935,6 +957,7 @@ impl DaSession {
     }
 
     fn shutdown(&self) -> BackendMsg {
+        // SAFETY: this session owns the successfully registered group handle.
         unsafe {
             let _ = self.server.RemoveGroup(self.group_handle, true);
         }
@@ -947,12 +970,14 @@ unsafe fn browse_enum(
     filter: crate::opc::bindings::da::tagOPCBROWSETYPE,
 ) -> Result<Vec<String>, BackendMsg> {
     let empty = wide("");
+    // SAFETY: the interface is live and empty is a terminated filter string.
     let enumerator = unsafe { browse.BrowseOPCItemIDs(filter, PCWSTR(empty.as_ptr()), 0, 0) }
         .map_err(|e| BackendMsg::raw(format!("BrowseOPCItemIDs: {e}")))?;
     let mut out = Vec::new();
     loop {
         let mut buffer: [PWSTR; 32] = [PWSTR::null(); 32];
         let mut fetched: u32 = 0;
+        // SAFETY: buffer and fetched are valid writable outputs for Next.
         let hr = unsafe { enumerator.Next(&mut buffer, Some(&raw mut fetched)) };
         if fetched == 0 {
             break;
@@ -989,6 +1014,7 @@ fn enumerate_servers(host: &str) -> Result<Vec<ServerEntry>, BackendMsg> {
         crate::opc::bindings::da::CATID_OPCDAServer20::IID,
         crate::opc::bindings::da::CATID_OPCDAServer10::IID,
     ] {
+        // SAFETY: the server list is live and category slices remain valid.
         let enumerator = match unsafe { list.EnumClassesOfCategories(&[catid], &[]) } {
             Ok(e) => e,
             Err(_) => continue,
@@ -996,6 +1022,7 @@ fn enumerate_servers(host: &str) -> Result<Vec<ServerEntry>, BackendMsg> {
         loop {
             let mut guids: [GUID; 16] = [GUID::zeroed(); 16];
             let mut fetched: u32 = 0;
+            // SAFETY: guids and fetched are valid writable outputs for Next.
             let hr = unsafe { enumerator.Next(&mut guids, Some(&raw mut fetched)) };
             if fetched == 0 {
                 break;
@@ -1025,6 +1052,7 @@ fn enumerate_servers(host: &str) -> Result<Vec<ServerEntry>, BackendMsg> {
 fn class_details(list: &IOPCServerList, clsid: &GUID) -> Option<ServerEntry> {
     let mut prog_id = PWSTR::null();
     let mut user_type = PWSTR::null();
+    // SAFETY: the list and CLSID are live and output pointers are writable.
     let ok = unsafe { list.GetClassDetails(clsid, &raw mut prog_id, &raw mut user_type) }.is_ok();
     // SAFETY: GetClassDetails transfers each non-null output allocation.
     let prog = unsafe { CoString::from_raw(prog_id) }
@@ -1038,6 +1066,7 @@ fn class_details(list: &IOPCServerList, clsid: &GUID) -> Option<ServerEntry> {
         return None;
     }
     let id = if prog.is_empty() {
+        // SAFETY: clsid references a valid GUID for the duration of the call.
         unsafe { windows::Win32::System::Com::ProgIDFromCLSID(clsid) }
             .ok()
             .map(|p| {
@@ -1060,6 +1089,7 @@ fn class_details(list: &IOPCServerList, clsid: &GUID) -> Option<ServerEntry> {
 fn create_instance(clsid: &GUID, host: &str) -> Result<IUnknown, BackendMsg> {
     let host = host.trim();
     if is_local_host(host) {
+        // SAFETY: clsid is valid; COM reports initialization or activation failures.
         return unsafe {
             CoCreateInstance(clsid, None::<&IUnknown>, CLSCTX_SERVER)
                 .map_err(|e| BackendMsg::raw(format!("CoCreateInstance: {e}")))
@@ -1078,6 +1108,8 @@ fn create_instance(clsid: &GUID, host: &str) -> Result<IUnknown, BackendMsg> {
         pItf: ManuallyDrop::new(None),
         hr: HRESULT(0),
     }];
+    // SAFETY: server_info, host string, IID and result storage live for the call;
+    // successful pItf is taken exactly once from its ManuallyDrop wrapper.
     unsafe {
         CoCreateInstanceEx(
             clsid,
@@ -1191,6 +1223,7 @@ unsafe fn read_hresult(errors: *mut HRESULT, index: usize) -> HRESULT {
     if errors.is_null() {
         HRESULT(0)
     } else {
+        // SAFETY: the caller guarantees index is in the returned error array.
         unsafe { *errors.add(index) }
     }
 }
