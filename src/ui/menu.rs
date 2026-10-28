@@ -127,7 +127,7 @@ pub(super) fn menu(app: &mut App, ui: &mut egui::Ui) {
                     .on_hover_text(tr(lang, Tr::HintCtrlA))
                     .clicked()
                 {
-                    app.selected_rows = app.rows.iter().map(|row| row.key).collect();
+                    app.selected_rows = app.rows().iter().map(|row| row.key).collect();
                     ui.close();
                 }
                 if ui.button(tr(lang, Tr::ClearSelection)).clicked() {

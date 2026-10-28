@@ -125,6 +125,7 @@ impl App {
                 Some(tr(self.lang(), Tr::SelectAdapterRequired).to_string());
             return;
         };
+        self.dialogs.connect.invalidate_ua_results();
         self.dialogs.connect.ua_search_results.clear();
         self.dialogs.connect.ua_result_epoch = self.dialogs.connect.ua_result_epoch.wrapping_add(1);
         self.dialogs.connect.error = None;
@@ -157,6 +158,7 @@ impl App {
         let bind = self.current_network_binding();
         let d = &mut self.dialogs.connect;
         d.error = None;
+        d.invalidate_ua_results();
         d.ua_search_results.clear();
         d.ua_result_epoch = d.ua_result_epoch.wrapping_add(1);
         d.ua_network_results.clear();
@@ -430,6 +432,7 @@ impl App {
         d.ua_scan_found = 0;
         d.ua_scan_error = None;
         d.ua_scan_servers.clear();
+        d.invalidate_ua_results();
         d.ua_search_results.clear();
         d.ua_result_epoch = d.ua_result_epoch.wrapping_add(1);
         d.ua_network_results.clear();
@@ -491,6 +494,7 @@ pub(super) fn merge_ua_scan_servers(dialog: &mut ConnectDialog) {
 /// Deduplicate one scan result by application URI and, when the URI is missing
 /// or distinct, by endpoint URL. Endpoints of a duplicate are unioned.
 fn merge_ua_server(dialog: &mut ConnectDialog, server: crate::bff::model::UaServerInfo) {
+    dialog.invalidate_ua_results();
     let app_uri = server.application_uri.trim();
     let mut existing = if app_uri.is_empty() {
         None
@@ -569,6 +573,7 @@ pub(super) fn merge_ua_servers(
 /// stored as a URI.
 pub(super) fn merge_ua_results(dialog: &mut ConnectDialog) {
     use crate::bff::model::UaServerInfo;
+    dialog.invalidate_ua_results();
     let mut merged: Vec<UaServerInfo> = std::mem::take(&mut dialog.ua_search_results);
     for network in std::mem::take(&mut dialog.ua_network_results) {
         let endpoints = network

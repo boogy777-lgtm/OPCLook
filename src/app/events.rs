@@ -181,7 +181,7 @@ impl App {
                     view.root_loaded = false;
                     view.root_loading = true;
                     view.read_in_flight = false;
-                    view.tree.clear();
+                    view.clear_tree();
                     view.next_tree_id = 1;
                     if let Some(ua) = view.ua_mut() {
                         ua.ua_session_timeout_ms = endpoint
@@ -278,6 +278,7 @@ impl App {
                         None => {
                             let id = view.next_tree_id;
                             view.next_tree_id += 1;
+                            view.invalidate_tree();
                             view.tree.insert(
                                 0,
                                 TreeItem {
@@ -329,6 +330,9 @@ impl App {
             }
             EventKind::Values { values } => {
                 for (key, value) in values {
+                    if self.expanded_values.contains(&(key, Vec::new())) {
+                        self.detail_revision = self.detail_revision.wrapping_add(1);
+                    }
                     if let Some(row) = self.row_position(key).and_then(|p| self.rows.get_mut(p)) {
                         // UI4: remember when the value really changed. The
                         // first value of a row (still pending / waiting) is
@@ -336,12 +340,13 @@ impl App {
                         if row.is_value_change(&value.value) {
                             row.changed_at = Some(Instant::now());
                         }
+                        row.invalidate_display();
                         row.value = value.value;
                         let mut quality = value.quality;
                         if let Some(reason) = &value.reason {
                             // The backend's reason for a Bad value, in the
                             // interface language.
-                            quality.text = backend_text(lang, reason);
+                            quality.text = backend_text(lang, reason).into();
                         }
                         row.quality = RowQuality::Server(quality);
                         row.timestamp = value.timestamp;
@@ -550,6 +555,7 @@ impl App {
                     return;
                 }
                 self.dialogs.connect.ua_search = UaSearch::Idle;
+                self.dialogs.connect.invalidate_ua_results();
                 self.dialogs.connect.ua_search_results = servers.clone();
                 refresh_ua_combos(&mut self.dialogs.connect);
                 self.journal

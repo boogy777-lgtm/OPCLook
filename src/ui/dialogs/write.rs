@@ -15,7 +15,7 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
         .write
         .keys
         .first()
-        .and_then(|key| app.rows.iter().find(|r| r.key == *key));
+        .and_then(|key| app.rows().iter().find(|r| r.key == *key));
     let (protocol, name, current, canonical, data_type, writable) = match first {
         Some(row) => {
             let protocol = app

@@ -67,7 +67,7 @@ fn ui1_value_expander_is_labelled_and_toggles_by_click() {
     let at = h.get_by_label("Развернуть значение").rect().center();
     pointer_click(&h, at);
     h.run_steps(5);
-    assert!(h.state().expanded_values.contains(&(key, vec![])));
+    assert!(h.state().expanded_values().contains(&(key, vec![])));
     // The row's own expander now reads "collapse"; the nested one is closed.
     assert_eq!(h.get_all_by_label("Свернуть значение").count(), 1);
     assert_eq!(h.get_all_by_label("Развернуть значение").count(), 1);
@@ -75,7 +75,7 @@ fn ui1_value_expander_is_labelled_and_toggles_by_click() {
     let at = h.get_by_label("Свернуть значение").rect().center();
     pointer_click(&h, at);
     h.run_steps(5);
-    assert!(h.state().expanded_values.is_empty());
+    assert!(h.state().expanded_values().is_empty());
     assert!(h.query_by_label("Свернуть значение").is_none());
 }
 
@@ -168,7 +168,7 @@ fn quality(kind: QualityKind) -> Quality {
     Quality {
         code,
         kind,
-        text: text.to_string(),
+        text: text.into(),
     }
 }
 
@@ -341,7 +341,7 @@ fn ui5_field_lines_follow_the_same_alignment() {
 }
 
 fn changed_at(app: &App, key: ItemKey) -> Option<std::time::Instant> {
-    app.rows
+    app.rows()
         .iter()
         .find(|r| r.key == key)
         .and_then(|r| r.changed_at)
@@ -372,21 +372,21 @@ fn ui4_first_value_after_adding_a_row_is_not_highlighted() {
     app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
     let key = app.seed_row(sid(1), "ns=2;s=A", "Level", Value::Empty);
     // Still pending: the first value arrives.
-    app.rows[0].pending = true;
+    app.rows_mut_for_test()[0].pending = true;
     push_value(&mut app, key, Value::F64(5.0), QualityKind::Good);
     assert!(changed_at(&app, key).is_none(), "pending → value: no flash");
     // Registered but waiting for the first value (placeholder quality).
-    app.rows[0].value = Value::Empty;
-    app.rows[0].quality = opcda_egui::app::RowQuality::Waiting("waiting".into());
+    app.rows_mut_for_test()[0].value = Value::Empty;
+    app.rows_mut_for_test()[0].quality = opcda_egui::app::RowQuality::Waiting("waiting".into());
     push_value(&mut app, key, Value::F64(6.0), QualityKind::Good);
     assert!(changed_at(&app, key).is_none(), "waiting → value: no flash");
 
     push_value(&mut app, key, Value::F64(7.0), QualityKind::Good);
     assert!(changed_at(&app, key).is_some(), "later change: flash");
 
-    app.rows[0].changed_at = None;
+    app.rows_mut_for_test()[0].changed_at = None;
     push_value(&mut app, key, Value::F64(f64::NAN), QualityKind::Good);
-    app.rows[0].changed_at = None;
+    app.rows_mut_for_test()[0].changed_at = None;
     push_value(&mut app, key, Value::F64(f64::NAN), QualityKind::Good);
     assert!(
         changed_at(&app, key).is_none(),
@@ -402,17 +402,17 @@ fn ui4_flash_strength_fades_over_a_second() {
     app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
     let key = app.seed_row(sid(1), "ns=2;s=A", "Level", Value::F64(1.0));
     let now = std::time::Instant::now();
-    assert_eq!(app.rows[0].change_flash(now), 0.0, "never changed");
-    app.rows[0].changed_at = Some(now);
-    assert!(app.rows[0].change_flash(now) > 0.99);
+    assert_eq!(app.rows()[0].change_flash(now), 0.0, "never changed");
+    app.rows_mut_for_test()[0].changed_at = Some(now);
+    assert!(app.rows()[0].change_flash(now) > 0.99);
     let later = |ms: u64| now + std::time::Duration::from_millis(ms);
     let (a, b) = (
-        app.rows[0].change_flash(later(250)),
-        app.rows[0].change_flash(later(600)),
+        app.rows()[0].change_flash(later(250)),
+        app.rows()[0].change_flash(later(600)),
     );
     assert!(a > b && b > 0.0 && a < 1.0, "monotonic fade: {a} > {b}");
-    assert_eq!(app.rows[0].change_flash(later(1000)), 0.0);
-    assert_eq!(app.rows[0].change_flash(later(5000)), 0.0);
+    assert_eq!(app.rows()[0].change_flash(later(1000)), 0.0);
+    assert_eq!(app.rows()[0].change_flash(later(5000)), 0.0);
     let _ = key;
 }
 
@@ -454,7 +454,7 @@ fn ui4_changed_value_cell_glows_and_requests_repaints_until_it_fades() {
     );
 
     // Pretend the change happened two seconds ago: no glow, no repaint request.
-    h.state_mut().rows[0].changed_at =
+    h.state_mut().rows_mut_for_test()[0].changed_at =
         std::time::Instant::now().checked_sub(std::time::Duration::from_secs(2));
     h.step();
     h.step();
@@ -595,7 +595,7 @@ fn server_quality_codes_do_not_collide_with_row_placeholders() {
                 )],
             },
         );
-        let row = &app.rows[0];
+        let row = &app.rows()[0];
         assert!(matches!(&row.quality, opcda_egui::app::RowQuality::Server(q) if q.code == code));
         assert!(
             row.is_value_change(&Value::I64(99)),
@@ -607,4 +607,84 @@ fn server_quality_codes_do_not_collide_with_row_placeholders() {
 
 fn sid(raw: u64) -> opcda_egui::bff::model::SessionId {
     opcda_egui::bff::model::SessionId::new(raw).unwrap()
+}
+
+#[test]
+fn expanded_large_array_respects_the_field_budget() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let key = app.seed_row(
+        sid(1),
+        "ns=2;s=Large",
+        "Large",
+        Value::Array(vec![Value::I64(1); 100_000]),
+    );
+    app.toggle_value(key, vec![]);
+    let lines = app.table_lines(&app.visible_row_positions());
+    assert_eq!(lines.len(), 1 + opcda_egui::app::MAX_FIELD_LINES);
+    assert!(matches!(&lines[1], opcda_egui::app::TableLine::Field { name, .. } if name == "[0]"));
+    assert!(
+        matches!(&lines[lines.len() - 1], opcda_egui::app::TableLine::Field { name, .. } if name == "[9999]")
+    );
+}
+
+#[test]
+fn expanded_fields_and_display_refresh_after_value_update() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let key = app.seed_row(
+        sid(1),
+        "ns=2;s=Struct",
+        "Struct",
+        Value::Struct {
+            type_name: "OldType".into(),
+            fields: vec![("OldName".into(), Value::I64(1))],
+        },
+    );
+    app.toggle_value(key, vec![]);
+    let visible = app.visible_row_positions();
+    let old = app.table_lines(&visible);
+    assert!(matches!(&old[1], opcda_egui::app::TableLine::Field { name, .. } if name == "OldName"));
+    assert!(app.rows()[0].value_text().contains("OldName"));
+    app.on_event_for_test_at(
+        sid(1),
+        EventKind::Values {
+            values: vec![(
+                key,
+                DataValue {
+                    value: Value::Struct {
+                        type_name: "NewType".into(),
+                        fields: vec![
+                            ("NewName".into(), Value::I64(2)),
+                            ("Extra".into(), Value::Bool(true)),
+                        ],
+                    },
+                    quality: quality(QualityKind::Good),
+                    timestamp: None,
+                    reason: None,
+                },
+            )],
+        },
+    );
+    let new = app.table_lines(&app.visible_row_positions());
+    assert_eq!(new.len(), 3);
+    assert!(
+        matches!(&new[1], opcda_egui::app::TableLine::Field { name, value_text, .. } if name == "NewName" && value_text == "2")
+    );
+    assert!(app.rows()[0].value_text().contains("NewName"));
+}
+
+#[test]
+fn write_type_reflects_metadata_updates_after_render() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_row(sid(1), "ns=2;s=Value", "Value", Value::I64(1));
+    assert_eq!(app.rows()[0].write_type_text(), "Auto");
+    app.rows_mut_for_test()[0].data_type = Some("Int64".into());
+    assert_eq!(app.rows()[0].write_type_text(), "Int64");
+    app.rows_mut_for_test()[0].data_type = Some("Boolean".into());
+    assert_eq!(app.rows()[0].write_type_text(), "Boolean");
 }

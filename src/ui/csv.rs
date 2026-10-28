@@ -11,7 +11,7 @@ pub fn export_tree_csv(app: &App) -> String {
     let mut text = String::new();
     text.push(CSV_BOM);
     text.push_str("server;item_id;name;value;quality;time\n");
-    for row in &app.rows {
+    for row in app.rows() {
         text.push_str(&format!(
             "{};{};{};{};{};{}\n",
             csv_escape(&row.server_label),
@@ -392,7 +392,10 @@ mod tests {
         assert_eq!(resolve_csv_session(&app, "   "), CsvServer::Empty);
         let added = import_tree_csv(&mut app, "server;item_id;name\n;Tag1;One\n");
         assert_eq!(added, 0);
-        assert!(app.rows.is_empty(), "nothing may land in the first session");
+        assert!(
+            app.rows().is_empty(),
+            "nothing may land in the first session"
+        );
         let log: Vec<String> = app
             .journal
             .entries()
@@ -459,9 +462,9 @@ mod tests {
 
         let (_ctx2, mut other) = app_with(&["A.OPC"]);
         assert_eq!(import_tree_csv(&mut other, &text), 2);
-        assert_eq!(other.rows.len(), 2);
-        assert_eq!(other.rows[0].display_name, nasty);
-        assert_eq!(other.rows[0].item_id, "Tag.1");
+        assert_eq!(other.rows().len(), 2);
+        assert_eq!(other.rows()[0].display_name, nasty);
+        assert_eq!(other.rows()[0].item_id, "Tag.1");
     }
 
     #[test]

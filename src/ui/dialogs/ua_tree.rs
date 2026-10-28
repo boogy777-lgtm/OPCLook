@@ -212,6 +212,8 @@ pub(crate) fn ua_server_tree(
     lang: Lang,
     servers: &[UaServerInfo],
     epoch: u64,
+    cache_id: u64,
+    revision: u64,
     selected_url: &str,
     selected_policy: UaSecurityPolicy,
     selected_mode: UaSecurityMode,
@@ -223,14 +225,30 @@ pub(crate) fn ua_server_tree(
     // stays scannable.
     let open_servers = servers.len() <= 3;
 
+    let id = egui::Id::unique(("ua_grouped_results", cache_id));
+    let cached = ui
+        .ctx()
+        .data(|data| data.get_temp::<(u64, std::sync::Arc<Vec<Vec<UaUrlNode>>>)>(id));
+    let grouped = match cached {
+        Some((old_revision, grouped)) if old_revision == revision => grouped,
+        _ => {
+            let grouped = std::sync::Arc::new(
+                servers
+                    .iter()
+                    .map(|server| group_endpoints(&server.endpoints))
+                    .collect::<Vec<_>>(),
+            );
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(id, (revision, grouped.clone())));
+            grouped
+        }
+    };
     for (server_index, server) in servers.iter().enumerate() {
-        let nodes = group_endpoints(&server.endpoints);
+        let Some(nodes) = grouped.get(server_index) else {
+            continue;
+        };
         let option_count: usize = nodes.iter().map(|node| node.options.len()).sum();
-        let summary = fmt(
-            lang,
-            Tr::UaTreeSummary,
-            &[&nodes.len().to_string(), &option_count.to_string()],
-        );
+        let summary = fmt(lang, Tr::UaTreeSummary, &[&nodes.len(), &option_count]);
         let holds_selection = nodes.iter().any(|node| {
             selected
                 .as_ref()

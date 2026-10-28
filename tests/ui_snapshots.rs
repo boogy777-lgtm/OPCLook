@@ -58,7 +58,7 @@ fn rendered_app_scenes() {
             Value::I64(i),
         );
     }
-    assert_eq!(main.rows.len(), 10_000);
+    assert_eq!(main.rows().len(), 10_000);
     save("main-10k-ru", main);
 
     let mut da = base(Lang::Ru);

@@ -120,7 +120,9 @@ pub struct ConnectDialog {
     /// Optional LDS host (`host[:port]`) for the LDS/mDNS search.
     pub ua_lds_host: String,
     pub ua_search: UaSearch,
-    pub ua_search_results: Vec<crate::bff::model::UaServerInfo>,
+    pub(super) ua_search_results: Vec<crate::bff::model::UaServerInfo>,
+    pub(crate) ua_results_revision: u64,
+    pub(crate) ua_results_cache_id: u64,
     /// Changes the collapse-state identity when a new search begins.
     pub ua_result_epoch: u64,
     /// Request keyboard focus for the primary field on the next populated frame.
@@ -156,6 +158,22 @@ pub struct ConnectDialog {
     pub connecting: Option<SessionId>,
 }
 
+static NEXT_UA_CACHE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+impl ConnectDialog {
+    pub fn ua_search_results(&self) -> &[crate::bff::model::UaServerInfo] {
+        &self.ua_search_results
+    }
+    pub(super) fn invalidate_ua_results(&mut self) {
+        self.ua_results_revision = self.ua_results_revision.wrapping_add(1);
+    }
+    #[cfg(feature = "test-support")]
+    pub fn ua_search_results_mut_for_test(&mut self) -> &mut Vec<crate::bff::model::UaServerInfo> {
+        self.invalidate_ua_results();
+        &mut self.ua_search_results
+    }
+}
+
 impl Default for ConnectDialog {
     fn default() -> Self {
         Self {
@@ -175,6 +193,9 @@ impl Default for ConnectDialog {
             ua_lds_host: String::new(),
             ua_search: UaSearch::Idle,
             ua_search_results: Vec::new(),
+            ua_results_revision: 0,
+            ua_results_cache_id: NEXT_UA_CACHE_ID
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             ua_result_epoch: 0,
             focus_pending: false,
             ua_security_policy: UaSecurityPolicy::Auto,
@@ -263,6 +284,7 @@ pub struct OptionsDialog {
 
 pub struct AboutDialog {
     pub open: bool,
+    pub(crate) certificate_subject: Option<Option<String>>,
 }
 
 pub struct MessageDialog {
@@ -320,7 +342,10 @@ impl Default for Dialogs {
                 draft: Options::default(),
                 focus_pending: false,
             },
-            about: AboutDialog { open: false },
+            about: AboutDialog {
+                open: false,
+                certificate_subject: None,
+            },
             message: None,
             confirm: None,
         }

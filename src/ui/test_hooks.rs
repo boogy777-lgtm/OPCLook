@@ -301,7 +301,7 @@ mod dnd_proof {
                 has_children: false,
             },
         );
-        assert_eq!(app.rows.len(), 0);
+        assert_eq!(app.rows().len(), 0);
         (ctx, app)
     }
 
@@ -379,11 +379,11 @@ mod dnd_proof {
         frame(&ctx, &mut app, input);
 
         assert_eq!(
-            app.rows.len(),
+            app.rows().len(),
             1,
             "dropping an Item must add exactly one row"
         );
-        assert_eq!(app.rows[0].item_id, "ns=1;s=item");
+        assert_eq!(app.rows()[0].item_id, "ns=1;s=item");
     }
 
     /// The drop target includes the unused central-panel space, even when
@@ -423,7 +423,7 @@ mod dnd_proof {
             modifiers: Modifiers::NONE,
         }];
         frame(&ctx, &mut app, release);
-        assert_eq!(app.rows.len(), 1, "blank background must accept a drop");
+        assert_eq!(app.rows().len(), 1, "blank background must accept a drop");
     }
 
     #[test]
@@ -453,7 +453,7 @@ mod dnd_proof {
         ];
         frame(&ctx, &mut app, input);
 
-        assert_eq!(app.rows.len(), 0, "a click must not add rows");
+        assert_eq!(app.rows().len(), 0, "a click must not add rows");
         assert_eq!(
             app.tree_focused, true,
             "a click on a tree row keeps tree focus"
@@ -559,7 +559,7 @@ mod dnd_proof {
             inner_after.min.x
         );
         assert_eq!(
-            app.rows.len(),
+            app.rows().len(),
             110,
             "all seeded + added rows must be present"
         );
@@ -627,7 +627,7 @@ mod dnd_proof {
         }];
         frame(&ctx, &mut app, rel);
 
-        assert_eq!(app.rows.len(), 7, "drop must add the tree Item");
+        assert_eq!(app.rows().len(), 7, "drop must add the tree Item");
         let (offset_after, _, inner_after) =
             table_scroll_for_test().expect("table scroll hook after drop");
         assert!(

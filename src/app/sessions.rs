@@ -359,6 +359,7 @@ impl App {
             return;
         }
         self.rows.retain(|row| row.session != session);
+        self.rows_changed();
         self.selected_rows
             .retain(|key| self.rows.iter().any(|row| row.key == *key));
         self.selected_tree = self.selected_tree.filter(|(sid, _)| *sid != session);

@@ -57,7 +57,12 @@ pub struct App {
     /// Lazily populated adapter inventory + current network lease.
     pub network: NetworkState,
     pub sessions: Vec<SessionView>,
-    pub rows: Vec<Row>,
+    rows: Vec<Row>,
+    rows_revision: u64,
+    table_cache:
+        std::cell::RefCell<Option<(std::rc::Rc<Vec<usize>>, u64, std::rc::Rc<Vec<TableLine>>)>>,
+    detail_revision: u64,
+    visible_cache: std::cell::RefCell<Option<(u64, Option<SessionId>, std::rc::Rc<Vec<usize>>)>>,
     pub journal: Journal,
     pub dialogs: Dialogs,
     pub active_session: Option<SessionId>,
@@ -76,7 +81,7 @@ pub struct App {
     table_view_session: Option<SessionId>,
     /// Structured / array values expanded in the table (V3): the row and the
     /// path of field indices from the row value down to the expanded node.
-    pub expanded_values: HashSet<(ItemKey, Vec<u32>)>,
+    expanded_values: HashSet<(ItemKey, Vec<u32>)>,
     pub last_update: Option<DateTime<Utc>>,
     /// Selected bottom tab (only relevant when both panels are enabled).
     pub bottom_tab: BottomTab,
@@ -155,6 +160,30 @@ fn owner_label(lang: Lang, owner: Owner) -> String {
 }
 
 impl App {
+    pub fn expanded_values(&self) -> &HashSet<(ItemKey, Vec<u32>)> {
+        &self.expanded_values
+    }
+
+    pub fn rows(&self) -> &[Row] {
+        &self.rows
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn rows_mut_for_test(&mut self) -> &mut Vec<Row> {
+        self.rows_changed();
+        for row in &mut self.rows {
+            row.invalidate_display();
+        }
+        &mut self.rows
+    }
+
+    fn rows_changed(&mut self) {
+        self.rows_revision = self.rows_revision.wrapping_add(1);
+        self.detail_revision = self.detail_revision.wrapping_add(1);
+        self.row_index.invalidate();
+        *self.visible_cache.borrow_mut() = None;
+    }
+
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let cjk = install_fonts(&cc.egui_ctx);
         let settings = Settings::load();
@@ -227,6 +256,10 @@ impl App {
             network: NetworkState::default(),
             sessions: Vec::new(),
             rows: Vec::new(),
+            rows_revision: 0,
+            table_cache: std::cell::RefCell::new(None),
+            detail_revision: 0,
+            visible_cache: std::cell::RefCell::new(None),
             journal: Journal::default(),
             dialogs: Dialogs::default(),
             active_session: None,
@@ -802,6 +835,7 @@ impl App {
             .expect("seed session not found");
         let id = view.next_tree_id;
         view.next_tree_id += 1;
+        view.invalidate_tree();
         view.tree.push(TreeItem {
             id,
             parent,
@@ -844,13 +878,15 @@ impl App {
             quality: RowQuality::Server(Quality {
                 code: 0xC0,
                 kind: QualityKind::Good,
-                text: "GOOD".to_string(),
+                text: "GOOD".into(),
             }),
             timestamp: None,
             description: String::new(),
             pending: false,
             poll_only: false,
             changed_at: None,
+            value_text_cache: Default::default(),
+            timestamp_text_cache: Default::default(),
         });
         key
     }
@@ -864,7 +900,7 @@ impl App {
         value: Value,
     ) -> ItemKey {
         let key = self.seed_row(session, item_id, name, value);
-        if let Some(row) = self.row_mut(key) {
+        if let Some(row) = self.row_position(key).and_then(|p| self.rows.get_mut(p)) {
             row.writable = true;
         }
         key

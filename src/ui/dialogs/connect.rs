@@ -220,7 +220,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                     ui.spinner();
                                     ui.label(tr(lang, Tr::SearchingUa));
                                 });
-                            } else if dialog.ua_search_results.is_empty() {
+                            } else if dialog.ua_search_results().is_empty() {
                                 ui.label(tr(lang, Tr::ListEmptyUrl));
                             }
                             if !is_da {
@@ -230,8 +230,10 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                 if let Some(pick) = super::ua_tree::ua_server_tree(
                                     ui,
                                     lang,
-                                    &dialog.ua_search_results,
+                                    dialog.ua_search_results(),
                                     dialog.ua_result_epoch,
+                                    dialog.ua_results_cache_id,
+                                    dialog.ua_results_revision,
                                     &dialog.ua_url,
                                     dialog.ua_security_policy,
                                     dialog.ua_security_mode,
@@ -755,7 +757,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                     // selected; None for a manually typed URL (host:port is used).
                     let parsed_url = endpoint.address.parse::<crate::bff::model::UaUrl>().ok();
                     let advertised = dialog
-                        .ua_search_results
+                        .ua_search_results()
                         .iter()
                         .find(|s| {
                             s.endpoints.iter().any(|e| {

@@ -168,7 +168,7 @@ impl App {
     pub fn reread_tree(&mut self, session: SessionId) {
         self.cancel_add_children(session);
         if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
-            view.tree.clear();
+            view.clear_tree();
             view.root_loaded = false;
         }
         self.selected_tree = self.selected_tree.filter(|(sid, _)| *sid != session);
@@ -546,7 +546,7 @@ impl App {
 }
 
 pub(super) fn replace_roots(view: &mut SessionView, children: Vec<BrowseNode>) {
-    view.tree.clear();
+    view.clear_tree();
     let mut id = view.next_tree_id;
     for node in children {
         view.tree.push(TreeItem {
@@ -612,6 +612,7 @@ pub(super) fn set_children(
         .collect();
     view.next_tree_id = id;
     view.tree.splice(parent_index + 1..end, new_items);
+    view.invalidate_tree();
 }
 
 /// Insert (replacing previous ones) the browse result of the tree item with id

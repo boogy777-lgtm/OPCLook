@@ -768,7 +768,10 @@ pub fn fmt(lang: Lang, key: Tr, args: &[&dyn std::fmt::Display]) -> String {
                 positional
             };
             match args.get(index) {
-                Some(a) => out.push_str(&a.to_string()),
+                Some(a) => {
+                    use std::fmt::Write as _;
+                    let _ = write!(out, "{a}");
+                }
                 None => out.push('?'),
             }
             positional += 1;

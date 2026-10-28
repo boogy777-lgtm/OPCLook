@@ -126,13 +126,6 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                 // The name never wraps, so the row height stays <= 28 px.
                 for (id, name, state, info, is_da, reconnect_state) in &snapshot {
                     let selected = app.active_session == Some(*id);
-                    let tooltip = format!(
-                        "{} | {} | {}",
-                        if *is_da { "OPC DA" } else { "OPC UA" },
-                        info,
-                        state_text(*state, lang)
-                    );
-                    let full_tooltip = format!("{}\n{}", name, tooltip);
                     let auto = app.settings.options.auto_reconnect;
                     let reconnecting = *state == SessionState::Connecting;
                     let exhausted = matches!(reconnect_state, ReconnectState::Exhausted);
@@ -232,7 +225,15 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                                     &short,
                                     RowBand::None,
                                 );
-                                response.clone().on_hover_text(&full_tooltip);
+                                response.clone().on_hover_ui(|ui| {
+                                    ui.label(format!(
+                                        "{}\n{} | {} | {}",
+                                        name,
+                                        if *is_da { "OPC DA" } else { "OPC UA" },
+                                        info,
+                                        state_text(*state, lang)
+                                    ));
+                                });
                                 if response.clicked() || response.double_clicked() {
                                     activate = Some(*id);
                                 }
@@ -387,7 +388,7 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                 let Some(view) = app.sessions.iter().find(|s| s.id == session_id) else {
                     return;
                 };
-                if view.tree.is_empty() {
+                if view.tree().is_empty() {
                     if root_loading {
                         ui.horizontal(|ui| {
                             ui.spinner();
@@ -425,7 +426,7 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                         .auto_shrink([false, false])
                         .show_rows(ui, TREE_ROW_HEIGHT, visible.len(), |ui, range| {
                             for index in visible.get(range).into_iter().flatten() {
-                                if let Some(item) = view.tree.get(*index) {
+                                if let Some(item) = view.tree().get(*index) {
                                     draw_tree_item(
                                         ui,
                                         item,
@@ -640,10 +641,12 @@ pub(super) fn draw_tree_item(
         // once the pointer moves past the drag threshold, so plain clicks keep
         // working. The tree has single selection, so the payload holds just
         // this node's id; `add_dropped_tree` accepts a list for multi-select.
-        response.dnd_set_drag_payload(TreeDragPayload {
-            session,
-            node_ids: vec![item.id],
-        });
+        if response.drag_started() {
+            response.dnd_set_drag_payload(TreeDragPayload {
+                session,
+                node_ids: vec![item.id],
+            });
+        }
         response.context_menu(|ui| {
             if ui.button(tr(lang, Tr::Add)).clicked() {
                 actions.push(TreeAction::Select(item.id));

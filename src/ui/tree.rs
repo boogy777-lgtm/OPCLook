@@ -2,35 +2,16 @@ use crate::app::{App, SessionState};
 use crate::bff::model::{NodeKind, SessionId};
 use crate::i18n::{Tr, fmt, tr};
 
-pub(super) fn visible_tree_indices(view: &crate::app::SessionView) -> Vec<usize> {
-    let mut out = Vec::new();
-    let mut hide_from: Option<usize> = None;
-    for (index, item) in view.tree.iter().enumerate() {
-        if let Some(depth) = hide_from {
-            if item.depth > depth {
-                continue;
-            }
-            hide_from = None;
-        }
-        out.push(index);
-        if !item.expanded {
-            hide_from = Some(item.depth);
-        }
-    }
-    out
+pub(super) fn visible_tree_indices(view: &crate::app::SessionView) -> std::rc::Rc<Vec<usize>> {
+    view.visible_tree_indices()
 }
 
 pub(super) fn toggle_tree_item(app: &mut App, session: SessionId, id: u64) {
-    let mut browse = false;
-    if let Some(view) = app.sessions.iter_mut().find(|s| s.id == session) {
-        if let Some(item) = view.tree.iter_mut().find(|t| t.id == id) {
-            item.expanded = !item.expanded;
-            if item.expanded && !item.loaded && item.node.has_children {
-                item.loading = true;
-                browse = true;
-            }
-        }
-    }
+    let browse = app
+        .sessions
+        .iter_mut()
+        .find(|s| s.id == session)
+        .is_some_and(|view| view.toggle_tree(id));
     if browse {
         // U7: the reply lands under THIS item, not the first node with the
         // same NodeId.
@@ -55,7 +36,7 @@ pub(super) fn refresh_selected(app: &mut App) {
         app.browse_item(session, item_id);
     } else {
         if let Some(view) = app.sessions.iter_mut().find(|s| s.id == session) {
-            view.tree.clear();
+            view.clear_tree();
             view.root_loaded = false;
         }
         app.browse(session, String::new());

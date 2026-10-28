@@ -105,8 +105,9 @@ pub(super) fn handle_tree_keys(app: &mut App, ui: &mut egui::Ui) {
             return;
         };
         let ids: Vec<u64> = visible_tree_indices(view)
-            .into_iter()
-            .map(|i| view.tree[i].id)
+            .iter()
+            .copied()
+            .map(|i| view.tree()[i].id)
             .collect();
         if ids.is_empty() {
             return;
@@ -123,8 +124,9 @@ pub(super) fn handle_tree_keys(app: &mut App, ui: &mut egui::Ui) {
             return;
         };
         visible_tree_indices(view)
-            .into_iter()
-            .map(|i| view.tree[i].id)
+            .iter()
+            .copied()
+            .map(|i| view.tree()[i].id)
             .collect()
     };
     if visible_ids.is_empty() {

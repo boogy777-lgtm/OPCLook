@@ -31,7 +31,7 @@ fn fixture(journal: bool) -> App {
             Value::I64(i as i64),
         );
     }
-    for row in &mut app.rows {
+    for row in app.rows_mut_for_test() {
         row.data_type = Some("Int64".into());
         row.canonical_vt = Some(VarType(20));
         row.timestamp = chrono::DateTime::from_timestamp(1_700_000_000, 0);
@@ -43,7 +43,7 @@ fn fixture(journal: bool) -> App {
         assert_eq!(app.journal.entries().len(), 5000);
         app.settings.options.show_log = true;
     } else {
-        assert_eq!(app.rows.len(), ROWS);
+        assert_eq!(app.rows().len(), ROWS);
     }
     app.tick_for_test();
     app
@@ -64,7 +64,7 @@ fn scene(changed: usize, journal: bool) {
     let mut bytes = Vec::with_capacity(FRAMES);
     let keys: Vec<_> = h
         .state()
-        .rows
+        .rows()
         .iter()
         .take(changed)
         .map(|row| row.key)
@@ -108,8 +108,8 @@ fn scene(changed: usize, journal: bool) {
         bytes.push(stats.bytes_allocated);
     }
     if changed > 0 {
-        assert!(matches!(h.state().rows[0].value, Value::I64(100_119)));
-        let timestamp = h.state().rows[0].timestamp_text();
+        assert!(matches!(h.state().rows()[0].value, Value::I64(100_119)));
+        let timestamp = h.state().rows()[0].timestamp_text();
         assert!(
             h.query_all_by_label(&timestamp).next().is_some(),
             "updated timestamp must be visible"

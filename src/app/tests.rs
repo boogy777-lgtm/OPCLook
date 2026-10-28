@@ -2562,3 +2562,47 @@ fn abnormal_shutdown_messages_are_localized_and_normal_shutdown_is_silent() {
         super::shutdown_messages(Lang::En, failed)
     );
 }
+
+#[test]
+fn row_index_tracks_same_length_replacement() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    let session = SessionId::new(1).unwrap();
+    app.seed_session(session, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let old = app.seed_row(session, "old", "old", Value::Empty);
+    assert!(app.has_row_for_item(session, "old"));
+    let mut other = App::new_test(&ctx);
+    other.seed_session(session, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    other.seed_row(session, "new", "new", Value::Empty);
+    let mut replacement = other.rows.pop().unwrap();
+    replacement.key = ItemKey::new(100).unwrap();
+    app.rows_mut_for_test()[0] = replacement;
+    assert!(!app.has_row_for_item(session, "old"));
+    assert!(app.has_row_for_item(session, "new"));
+    assert_eq!(app.row_position(old), None);
+    assert_eq!(app.row_position(ItemKey::new(100).unwrap()), Some(0));
+}
+
+#[test]
+fn visible_tree_cache_updates_on_toggle() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    let session = SessionId::new(1).unwrap();
+    app.seed_session(session, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let node = |name: &str| BrowseNode {
+        node_id: name.into(),
+        name: name.into(),
+        kind: NodeKind::Branch,
+        has_children: true,
+    };
+    let root = app.seed_tree_item(session, None, 0, node("root"));
+    app.seed_tree_item(session, Some(root), 1, node("child"));
+    let view = &mut app.sessions[0];
+    let first = view.visible_tree_indices();
+    assert_eq!(first.as_slice(), &[0]);
+    assert!(std::rc::Rc::ptr_eq(&first, &view.visible_tree_indices()));
+    view.toggle_tree(root);
+    assert_eq!(view.visible_tree_indices().as_slice(), &[0, 1]);
+    view.toggle_tree(root);
+    assert_eq!(view.visible_tree_indices().as_slice(), &[0]);
+}

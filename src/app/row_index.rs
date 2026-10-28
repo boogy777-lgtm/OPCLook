@@ -5,9 +5,7 @@
 //! O(N^2) overall. The index maps `ItemKey -> position` and remembers which
 //! `(session, item_id)` pairs exist (duplicate check for `add_items`).
 //!
-//! `rows` stays a plain public `Vec`, so the index never trusts itself: it is
-//! rebuilt whenever the row count changed since it was built, and every hit is
-//! verified against the row at that position before it is used.
+//! Structural changes invalidate this index explicitly.
 
 use super::*;
 use std::collections::HashMap;
@@ -17,7 +15,13 @@ pub(super) struct RowIndex {
     positions: HashMap<ItemKey, usize>,
     items: HashMap<SessionId, HashSet<String>>,
     /// `rows.len()` the index was built (or incrementally kept) for.
-    built_for: usize,
+    built_for: Option<u64>,
+}
+
+impl RowIndex {
+    pub(super) fn invalidate(&mut self) {
+        self.built_for = None;
+    }
 }
 
 impl App {
@@ -34,11 +38,11 @@ impl App {
                 .or_default()
                 .insert(row.item_id.clone());
         }
-        index.built_for = self.rows.len();
+        index.built_for = Some(self.rows_revision);
     }
 
     fn ensure_row_index(&mut self) {
-        if self.row_index.built_for != self.rows.len() {
+        if self.row_index.built_for != Some(self.rows_revision) {
             self.rebuild_row_index();
         }
     }
@@ -55,12 +59,6 @@ impl App {
         self.row_index.positions.get(&key).copied()
     }
 
-    /// The row with `key`.
-    pub(super) fn row_mut(&mut self, key: ItemKey) -> Option<&mut Row> {
-        let position = self.row_position(key)?;
-        self.rows.get_mut(position)
-    }
-
     /// Whether `session` already has a row for `item_id`.
     pub(super) fn has_row_for_item(&mut self, session: SessionId, item_id: &str) -> bool {
         self.ensure_row_index();
@@ -72,7 +70,8 @@ impl App {
 
     /// Append a row and keep the index current without a rebuild.
     pub(super) fn push_row(&mut self, row: Row) {
-        let kept = self.row_index.built_for == self.rows.len();
+        self.ensure_row_index();
+        let kept = self.row_index.built_for == Some(self.rows_revision);
         let position = self.rows.len();
         if kept {
             self.row_index.positions.insert(row.key, position);
@@ -81,9 +80,11 @@ impl App {
                 .entry(row.session)
                 .or_default()
                 .insert(row.item_id.clone());
-            self.row_index.built_for = position + 1;
         }
         self.rows.push(row);
+        self.rows_revision = self.rows_revision.wrapping_add(1);
+        *self.visible_cache.borrow_mut() = None;
+        self.row_index.built_for = if kept { Some(self.rows_revision) } else { None };
     }
 
     /// Remove all rows whose key is in `keys` (one pass, one rebuild later).
@@ -92,5 +93,6 @@ impl App {
             return;
         }
         self.rows.retain(|row| !keys.contains(&row.key));
+        self.rows_changed();
     }
 }

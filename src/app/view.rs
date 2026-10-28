@@ -20,21 +20,28 @@ impl App {
     }
 
     /// Positions in `rows` of the rows the table shows, in table order.
-    pub fn visible_row_positions(&self) -> Vec<usize> {
-        self.rows
-            .iter()
-            .enumerate()
-            .filter(|(_, row)| self.row_shown(row))
-            .map(|(position, _)| position)
-            .collect()
+    pub fn visible_row_positions(&self) -> std::rc::Rc<Vec<usize>> {
+        if let Some((revision, session, visible)) = &*self.visible_cache.borrow() {
+            if *revision == self.rows_revision && *session == self.active_session {
+                return visible.clone();
+            }
+        }
+        let visible: std::rc::Rc<Vec<usize>> = std::rc::Rc::new(
+            self.rows
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| self.row_shown(row))
+                .map(|(position, _)| position)
+                .collect(),
+        );
+        *self.visible_cache.borrow_mut() =
+            Some((self.rows_revision, self.active_session, visible.clone()));
+        visible
     }
 
     /// Number of rows the table shows.
     pub fn visible_row_count(&self) -> usize {
-        match self.active_session {
-            Some(session) => self.rows.iter().filter(|r| r.session == session).count(),
-            None => self.rows.len(),
-        }
+        self.visible_row_positions().len()
     }
 
     /// Drop selection and focus that belong to another tab. Called every frame
@@ -207,7 +214,12 @@ pub const MAX_FIELD_LINES: usize = 10_000;
 impl App {
     /// The table's lines for the visible rows, with the expanded values
     /// unfolded under their rows.
-    pub fn table_lines(&self, visible: &[usize]) -> Vec<TableLine> {
+    pub fn table_lines(&self, visible: &std::rc::Rc<Vec<usize>>) -> std::rc::Rc<Vec<TableLine>> {
+        if let Some((cached_visible, revision, lines)) = &*self.table_cache.borrow() {
+            if *revision == self.detail_revision && std::rc::Rc::ptr_eq(cached_visible, visible) {
+                return lines.clone();
+            }
+        }
         let mut lines = Vec::with_capacity(visible.len());
         let mut budget = MAX_FIELD_LINES;
         for (index, position) in visible.iter().enumerate() {
@@ -222,6 +234,9 @@ impl App {
                 self.push_fields(&mut lines, &mut budget, index, row.key, &row.value, &[], 1);
             }
         }
+        let lines = std::rc::Rc::new(lines);
+        *self.table_cache.borrow_mut() =
+            Some((visible.clone(), self.detail_revision, lines.clone()));
         lines
     }
 
@@ -236,10 +251,13 @@ impl App {
         path: &[u32],
         depth: usize,
     ) {
-        for (child, (name, field)) in value.children().into_iter().enumerate() {
+        for child in 0..value.child_count() {
             if *budget == 0 {
                 return;
             }
+            let Some((name, field)) = value.child(child) else {
+                break;
+            };
             *budget -= 1;
             let mut child_path = path.to_vec();
             child_path.push(u32::try_from(child).unwrap_or(u32::MAX));
@@ -254,7 +272,7 @@ impl App {
                 key,
                 path: child_path.clone(),
                 depth,
-                name,
+                name: name.into_owned(),
                 value_text: field.to_string(),
                 type_text,
                 expandable,
@@ -269,6 +287,7 @@ impl App {
 
     /// Expand / collapse one structured value node of a row.
     pub fn toggle_value(&mut self, key: ItemKey, path: Vec<u32>) {
+        self.detail_revision = self.detail_revision.wrapping_add(1);
         let entry = (key, path);
         if !self.expanded_values.remove(&entry) {
             self.expanded_values.insert(entry);
@@ -281,27 +300,26 @@ impl App {
         let Some(key) = self.table_focus.and_then(|i| self.row_key(i)) else {
             return;
         };
-        let Some(value) = self
-            .rows
-            .iter()
-            .find(|r| r.key == key)
-            .map(|r| r.value.clone())
-        else {
+        let Some(value) = self.rows.iter().find(|r| r.key == key).map(|r| &r.value) else {
             return;
         };
         if !value.is_expandable() {
             return;
         }
+        self.detail_revision = self.detail_revision.wrapping_add(1);
         if self.expanded_values.insert((key, Vec::new())) {
             return;
         }
         let mut budget = MAX_FIELD_LINES;
-        let mut stack: Vec<(Vec<u32>, &Value)> = vec![(Vec::new(), &value)];
+        let mut stack: Vec<(Vec<u32>, &Value)> = vec![(Vec::new(), value)];
         while let Some((path, node)) = stack.pop() {
-            for (child, (_, field)) in node.children().into_iter().enumerate() {
+            for child in 0..node.child_count() {
                 if budget == 0 {
                     return;
                 }
+                let Some((_, field)) = node.child(child) else {
+                    break;
+                };
                 budget -= 1;
                 if field.is_expandable() {
                     let mut child_path = path.clone();
@@ -318,6 +336,7 @@ impl App {
         let Some(key) = self.table_focus.and_then(|i| self.row_key(i)) else {
             return;
         };
+        self.detail_revision = self.detail_revision.wrapping_add(1);
         self.expanded_values.retain(|(k, _)| *k != key);
     }
 }

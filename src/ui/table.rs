@@ -71,7 +71,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                             egui::RichText::new(fmt(
                                 lang,
                                 Tr::SignalsCount,
-                                &[&visible.len().to_string(), &selected_count.to_string()],
+                                &[&visible.len(), &selected_count],
                             ))
                             .weak(),
                         );
@@ -285,7 +285,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                             }
                                             None => return,
                                         };
-                                        let Some(signal) = app.rows.get(position) else {
+                                        let Some(signal) = app.rows().get(position) else {
                                             return;
                                         };
                                         let key = signal.key;
@@ -311,7 +311,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                     row.col(|ui| {
                                                         if signal.value.is_expandable() {
                                                             let expanded = app
-                                                                .expanded_values
+                                                                .expanded_values()
                                                                 .contains(&(key, Vec::new()));
                                                             toggle_rect = Some(value_toggle(
                                                                 ui,
@@ -356,7 +356,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                             is_numeric_value(&signal.value);
                                                         value_text_cell(
                                                             ui,
-                                                            signal.value.to_string(),
+                                                            signal.value_text(),
                                                             numeric,
                                                             color,
                                                         )
@@ -528,13 +528,13 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                         }
                     }
                     TableAction::CopyValue(key) => {
-                        if let Some(row) = app.rows.iter().find(|r| r.key == key) {
+                        if let Some(row) = app.rows().iter().find(|r| r.key == key) {
                             ui.ctx().copy_text(row.value.to_string());
                             app.status = tr(app.lang(), Tr::ValueCopied).to_string();
                         }
                     }
                     TableAction::CopyFullName(key) => {
-                        if let Some(row) = app.rows.iter().find(|r| r.key == key) {
+                        if let Some(row) = app.rows().iter().find(|r| r.key == key) {
                             ui.ctx().copy_text(row.item_id.clone());
                             app.status = tr(app.lang(), Tr::FullNameCopied).to_string();
                         }

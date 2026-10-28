@@ -101,10 +101,11 @@ pub(super) fn csv_import_dialog(app: &mut App, ui: &mut egui::Ui) {
             }
         }
         for (session, items) in session_items {
-            let before = app.rows.len();
+            let before = app.rows().len();
             app.add_items(session, items);
+            let loaded = app.rows().len().saturating_sub(before);
             if let Some(job) = app.csv_import.as_mut() {
-                job.loaded += app.rows.len().saturating_sub(before);
+                job.loaded += loaded;
             }
         }
         if let Some(job) = app.csv_import.as_mut() {

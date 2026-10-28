@@ -81,7 +81,7 @@ fn ui1_tree_expander_is_painted_and_toggles() {
             .sessions
             .iter()
             .find(|s| s.id == sid(1))
-            .and_then(|s| s.tree.iter().find(|t| t.id == branch))
+            .and_then(|s| s.tree().iter().find(|t| t.id == branch))
             .map(|t| t.expanded)
     };
     assert_eq!(expanded(&h), Some(true));
@@ -213,7 +213,7 @@ fn ui3_close_button_shows_on_active_tab_and_on_hover() {
     assert!(state.sessions.iter().any(|s| s.id == sid(1) && s.visible));
     assert!(state.sessions.iter().any(|s| s.id == sid(2) && !s.visible));
     assert_eq!(state.sessions.len(), 2, "the container itself survives");
-    assert_eq!(state.rows.len(), 2, "its rows survive");
+    assert_eq!(state.rows().len(), 2, "its rows survive");
 }
 
 /// UI3: once the pointer leaves, the inactive tab's × goes away again.

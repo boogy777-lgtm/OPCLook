@@ -54,6 +54,8 @@ impl App {
                 pending: true,
                 poll_only: false,
                 changed_at: None,
+                value_text_cache: Default::default(),
+                timestamp_text_cache: Default::default(),
             });
             specs.push(ItemSpec { key, item_id });
             added += 1;

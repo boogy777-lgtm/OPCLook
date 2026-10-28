@@ -191,7 +191,7 @@ fn table_row_context_menu_removes_selected() {
     right_click_row(&h, "SigA");
     click_menu_item(&mut h, "Удалить выбранные");
 
-    let rows: Vec<ItemKey> = h.state().rows.iter().map(|r| r.key).collect();
+    let rows: Vec<ItemKey> = h.state().rows().iter().map(|r| r.key).collect();
     assert_eq!(rows, vec![keys[1]]);
 }
 
@@ -377,9 +377,9 @@ fn delete_removes_selected_row() {
     h.key_press(Key::Delete);
     h.run_steps(3);
 
-    assert_eq!(h.state().rows.len(), 1);
-    assert!(h.state().rows.iter().any(|r| r.key == keys[1]));
-    assert!(!h.state().rows.iter().any(|r| r.key == keys[0]));
+    assert_eq!(h.state().rows().len(), 1);
+    assert!(h.state().rows().iter().any(|r| r.key == keys[1]));
+    assert!(!h.state().rows().iter().any(|r| r.key == keys[0]));
 }
 
 #[test]
@@ -426,7 +426,7 @@ fn tree_space_toggles_expansion() {
         .iter()
         .find(|s| s.id == sid(1))
         .unwrap()
-        .tree
+        .tree()
         .iter()
         .find(|t| t.id == branch)
         .unwrap();
@@ -454,7 +454,7 @@ fn csv_save_load_roundtrip_preserves_rows() {
     let _ = std::fs::remove_file(&tmp);
 
     assert_eq!(count, 2);
-    let ids: Vec<&str> = loaded.rows.iter().map(|r| r.item_id.as_str()).collect();
+    let ids: Vec<&str> = loaded.rows().iter().map(|r| r.item_id.as_str()).collect();
     assert!(ids.contains(&"ns=1;s=a"));
     assert!(ids.contains(&"ns=1;s=b"));
 }
@@ -636,7 +636,7 @@ fn stale_reply_with_unknown_request_id_is_ignored() {
         },
     );
     assert!(
-        app.sessions[0].tree.is_empty(),
+        app.sessions[0].tree().is_empty(),
         "stale Browse must be ignored"
     );
 }
@@ -979,7 +979,7 @@ fn ua_scan_events_ignore_stale_scan_ids() {
     assert_eq!(d.ua_scan_checked, 0);
     assert_eq!(d.ua_scan_total, 10);
     assert!(d.ua_scan_servers.is_empty());
-    assert!(d.ua_search_results.is_empty());
+    assert!(d.ua_search_results().is_empty());
 
     app.on_event_for_test(EventKind::UaScanProgress {
         scan_id: ScanId::new(2).unwrap(),
@@ -1001,8 +1001,8 @@ fn ua_scan_events_ignore_stale_scan_ids() {
     assert!(!d.ua_search.scan_id().is_some());
     assert_eq!(d.ua_scan_checked, 10);
     assert_eq!(d.ua_scan_found, 1);
-    assert_eq!(d.ua_search_results.len(), 1);
-    assert_eq!(d.ua_search_results[0].application_uri, "urn:scan");
+    assert_eq!(d.ua_search_results().len(), 1);
+    assert_eq!(d.ua_search_results()[0].application_uri, "urn:scan");
 }
 
 /// A subnet above the confirmation threshold is not launched on the first
@@ -1032,7 +1032,7 @@ fn ua_subnet_scan_requires_confirmation_for_large_subnet() {
         assert!(d.ua_search.scan_id().is_some());
         assert!(d.ua_search.scan_id().is_some());
         assert_eq!(d.ua_search.confirmation_count(), None);
-        assert_eq!(d.ua_search_results.len(), 0);
+        assert_eq!(d.ua_search_results().len(), 0);
     }
     app.cancel_ua_subnet_scan();
     assert!(!app.dialogs.connect.ua_search.scan_id().is_some());
@@ -1096,10 +1096,10 @@ fn ua_servers_found_populates_results_state() {
             servers,
         },
     );
-    assert_eq!(app.dialogs.connect.ua_search_results.len(), 1);
+    assert_eq!(app.dialogs.connect.ua_search_results().len(), 1);
     assert!(!app.dialogs.connect.ua_search.host_searching());
     assert_eq!(
-        app.dialogs.connect.ua_search_results[0]
+        app.dialogs.connect.ua_search_results()[0]
             .endpoints
             .first()
             .unwrap()
@@ -1144,11 +1144,11 @@ fn ua_discovery_reply_arrives_on_network_pane() {
         h.state().dialogs.connect.pane,
         ConnectPane::Network { .. }
     ));
-    assert_eq!(h.state().dialogs.connect.ua_search_results.len(), 1);
+    assert_eq!(h.state().dialogs.connect.ua_search_results().len(), 1);
     h.get_by_label("OPC UA").click();
     h.run_steps(3);
     assert_eq!(
-        h.state().dialogs.connect.ua_search_results[0].application_name,
+        h.state().dialogs.connect.ua_search_results()[0].application_name,
         "Sample"
     );
 }
@@ -1194,7 +1194,7 @@ fn connect_dialog_reopen_keeps_discovered_servers() {
             }],
         },
     );
-    assert_eq!(app.dialogs.connect.ua_search_results.len(), 1);
+    assert_eq!(app.dialogs.connect.ua_search_results().len(), 1);
     assert_eq!(app.dialogs.connect.ua_discovered_endpoints.len(), 1);
 
     // Close cancels in-flight searches (keeping the found servers), then reopen.
@@ -1207,7 +1207,7 @@ fn connect_dialog_reopen_keeps_discovered_servers() {
         "DA servers must survive a close/reopen"
     );
     assert_eq!(
-        app.dialogs.connect.ua_search_results.len(),
+        app.dialogs.connect.ua_search_results().len(),
         1,
         "UA search results must survive a close/reopen"
     );
@@ -1247,18 +1247,18 @@ fn connect_dialog_reopen_keeps_merged_subnet_scan_results() {
         servers: vec![scan_server()],
     });
     // Scan results appear immediately instead of waiting for completion.
-    assert_eq!(app.dialogs.connect.ua_search_results.len(), 1);
+    assert_eq!(app.dialogs.connect.ua_search_results().len(), 1);
 
     app.close_connect_dialog();
     assert_eq!(
-        app.dialogs.connect.ua_search_results.len(),
+        app.dialogs.connect.ua_search_results().len(),
         1,
         "closing must cancel the scan and merge its buffer"
     );
 
     app.open_connect_dialog();
     assert_eq!(
-        app.dialogs.connect.ua_search_results.len(),
+        app.dialogs.connect.ua_search_results().len(),
         1,
         "merged subnet-scan results must survive a reopen"
     );
@@ -2260,7 +2260,7 @@ fn ctrl_a_then_delete_removes_rows() {
 
     h.key_press(Key::Delete);
     h.run_steps(3);
-    assert_eq!(h.state().rows.len(), 0);
+    assert_eq!(h.state().rows().len(), 0);
     assert!(h.state().selected_rows.is_empty());
 }
 
@@ -2393,7 +2393,7 @@ fn k3_write_error_reselects_the_value() {
     let mut app = App::new_test(&ctx);
     app.settings.options.confirm_write = false;
     let key = seed_writable_table(&mut app, &[("a", "SigA", 42)])[0];
-    app.rows[0].canonical_vt = Some(opcda_egui::bff::model::VarType::I4); // VT_I4: text is not accepted
+    app.rows_mut_for_test()[0].canonical_vt = Some(opcda_egui::bff::model::VarType::I4); // VT_I4: text is not accepted
     let mut h = harness(app);
     h.state_mut().open_write_dialog(vec![key]);
     h.run_steps(3);
@@ -2430,7 +2430,7 @@ fn k3_ctrl_a_then_delete_after_the_tree_had_focus() {
     assert_eq!(h.state().selected_rows.len(), 2);
     h.key_press(Key::Delete);
     h.run_steps(3);
-    assert_eq!(h.state().rows.len(), 0);
+    assert_eq!(h.state().rows().len(), 0);
 }
 
 /// K3: Tab moves the keyboard tree -> table -> tree.
@@ -2541,7 +2541,7 @@ fn v3_structured_value_expands_into_field_lines() {
     let at = h.get_by_label("Развернуть значение").rect().center();
     pointer_click(&h, at, PointerButton::Primary);
     h.run_steps(3);
-    assert!(h.state().expanded_values.contains(&(key, vec![])));
+    assert!(h.state().expanded_values().contains(&(key, vec![])));
     assert!(h.query_by_label("Speed").is_some());
     assert!(h.query_by_label("Running").is_some());
     assert!(h.query_by_label("MotorType").is_some(), "nested type name");
@@ -2588,7 +2588,7 @@ fn v3_arrow_keys_expand_and_collapse_a_structure() {
     h.key_press(Key::ArrowLeft);
     h.run_steps(3);
     assert!(h.query_by_label("Speed").is_none());
-    assert!(h.state().expanded_values.is_empty());
+    assert!(h.state().expanded_values().is_empty());
 }
 
 /// V3: field lines never take part in the selection: a click on one selects
@@ -2645,16 +2645,20 @@ fn disconnect_event_keeps_rows_and_marks_them_stale() {
     );
 
     // Rows and tree remain; the value is kept.
-    assert_eq!(app.rows.len(), 1, "rows must survive a disconnect");
-    assert_eq!(app.rows[0].value, Value::I64(5), "last value must be kept");
+    assert_eq!(app.rows().len(), 1, "rows must survive a disconnect");
     assert_eq!(
-        app.rows[0].quality.text(),
+        app.rows()[0].value,
+        Value::I64(5),
+        "last value must be kept"
+    );
+    assert_eq!(
+        app.rows()[0].quality.text(),
         "устаревшие данные",
         "row quality must be marked stale"
     );
     assert_eq!(app.sessions[0].state, SessionState::Disconnected);
     assert_eq!(
-        app.sessions[0].tree.len(),
+        app.sessions[0].tree().len(),
         1,
         "tree must survive a disconnect"
     );
@@ -2678,7 +2682,7 @@ fn reconnect_connected_resubscribes_rows_requests_browse_and_read() {
             reason: opcda_egui::bff::model::BackendMsg::raw("связь потеряна"),
         },
     );
-    assert_eq!(app.rows.len(), 2);
+    assert_eq!(app.rows().len(), 2);
 
     // Server comes back.
     app.on_event_for_test_at(
@@ -2691,14 +2695,14 @@ fn reconnect_connected_resubscribes_rows_requests_browse_and_read() {
 
     // Rows offered for re-add (pending=true is set by register_rows).
     assert!(
-        app.rows.iter().all(|r| r.pending),
+        app.rows().iter().all(|r| r.pending),
         "rows must be re-registered"
     );
     // Fresh root browse in flight.
     let view = app.sessions.iter().find(|s| s.id == sid(1)).unwrap();
     assert!(view.root_loading, "root must be re-browsed after reconnect");
     assert!(view.root_loaded == false);
-    assert!(view.tree.is_empty());
+    assert!(view.tree().is_empty());
     // Immediate re-read armed: last_poll is in the past.
     assert!(view.read_in_flight == false);
 }
@@ -2873,7 +2877,7 @@ fn ua_reconnect_resubscribes_rows_and_resets_subscription_flag() {
     assert_eq!(view.ua().unwrap().ua_session_timeout_ms, 123_000);
     // Rows offered for re-add (AddItems dispatched via register_rows).
     let rows: Vec<&opcda_egui::app::Row> =
-        app.rows.iter().filter(|r| r.session == sid(1)).collect();
+        app.rows().iter().filter(|r| r.session == sid(1)).collect();
     assert_eq!(rows.len(), 2);
     assert!(
         rows.iter().all(|r| r.pending),
@@ -3082,7 +3086,7 @@ fn tree_enter_on_unsubscribed_item_adds_row_without_dialog() {
             has_children: false,
         },
     );
-    assert_eq!(app.rows.len(), 0, "no rows yet");
+    assert_eq!(app.rows().len(), 0, "no rows yet");
 
     let mut h = harness(app);
     h.state_mut().set_tree_focus(sid(1), id);
@@ -3090,8 +3094,8 @@ fn tree_enter_on_unsubscribed_item_adds_row_without_dialog() {
     h.key_press(Key::Enter);
     h.run_steps(3);
 
-    assert_eq!(h.state().rows.len(), 1, "row must be added");
-    assert_eq!(h.state().rows[0].item_id, "ns=1;s=new");
+    assert_eq!(h.state().rows().len(), 1, "row must be added");
+    assert_eq!(h.state().rows()[0].item_id, "ns=1;s=new");
     assert!(
         !h.state().dialogs.write.open,
         "write dialog must NOT open for an unsubscribed item"
@@ -3101,7 +3105,7 @@ fn tree_enter_on_unsubscribed_item_adds_row_without_dialog() {
         .state()
         .journal
         .entries()
-        .last()
+        .back()
         .map(|e| e.render(opcda_egui::i18n::Lang::Ru))
         .unwrap_or_default();
     assert!(note.contains("Сигнал добавлен в таблицу"), "got: {note}");
@@ -3255,7 +3259,7 @@ fn connect_dialog_ua_empty_host_without_adapter_searches_loopback_only() {
     assert!(!app.dialogs.connect.ua_search.network_searching());
     assert_eq!(app.dialogs.connect.ua_search.auto_pending_count(), 0);
     assert!(
-        app.dialogs.connect.ua_search_results.len() == 1,
+        app.dialogs.connect.ua_search_results().len() == 1,
         "the loopback result must be in the list"
     );
 }
@@ -3394,15 +3398,18 @@ fn connect_dialog_select_ua_result_fills_url() {
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
     app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
-    app.dialogs.connect.ua_search_results.push(UaServerInfo {
-        application_name: "CODESYS".to_string(),
-        application_uri: "urn:test".to_string(),
-        endpoints: vec![UaEndpointInfo {
-            url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
-            security_policy: opcda_egui::bff::model::AdvertisedPolicy::from_wire("None"),
-            security_mode: opcda_egui::bff::model::AdvertisedMode::from_wire("None"),
-        }],
-    });
+    app.dialogs
+        .connect
+        .ua_search_results_mut_for_test()
+        .push(UaServerInfo {
+            application_name: "CODESYS".to_string(),
+            application_uri: "urn:test".to_string(),
+            endpoints: vec![UaEndpointInfo {
+                url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
+                security_policy: opcda_egui::bff::model::AdvertisedPolicy::from_wire("None"),
+                security_mode: opcda_egui::bff::model::AdvertisedMode::from_wire("None"),
+            }],
+        });
     let mut h = harness(app);
     h.get_by_label("OPC UA").click();
     h.run_steps(5);
@@ -3568,19 +3575,19 @@ fn language_switch_keeps_rows_and_selection() {
         let ctx = egui::Context::default();
         let mut app = App::new_test(&ctx);
         seed_table(&mut app, &[("a", "SigA", 1), ("b", "SigB", 2)]);
-        app.selected_rows.insert(app.rows[0].key);
-        let count_before = app.rows.len();
+        app.selected_rows.insert(app.rows()[0].key);
+        let count_before = app.rows().len();
 
         let mut h = harness(app);
         h.run_steps(3);
-        assert_eq!(h.state().rows.len(), count_before);
+        assert_eq!(h.state().rows().len(), count_before);
         assert_eq!(h.state().selected_rows.len(), 1);
 
         h.state_mut().set_lang(Lang::Zh);
         h.run_steps(3);
 
         // Switching language must not clear rows or the selection state.
-        assert_eq!(h.state().rows.len(), count_before);
+        assert_eq!(h.state().rows().len(), count_before);
         assert_eq!(h.state().selected_rows.len(), 1);
         assert_eq!(h.state().lang(), Lang::Zh);
     });
@@ -3664,12 +3671,12 @@ fn add_dropped_tree_branch_with_loaded_children_adds_items() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     let (branch, _, _) = seed_branch_with_items(&mut app);
-    assert_eq!(app.rows.len(), 0);
+    assert_eq!(app.rows().len(), 0);
 
     app.add_dropped_tree(sid(1), vec![branch]);
 
     // No rows yet: the browse for the branch is in flight.
-    assert_eq!(app.rows.len(), 0);
+    assert_eq!(app.rows().len(), 0);
 
     // Feed the browse response for the branch; its Item children are collected.
     feed_job_browse(
@@ -3693,11 +3700,11 @@ fn add_dropped_tree_branch_with_loaded_children_adds_items() {
     );
 
     assert_eq!(
-        app.rows.len(),
+        app.rows().len(),
         2,
         "both Item children of the branch must be added"
     );
-    let ids: Vec<&str> = app.rows.iter().map(|r| r.item_id.as_str()).collect();
+    let ids: Vec<&str> = app.rows().iter().map(|r| r.item_id.as_str()).collect();
     assert!(ids.contains(&"c1"));
     assert!(ids.contains(&"c2"));
 }
@@ -3723,7 +3730,7 @@ fn add_dropped_tree_unloaded_branch_browses_then_adds() {
     // Simulate a branch the client has not browsed into yet.
     {
         let view = app.sessions.iter_mut().find(|s| s.id == sid(1)).unwrap();
-        view.tree
+        view.tree_mut_for_test()
             .iter_mut()
             .find(|t| t.id == branch)
             .unwrap()
@@ -3733,9 +3740,9 @@ fn add_dropped_tree_unloaded_branch_browses_then_adds() {
     app.add_dropped_tree(sid(1), vec![branch]);
 
     // No rows yet; the browse is in flight (branch marked loading).
-    assert_eq!(app.rows.len(), 0);
+    assert_eq!(app.rows().len(), 0);
     let view = app.sessions.iter().find(|s| s.id == sid(1)).unwrap();
-    let item = view.tree.iter().find(|t| t.id == branch).unwrap();
+    let item = view.tree().iter().find(|t| t.id == branch).unwrap();
     assert!(
         item.loading,
         "drop must trigger a browse of the unloaded branch"
@@ -3764,7 +3771,7 @@ fn add_dropped_tree_unloaded_branch_browses_then_adds() {
     );
 
     assert_eq!(
-        app.rows.len(),
+        app.rows().len(),
         2,
         "pending children must be added on browse completion"
     );
@@ -3776,12 +3783,12 @@ fn add_dropped_tree_item_adds_row() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     let (a, _b) = seed_tree(&mut app);
-    assert_eq!(app.rows.len(), 0);
+    assert_eq!(app.rows().len(), 0);
 
     app.add_dropped_tree(sid(1), vec![a]);
 
-    assert_eq!(app.rows.len(), 1);
-    assert_eq!(app.rows[0].item_id, "ns=1;s=a");
+    assert_eq!(app.rows().len(), 1);
+    assert_eq!(app.rows()[0].item_id, "ns=1;s=a");
 }
 
 /// Re-dropping an already-subscribed Item must not create a duplicate row.
@@ -3791,11 +3798,11 @@ fn add_dropped_tree_deduplicates_existing_rows() {
     let mut app = App::new_test(&ctx);
     let (a, _b) = seed_tree(&mut app);
     app.add_items(sid(1), vec![("ns=1;s=a".to_string(), "SigA".to_string())]);
-    assert_eq!(app.rows.len(), 1);
+    assert_eq!(app.rows().len(), 1);
 
     app.add_dropped_tree(sid(1), vec![a]);
 
-    assert_eq!(app.rows.len(), 1, "duplicate drop must be skipped");
+    assert_eq!(app.rows().len(), 1, "duplicate drop must be skipped");
 }
 
 /// Dropping a node that belongs to a different session than the active one
@@ -3822,7 +3829,7 @@ fn add_dropped_tree_cross_session_warns_and_skips() {
 
     app.add_dropped_tree(sid(1), vec![other]);
 
-    assert_eq!(app.rows.len(), 0, "cross-session drop must be skipped");
+    assert_eq!(app.rows().len(), 0, "cross-session drop must be skipped");
     let warned = app.journal.entries().iter().any(|e| {
         e.render(opcda_egui::i18n::Lang::Ru)
             .contains("активного сервера")
@@ -3877,7 +3884,7 @@ fn reopen_tab_for_same_endpoint_does_not_duplicate() {
         app.open_tab_for_endpoint(EndpointSpec::da("", "Alpha.Server"));
         app.seed_row(app.sessions[0].id, "ns=1;s=a", "SigA", Value::I64(7));
         let id = app.sessions[0].id;
-        let rows_before = app.rows.len();
+        let rows_before = app.rows().len();
         let counts_before = app.sessions.len();
 
         // Simulate closing the tab, then double-clicking the server again.
@@ -3897,7 +3904,7 @@ fn reopen_tab_for_same_endpoint_does_not_duplicate() {
         );
         assert_eq!(app.active_session, Some(id));
         assert_eq!(
-            app.rows.len(),
+            app.rows().len(),
             rows_before,
             "rows stay with the same container"
         );
@@ -3923,8 +3930,8 @@ fn close_tab_hides_view_keeps_rows_and_keeps_connection() {
         SessionState::Connected,
         "closing a tab must NOT disconnect a connected session"
     );
-    assert_eq!(app.rows.len(), 1, "rows must survive closing the tab");
-    assert_eq!(app.sessions[0].tree.len(), 0);
+    assert_eq!(app.rows().len(), 1, "rows must survive closing the tab");
+    assert_eq!(app.sessions[0].tree().len(), 0);
     assert!(
         app.active_session.is_none(),
         "no visible tab remains -> no active session"
@@ -3974,7 +3981,7 @@ fn remove_session_drops_container_and_rows() {
     app.confirm_yes();
 
     assert!(app.sessions.is_empty(), "container must be dropped");
-    assert!(app.rows.is_empty(), "its rows must be dropped");
+    assert!(app.rows().is_empty(), "its rows must be dropped");
     assert!(app.active_session.is_none());
 }
 
@@ -4150,7 +4157,7 @@ fn tab_context_menu_remove_from_list_drops_container() {
 
     click_menu_item(&mut h, "Да");
     assert!(h.state().sessions.is_empty());
-    assert!(h.state().rows.is_empty());
+    assert!(h.state().rows().is_empty());
 }
 
 /// A manual disconnect keeps the container (tab/rows/address), marks rows stale
@@ -4175,8 +4182,8 @@ fn disconnect_keeps_container_and_does_not_arm_reconnect() {
         app.sessions[0].visible,
         "tab stays visible after manual disconnect"
     );
-    assert_eq!(app.rows.len(), 1, "rows must survive a manual disconnect");
-    assert_eq!(app.rows[0].quality.text(), "устаревшие данные");
+    assert_eq!(app.rows().len(), 1, "rows must survive a manual disconnect");
+    assert_eq!(app.rows()[0].quality.text(), "устаревшие данные");
 
     // The backend reports the link closed; because this was a manual disconnect
     // it must NOT re-arm the auto-reconnect loop.
@@ -4294,14 +4301,17 @@ fn servers_row_remove_requires_confirm_and_drops_after_yes() {
     );
     // The container and its tab are still present before confirmation.
     assert_eq!(h.state().sessions.len(), 1);
-    assert_eq!(h.state().rows.len(), 1);
+    assert_eq!(h.state().rows().len(), 1);
 
     click_menu_item(&mut h, "Да");
     assert!(
         h.state().sessions.is_empty(),
         "session dropped after confirm"
     );
-    assert!(h.state().rows.is_empty(), "its rows dropped after confirm");
+    assert!(
+        h.state().rows().is_empty(),
+        "its rows dropped after confirm"
+    );
 }
 
 /// The servers-row × (confirm→No) leaves the container and rows intact.
@@ -4319,7 +4329,7 @@ fn servers_row_remove_cancel_keeps_container() {
     assert!(h.state().dialogs.confirm.is_some());
     click_menu_item(&mut h, "Нет");
     assert_eq!(h.state().sessions.len(), 1, "container kept on cancel");
-    assert_eq!(h.state().rows.len(), 1, "rows kept on cancel");
+    assert_eq!(h.state().rows().len(), 1, "rows kept on cancel");
 }
 
 /// The tab bar's «×» only hides the view, keeping the container + connection.
@@ -4342,7 +4352,7 @@ fn tab_close_button_only_hides_view() {
     tab_close.click();
     h.run_steps(3);
     assert_eq!(h.state().sessions.len(), 1, "container survives tab ×");
-    assert_eq!(h.state().rows.len(), 1, "rows survive tab ×");
+    assert_eq!(h.state().rows().len(), 1, "rows survive tab ×");
     assert!(!h.state().sessions[0].visible, "tab × hides only the view");
 }
 
@@ -4521,8 +4531,8 @@ fn v1_switching_tabs_drops_the_hidden_selection() {
     assert!(h.state().selected_rows.is_empty());
     h.key_press(Key::Delete);
     h.run_steps(3);
-    assert!(h.state().rows.iter().any(|r| r.key == a));
-    assert!(h.state().rows.iter().any(|r| r.key == b));
+    assert!(h.state().rows().iter().any(|r| r.key == a));
+    assert!(h.state().rows().iter().any(|r| r.key == b));
 }
 
 /// V1: the count strip shows the active tab's tags.
@@ -4539,7 +4549,7 @@ fn v1_signal_count_is_per_tab() {
     assert_eq!(app.visible_row_count(), 1);
     app.activate_session(sid(1));
     assert_eq!(app.visible_row_count(), 2);
-    assert_eq!(app.visible_row_positions(), vec![0, 1]);
+    assert_eq!(app.visible_row_positions().as_slice(), &[0, 1]);
 }
 
 /// A12: a branch with thousands of nodes builds only the visible rows.
@@ -4855,7 +4865,7 @@ fn a3_failed_connectivity_test_marks_rows_stale_like_disconnected() {
     let mut app = App::new_test(&ctx);
     seed_table(&mut app, &[("tag.a", "A", 1), ("tag.b", "B", 2)]);
     assert!(
-        app.rows
+        app.rows()
             .iter()
             .all(|r| r.quality.kind() == opcda_egui::bff::model::QualityKind::Good)
     );
@@ -4868,7 +4878,7 @@ fn a3_failed_connectivity_test_marks_rows_stale_like_disconnected() {
     );
     assert_eq!(app.sessions[0].state, SessionState::Disconnected);
     let stale = opcda_egui::i18n::tr(opcda_egui::i18n::Lang::Ru, opcda_egui::i18n::Tr::StaleData);
-    for row in &app.rows {
+    for row in app.rows() {
         assert_eq!(row.quality.kind(), opcda_egui::bff::model::QualityKind::Bad);
         assert_eq!(row.quality.text(), stale);
     }
@@ -4936,7 +4946,7 @@ fn scan_terminal_outcomes_keep_partial_results_and_progress() {
         assert_eq!(d.ua_search, UaSearch::Idle);
         assert_eq!(d.ua_scan_checked, 3);
         assert_eq!(d.ua_scan_found, 1);
-        assert_eq!(d.ua_search_results.len(), 1);
+        assert_eq!(d.ua_search_results().len(), 1);
         assert_eq!(d.ua_scan_error.is_some(), failed);
     }
 }
@@ -5009,14 +5019,14 @@ fn csv_import_cancel_retains_partial_rows_and_close_then_complete() {
     let job = h.state().csv_import.as_ref().unwrap();
     assert_eq!(job.state, CsvImportState::Cancelled);
     assert!(job.processed > 0 && job.processed < job.total);
-    assert_eq!(job.loaded, h.state().rows.len());
+    assert_eq!(job.loaded, h.state().rows().len());
     let retained = job.loaded;
     h.run_steps(2);
-    assert_eq!(h.state().rows.len(), retained);
+    assert_eq!(h.state().rows().len(), retained);
     h.get_by_label("Закрыть").click();
     h.run_steps(1);
     assert!(h.state().csv_import.is_none());
-    assert_eq!(h.state().rows.len(), retained);
+    assert_eq!(h.state().rows().len(), retained);
 
     opcda_egui::ui::start_csv_import(
         h.state_mut(),
@@ -5139,4 +5149,44 @@ fn browse_filter_control_is_ua_only_and_changes_ua_filter() {
         h.state().sessions[1].ua().unwrap().ua_browse_filter,
         opcda_egui::bff::model::NodeClassFilter::Variables
     );
+}
+
+#[test]
+fn ua_result_tree_rebuilds_after_same_length_replacement() {
+    use opcda_egui::bff::model::{AdvertisedMode, AdvertisedPolicy, UaEndpointInfo, UaServerInfo};
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.open_connect_dialog();
+    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
+    let server = |url: &str, policy: &str, mode: &str| UaServerInfo {
+        application_name: "Server".into(),
+        application_uri: "urn:test".into(),
+        endpoints: vec![UaEndpointInfo {
+            url: url.parse().unwrap(),
+            security_policy: AdvertisedPolicy::from_wire(policy),
+            security_mode: AdvertisedMode::from_wire(mode),
+        }],
+    };
+    app.dialogs
+        .connect
+        .ua_search_results_mut_for_test()
+        .push(server("opc.tcp://127.0.0.1:4840", "None", "None"));
+    let mut h = harness(app);
+    h.run_steps(4);
+    assert!(
+        h.query_by_label_contains("opc.tcp://127.0.0.1:4840")
+            .is_some()
+    );
+    h.state_mut()
+        .dialogs
+        .connect
+        .ua_search_results_mut_for_test()[0] = server("opc.tcp://127.0.0.1:4841", "None", "None");
+    h.run_steps(4);
+    assert!(
+        h.query_by_label_contains("opc.tcp://127.0.0.1:4840")
+            .is_none()
+    );
+    h.get_by_label_contains("opc.tcp://127.0.0.1:4841").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialogs.connect.ua_url, "opc.tcp://127.0.0.1:4841");
 }

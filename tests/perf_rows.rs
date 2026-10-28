@@ -24,7 +24,7 @@ fn good() -> Quality {
     Quality {
         code: 0,
         kind: QualityKind::Good,
-        text: "Good".to_string(),
+        text: "Good".into(),
     }
 }
 
@@ -40,10 +40,10 @@ fn a4_ten_thousand_rows() {
     let started = Instant::now();
     app.add_items(sid(1), items);
     let add_items = started.elapsed();
-    assert_eq!(app.rows.len(), N);
+    assert_eq!(app.rows().len(), N);
 
     // 2. one value per event (what an OPC UA subscription delivers).
-    let keys: Vec<_> = app.rows.iter().map(|r| r.key).collect();
+    let keys: Vec<_> = app.rows().iter().map(|r| r.key).collect();
     let started = Instant::now();
     for (i, key) in keys.iter().enumerate() {
         app.on_event_for_test_at(

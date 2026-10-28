@@ -132,7 +132,8 @@ pub struct SessionView {
     /// never changes this flag — closing a tab is not disconnecting.
     pub visible: bool,
     pub info: String,
-    pub tree: Vec<TreeItem>,
+    pub(super) tree: Vec<TreeItem>,
+    tree_visible_cache: std::cell::RefCell<Option<std::rc::Rc<Vec<usize>>>>,
     pub next_tree_id: u64,
     pub root_loaded: bool,
     pub root_loading: bool,
@@ -156,6 +157,7 @@ impl SessionView {
             visible: true,
             info: tr(lang, Tr::Connecting).to_string(),
             tree: Vec::new(),
+            tree_visible_cache: std::cell::RefCell::new(None),
             next_tree_id: 1,
             root_loaded: false,
             root_loading: false,
@@ -164,6 +166,61 @@ impl SessionView {
             last_test: now,
             reconnect: ReconnectState::Idle,
         }
+    }
+
+    pub fn tree(&self) -> &[TreeItem] {
+        &self.tree
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn tree_mut_for_test(&mut self) -> &mut Vec<TreeItem> {
+        self.invalidate_tree();
+        &mut self.tree
+    }
+
+    pub(crate) fn invalidate_tree(&mut self) {
+        *self.tree_visible_cache.get_mut() = None;
+    }
+
+    pub(crate) fn clear_tree(&mut self) {
+        self.tree.clear();
+        self.invalidate_tree();
+    }
+
+    pub(crate) fn toggle_tree(&mut self, id: u64) -> bool {
+        let Some(item) = self.tree.iter_mut().find(|item| item.id == id) else {
+            return false;
+        };
+        item.expanded = !item.expanded;
+        let browse = item.expanded && !item.loaded && item.node.has_children;
+        if browse {
+            item.loading = true;
+        }
+        self.invalidate_tree();
+        browse
+    }
+
+    pub(crate) fn visible_tree_indices(&self) -> std::rc::Rc<Vec<usize>> {
+        if let Some(indices) = &*self.tree_visible_cache.borrow() {
+            return indices.clone();
+        }
+        let mut indices = Vec::new();
+        let mut hidden = None;
+        for (index, item) in self.tree.iter().enumerate() {
+            if let Some(depth) = hidden {
+                if item.depth > depth {
+                    continue;
+                }
+                hidden = None;
+            }
+            indices.push(index);
+            if !item.expanded {
+                hidden = Some(item.depth);
+            }
+        }
+        let indices = std::rc::Rc::new(indices);
+        *self.tree_visible_cache.borrow_mut() = Some(indices.clone());
+        indices
     }
 
     pub fn protocol(&self) -> Protocol {
@@ -247,27 +304,44 @@ pub struct Row {
     /// UI4: when the shown value last CHANGED (not merely arrived again); the
     /// table lights the value cell up for a moment after it.
     pub changed_at: Option<Instant>,
+    pub(super) value_text_cache: std::cell::RefCell<Option<String>>,
+    pub(super) timestamp_text_cache: std::cell::RefCell<Option<String>>,
 }
 
 impl Row {
-    pub fn write_type_text(&self) -> String {
+    pub fn write_type_text(&self) -> std::borrow::Cow<'_, str> {
         if let Some(vt) = self.write_type.or(self.canonical_vt) {
-            crate::bff::da_variant::vt_name(vt).to_string()
+            std::borrow::Cow::Borrowed(crate::bff::da_variant::vt_name(vt))
         } else if let Some(data_type) = &self.data_type {
-            data_type.clone()
+            std::borrow::Cow::Borrowed(data_type)
         } else {
-            "Auto".to_string()
+            std::borrow::Cow::Borrowed("Auto")
         }
     }
 
+    pub(super) fn invalidate_display(&mut self) {
+        *self.value_text_cache.get_mut() = None;
+        *self.timestamp_text_cache.get_mut() = None;
+    }
+
+    pub fn value_text(&self) -> String {
+        let mut cached = self.value_text_cache.borrow_mut();
+        cached.get_or_insert_with(|| self.value.to_string()).clone()
+    }
+
     pub fn timestamp_text(&self) -> String {
-        self.timestamp
-            .map(|t| {
-                t.with_timezone(&Local)
-                    .format("%Y-%m-%d %H:%M:%S")
-                    .to_string()
+        let mut cached = self.timestamp_text_cache.borrow_mut();
+        cached
+            .get_or_insert_with(|| {
+                self.timestamp
+                    .map(|t| {
+                        t.with_timezone(&Local)
+                            .format("%Y-%m-%d %H:%M:%S")
+                            .to_string()
+                    })
+                    .unwrap_or_default()
             })
-            .unwrap_or_default()
+            .clone()
     }
 }
 

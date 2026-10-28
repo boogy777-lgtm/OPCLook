@@ -1256,7 +1256,7 @@ pub enum QualityKind {
 pub struct Quality {
     pub code: u32,
     pub kind: QualityKind,
-    pub text: String,
+    pub text: std::borrow::Cow<'static, str>,
 }
 
 impl Quality {
@@ -1270,7 +1270,7 @@ impl Quality {
         Self {
             code: code32,
             kind,
-            text: da_quality_text(code).to_string(),
+            text: std::borrow::Cow::Borrowed(da_quality_text(code)),
         }
     }
 
@@ -1284,7 +1284,7 @@ impl Quality {
         Self {
             code,
             kind,
-            text: text.into(),
+            text: std::borrow::Cow::Owned(text.into()),
         }
     }
 }
@@ -1444,6 +1444,28 @@ impl fmt::Display for Value {
 }
 
 impl Value {
+    /// Number of direct children without allocating names or a collection.
+    pub fn child_count(&self) -> usize {
+        match self {
+            Self::Struct { fields, .. } => fields.len(),
+            Self::Array(items) => items.len(),
+            _ => 0,
+        }
+    }
+
+    /// A child and its name, allocating only for an array index.
+    pub fn child(&self, index: usize) -> Option<(std::borrow::Cow<'_, str>, &Value)> {
+        match self {
+            Self::Struct { fields, .. } => fields
+                .get(index)
+                .map(|(name, value)| (std::borrow::Cow::Borrowed(name.as_str()), value)),
+            Self::Array(items) => items
+                .get(index)
+                .map(|value| (std::borrow::Cow::Owned(format!("[{index}]")), value)),
+            _ => None,
+        }
+    }
+
     /// V3: children of a structure (field name, value) or an array (`[i]`,
     /// value), for the expandable table row. Empty for scalars.
     pub fn children(&self) -> Vec<(String, &Value)> {
@@ -1491,8 +1513,8 @@ impl DataValue {
                 code: 0,
                 kind: QualityKind::Bad,
                 text: match &reason {
-                    BackendMsg::Raw(text) => text.clone(),
-                    _ => String::new(),
+                    BackendMsg::Raw(text) => text.clone().into(),
+                    _ => "".into(),
                 },
             },
             timestamp: None,

@@ -56,10 +56,7 @@ pub(super) fn status_bar(app: &mut App, ui: &mut egui::Ui) {
                 let counts = egui::Label::new(fmt(
                     lang,
                     Tr::SignalsCount,
-                    &[
-                        &app.visible_row_count().to_string(),
-                        &app.selected_rows.len().to_string(),
-                    ],
+                    &[&app.visible_row_count(), &app.selected_rows.len()],
                 ));
                 if let Some(hint) = hint {
                     ui.add(counts).on_hover_text(hint);
@@ -117,7 +114,11 @@ pub(super) fn status_popup(app: &mut App, ui: &mut egui::Ui) {
         app.status_popup = false;
         return;
     };
-    let subscribed = app.rows.iter().filter(|r| r.session == session_id).count();
+    let subscribed = app
+        .rows()
+        .iter()
+        .filter(|r| r.session == session_id)
+        .count();
     let selected = app.selected_rows.len();
     let last_update = app.last_update;
     let protocol = session.protocol();

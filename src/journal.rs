@@ -1,6 +1,7 @@
 use crate::i18n::{Lang, Tr};
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::io::Write;
 use std::path::Path;
 
@@ -27,14 +28,14 @@ pub struct Entry {
 
 #[derive(Debug)]
 pub struct Journal {
-    entries: Vec<Entry>,
+    entries: VecDeque<Entry>,
     max_entries: usize,
 }
 
 impl Default for Journal {
     fn default() -> Self {
         Self {
-            entries: Vec::new(),
+            entries: VecDeque::new(),
             max_entries: 5000,
         }
     }
@@ -42,20 +43,20 @@ impl Default for Journal {
 
 impl Journal {
     pub fn add(&mut self, level: Level, text: impl Into<String>) {
-        self.entries.push(Entry {
+        self.entries.push_back(Entry {
             time: Local::now(),
             level,
             message: JournalMessage::Plain(text.into()),
         });
         if self.entries.len() > self.max_entries {
             let excess = self.entries.len() - self.max_entries;
-            self.entries.drain(0..excess);
+            self.entries.drain(..excess);
         }
     }
 
     /// Store the key and arguments for rendering in the current language.
     pub fn add_l(&mut self, level: Level, key: Tr, args: &[&dyn std::fmt::Display]) {
-        self.entries.push(Entry {
+        self.entries.push_back(Entry {
             time: Local::now(),
             level,
             message: JournalMessage::Localized {
@@ -65,7 +66,7 @@ impl Journal {
         });
         if self.entries.len() > self.max_entries {
             let excess = self.entries.len() - self.max_entries;
-            self.entries.drain(0..excess);
+            self.entries.drain(..excess);
         }
     }
 
@@ -93,7 +94,7 @@ impl Journal {
         self.add(Level::Error, text);
     }
 
-    pub fn entries(&self) -> &[Entry] {
+    pub fn entries(&self) -> &VecDeque<Entry> {
         &self.entries
     }
 
@@ -129,16 +130,15 @@ impl Journal {
             if text.is_empty() {
                 continue;
             }
-            self.entries.push(Entry {
+            self.entries.push_back(Entry {
                 time: Local::now(),
                 level: Level::Info,
                 message: JournalMessage::Plain(text.to_string()),
             });
             count += 1;
-        }
-        if self.entries.len() > self.max_entries {
-            let excess = self.entries.len() - self.max_entries;
-            self.entries.drain(0..excess);
+            if self.entries.len() > self.max_entries {
+                self.entries.pop_front();
+            }
         }
         Ok(count)
     }
@@ -285,11 +285,11 @@ mod tests {
         assert_eq!(j.entries().len(), capacity);
         // Oldest two entries dropped (0 and 1) -> first kept is "entry 2".
         assert_eq!(
-            j.entries().first().unwrap().render(Lang::Ru),
+            j.entries().front().unwrap().render(Lang::Ru),
             format!("entry {}", 2)
         );
         assert_eq!(
-            j.entries().last().unwrap().render(Lang::Ru),
+            j.entries().back().unwrap().render(Lang::Ru),
             format!("entry {}", capacity + 1)
         );
     }
@@ -382,7 +382,7 @@ mod tests {
         assert_eq!(j.entries().len(), j.max_entries);
         // Oldest 10 dropped, first kept matches the 11th line.
         assert_eq!(
-            j.entries().first().unwrap().render(Lang::Ru),
+            j.entries().front().unwrap().render(Lang::Ru),
             format!("e{}", 10)
         );
     }
