@@ -10,6 +10,22 @@ pub struct UaUrl {
     explicit_port: bool,
     path: String,
     query_fragment: String,
+    host_identity: HostIdentity,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum HostIdentity {
+    Ip(IpAddr),
+    Dns(String),
+}
+
+/// Canonical identity for discovery and scanner maps.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct UaUrlIdentity {
+    host: HostIdentity,
+    port: u16,
+    path: String,
+    query_fragment: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,6 +93,10 @@ impl FromStr for UaUrl {
             explicit_port,
             path: path.to_owned(),
             query_fragment: query_fragment.to_owned(),
+            host_identity: host
+                .parse::<IpAddr>()
+                .map(HostIdentity::Ip)
+                .unwrap_or_else(|_| HostIdentity::Dns(host.to_ascii_lowercase())),
         })
     }
 }
@@ -94,18 +114,45 @@ impl UaUrl {
     pub fn as_str(&self) -> &str {
         &self.original
     }
+    pub fn is_loopback(&self) -> bool {
+        match &self.host_identity {
+            HostIdentity::Ip(ip) => ip.is_loopback(),
+            HostIdentity::Dns(name) => name == "localhost",
+        }
+    }
+    pub fn is_authority_only(&self) -> bool {
+        (self.path.is_empty() || self.path == "/") && self.query_fragment.is_empty()
+    }
+
+    /// Return a stable, hashable identity for maps; parsing happens once.
+    pub fn identity(&self) -> UaUrlIdentity {
+        UaUrlIdentity {
+            host: self.host_identity.clone(),
+            port: self.port,
+            path: self.path.trim_end_matches('/').to_owned(),
+            query_fragment: self.query_fragment.clone(),
+        }
+    }
 
     /// Hostnames compare without allocation, IP literals by address, and paths
     /// retain case. A trailing path slash remains compatible with older files.
     pub fn same_endpoint(&self, other: &Self) -> bool {
-        let same_host = match (self.host.parse::<IpAddr>(), other.host.parse::<IpAddr>()) {
-            (Ok(left), Ok(right)) => left == right,
-            _ => self.host.eq_ignore_ascii_case(&other.host),
-        };
-        same_host
+        self.host_identity == other.host_identity
             && self.port == other.port
             && self.path.trim_end_matches('/') == other.path.trim_end_matches('/')
             && self.query_fragment == other.query_fragment
+    }
+}
+
+impl std::ops::Deref for UaUrl {
+    type Target = str;
+    fn deref(&self) -> &str {
+        self.as_str()
+    }
+}
+impl std::fmt::Display for UaUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -120,7 +167,9 @@ mod tests {
             (a.host(), a.port(), a.explicit_port()),
             ("::1", 4840, false)
         );
-        assert!(a.same_endpoint(&"OPC.TCP://[0:0:0:0:0:0:0:1]:4840/A/?x=/".parse().unwrap()));
+        let equivalent: UaUrl = "OPC.TCP://[0:0:0:0:0:0:0:1]:4840/A/?x=/".parse().unwrap();
+        assert!(a.same_endpoint(&equivalent));
+        assert_eq!(a.identity(), equivalent.identity());
         assert!(!a.same_endpoint(&"opc.tcp://[::1]:4840/a?x=/".parse().unwrap()));
         assert!(!a.same_endpoint(&"opc.tcp://[::1]:4840/A?x=".parse().unwrap()));
         assert!(

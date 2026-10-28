@@ -8,6 +8,25 @@ use crate::i18n::{Tr, fmt, tr};
 use std::time::Duration;
 use std::time::Instant;
 
+#[derive(Debug, PartialEq, Eq)]
+enum UaUrlKey {
+    Valid(crate::bff::model::UaUrlIdentity),
+    Invalid(String),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum EndpointKey {
+    Da {
+        host: String,
+        address: String,
+    },
+    Ua {
+        url: UaUrlKey,
+        policy: crate::bff::model::UaSecurityPolicy,
+        mode: crate::bff::model::UaSecurityMode,
+    },
+}
+
 impl App {
     /// Unique identity used for endpoint deduplication. Two sessions are the
     /// same container iff they share the protocol and the address (ProgID for
@@ -18,25 +37,23 @@ impl App {
     /// mode (as the server tree lists them), so two endpoints of one server
     /// are two sessions, each with its own tags, instead of one session that
     /// reconnects with the other security.
-    fn dedup_key(endpoint: &EndpointSpec) -> (Protocol, String) {
+    fn dedup_key(endpoint: &EndpointSpec) -> EndpointKey {
         match endpoint.protocol {
-            Protocol::OpcDa => (
-                endpoint.protocol,
-                format!(
-                    "{}|{}",
-                    endpoint.host.trim().to_ascii_lowercase(),
-                    endpoint.address.trim().to_ascii_lowercase()
-                ),
-            ),
-            Protocol::OpcUa => (
-                endpoint.protocol,
-                format!(
-                    "{}|{:?}|{:?}",
-                    endpoint.address.trim(),
-                    endpoint.ua_security_policy.unwrap_or_default(),
-                    endpoint.ua_security_mode.unwrap_or_default()
-                ),
-            ),
+            Protocol::OpcDa => EndpointKey::Da {
+                host: endpoint.host.trim().to_ascii_lowercase(),
+                address: endpoint.address.trim().to_ascii_lowercase(),
+            },
+            Protocol::OpcUa => {
+                let url = match endpoint.address.parse::<crate::bff::model::UaUrl>() {
+                    Ok(url) => UaUrlKey::Valid(url.identity()),
+                    Err(_) => UaUrlKey::Invalid(endpoint.address.clone()),
+                };
+                EndpointKey::Ua {
+                    url,
+                    policy: endpoint.ua_security_policy.unwrap_or_default(),
+                    mode: endpoint.ua_security_mode.unwrap_or_default(),
+                }
+            }
         }
     }
 
@@ -623,6 +640,27 @@ pub(super) fn reconnect_delay(attempt: u32) -> Duration {
 #[cfg(test)]
 mod popup_identity_tests {
     use super::*;
+
+    #[test]
+    fn ua_session_identity_normalizes_host_and_port_but_preserves_resource() {
+        let a = EndpointSpec::ua("opc.tcp://HOST/A?x=/");
+        assert_eq!(
+            App::dedup_key(&a),
+            App::dedup_key(&EndpointSpec::ua("opc.tcp://host:4840/A/?x=/"))
+        );
+        assert_ne!(
+            App::dedup_key(&a),
+            App::dedup_key(&EndpointSpec::ua("opc.tcp://host/a?x=/"))
+        );
+        assert_ne!(
+            App::dedup_key(&a),
+            App::dedup_key(&EndpointSpec::ua("opc.tcp://host/A?x="))
+        );
+        assert_ne!(
+            App::dedup_key(&a),
+            App::dedup_key(&EndpointSpec::ua("opc.tcp://host:4850/A?x=/"))
+        );
+    }
 
     #[test]
     fn da_progid_identity_includes_source_computer() {

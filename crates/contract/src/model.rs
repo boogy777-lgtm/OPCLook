@@ -1,4 +1,4 @@
-pub use crate::ua_url::UaUrl;
+pub use crate::ua_url::{UaUrl, UaUrlIdentity};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
@@ -146,6 +146,7 @@ pub enum BackendMsg {
     DaNoBrowsePath,
     UaNeedsServerUrl,
     UaUrlScheme,
+    InvalidDiscoveredUaUrl,
     UaRuntimeStartFailed {
         detail: String,
     },
@@ -937,7 +938,7 @@ pub struct ServerEntry {
 /// A single OPC UA endpoint as reported by a discovery search.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UaEndpointInfo {
-    pub url: String,
+    pub url: UaUrl,
     pub security_policy: String,
     pub security_mode: String,
 }
@@ -956,7 +957,7 @@ pub struct UaServerInfo {
 pub struct UaNetworkInfo {
     pub application_name: String,
     pub application_uri: String,
-    pub discovery_urls: Vec<String>,
+    pub discovery_urls: Vec<UaUrl>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

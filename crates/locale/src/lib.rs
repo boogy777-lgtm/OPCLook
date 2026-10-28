@@ -2684,6 +2684,12 @@ pub fn backend_text(lang: Lang, msg: &BackendMsg) -> String {
             "the OPC UA URL must start with opc.tcp://",
             "OPC UA URL 必须以 opc.tcp:// 开头"
         ),
+        M::InvalidDiscoveredUaUrl => l!(
+            lang,
+            "сервер сообщил недопустимый URL OPC UA; адрес отклонён",
+            "the server advertised an invalid OPC UA URL; the address was rejected",
+            "服务器公布了无效的 OPC UA URL，地址已拒绝"
+        ),
         M::UaRuntimeStartFailed { detail } => l!(
             lang,
             "не удалось запустить tokio runtime: {detail}",
@@ -3666,6 +3672,7 @@ mod tests {
             (BackendMsg::DaNoBrowsePath, vec![]),
             (BackendMsg::UaNeedsServerUrl, vec![]),
             (BackendMsg::UaUrlScheme, vec![]),
+            (BackendMsg::InvalidDiscoveredUaUrl, vec![]),
             (
                 BackendMsg::UaRuntimeStartFailed {
                     detail: "§detail§".to_string(),

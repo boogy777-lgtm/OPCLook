@@ -226,10 +226,15 @@ impl App {
         }
         // Search results may contain different servers. Validate only the
         // selected URL, never a different server's security capabilities.
+        let selected_url = d.ua_url.parse::<crate::bff::model::UaUrl>().ok();
         let selected: Vec<_> = d
             .ua_discovered_endpoints
             .iter()
-            .filter(|endpoint| endpoint.url == d.ua_url.trim())
+            .filter(|endpoint| {
+                selected_url
+                    .as_ref()
+                    .is_some_and(|url| endpoint.url.same_endpoint(url))
+            })
             .cloned()
             .collect();
         if !selected.is_empty() {
@@ -430,9 +435,10 @@ fn merge_ua_server(dialog: &mut ConnectDialog, server: crate::bff::model::UaServ
         existing = dialog.ua_search_results.iter().position(|s| {
             (app_uri.is_empty() || s.application_uri.trim().is_empty())
                 && s.endpoints.iter().any(|existing| {
-                    server.endpoints.iter().any(|incoming| {
-                        normalized_ua_url(&existing.url) == normalized_ua_url(&incoming.url)
-                    })
+                    server
+                        .endpoints
+                        .iter()
+                        .any(|incoming| existing.url.same_endpoint(&incoming.url))
                 })
         });
     }
@@ -459,16 +465,12 @@ fn merge_ua_server(dialog: &mut ConnectDialog, server: crate::bff::model::UaServ
     }
 }
 
-fn normalized_ua_url(url: &str) -> String {
-    url.trim().trim_end_matches('/').to_ascii_lowercase()
-}
-
 /// Same URL can advertise several distinct security configurations.
 fn same_ua_endpoint(
     left: &crate::bff::model::UaEndpointInfo,
     right: &crate::bff::model::UaEndpointInfo,
 ) -> bool {
-    normalized_ua_url(&left.url) == normalized_ua_url(&right.url)
+    left.url.same_endpoint(&right.url)
         && left.security_policy == right.security_policy
         && left.security_mode == right.security_mode
 }
@@ -535,7 +537,7 @@ pub(super) fn refresh_ua_combos(dialog: &mut ConnectDialog) {
     for server in &dialog.ua_search_results {
         for e in &server.endpoints {
             let key = (
-                e.url.clone(),
+                e.url.identity(),
                 e.security_policy.clone(),
                 e.security_mode.clone(),
             );
@@ -551,49 +553,32 @@ pub(super) fn refresh_ua_combos(dialog: &mut ConnectDialog) {
 /// IPv6 literal in brackets, an optional `opc.tcp://` prefix and trailing `/`
 /// are tolerated). The port defaults to 4840.
 pub(crate) fn parse_lds_host(text: &str) -> Result<Option<(String, u16)>, ()> {
-    let mut rest = text.trim();
+    let rest = text.trim();
     if rest.is_empty() {
         return Ok(None);
     }
-    if rest
+    let candidate = if rest
         .get(..10)
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("opc.tcp://"))
     {
-        rest = &rest[10..];
-    }
-    let rest = rest.trim_end_matches('/');
-    let parse_port = |port: &str| -> Result<u16, ()> {
-        match port.parse::<u16>() {
-            Ok(port) if port > 0 => Ok(port),
-            _ => Err(()),
-        }
-    };
-    let (host, port) = if let Some(inner) = rest.strip_prefix('[') {
-        let (host, tail) = inner.split_once(']').ok_or(())?;
-        if host.parse::<std::net::Ipv6Addr>().is_err() {
-            return Err(());
-        }
-        match tail.strip_prefix(':') {
-            Some(port) => (host.to_string(), parse_port(port)?),
-            None if tail.is_empty() => (host.to_string(), DEFAULT_UA_PORT),
-            None => return Err(()),
-        }
+        rest.to_owned()
     } else if rest.parse::<std::net::Ipv6Addr>().is_ok() {
-        (rest.to_string(), DEFAULT_UA_PORT)
-    } else if let Some((host, port)) = rest.rsplit_once(':') {
-        (host.to_string(), parse_port(port)?)
+        format!("opc.tcp://[{rest}]")
     } else {
-        (rest.to_string(), DEFAULT_UA_PORT)
+        format!("opc.tcp://{rest}")
     };
-    let valid_host = !host.is_empty()
-        && host
+    let url = candidate
+        .parse::<crate::bff::model::UaUrl>()
+        .map_err(|_| ())?;
+    if !url.is_authority_only()
+        || !url
+            .host()
             .chars()
-            .all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | ':'));
-    if valid_host {
-        Ok(Some((host, port)))
-    } else {
-        Err(())
+            .all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | ':'))
+    {
+        return Err(());
     }
+    Ok(Some((url.host().to_owned(), url.port())))
 }
 
 /// The requests of the combined "empty host" UA search: LDS/mDNS when an

@@ -1115,6 +1115,7 @@ pub(super) async fn connect(
     session_id: SessionId,
     endpoint: EndpointSpec,
     cancel: &CancellationToken,
+    event_tx: &Sender<Event>,
 ) -> Result<UaSession, BackendMsg> {
     let url = endpoint.address.trim();
     if url.parse::<opclook_contract::ua_url::UaUrl>().is_err() {
@@ -1128,19 +1129,32 @@ pub(super) async fn connect(
     //    own user-token policies (CODESYS advertises "Anonymous", not the
     //    crate's hardcoded "anonymous", and rejects ActivateSession otherwise
     //    with BadIdentityTokenInvalid).
-    let server_endpoints = tokio::select! {
+    let mut server_endpoints = tokio::select! {
         biased;
         _ = cancel.cancelled() => return Err(BackendMsg::ConnectCancelled),
         found = discover_endpoints(url, binding.as_ref()) => found?,
     };
-    let discovered: Vec<UaEndpointInfo> = server_endpoints
-        .iter()
-        .map(|e| UaEndpointInfo {
-            url: e.endpoint_url.to_string(),
-            security_policy: e.security_policy_uri.to_string(),
-            security_mode: format!("{:?}", e.security_mode),
-        })
-        .collect();
+    let mut discovered = Vec::with_capacity(server_endpoints.len());
+    server_endpoints.retain(|e| match e.endpoint_url.to_string().parse() {
+        Ok(url) => {
+            discovered.push(UaEndpointInfo {
+                url,
+                security_policy: e.security_policy_uri.to_string(),
+                security_mode: format!("{:?}", e.security_mode),
+            });
+            true
+        }
+        Err(_) => {
+            let _ = event_tx.send(Event {
+                request_id: 0,
+                session: session_id,
+                kind: EventKind::Log {
+                    message: BackendMsg::InvalidDiscoveredUaUrl,
+                },
+            });
+            false
+        }
+    });
 
     // 2. Resolve the requested policy/mode (Auto default) against what the
     //    server advertises. An unsupported explicit choice is a hard error: no

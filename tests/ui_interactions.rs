@@ -937,7 +937,7 @@ fn scan_server() -> opcda_egui::bff::model::UaServerInfo {
         application_name: "SCAN".to_string(),
         application_uri: "urn:scan".to_string(),
         endpoints: vec![opcda_egui::bff::model::UaEndpointInfo {
-            url: "opc.tcp://10.0.0.9:4840".to_string(),
+            url: "opc.tcp://10.0.0.9:4840".parse().unwrap(),
             security_policy: "None".to_string(),
             security_mode: "None".to_string(),
         }],
@@ -1066,7 +1066,7 @@ fn ua_servers_found_populates_results_state() {
         application_name: "CODESYS".to_string(),
         application_uri: "urn:test".to_string(),
         endpoints: vec![opcda_egui::bff::model::UaEndpointInfo {
-            url: "opc.tcp://127.0.0.1:4840".to_string(),
+            url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
             security_policy: "None".to_string(),
             security_mode: "None".to_string(),
         }],
@@ -1083,7 +1083,8 @@ fn ua_servers_found_populates_results_state() {
             .endpoints
             .first()
             .unwrap()
-            .url,
+            .url
+            .as_str(),
         "opc.tcp://127.0.0.1:4840"
     );
 }
@@ -1118,7 +1119,7 @@ fn connect_dialog_reopen_keeps_discovered_servers() {
             application_name: "CODESYS".to_string(),
             application_uri: "urn:test".to_string(),
             endpoints: vec![UaEndpointInfo {
-                url: "opc.tcp://127.0.0.1:4840".to_string(),
+                url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
                 security_policy: "None".to_string(),
                 security_mode: "None".to_string(),
             }],
@@ -2022,7 +2023,7 @@ fn connect_dialog_unadvertised_security_choice_shows_error_and_does_not_connect(
     app.dialogs.connect.ua_security_policy = UaSecurityPolicy::Basic256Sha256;
     app.dialogs.connect.ua_security_mode = UaSecurityMode::SignAndEncrypt;
     app.dialogs.connect.ua_discovered_endpoints = vec![opcda_egui::bff::model::UaEndpointInfo {
-        url: "opc.tcp://127.0.0.1:4840".to_string(),
+        url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
         security_policy: "None".to_string(),
         security_mode: "None".to_string(),
     }];
@@ -3045,7 +3046,7 @@ fn connect_dialog_ua_empty_host_without_adapter_searches_loopback_only() {
                 application_name: "SRV".to_string(),
                 application_uri: format!("urn:srv-{h_name}"),
                 endpoints: vec![opcda_egui::bff::model::UaEndpointInfo {
-                    url: format!("opc.tcp://{h_name}:{p}"),
+                    url: format!("opc.tcp://{h_name}:{p}").parse().unwrap(),
                     security_policy: "None".to_string(),
                     security_mode: "None".to_string(),
                 }],
@@ -3191,7 +3192,7 @@ fn connect_dialog_select_ua_result_fills_url() {
         application_name: "CODESYS".to_string(),
         application_uri: "urn:test".to_string(),
         endpoints: vec![UaEndpointInfo {
-            url: "opc.tcp://127.0.0.1:4840".to_string(),
+            url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
             security_policy: "None".to_string(),
             security_mode: "None".to_string(),
         }],

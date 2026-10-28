@@ -92,3 +92,9 @@ passed, 23 ignored — 22 требуют живой DA/UA-сервер, 1 Window
 DA VarType типизирован; UA URL/security/индексы и role-ID ещё открыты.
 UA URL: первый общий parser подключён частично; discovery merge и остальные
 пункты C, role ID и финальный CI ещё открыты.
+UA discovery/scanner используют общую URL identity, LDS aliases различают порты;
+часть merge ещё повторно разбирает URL, security и NonZero индексы открыты.
+Discovery URL теперь проверены и типизированы на входе; advertised security,
+NonZero индексы и role IDs остаются открыты.
+Ключ UA-сессии различает валидный и невалидный URL enum; оставшиеся C/A открыты.
+Исправлено смещение эпох DA FILETIME; Windows runtime и остальные этапы открыты.

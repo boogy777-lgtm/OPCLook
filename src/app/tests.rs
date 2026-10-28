@@ -500,7 +500,7 @@ fn standalone_lds_results_become_visible() {
         servers: vec![UaNetworkInfo {
             application_name: "Simulator".to_string(),
             application_uri: "urn:sim".to_string(),
-            discovery_urls: vec!["opc.tcp://127.0.0.1:4840".to_string()],
+            discovery_urls: vec!["opc.tcp://127.0.0.1:4840".parse().unwrap()],
         }],
     });
     assert_eq!(app.dialogs.connect.ua_search_results.len(), 1);
@@ -521,12 +521,12 @@ fn security_validation_applies_to_selected_url_only() {
     app.dialogs.connect.ua_security_mode = UaSecurityMode::SignAndEncrypt;
     app.dialogs.connect.ua_discovered_endpoints = vec![
         UaEndpointInfo {
-            url: "opc.tcp://server-a:4840".to_string(),
+            url: "opc.tcp://server-a:4840".parse().unwrap(),
             security_policy: "None".to_string(),
             security_mode: "None".to_string(),
         },
         UaEndpointInfo {
-            url: "opc.tcp://server-b:4840".to_string(),
+            url: "opc.tcp://server-b:4840".parse().unwrap(),
             security_policy: "Basic256Sha256".to_string(),
             security_mode: "SignAndEncrypt".to_string(),
         },
@@ -551,7 +551,7 @@ fn combined_ua_search_preserves_security_variants_at_same_url() {
                 application_name: "Simulator".to_string(),
                 application_uri: "urn:sim".to_string(),
                 endpoints: vec![UaEndpointInfo {
-                    url: "opc.tcp://localhost:4840".to_string(),
+                    url: "opc.tcp://localhost:4840".parse().unwrap(),
                     security_policy: policy.to_string(),
                     security_mode: mode.to_string(),
                 }],
@@ -580,7 +580,7 @@ fn combined_ua_search_shows_a_loopback_server_once_while_running() {
                 application_name: "Simulator".to_string(),
                 application_uri: "urn:sim".to_string(),
                 endpoints: vec![UaEndpointInfo {
-                    url: "opc.tcp://127.0.0.1:4840".to_string(),
+                    url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
                     security_policy: "None".to_string(),
                     security_mode: "None".to_string(),
                 }],
@@ -607,7 +607,7 @@ fn lds_urls_merge_into_host_result_instead_of_being_dropped() {
             application_name: "Simulator".to_string(),
             application_uri: "urn:sim".to_string(),
             endpoints: vec![UaEndpointInfo {
-                url: "opc.tcp://127.0.0.1:4840".to_string(),
+                url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
                 security_policy: "None".to_string(),
                 security_mode: "None".to_string(),
             }],
@@ -619,14 +619,14 @@ fn lds_urls_merge_into_host_result_instead_of_being_dropped() {
             UaNetworkInfo {
                 application_name: "Simulator".to_string(),
                 application_uri: "urn:sim".to_string(),
-                discovery_urls: vec!["opc.tcp://10.0.0.5:4840".to_string()],
+                discovery_urls: vec!["opc.tcp://10.0.0.5:4840".parse().unwrap()],
             },
             // LDS record without URI for the loopback URL: merged by URL,
             // its name must not become a fake application URI.
             UaNetworkInfo {
                 application_name: "Simulator (LDS)".to_string(),
                 application_uri: String::new(),
-                discovery_urls: vec!["opc.tcp://127.0.0.1:4840/".to_string()],
+                discovery_urls: vec!["opc.tcp://127.0.0.1:4840/".parse().unwrap()],
             },
         ],
     });
@@ -637,7 +637,7 @@ fn lds_urls_merge_into_host_result_instead_of_being_dropped() {
         results[0]
             .endpoints
             .iter()
-            .any(|e| e.url == "opc.tcp://10.0.0.5:4840"),
+            .any(|e| e.url.as_str() == "opc.tcp://10.0.0.5:4840"),
         "the LAN URL reported only by LDS/mDNS must be kept"
     );
 }
@@ -655,7 +655,7 @@ fn different_application_uris_are_never_merged_by_url() {
                 application_name: uri.to_string(),
                 application_uri: uri.to_string(),
                 endpoints: vec![UaEndpointInfo {
-                    url: "opc.tcp://shared:4840".to_string(),
+                    url: "opc.tcp://shared:4840".parse().unwrap(),
                     security_policy: String::new(),
                     security_mode: String::new(),
                 }],

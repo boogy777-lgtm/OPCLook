@@ -10,6 +10,8 @@ pub mod da;
 pub mod da;
 #[cfg(windows)]
 pub mod da_variant;
+#[cfg(any(windows, test))]
+mod filetime;
 /// Non-Windows: only the platform-neutral part of the VARIANT layer.
 #[cfg(not(windows))]
 pub mod da_variant {

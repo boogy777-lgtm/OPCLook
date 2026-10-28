@@ -770,10 +770,17 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                         crate::bff::model::EndpointSpec::ua(dialog.ua_url.trim().to_string());
                     // Advertised application name when a discovered endpoint was
                     // selected; None for a manually typed URL (host:port is used).
+                    let parsed_url = endpoint.address.parse::<crate::bff::model::UaUrl>().ok();
                     let advertised = dialog
                         .ua_search_results
                         .iter()
-                        .find(|s| s.endpoints.iter().any(|e| e.url == endpoint.address))
+                        .find(|s| {
+                            s.endpoints.iter().any(|e| {
+                                parsed_url
+                                    .as_ref()
+                                    .is_some_and(|url| e.url.same_endpoint(url))
+                            })
+                        })
                         .and_then(|s| {
                             if s.application_name.trim().is_empty() {
                                 None

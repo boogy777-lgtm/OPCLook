@@ -299,3 +299,33 @@ BYREF/неверных layout; остальные изолированные COM
 BSTR и уничтожения массива. Измерено локально: fmt и Windows i686 backend
 `--tests` Clippy typecheck прошли; Windows runtime после исправления и
 финальный exact-head CI ещё не прошли.
+
+UA URL identity хранит распарсенный IP и сравнивает DNS без повторной
+нормализации; дерево и сканер группируют по типизированной identity, путь и
+query сохраняют регистр. LDS ввод использует общий parser; loopback alias
+дедуплицируется по порту, поэтому пользовательский LDS порт не теряется.
+Linux discovery 12/12, scanner 2/2, U15 8/8, UI grouping 2/2; Windows i686
+workspace all-targets typecheck с test-only флагами и fmt прошли. Некоторые
+циклы merge ещё повторно вызывают parser для строк: перенос parse-once всех
+путей остаётся открытым, как и типизация advertised security/NonZero индексов,
+Windows runtime и полный gate.
+
+`UaEndpointInfo.url` и `UaNetworkInfo.discovery_urls` теперь проверенные UaUrl;
+UI, scanner и discovery сравнивают сохранённую identity без повторного разбора.
+Некорректный advertised URL отклоняется с локализованной диагностикой без
+вывода адреса; остальные корректные результаты остаются доступны. Сессии
+сравнивают typed URL identity, policy и mode. Linux discovery 13/13, scanner
+2/2, session identity 2/2, UI grouping 2/2, security-filter 10/10, locale 9/9;
+Windows i686 backend/CLI standalone all-targets typecheck без skip и workspace
+all-targets typecheck с test-only флагами прошли. Live Windows runtime и полный
+gate остаются открытыми. Typed advertised security и NonZero индексы ещё открыты.
+
+URL ключ сессии теперь enum Valid/Invalid, исключающий противоречивые поля;
+Linux session identity 2/2 и Windows GUI all-targets typecheck с test-only
+resource skip прошли. Runtime и остальные пункты C/A открыты.
+
+FILETIME DA timestamps теперь вычитают смещение 1601→1970, сохраняя 100-нс
+доли и zero sentinel. Общий checked helper проверен Linux тестом (epoch,
+доля, тик до epoch, ноль и u64::MAX: 1/1); Windows wrapper тест с настоящим
+FILETIME прошёл только i686 backend `--tests` typecheck без resource skip и
+ожидает Windows runtime. Реальный DA и итоговый exact-head CI остаются открыты.

@@ -6,6 +6,7 @@ use crate::constants::{
     SCAN_TCP_CONNECT_TIMEOUT, SCAN_UA_HANDSHAKE_TIMEOUT,
 };
 use crate::net::SubnetSpec;
+use opclook_contract::ua_url::UaUrlIdentity;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -226,10 +227,10 @@ pub(super) async fn run_scan_job(
     };
 
     let mut queue: VecDeque<ScanTarget> = targets.into();
-    let mut tasks: JoinSet<(IpAddr, Option<Vec<UaServerInfo>>)> = JoinSet::new();
+    let mut tasks: JoinSet<(IpAddr, Option<(Vec<UaServerInfo>, bool)>)> = JoinSet::new();
     let mut checked = 0usize;
     let mut found = 0usize;
-    let mut seen_servers: HashMap<String, UaServerInfo> = HashMap::new();
+    let mut seen_servers: HashMap<ScanServerKey, UaServerInfo> = HashMap::new();
 
     loop {
         let cancelled = cancel.load(Ordering::Relaxed);
@@ -262,7 +263,15 @@ pub(super) async fn run_scan_job(
                 None
             }
         };
-        if let Some(batch) = result {
+        if let Some((batch, invalid_urls)) = result {
+            if invalid_urls {
+                send_scan_event(
+                    tx,
+                    EventKind::Log {
+                        message: BackendMsg::InvalidDiscoveredUaUrl,
+                    },
+                );
+            }
             let (fresh, new_servers) = merge_scan_batch(&mut seen_servers, batch);
             found += new_servers;
             if !fresh.is_empty() {
@@ -288,7 +297,7 @@ async fn check_scan_target(
     ip: IpAddr,
     binding: NetworkBinding,
     port: u16,
-) -> Option<Vec<UaServerInfo>> {
+) -> Option<(Vec<UaServerInfo>, bool)> {
     let address = SocketAddr::new(ip, port);
     let probe = tcp_probe(address, &binding, SCAN_TCP_CONNECT_TIMEOUT);
     let check = async {
@@ -302,7 +311,9 @@ async fn check_scan_target(
         )
         .await
         {
-            Ok(Ok(servers)) if !servers.is_empty() => Some(servers),
+            Ok(Ok((servers, invalid))) if !servers.is_empty() || invalid => {
+                Some((servers, invalid))
+            }
             _ => None,
         }
     };
@@ -317,7 +328,7 @@ async fn scan_ua_server_at(
     client: &opcua::client::Client,
     url: &str,
     binding: &NetworkBinding,
-) -> Result<Vec<UaServerInfo>, String> {
+) -> Result<(Vec<UaServerInfo>, bool), String> {
     let connector = BoundConnectorBuilder::new(url, binding.clone());
     let endpoints = client
         .get_server_endpoints_from_url(connector)
@@ -326,18 +337,32 @@ async fn scan_ua_server_at(
     let Some(first) = endpoints.first() else {
         return Err("the endpoint returned no descriptions".to_string());
     };
-    Ok(vec![UaServerInfo {
-        application_name: first.server.application_name.text.to_string(),
-        application_uri: first.server.application_uri.to_string(),
-        endpoints: endpoints
-            .iter()
-            .map(|endpoint| UaEndpointInfo {
-                url: endpoint.endpoint_url.to_string(),
+    let mut invalid = false;
+    let endpoints = endpoints
+        .iter()
+        .filter_map(|endpoint| {
+            let url = match endpoint.endpoint_url.to_string().parse() {
+                Ok(url) => url,
+                Err(_) => {
+                    invalid = true;
+                    return None;
+                }
+            };
+            Some(UaEndpointInfo {
+                url,
                 security_policy: endpoint.security_policy_uri.to_string(),
                 security_mode: format!("{:?}", endpoint.security_mode),
             })
-            .collect(),
-    }])
+        })
+        .collect();
+    Ok((
+        vec![UaServerInfo {
+            application_name: first.server.application_name.text.to_string(),
+            application_uri: first.server.application_uri.to_string(),
+            endpoints,
+        }],
+        invalid,
+    ))
 }
 
 /// Merge one scanner result batch into the servers already found by earlier
@@ -345,7 +370,7 @@ async fn scan_ua_server_at(
 /// are unioned and only the new endpoint descriptions are emitted as a delta, so
 /// the UI can merge them immediately without losing NTBK700582/loopback URLs.
 pub(super) fn merge_scan_batch(
-    seen: &mut HashMap<String, UaServerInfo>,
+    seen: &mut HashMap<ScanServerKey, UaServerInfo>,
     batch: Vec<UaServerInfo>,
 ) -> (Vec<UaServerInfo>, usize) {
     let mut fresh = Vec::new();
@@ -355,10 +380,14 @@ pub(super) fn merge_scan_batch(
         match seen.get_mut(&key) {
             Some(existing) => {
                 let mut added = Vec::new();
+                let mut identities: HashSet<_> = existing
+                    .endpoints
+                    .iter()
+                    .map(|owned| owned.url.identity())
+                    .collect();
                 for endpoint in server.endpoints {
-                    if !existing.endpoints.iter().any(|owned| {
-                        normalized_scan_url(&owned.url) == normalized_scan_url(&endpoint.url)
-                    }) {
+                    let identity = endpoint.url.identity();
+                    if identities.insert(identity) {
                         existing.endpoints.push(endpoint.clone());
                         added.push(endpoint);
                     }
@@ -385,21 +414,23 @@ pub(super) fn merge_scan_batch(
     (fresh, new_servers)
 }
 
-pub(super) fn scan_server_key(server: &UaServerInfo) -> String {
-    let uri = server.application_uri.trim().to_ascii_lowercase();
-    if !uri.is_empty() {
-        return format!("uri:{uri}");
-    }
-    let url = server
-        .endpoints
-        .first()
-        .map(|endpoint| normalized_scan_url(&endpoint.url))
-        .unwrap_or_default();
-    format!("url:{url}")
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(super) enum ScanServerKey {
+    Uri(String),
+    Url(UaUrlIdentity),
+    Missing,
 }
 
-fn normalized_scan_url(url: &str) -> String {
-    url.trim().trim_end_matches('/').to_ascii_lowercase()
+pub(super) fn scan_server_key(server: &UaServerInfo) -> ScanServerKey {
+    let uri = server.application_uri.trim().to_ascii_lowercase();
+    if !uri.is_empty() {
+        return ScanServerKey::Uri(uri);
+    }
+    server
+        .endpoints
+        .first()
+        .map(|endpoint| ScanServerKey::Url(endpoint.url.identity()))
+        .unwrap_or(ScanServerKey::Missing)
 }
 
 fn send_scan_event(tx: &Sender<Event>, kind: EventKind) {

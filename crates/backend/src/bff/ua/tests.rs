@@ -515,7 +515,7 @@ fn relative_path_parsing() {
 
 fn ep(url: &str, policy: &str, mode: &str) -> UaEndpointInfo {
     UaEndpointInfo {
-        url: url.to_string(),
+        url: url.parse().unwrap(),
         security_policy: policy.to_string(),
         security_mode: mode.to_string(),
     }
@@ -689,7 +689,7 @@ fn network_info(name: &str, uri: &str, urls: &[&str]) -> UaNetworkInfo {
     UaNetworkInfo {
         application_name: name.to_string(),
         application_uri: uri.to_string(),
-        discovery_urls: urls.iter().map(|url| url.to_string()).collect(),
+        discovery_urls: urls.iter().map(|url| url.parse().unwrap()).collect(),
     }
 }
 
@@ -710,11 +710,12 @@ fn network_results_merge_by_application_uri_and_union_urls() {
     );
     assert_eq!(found.len(), 1);
     assert_eq!(
-        found[0].discovery_urls,
-        vec![
-            "opc.tcp://10.0.0.5:4840".to_string(),
-            "opc.tcp://[fe80::5]:4840".to_string()
-        ]
+        found[0]
+            .discovery_urls
+            .iter()
+            .map(|url| url.as_str())
+            .collect::<Vec<_>>(),
+        vec!["opc.tcp://10.0.0.5:4840", "opc.tcp://[fe80::5]:4840"]
     );
 }
 
@@ -726,7 +727,14 @@ fn network_results_merge_by_discovery_url_when_uri_is_missing() {
         network_info("mDNS", "", &["opc.tcp://HOST:4840"]),
     );
     assert_eq!(found.len(), 1);
-    assert_eq!(found[0].discovery_urls, vec!["opc.tcp://host:4840/"]);
+    assert_eq!(
+        found[0]
+            .discovery_urls
+            .iter()
+            .map(|url| url.as_str())
+            .collect::<Vec<_>>(),
+        vec!["opc.tcp://host:4840/"]
+    );
 }
 
 #[test]
@@ -960,24 +968,58 @@ fn scan_server_keys_prefer_application_uri_then_url() {
         application_name: "A".to_string(),
         application_uri: "urn:Example:A".to_string(),
         endpoints: vec![UaEndpointInfo {
-            url: "opc.tcp://10.0.0.5:4840".to_string(),
+            url: "opc.tcp://10.0.0.5:4840".parse().unwrap(),
             security_policy: String::new(),
             security_mode: String::new(),
         }],
     };
-    assert_eq!(scan_server_key(&by_uri), "uri:urn:example:a");
+    assert_eq!(
+        scan_server_key(&by_uri),
+        super::scanner::ScanServerKey::Uri("urn:example:a".to_string())
+    );
 
     let by_url = UaServerInfo {
         application_uri: String::new(),
         ..by_uri
     };
-    assert_eq!(scan_server_key(&by_url), "url:opc.tcp://10.0.0.5:4840");
+    assert!(matches!(
+        scan_server_key(&by_url),
+        super::scanner::ScanServerKey::Url(_)
+    ));
+}
+
+#[test]
+fn scanner_preserves_distinct_url_resources() {
+    let endpoint = |url: &str| UaEndpointInfo {
+        url: url.parse().unwrap(),
+        security_policy: "None".into(),
+        security_mode: "None".into(),
+    };
+    let server = |endpoints| UaServerInfo {
+        application_name: "A".into(),
+        application_uri: "urn:A".into(),
+        endpoints,
+    };
+    let mut seen = std::collections::HashMap::new();
+    merge_scan_batch(
+        &mut seen,
+        vec![server(vec![endpoint("opc.tcp://HOST/A?x=/")])],
+    );
+    let (fresh, _) = merge_scan_batch(
+        &mut seen,
+        vec![server(vec![
+            endpoint("opc.tcp://host:4840/A/?x=/"),
+            endpoint("opc.tcp://host/a?x=/"),
+            endpoint("opc.tcp://host/A?x="),
+        ])],
+    );
+    assert_eq!(fresh[0].endpoints.len(), 2);
 }
 
 #[test]
 fn scanner_unions_endpoints_for_the_same_application_uri() {
     let endpoint = |url: &str| UaEndpointInfo {
-        url: url.to_string(),
+        url: url.parse().unwrap(),
         security_policy: "None".to_string(),
         security_mode: "None".to_string(),
     };
@@ -1002,7 +1044,10 @@ fn scanner_unions_endpoints_for_the_same_application_uri() {
     assert_eq!(new_servers, 0, "the same ApplicationUri is one server");
     assert_eq!(fresh.len(), 1);
     assert_eq!(fresh[0].endpoints.len(), 1);
-    assert_eq!(fresh[0].endpoints[0].url, "opc.tcp://NTBK700582:4840");
+    assert_eq!(
+        fresh[0].endpoints[0].url.as_str(),
+        "opc.tcp://NTBK700582:4840"
+    );
     let merged = seen.values().next().unwrap();
     assert_eq!(merged.endpoints.len(), 2);
 }

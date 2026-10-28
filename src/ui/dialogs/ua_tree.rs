@@ -57,6 +57,7 @@ impl UaSecurityOption {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct UaUrlNode {
     pub url: String,
+    identity: crate::bff::model::UaUrl,
     pub options: Vec<UaSecurityOption>,
 }
 
@@ -86,11 +87,6 @@ pub(crate) struct UaTreePick {
     pub mode: UaSecurityMode,
     /// Double-click: connect right away with this selection.
     pub connect: bool,
-}
-
-/// Case/trailing-slash-insensitive URL identity used for grouping/selection.
-pub(crate) fn url_key(url: &str) -> String {
-    url.trim().trim_end_matches('/').to_ascii_lowercase()
 }
 
 /// Classify one advertised (policy, mode) pair. `None` means "not advertised"
@@ -132,16 +128,17 @@ pub(crate) fn classify_security(endpoint: &UaEndpointInfo) -> Option<UaSecurityO
 pub(crate) fn group_endpoints(endpoints: &[UaEndpointInfo]) -> Vec<UaUrlNode> {
     let mut nodes: Vec<UaUrlNode> = Vec::new();
     for endpoint in endpoints {
-        let url = endpoint.url.trim();
-        if url.is_empty() {
-            continue;
-        }
-        let key = url_key(url);
-        let index = match nodes.iter().position(|node| url_key(&node.url) == key) {
+        let identity = endpoint.url.clone();
+        let url = identity.as_str();
+        let index = match nodes
+            .iter()
+            .position(|node| node.identity.same_endpoint(&identity))
+        {
             Some(index) => index,
             None => {
                 nodes.push(UaUrlNode {
                     url: url.to_string(),
+                    identity: identity.clone(),
                     options: Vec::new(),
                 });
                 nodes.len() - 1
@@ -224,7 +221,7 @@ pub(crate) fn ua_server_tree(
     selected_mode: UaSecurityMode,
 ) -> Option<UaTreePick> {
     let mut pick: Option<UaTreePick> = None;
-    let selected_key = url_key(selected_url);
+    let selected = selected_url.parse::<crate::bff::model::UaUrl>().ok();
     let hint = tr(lang, Tr::DoubleClickServerHint);
     // Few servers: open them all. Many servers: start collapsed so the list
     // stays scannable.
@@ -238,7 +235,11 @@ pub(crate) fn ua_server_tree(
             Tr::UaTreeSummary,
             &[&nodes.len().to_string(), &option_count.to_string()],
         );
-        let holds_selection = nodes.iter().any(|node| url_key(&node.url) == selected_key);
+        let holds_selection = nodes.iter().any(|node| {
+            selected
+                .as_ref()
+                .is_some_and(|url| node.identity.same_endpoint(url))
+        });
         let title = egui::RichText::new(server_title(server)).strong();
         let header = egui::CollapsingHeader::new(title)
             .id_salt(("ua_tree_server", epoch, server_index))
@@ -251,7 +252,9 @@ pub(crate) fn ua_server_tree(
                 }
                 let open_urls = nodes.len() <= 2;
                 for (url_index, node) in nodes.iter().enumerate() {
-                    let same_url = url_key(&node.url) == selected_key;
+                    let same_url = selected
+                        .as_ref()
+                        .is_some_and(|url| node.identity.same_endpoint(url));
                     let exact_leaf = same_url && node.offers(selected_policy, selected_mode);
                     // The URL row is selected when its URL is current and no
                     // leaf of it matches the current policy/mode (Auto etc.).
@@ -353,7 +356,7 @@ mod tests {
 
     fn ep(url: &str, policy: &str, mode: &str) -> UaEndpointInfo {
         UaEndpointInfo {
-            url: url.to_string(),
+            url: url.parse().unwrap(),
             security_policy: policy.to_string(),
             security_mode: mode.to_string(),
         }
@@ -365,6 +368,17 @@ mod tests {
     // A policy this client does not implement (the list of supported ones grows:
     // Aes256_Sha256_RsaPss used to stand here and is supported now).
     const FUTURE: &str = "http://opcfoundation.org/UA/SecurityPolicy#Aes512_Sha999_Hypothetical";
+
+    #[test]
+    fn groups_by_host_and_ip_but_preserves_path_and_query_case() {
+        let nodes = group_endpoints(&[
+            ep("opc.tcp://[::1]/A?x=/", NONE, "None"),
+            ep("opc.tcp://[0:0:0:0:0:0:0:1]:4840/A/?x=/", NONE, "None"),
+            ep("opc.tcp://[::1]/a?x=/", NONE, "None"),
+            ep("opc.tcp://[::1]/A?x=", NONE, "None"),
+        ]);
+        assert_eq!(nodes.len(), 3);
+    }
 
     #[test]
     fn groups_by_url_and_keeps_first_spelling() {

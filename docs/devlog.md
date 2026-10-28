@@ -283,3 +283,20 @@ Windows CI изолировал heap corruption в тесте некоррект
 `VARIANT` в extension windows-rs ранее не был учтён. Исправлены двойное
 уничтожение в тесте и владение BSTR при повторном чтении SAFEARRAY; тест
 повторного чтения добавлен. Windows runtime исправления ещё ожидает CI.
+
+Общий UaUrl используется в дереве, scanner и LDS вводе; идентичность сохраняет
+регистр path/query и учитывает адрес и порт. Loopback LDS aliases разделены по
+порту. Linux discovery 12/12, scanner 2/2, U15 8/8, UI grouping 2/2; Windows
+workspace typecheck прошёл. Полный parse-once merge и остальные пункты C открыты.
+
+Discovery URL проверяются при получении и хранятся UaUrl, с безопасной
+диагностикой отброшенных записей; совпадение сессии учитывает host, порт,
+path/query и security. Linux discovery 13/13, scanner 2/2, UI identity 2/2,
+grouping 2/2, security-filter 10/10, locale 9/9; Windows typecheck прошёл,
+реальный runtime и полный gate остаются обязательными.
+Ключ URL сессии хранит валидный identity либо исходный invalid, без двух
+взаимоисключающих полей. Linux identity 2/2 и Windows GUI typecheck прошли.
+
+Исправлен знак смещения FILETIME→Unix для DA дат; 0 остаётся отсутствующим
+временем. Linux checked-conversion regression 1/1; Windows FILETIME wrapper
+прошёл проверку типов, runtime ещё нужен в CI.

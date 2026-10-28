@@ -597,7 +597,7 @@ impl ConnectJob {
         let outcome = if cancel.is_cancelled() {
             Err(BackendMsg::ConnectCancelled)
         } else {
-            connect(session, endpoint.clone(), &cancel).await
+            connect(session, endpoint.clone(), &cancel, &event_tx).await
         };
         match outcome {
             Ok(mut ua_session) => {

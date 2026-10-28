@@ -21,12 +21,7 @@ const MAX_VARIANT_DEPTH: usize = 32;
 
 pub fn filetime_to_utc(ft: FILETIME) -> Option<DateTime<Utc>> {
     let ticks = (u64::from(ft.dwHighDateTime) << 32) | u64::from(ft.dwLowDateTime);
-    if ticks == 0 {
-        return None;
-    }
-    let secs = (ticks / 10_000_000) as i64;
-    let nanos = ((ticks % 10_000_000) * 100) as u32;
-    Utc.timestamp_opt(11_644_473_600 + secs, nanos).single()
+    super::filetime::ticks_to_utc(ticks)
 }
 
 fn ole_date_to_utc(days: f64) -> Option<DateTime<Utc>> {
@@ -733,6 +728,18 @@ pub fn clear_variant(variant: &mut VARIANT) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn filetime_wrapper_combines_windows_words() {
+        let ticks = 116_444_736_001_234_567u64;
+        let ft = super::FILETIME {
+            dwHighDateTime: (ticks >> 32) as u32,
+            dwLowDateTime: ticks as u32,
+        };
+        let date = super::filetime_to_utc(ft).unwrap();
+        assert_eq!(date.timestamp(), 0);
+        assert_eq!(date.timestamp_subsec_nanos(), 123_456_700);
+    }
+
     use super::*;
     use chrono::{TimeZone, Utc};
 
