@@ -49,6 +49,20 @@ impl App {
     /// Return false when the requested operation was rejected so the caller
     /// can keep its dialog open and show the error.
     pub fn open_tab_for_endpoint(&mut self, endpoint: EndpointSpec) -> bool {
+        if endpoint.protocol == Protocol::OpcUa
+            && endpoint
+                .address
+                .parse::<crate::bff::model::UaUrl>()
+                .is_err()
+        {
+            let message = tr(self.lang(), Tr::HintUaUrl).to_string();
+            self.status = message.clone();
+            self.journal.error(message.clone());
+            if self.dialogs.connect.open {
+                self.dialogs.connect.error = Some(message);
+            }
+            return false;
+        }
         let key = Self::dedup_key(&endpoint);
         if let Some(id) = self
             .sessions

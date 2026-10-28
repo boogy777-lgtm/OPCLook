@@ -67,9 +67,7 @@ fn parse(args: Vec<String>) -> Result<Option<Options>, String> {
                     return Err("select one endpoint".into());
                 }
                 let url = value_arg(&args, &mut i, key)?;
-                if !url.starts_with("opc.tcp://")
-                    || url.split('/').nth(2).is_some_and(|host| host.contains('@'))
-                {
+                if url.parse::<opclook_contract::ua_url::UaUrl>().is_err() {
                     return Err("invalid UA endpoint URL".into());
                 }
                 endpoint = Some(EndpointSpec::ua(url));

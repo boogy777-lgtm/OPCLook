@@ -1117,7 +1117,7 @@ pub(super) async fn connect(
     cancel: &CancellationToken,
 ) -> Result<UaSession, BackendMsg> {
     let url = endpoint.address.trim();
-    if !url.starts_with("opc.tcp://") {
+    if url.parse::<opclook_contract::ua_url::UaUrl>().is_err() {
         return Err(BackendMsg::UaUrlScheme);
     }
     let binding = endpoint.ua_bind.clone();

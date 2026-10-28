@@ -858,6 +858,20 @@ fn u5_toggling_vars_only_rereads_the_tree_from_the_root() {
 // ---- U11: URL host parsing ----
 
 #[test]
+fn ua_url_userinfo_is_rejected_before_journal_or_session() {
+    let (_ctx, mut app) = tree_app();
+    let before = app.sessions.len();
+    assert!(!app.connect_endpoint(EndpointSpec::ua("opc.tcp://user:secret@host:4840")));
+    assert_eq!(app.sessions.len(), before);
+    assert!(
+        app.journal
+            .entries()
+            .iter()
+            .all(|entry| !entry.text.contains("secret"))
+    );
+}
+
+#[test]
 fn u11_ipv6_url_host_and_port_are_parsed() {
     use super::present::ua_url_host;
     assert_eq!(ua_url_host("opc.tcp://[::1]:4840").as_deref(), Some("::1"));
@@ -866,10 +880,7 @@ fn u11_ipv6_url_host_and_port_are_parsed() {
         Some("2001:db8::7")
     );
     assert_eq!(ua_url_host("opc.tcp://[::1]").as_deref(), Some("::1"));
-    assert_eq!(
-        ua_url_host("opc.tcp://user@plant:4840/x").as_deref(),
-        Some("plant")
-    );
+    assert_eq!(ua_url_host("opc.tcp://user@plant:4840/x").as_deref(), None);
     assert_eq!(ua_url_host("opc.tcp://:4840"), None);
 }
 

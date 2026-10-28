@@ -85,3 +85,5 @@ passed, 23 ignored — 22 требуют живой DA/UA-сервер, 1 Window
 оставшиеся пункты A/C открыты.
 Настройки AdapterId/IpAddr типизированы; остальные пункты A/C открыты.
 DA VarType типизирован; UA URL/security/индексы и role-ID ещё открыты.
+UA URL: первый общий parser подключён частично; discovery merge и остальные
+пункты C, role ID и финальный CI ещё открыты.

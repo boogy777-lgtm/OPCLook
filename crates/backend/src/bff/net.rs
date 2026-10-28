@@ -27,8 +27,6 @@ use opcua::client::transport::{
     StreamConnector, TcpTransport, TransportConfiguration,
 };
 use opcua::core::comms::tcp_codec::TcpCodec;
-use opcua::core::comms::url::hostname_port_from_url;
-use opcua::core::constants::DEFAULT_OPC_UA_SERVER_PORT;
 use opcua::types::{DecodingOptions, EndpointDescription, Error, StatusCode};
 use tokio::io::{ReadHalf, WriteHalf};
 use tokio::net::{TcpSocket, TcpStream};
@@ -46,24 +44,10 @@ pub(crate) fn endpoint_url_for(ip: IpAddr, port: u16) -> String {
 
 /// Parse an `opc.tcp://` URL into a resolver host (brackets stripped) and port.
 pub(crate) fn parse_opc_tcp_url(url: &str) -> Result<(String, u16), Error> {
-    let (raw_host, port) =
-        hostname_port_from_url(url, DEFAULT_OPC_UA_SERVER_PORT).map_err(|_| {
-            Error::new(
-                StatusCode::BadTcpEndpointUrlInvalid,
-                format!("invalid OPC UA URL: {url}"),
-            )
-        })?;
-    let host = raw_host
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .to_string();
-    if host.is_empty() {
-        return Err(Error::new(
-            StatusCode::BadTcpEndpointUrlInvalid,
-            format!("OPC UA URL has no host: {url}"),
-        ));
-    }
-    Ok((host, port))
+    let parsed: opclook_contract::ua_url::UaUrl = url
+        .parse()
+        .map_err(|_| Error::new(StatusCode::BadTcpEndpointUrlInvalid, "invalid OPC UA URL"))?;
+    Ok((parsed.host().to_owned(), parsed.port()))
 }
 
 /// Connector that pins a fresh TCP socket to `binding` for every connection.

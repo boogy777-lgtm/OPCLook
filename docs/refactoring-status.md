@@ -268,3 +268,21 @@ VarType с именованными VT-константами проходит �
 Linux backend VT test 1/1, GUI K3 interaction 1/1 и all-targets check прошли;
 Windows workspace all-targets typecheck с test-only флагами прошёл без runtime.
 На Windows фактические VARIANT и полный gate ещё требуют CI.
+
+Общий `UaUrl` введён частично: GUI connect/discover, CLI и backend connect/TCP
+используют проверку схемы, host, IPv6 и порта; userinfo, port 0 и управляющие
+символы отклоняются до записи GUI в журнал. Сравнение host учитывает регистр
+DNS и нормализует IP, путь сохраняет регистр, query/fragment сравниваются без
+снятия завершающих slash. API сравнения пока не подключён ко всем путям
+обнаружения и объединения: это обязательный следующий шаг. В используемом SDK
+`hostname_port_from_url` опирается на `url::Url`, который не принимает IPv6 zone
+identifiers; поддержка scoped URL здесь не заявлена. Typed advertised security,
+NonZero индексы и role ID также остаются открытыми; Windows runtime и финальный
+exact-head CI обязательны.
+Локально прошли contract URL 1/1, GUI userinfo-before-journal 1/1 и U11
+host/loopback 3/3 на Linux; fmt, Windows i686 backend/CLI all-targets typecheck
+без resource skip и GUI all-targets typecheck с test-only отключением ресурсов.
+Для Linux сборки локально использован codegen-units=1 также для `vello_cpu`
+после zero-length object rustc; этот workaround не меняет repository. Windows
+runtime не запускался; проверка прежнего exact head выявила heap corruption,
+которая требует отдельного исправления до final CI.

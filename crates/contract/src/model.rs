@@ -1,3 +1,4 @@
+pub use crate::ua_url::UaUrl;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 

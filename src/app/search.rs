@@ -192,7 +192,7 @@ impl App {
     pub fn discover_ua_endpoints(&mut self) -> bool {
         let lang = self.lang();
         let url = self.dialogs.connect.ua_url.trim().to_string();
-        if !url.starts_with("opc.tcp://") {
+        if url.parse::<crate::bff::model::UaUrl>().is_err() {
             self.dialogs.connect.error = Some(tr(lang, Tr::HintUaUrl).to_string());
             return false;
         }

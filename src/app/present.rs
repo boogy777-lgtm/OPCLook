@@ -80,53 +80,16 @@ fn ua_host_port(url: &str) -> String {
     }
 }
 
-/// `host[:port]` part of an OPC UA URL, without scheme, path and user info.
-fn ua_authority(url: &str) -> &str {
-    let rest = url
-        .strip_prefix("opc.tcp://")
-        .or_else(|| url.strip_prefix("opc.tcp:"))
-        .unwrap_or(url);
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    authority.rsplit('@').next().unwrap_or(authority)
-}
-
-/// Split an authority into host (IPv6 brackets removed) and optional port.
-/// Understands `host`, `host:port`, `[v6]`, `[v6]:port` and a bare IPv6
-/// literal (several colons, no brackets) which has no port.
-fn split_host_port(authority: &str) -> (String, Option<String>) {
-    let authority = authority.trim();
-    if let Some(rest) = authority.strip_prefix('[') {
-        return match rest.split_once(']') {
-            Some((host, tail)) => (
-                host.trim().to_string(),
-                tail.strip_prefix(':')
-                    .map(str::trim)
-                    .filter(|port| !port.is_empty())
-                    .map(str::to_string),
-            ),
-            None => (rest.trim().to_string(), None),
-        };
-    }
-    if authority.matches(':').count() > 1 {
-        return (authority.to_string(), None);
-    }
-    match authority.split_once(':') {
-        Some((host, port)) => (
-            host.trim().to_string(),
-            Some(port.trim().to_string()).filter(|port| !port.is_empty()),
-        ),
-        None => (authority.to_string(), None),
-    }
-}
-
-/// Host of an OPC UA URL; IPv6 literals come back without brackets.
+/// Host of a validated OPC UA URL; IPv6 brackets are removed.
 pub(super) fn ua_url_host(url: &str) -> Option<String> {
-    let (host, _) = split_host_port(ua_authority(url));
-    if host.is_empty() { None } else { Some(host) }
+    url.parse::<crate::bff::model::UaUrl>()
+        .ok()
+        .map(|url| url.host().to_owned())
 }
 
 fn ua_url_port(url: &str) -> Option<String> {
-    split_host_port(ua_authority(url)).1
+    let parsed = url.parse::<crate::bff::model::UaUrl>().ok()?;
+    parsed.explicit_port().then(|| parsed.port().to_string())
 }
 
 pub(super) fn operation_label(lang: Lang, operation: Operation) -> String {
