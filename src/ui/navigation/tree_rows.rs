@@ -40,7 +40,7 @@ pub(super) fn draw_tree_item(
         let is_selected = selected == Some((session, item.id));
         let text = match item.node.kind {
             NodeKind::Branch => {
-                egui::RichText::new(&item.node.name).color(egui::Color32::from_rgb(130, 180, 255))
+                egui::RichText::new(&item.node.name).color(super::super::colors::accent())
             }
             NodeKind::Item => egui::RichText::new(&item.node.name),
         };

@@ -28,13 +28,17 @@ impl UaSession {
         let interval_ms = self.publishing_interval_ms.clamp(100, 3600_000);
         let interval = Duration::from_millis(interval_ms);
         let session_id = self.session_id;
+        let connection_id = self.connection_id;
         let event_tx = tx.clone();
         let types = self.types.clone();
         let callback =
             DataChangeCallback::new(move |data_value: UaDataValue, item: &MonitoredItem| {
                 let Some(key) = ItemKey::new(item.client_handle()) else {
                     let _ = event_tx.send(Event {
-                        origin: crate::bff::model::Origin::Unsolicited,
+                        origin: connection_id.map_or(
+                            crate::bff::model::Origin::Unsolicited,
+                            crate::bff::model::Origin::Session,
+                        ),
                         owner: session_id.into(),
                         kind: EventKind::Log {
                             message: BackendMsg::InvalidItemHandle,
@@ -43,7 +47,10 @@ impl UaSession {
                     return;
                 };
                 let _ = event_tx.send(Event {
-                    origin: crate::bff::model::Origin::Unsolicited,
+                    origin: connection_id.map_or(
+                        crate::bff::model::Origin::Unsolicited,
+                        crate::bff::model::Origin::Session,
+                    ),
                     owner: session_id.into(),
                     kind: EventKind::Values {
                         values: vec![(key, ua_data_value_typed(&data_value, types.as_deref()))],
@@ -471,7 +478,10 @@ impl UaSession {
         send(
             tx,
             Event {
-                origin: crate::bff::model::Origin::Unsolicited,
+                origin: self.connection_id.map_or(
+                    crate::bff::model::Origin::Unsolicited,
+                    crate::bff::model::Origin::Session,
+                ),
                 owner: self.session_id.into(),
                 kind: EventKind::SubscriptionState { state },
             },
@@ -483,7 +493,10 @@ impl UaSession {
         send(
             tx,
             Event {
-                origin: crate::bff::model::Origin::Unsolicited,
+                origin: self.connection_id.map_or(
+                    crate::bff::model::Origin::Unsolicited,
+                    crate::bff::model::Origin::Session,
+                ),
                 owner: self.session_id.into(),
                 kind: EventKind::Log { message },
             },

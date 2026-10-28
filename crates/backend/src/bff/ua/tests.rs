@@ -508,8 +508,14 @@ fn infer_write_supports_new_value_types() {
 #[test]
 fn nested_array_write_is_rejected() {
     let value = Value::Array(vec![Value::Array(vec![Value::I64(1)])]);
-    assert!(value_to_ua_variant(&value, Some(VariantScalarTypeId::Int32)).is_err());
-    assert!(value_to_ua_variant(&value, None).is_err());
+    assert!(matches!(
+        value_to_ua_variant(&value, Some(VariantScalarTypeId::Int32)),
+        Err(BackendMsg::WriteMultiDim)
+    ));
+    assert!(matches!(
+        value_to_ua_variant(&value, None),
+        Err(BackendMsg::WriteMultiDim)
+    ));
 }
 
 #[test]
@@ -1446,3 +1452,33 @@ const KEY_10: ItemKey = ItemKey::new(10).unwrap();
 const KEY_20: ItemKey = ItemKey::new(20).unwrap();
 const KEY_30: ItemKey = ItemKey::new(30).unwrap();
 const KEY_40: ItemKey = ItemKey::new(40).unwrap();
+
+#[test]
+fn inferred_array_requires_homogeneous_nonempty_elements() {
+    let mixed = Value::Array(vec![Value::I64(1), Value::Bool(true)]);
+    assert!(matches!(
+        value_to_ua_variant(&mixed, None),
+        Err(BackendMsg::WriteArrayBuildFailed { .. })
+    ));
+    let null_element = Value::Array(vec![Value::Empty]);
+    assert!(matches!(
+        value_to_ua_variant(&null_element, None),
+        Err(BackendMsg::WriteArrayBuildFailed { .. })
+    ));
+    let flat = Value::Array(vec![Value::I64(1), Value::I64(2)]);
+    let Variant::Array(flat) = value_to_ua_variant(&flat, None).unwrap() else {
+        panic!("array expected")
+    };
+    assert_eq!(flat.value_type, Vt::Int64);
+    assert_eq!(flat.values, vec![Variant::Int64(1), Variant::Int64(2)]);
+    let Variant::Array(empty) = value_to_ua_variant(&Value::Array(vec![]), None).unwrap() else {
+        panic!("array expected")
+    };
+    assert_eq!(empty.value_type, Vt::Double);
+    assert!(empty.values.is_empty());
+    // Known node types still use the existing conversion rules.
+    let Variant::Array(converted) = value_to_ua_variant(&mixed, Some(Vt::Int32)).unwrap() else {
+        panic!("array expected")
+    };
+    assert_eq!(converted.values, vec![Variant::Int32(1), Variant::Int32(1)]);
+}

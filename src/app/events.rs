@@ -11,6 +11,25 @@ use chrono::Utc;
 use std::time::{Duration, Instant};
 
 impl App {
+    fn session_backend_text(
+        &self,
+        session: SessionId,
+        message: &crate::bff::model::BackendMsg,
+    ) -> String {
+        let mut text = backend_text(self.lang(), message);
+        if let Some(view) = self.session(session) {
+            let endpoint = view.endpoint();
+            let mut secrets = [&endpoint.user, &endpoint.password];
+            secrets.sort_by_key(|secret| std::cmp::Reverse(secret.len()));
+            for secret in secrets {
+                if !secret.is_empty() {
+                    text = text.replace(secret, tr(self.lang(), Tr::DiagnosticRedacted));
+                }
+            }
+        }
+        text
+    }
+
     pub(super) fn poll_events(&mut self) {
         while let Some(event) = self.engine.try_recv() {
             self.on_event(event);
@@ -33,7 +52,11 @@ impl App {
     #[cfg(feature = "test-support")]
     pub fn on_synced_event_for_test_at(&mut self, session: SessionId, kind: EventKind) {
         self.on_event(Event {
-            origin: Origin::Unsolicited,
+            origin: Origin::Session(
+                self.engine
+                    .connection_id_for_test(session)
+                    .unwrap_or(RequestId::FIRST),
+            ),
             owner: Owner::Session(session),
             kind,
         });
@@ -44,7 +67,11 @@ impl App {
     pub fn on_event_for_test_at(&mut self, session: SessionId, kind: EventKind) {
         self.sync_fixture_sessions();
         self.on_event(Event {
-            origin: Origin::Unsolicited,
+            origin: Origin::Session(
+                self.engine
+                    .connection_id_for_test(session)
+                    .unwrap_or(RequestId::FIRST),
+            ),
             owner: Owner::Session(session),
             kind,
         });
@@ -100,7 +127,7 @@ impl App {
                         &[
                             &match event.origin {
                                 Origin::Reply(id) => id.to_string(),
-                                Origin::Unsolicited => String::new(),
+                                Origin::Unsolicited | Origin::Session(_) => String::new(),
                             },
                             &operation_label(self.lang(), pending.operation),
                             &owner_label(self.lang(), owner),
@@ -118,7 +145,7 @@ impl App {
                         &[
                             &match event.origin {
                                 Origin::Reply(id) => id.to_string(),
-                                Origin::Unsolicited => String::new(),
+                                Origin::Unsolicited | Origin::Session(_) => String::new(),
                             },
                             &owner_label(self.lang(), owner),
                         ],
@@ -129,7 +156,7 @@ impl App {
         };
         let request_id = match event.origin {
             Origin::Reply(id) => Some(id),
-            Origin::Unsolicited => None,
+            Origin::Unsolicited | Origin::Session(_) => None,
         };
         let kind = match (event.kind, &ctx) {
             (
@@ -164,10 +191,9 @@ impl App {
     }
 
     fn on_session_event(&mut self, session: SessionId, kind: EventKind) {
-        let lang = self.lang();
         match kind {
             EventKind::Connected { endpoint, info } => {
-                let info = backend_text(lang, &info);
+                let info = self.session_backend_text(session, &info);
                 let is_ua = self.session_protocol(session) == Some(Protocol::OpcUa);
                 // Any other reply from the old link is now superseded.
                 self.clear_pending_requests(session);
@@ -207,7 +233,7 @@ impl App {
                 }
             }
             EventKind::Disconnected { reason } => {
-                let reason = backend_text(lang, &reason);
+                let reason = self.session_backend_text(session, &reason);
                 // A late disconnect from the old link must not interrupt a
                 // new connection attempt.
                 let name = self
@@ -221,7 +247,8 @@ impl App {
                 }
             }
             EventKind::Log { message } => {
-                self.journal.info(backend_text(lang, &message));
+                self.journal
+                    .info(self.session_backend_text(session, &message));
             }
             _ => {}
         }
@@ -241,7 +268,7 @@ impl App {
                     match result {
                         Ok(info) => self.apply_item_info(key, info),
                         Err(message) => {
-                            let message = backend_text(lang, &message);
+                            let message = self.session_backend_text(session, &message);
                             if let Some(row) =
                                 self.row_position(key).and_then(|p| self.rows.get_mut(p))
                             {
@@ -358,6 +385,10 @@ impl App {
             }
             EventKind::Values { values } => {
                 for (key, value) in values {
+                    let reason_text = value
+                        .reason
+                        .as_ref()
+                        .map(|reason| self.session_backend_text(session, reason));
                     if self.expanded_values.contains(&(key, Vec::new())) {
                         self.detail_revision = self.detail_revision.wrapping_add(1);
                     }
@@ -371,10 +402,10 @@ impl App {
                         row.invalidate_display();
                         row.value = value.value;
                         let mut quality = value.quality;
-                        if let Some(reason) = &value.reason {
+                        if let Some(reason) = reason_text {
                             // The backend's reason for a Bad value, in the
                             // interface language.
-                            quality.text = backend_text(lang, reason).into();
+                            quality.text = reason.into();
                         }
                         row.quality = RowQuality::Server(quality);
                         row.timestamp = value.timestamp;
@@ -414,7 +445,7 @@ impl App {
                         self.journal.info_l(Tr::WrittenValue, &[&name]);
                     }
                     Err(message) => {
-                        let message = backend_text(lang, &message);
+                        let message = self.session_backend_text(session, &message);
                         self.journal.error_l(Tr::WriteFailed, &[&name, &message]);
                         self.dialogs.message = Some(MessageDialog {
                             title: tr(lang, Tr::WriteError).to_string(),
@@ -438,7 +469,7 @@ impl App {
         request_id: Option<RequestId>,
     ) {
         let lang = self.lang();
-        let message = backend_text(lang, &message);
+        let message = self.session_backend_text(session, &message);
         self.journal
             .error_l(Tr::ErrorOp, &[&operation_label(lang, operation), &message]);
         match operation {

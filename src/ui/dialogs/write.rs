@@ -38,6 +38,7 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
             return;
         }
     };
+    let unavailable = first.and_then(|row| app.write_unavailable(row.session, protocol));
     let choices = write_type_choices(protocol);
     let mut submit = false;
     let mut close = false;
@@ -53,7 +54,7 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(&ctx, |ui| {
                 dialog_spacing(ui);
-                let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let enter = crate::ui::key_pressed_once(ui.ctx(), egui::Key::Enter);
                 let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
                 let opening_frame = dialog.focus_pending;
                 ui.label(fmt(lang, Tr::SignalLabel, &[&name]));
@@ -104,7 +105,7 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
                     state.store(ui.ctx(), id);
                     dialog.focus_pending = false;
                 }
-                if enter && writable && !opening_frame && !confirm_open {
+                if enter && writable && unavailable.is_none() && !opening_frame && !confirm_open {
                     submit = true;
                 } else if esc && !opening_frame && !confirm_open {
                     close = true;
@@ -120,13 +121,26 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
                 }
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(writable, egui::Button::new(tr(lang, Tr::Write)))
-                        .clicked()
+                    let response = ui.add_enabled(
+                        writable && unavailable.is_none() && !confirm_open,
+                        egui::Button::new(tr(lang, Tr::Write)),
+                    );
+                    let response = if let Some(reason) = unavailable {
+                        let text = tr(lang, reason);
+                        response.on_hover_text(text).on_disabled_hover_text(text)
+                    } else {
+                        response
+                    };
+                    if response.clicked()
+                        && !crate::ui::key_repeat(ui.ctx(), egui::Key::Enter)
+                        && !crate::ui::key_repeat(ui.ctx(), egui::Key::Space)
                     {
                         submit = true;
                     }
-                    if ui.button(tr(lang, Tr::Cancel)).clicked() {
+                    if ui
+                        .add_enabled(!confirm_open, egui::Button::new(tr(lang, Tr::Cancel)))
+                        .clicked()
+                    {
                         close = true;
                     }
                 });

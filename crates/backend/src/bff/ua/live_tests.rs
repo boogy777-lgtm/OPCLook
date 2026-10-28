@@ -551,6 +551,34 @@ fn added_node_is_reused_for_reads_and_writes() {
         matches!(&results[1].1, Err(BackendMsg::InvalidNodeId { .. })),
         "{results:?}"
     );
+    // Preserve error priority: an unknown item is reported before payload
+    // conversion; a subscribed item gets the shape error as a Wrote reply.
+    for (key, expected_missing) in [(ItemKey::new(2).unwrap(), true), (key, false)] {
+        let request = app.send(
+            session.into(),
+            CommandKind::Write {
+                request: crate::bff::model::WriteRequest {
+                    key,
+                    value: Value::Array(vec![Value::Array(vec![Value::I64(1)])]),
+                    type_hint: None,
+                },
+            },
+        );
+        let reply = app
+            .reply(request, Duration::from_secs(10))
+            .expect("write error reply");
+        match reply.kind {
+            EventKind::Wrote {
+                result: Err(BackendMsg::NodeNotSubscribed),
+                ..
+            } if expected_missing => {}
+            EventKind::Wrote {
+                result: Err(BackendMsg::WriteMultiDim),
+                ..
+            } if !expected_missing => {}
+            other => panic!("unexpected write error: {other:?}"),
+        }
+    }
     for value in [7.5, 9.5] {
         server.set("Level", Variant::Double(value));
         let id = app.send(
@@ -591,6 +619,29 @@ fn added_node_is_reused_for_reads_and_writes() {
     assert!(
         matches!(reply.kind, EventKind::Values { values } if values[0].1.value == Value::F64(12.5))
     );
+}
+
+#[test]
+fn subscription_push_carries_the_connect_request_across_reconnect() {
+    use crate::bff::model::{Origin, RequestId};
+    let server = TestServer::start(free_port());
+    let mut app = Harness::new();
+    let session = SessionId::new(1).unwrap();
+    let key = ItemKey::new(1).unwrap();
+    let mut captured = Vec::new();
+    for _ in 0..2 {
+        app.connect(session, Harness::endpoint(&server.url))
+            .expect("connect");
+        let epoch = RequestId::new(app.next_request).unwrap();
+        let results = app.add_items(session, &[(key, server.node("Level"))]);
+        assert!(results.iter().all(|(_, result)| result.is_ok()));
+        let event = app.wait(Duration::from_secs(20), |event| {
+            (event.origin == Origin::Session(epoch) && matches!(&event.kind, EventKind::Values { values } if values.iter().any(|(id, _)| *id == key))).then(|| event.clone())
+        }).expect("subscription push for connection");
+        captured.push(event);
+        app.disconnect(session);
+    }
+    assert_ne!(captured[0].origin, captured[1].origin);
 }
 
 #[test]

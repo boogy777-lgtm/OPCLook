@@ -220,6 +220,12 @@ impl App {
         if request_list.requests.is_empty() {
             return;
         }
+        if let Some(reason) = self.write_unavailable(request_list.session, request_list.protocol) {
+            self.dialogs.write.error = Some(tr(self.lang(), reason).to_string());
+            self.journal.error_l(reason, &[]);
+            self.status = tr(self.lang(), reason).to_string();
+            return;
+        }
         // With confirm_write enabled, keep the dialog open and ask explicitly,
         // mirroring the original message before the write is sent.
         if self.settings.view.options.confirm_write {

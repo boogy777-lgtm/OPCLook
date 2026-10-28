@@ -475,8 +475,10 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                             (table_out.inner_rect.top() + TABLE_HEADER_HEIGHT)
                                 ..=ui.max_rect().bottom(),
                         );
-                        if empty_table_prompt(ui, lang, area, app.active_session.is_some()) {
-                            app.open_connect_dialog();
+                        if empty_table_prompt(ui, app, lang, area, app.active_session.is_some()) {
+                            let _ = app.execute_ui_action(
+                                crate::app::actions::UiAction::OpenConnectDialog,
+                            );
                         }
                     }
 
@@ -655,7 +657,8 @@ pub(super) fn handle_table_keys(app: &mut App, ui: &mut egui::Ui) {
     if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
         app.remove_selected_rows();
     }
-    if ctx.input(|i| i.key_pressed(egui::Key::Enter)) || ctx.input(|i| i.key_pressed(egui::Key::F2))
+    if crate::ui::key_pressed_once(ctx, egui::Key::Enter)
+        || crate::ui::key_pressed_once(ctx, egui::Key::F2)
     {
         app.open_write_dialog(Vec::new());
     }

@@ -4,17 +4,29 @@ use super::files::{
 use super::tree::{open_add_signal, refresh_selected, request_disconnect};
 use crate::app::{App, MessageDialog};
 use crate::i18n::{Lang, Tr, tr};
+use crate::settings::Theme;
 
 pub(super) fn menu(app: &mut App, ui: &mut egui::Ui) {
     let lang = app.lang();
     egui::Panel::top("menu_bar").show(ui, |ui| {
+        let narrow = ui.available_width() < 700.0;
+        if narrow {
+            egui::MenuBar::new().ui(ui, |ui| theme_menu(app, ui, lang));
+        }
         egui::MenuBar::new().ui(ui, |ui| {
+            if !narrow {
+                theme_menu(app, ui, lang);
+            }
             ui.menu_button(tr(lang, Tr::MenuClient), |ui| {
-                if ui
-                    .add(egui::Button::new(tr(lang, Tr::ConnectEllipsis)).shortcut_text("Ctrl+N"))
-                    .clicked()
+                if super::actions::action_button(
+                    app,
+                    ui,
+                    crate::app::actions::UiAction::OpenConnectDialog,
+                    egui::Button::new(tr(lang, Tr::ConnectEllipsis)).shortcut_text("Ctrl+N"),
+                )
+                .clicked()
                 {
-                    app.open_connect_dialog();
+                    let _ = app.execute_ui_action(crate::app::actions::UiAction::OpenConnectDialog);
                     ui.close();
                 }
                 if ui.button(tr(lang, Tr::Disconnect)).clicked() {
@@ -36,12 +48,22 @@ pub(super) fn menu(app: &mut App, ui: &mut egui::Ui) {
             });
 
             ui.menu_button(tr(lang, Tr::MenuServers), |ui| {
-                if ui
-                    .button(tr(lang, Tr::ConnectEllipsis))
-                    .on_hover_text(tr(lang, Tr::HintConnectUa))
-                    .clicked()
-                {
-                    app.open_connect_dialog();
+                let available = app
+                    .ui_action_unavailable(crate::app::actions::UiAction::OpenConnectDialog)
+                    .is_none();
+                let response = super::actions::action_button(
+                    app,
+                    ui,
+                    crate::app::actions::UiAction::OpenConnectDialog,
+                    egui::Button::new(tr(lang, Tr::ConnectEllipsis)),
+                );
+                let response = if available {
+                    response.on_hover_text(tr(lang, Tr::HintConnectUa))
+                } else {
+                    response
+                };
+                if response.clicked() {
+                    let _ = app.execute_ui_action(crate::app::actions::UiAction::OpenConnectDialog);
                     ui.close();
                 }
                 if ui.button(tr(lang, Tr::Disconnect)).clicked() {
@@ -235,6 +257,29 @@ pub(super) fn menu(app: &mut App, ui: &mut egui::Ui) {
                 }
             });
         });
+    });
+}
+
+fn theme_menu(app: &mut App, ui: &mut egui::Ui, lang: Lang) {
+    ui.menu_button(tr(lang, Tr::ThemeTitle), |ui| {
+        for (theme, label) in [
+            (Theme::System, Tr::ThemeSystem),
+            (Theme::Light, Tr::ThemeLight),
+            (Theme::Dark, Tr::ThemeDark),
+        ] {
+            if ui
+                .selectable_label(app.settings.view.options.theme == theme, tr(lang, label))
+                .clicked()
+            {
+                app.settings.view.options.theme = theme;
+                // Preserve other unsaved options while preventing a stale draft
+                // from reverting the theme on Save.
+                app.dialogs.options.draft.theme = theme;
+                app.persist_settings();
+                ui.close();
+                ui.ctx().request_repaint();
+            }
+        }
     });
 }
 

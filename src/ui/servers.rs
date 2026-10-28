@@ -1,4 +1,4 @@
-use super::colors::{green, red, yellow};
+use super::colors::{green, muted, red, yellow};
 use super::dialogs::{security_mode_label, security_policy_label};
 use super::paint::{paint_lock_icon, painter_x_button};
 use super::truncate_text;
@@ -112,11 +112,21 @@ pub(super) fn session_tab_strip(app: &mut App, ui: &mut egui::Ui) {
                     // (a new connection). Unlike a tab's «×», this never hides
                     // or removes anything. It scrolls with the tabs so it is
                     // always reachable.
-                    if ui
-                        .small_button("+")
-                        .on_hover_text(tr(lang, Tr::NewConnection))
-                        .clicked()
-                    {
+                    let available = app
+                        .ui_action_unavailable(crate::app::actions::UiAction::OpenConnectDialog)
+                        .is_none();
+                    let response = super::actions::action_button(
+                        app,
+                        ui,
+                        crate::app::actions::UiAction::OpenConnectDialog,
+                        egui::Button::new("+").small(),
+                    );
+                    let response = if available {
+                        response.on_hover_text(tr(lang, Tr::NewConnection))
+                    } else {
+                        response
+                    };
+                    if response.clicked() {
                         new_connection = true;
                     }
                 });
@@ -143,7 +153,7 @@ pub(super) fn session_tab_strip(app: &mut App, ui: &mut egui::Ui) {
         request_remove_session(app, id);
     }
     if new_connection {
-        app.open_connect_dialog();
+        let _ = app.execute_ui_action(crate::app::actions::UiAction::OpenConnectDialog);
     }
 }
 
@@ -307,7 +317,7 @@ pub(super) fn server_state_color(state: SessionState) -> egui::Color32 {
     match state {
         SessionState::Connected => green(),
         SessionState::Connecting => yellow(),
-        SessionState::Disconnected => egui::Color32::GRAY,
+        SessionState::Disconnected => muted(),
     }
 }
 

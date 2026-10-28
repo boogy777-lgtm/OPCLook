@@ -428,6 +428,7 @@ fn add_children_ignores_unrelated_browse_request_id() {
 fn add_children_disconnect_cancels_job() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
+    app.record_dispatches_for_test();
     app.seed_session(
         crate::bff::model::SessionId::new(1).unwrap(),
         EndpointSpec::da("", "Srv.Test"),
@@ -450,7 +451,38 @@ fn add_children_disconnect_cancels_job() {
     // A disconnect during the job cancels it.
     app.disconnect_session(crate::bff::model::SessionId::new(1).unwrap());
     assert!(app.add_children.is_none(), "disconnect must cancel the job");
-    // A Disconnected event also cancels (non-triggered link loss path).
+    // Reconnect through a real correlated Connect before simulating link loss.
+    let session = SessionId::new(1).unwrap();
+    let endpoint = EndpointSpec::da("", "Srv.Test");
+    let connect = app
+        .send(
+            session,
+            Protocol::OpcDa,
+            CommandKind::Connect {
+                endpoint: endpoint.clone(),
+            },
+        )
+        .unwrap();
+    app.on_event_for_test_with_request(
+        session,
+        connect,
+        EventKind::Connected {
+            endpoint,
+            info: BackendMsg::raw("connected"),
+        },
+    );
+    app.seed_tree_item(
+        session,
+        None,
+        0,
+        BrowseNode {
+            node_id: "a".to_string(),
+            name: "A".to_string(),
+            kind: NodeKind::Branch,
+            has_children: true,
+        },
+    );
+    app.set_tree_focus(session, 1);
     app.add_selected_children();
     assert!(app.add_children.is_some());
     app.on_event_for_test_at(
@@ -2280,6 +2312,119 @@ fn closed_worker_marks_link_lost_and_finishes_pending_write() {
     assert!(app.pending_request_ids_for_test(session).is_empty());
     assert_eq!((app.write_batch.pending, app.write_batch.errors), (0, 1));
     assert!(app.write_batch.summary.is_some());
+}
+
+#[test]
+fn old_disconnect_preserves_new_connection_write_confirmation() {
+    let (_ctx, mut app) = tree_app();
+    let session = SessionId::FIRST;
+    let endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+    app.engine.limit_dispatch_for_test(usize::MAX);
+    let a = app
+        .send(
+            session,
+            Protocol::OpcUa,
+            CommandKind::Connect {
+                endpoint: endpoint.clone(),
+            },
+        )
+        .unwrap();
+    app.on_event_for_test_with_request(
+        session,
+        a,
+        EventKind::Connected {
+            endpoint: endpoint.clone(),
+            info: BackendMsg::raw("A"),
+        },
+    );
+    let disconnect = app
+        .send(session, Protocol::OpcUa, CommandKind::Disconnect)
+        .unwrap();
+    app.on_event_for_test_with_request(
+        session,
+        disconnect,
+        EventKind::Disconnected {
+            reason: BackendMsg::ConnectionClosed,
+        },
+    );
+    let b = app
+        .send(
+            session,
+            Protocol::OpcUa,
+            CommandKind::Connect {
+                endpoint: endpoint.clone(),
+            },
+        )
+        .unwrap();
+    app.on_event_for_test_with_request(
+        session,
+        b,
+        EventKind::Connected {
+            endpoint,
+            info: BackendMsg::raw("B"),
+        },
+    );
+    app.dialogs.confirm = Some(ConfirmRequest {
+        title: String::new(),
+        text: String::new(),
+        action: ConfirmAction::Write(PendingWrites {
+            session,
+            protocol: Protocol::OpcUa,
+            requests: vec![],
+            type_label: String::new(),
+        }),
+    });
+    app.sync_fixture_sessions();
+    assert_eq!(app.engine.connection_id_for_test(session), Some(b));
+    let lost = |id| crate::bff::model::Event {
+        owner: session.into(),
+        origin: crate::bff::model::Origin::Session(id),
+        kind: EventKind::Disconnected {
+            reason: BackendMsg::ConnectionClosed,
+        },
+    };
+    app.on_event(lost(a));
+    assert!(app.dialogs.confirm.is_some());
+    assert!(app.dialogs.write.error.is_none());
+    app.on_event(lost(b));
+    assert!(app.dialogs.confirm.is_none());
+    assert_eq!(
+        app.dialogs.write.error.as_deref(),
+        Some(tr(app.lang(), Tr::ActionWriteConnectionChanged))
+    );
+}
+
+#[test]
+fn stale_connection_push_does_not_change_current_row() {
+    let (_ctx, mut app) = tree_app();
+    let session = SessionId::new(1).unwrap();
+    let key = app.seed_row(session, "tag", "tag", Value::I64(1));
+    app.sync_fixture_sessions();
+    let event = |origin, value| crate::bff::model::Event {
+        owner: session.into(),
+        origin,
+        kind: EventKind::Values {
+            values: vec![(
+                key,
+                crate::bff::model::DataValue {
+                    value: Value::I64(value),
+                    quality: crate::bff::model::Quality::from_da(0xc0),
+                    timestamp: None,
+                    reason: None,
+                },
+            )],
+        },
+    };
+    app.on_event(event(
+        crate::bff::model::Origin::Session(RequestId::new(2).unwrap()),
+        99,
+    ));
+    assert_eq!(app.rows[0].value, Value::I64(1));
+    app.on_event(event(
+        crate::bff::model::Origin::Session(RequestId::FIRST),
+        2,
+    ));
+    assert_eq!(app.rows[0].value, Value::I64(2));
 }
 
 #[test]

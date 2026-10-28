@@ -43,3 +43,20 @@ pub struct TreeDragPayload {
     pub session: SessionId,
     pub node_ids: Vec<u64>,
 }
+
+/// Render one GUI action using its read-only availability and localized reason.
+pub(super) fn action_button(
+    app: &crate::app::App,
+    ui: &mut egui::Ui,
+    action: crate::app::actions::UiAction,
+    button: egui::Button<'_>,
+) -> egui::Response {
+    let reason = app.ui_action_unavailable(action);
+    let response = ui.add_enabled(reason.is_none(), button);
+    if let Some(reason) = reason {
+        let text = crate::i18n::tr(app.lang(), reason);
+        response.on_hover_text(text).on_disabled_hover_text(text)
+    } else {
+        response
+    }
+}

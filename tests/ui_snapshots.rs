@@ -95,3 +95,109 @@ fn rendered_app_scenes() {
     );
     save("confirmation-ru", confirm);
 }
+
+#[test]
+#[ignore = "manual visual QA requiring a headless wgpu renderer"]
+fn p1_theme_scenes() {
+    use opcda_egui::i18n::{Tr, tr};
+    use opcda_egui::settings::Theme;
+    let session = SessionId::new(1).unwrap();
+    std::fs::create_dir_all("docs/screenshots/p1").unwrap();
+    for (language, lang) in [("ru", Lang::Ru), ("en", Lang::En), ("zh", Lang::Zh)] {
+        for (name, theme) in [
+            ("light", Theme::Light),
+            ("dark", Theme::Dark),
+            ("system", Theme::System),
+        ] {
+            let mut app = base(lang);
+            app.settings.view.options.theme = theme;
+            app.seed_session(session, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+            let selected = app.seed_row(session, "ns=2;s=Level", "Level", Value::F64(21.5));
+            app.seed_row(session, "ns=2;s=Pressure", "Pressure", Value::F64(7.25));
+            app.selected_rows.insert(selected);
+            app.journal.info("Connected to sample server");
+            app.journal.warn("Sample warning");
+            app.journal.error("Sample error");
+            let mut h = Harness::builder()
+                .with_size([1200.0, 700.0])
+                .with_accessibility_check(false)
+                .with_render_cursor(false)
+                .with_context_setup(|ctx| {
+                    assert!(opcda_egui::app::install_fonts(ctx).is_some());
+                })
+                .build_ui_state(|ui, app: &mut App| app.update(ui), app);
+            h.input_mut().system_theme = Some(egui::Theme::Light);
+            h.run_steps(8);
+            h.get_by_label(tr(lang, Tr::ThemeTitle)).click();
+            h.run_steps(4);
+            h.key_press(egui::Key::ArrowDown);
+            h.run_steps(3);
+            assert!(h.ctx.memory(|memory| memory.focused()).is_some());
+            let hover = h.get_by_label(tr(lang, Tr::ThemeDark)).rect().center();
+            h.event(egui::Event::PointerMoved(hover));
+            h.run_steps(3);
+            h.render()
+                .unwrap()
+                .save(format!("docs/screenshots/p1/{name}-{language}.png"))
+                .unwrap();
+        }
+    }
+}
+
+#[test]
+#[ignore = "manual visual QA requiring a headless wgpu renderer"]
+fn p1_narrow_scene() {
+    use opcda_egui::i18n::{Tr, tr};
+    let mut h = Harness::builder()
+        .with_size([480.0, 520.0])
+        .with_accessibility_check(false)
+        .with_render_cursor(false)
+        .with_context_setup(|ctx| {
+            assert!(opcda_egui::app::install_fonts(ctx).is_some());
+        })
+        .build_ui_state(|ui, app: &mut App| app.update(ui), base(Lang::Ru));
+    h.run_steps(8);
+    h.get_by_label(tr(Lang::Ru, Tr::ThemeTitle)).click();
+    h.run_steps(4);
+    std::fs::create_dir_all("docs/screenshots/p1").unwrap();
+    h.render()
+        .unwrap()
+        .save("docs/screenshots/p1/narrow-ru.png")
+        .unwrap();
+}
+
+#[test]
+#[ignore = "manual visual QA requiring a headless wgpu renderer"]
+fn p1_focus_scene() {
+    let mut h = Harness::builder()
+        .with_size([1200.0, 700.0])
+        .with_accessibility_check(false)
+        .with_render_cursor(false)
+        .with_context_setup(|ctx| {
+            assert!(opcda_egui::app::install_fonts(ctx).is_some());
+        })
+        .build_ui_state(|ui, app: &mut App| app.update(ui), base(Lang::En));
+    h.run_steps(8);
+    h.get_by_label(opcda_egui::i18n::tr(
+        Lang::En,
+        opcda_egui::i18n::Tr::ThemeTitle,
+    ))
+    .click();
+    h.run_steps(3);
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(4);
+    assert!(h.ctx.memory(|memory| memory.focused()).is_some());
+    std::fs::create_dir_all("docs/screenshots/p1").unwrap();
+    h.render()
+        .unwrap()
+        .save("docs/screenshots/p1/focus-en.png")
+        .unwrap();
+}
+
+#[test]
+#[ignore = "manual visual QA requiring a headless wgpu renderer"]
+fn p2_disabled_action_scene() {
+    let mut app = base(Lang::Ru);
+    app.dialogs.about.open = true;
+    save("p2-disabled-action-ru", app);
+}

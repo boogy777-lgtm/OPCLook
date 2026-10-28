@@ -40,17 +40,20 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                 .active_session
                 .and_then(|id| app.sessions.iter().find(|s| s.id == id))
                 .map(|s| s.state);
-            // «Подключиться» is always available (first start: no sessions yet).
-            let can_connect = true;
+            // The modal/import guard also applies to the reconnect shortcut.
             let (can_disconnect, can_reconnect) = match active_state {
                 None => (false, false),
                 Some(SessionState::Connecting | SessionState::Connected) => (true, true),
                 Some(SessionState::Disconnected) => (false, true),
             };
             ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(can_connect, egui::Button::new(tr(lang, Tr::Connect)))
-                    .clicked()
+                if super::actions::action_button(
+                    app,
+                    ui,
+                    crate::app::actions::UiAction::OpenConnectDialog,
+                    egui::Button::new(tr(lang, Tr::Connect)),
+                )
+                .clicked()
                 {
                     app.toolbar_connect();
                 }
@@ -77,14 +80,16 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
             ui.label(egui::RichText::new(tr(lang, Tr::Servers)).strong());
 
             // Full-width «Добавить сервер» opens the connect dialog.
-            if ui
-                .add(
-                    egui::Button::new(tr(lang, Tr::AddServer))
-                        .min_size(egui::vec2(ui.available_width(), 0.0)),
-                )
-                .clicked()
+            let add_width = ui.available_width();
+            if super::actions::action_button(
+                app,
+                ui,
+                crate::app::actions::UiAction::OpenConnectDialog,
+                egui::Button::new(tr(lang, Tr::AddServer)).min_size(egui::vec2(add_width, 0.0)),
+            )
+            .clicked()
             {
-                app.open_connect_dialog();
+                let _ = app.execute_ui_action(crate::app::actions::UiAction::OpenConnectDialog);
             }
             ui.add_space(4.0);
 

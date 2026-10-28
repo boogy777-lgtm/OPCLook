@@ -2688,9 +2688,13 @@ fn reconnect_connected_resubscribes_rows_requests_browse_and_read() {
     );
     assert_eq!(app.rows().len(), 2);
 
-    // Server comes back.
-    app.on_event_for_test_at(
+    // Server comes back in response to a real reconnect request.
+    app.record_dispatches_for_test();
+    app.reconnect_session(sid(1));
+    let request = *app.pending_request_ids_for_test(sid(1)).last().unwrap();
+    app.on_event_for_test_with_request(
         sid(1),
+        request,
         opcda_egui::bff::model::EventKind::Connected {
             endpoint: EndpointSpec::da("", "Srv.Test"),
             info: opcda_egui::bff::model::BackendMsg::raw("подключено"),
@@ -2855,8 +2859,12 @@ fn ua_reconnect_resubscribes_rows_and_resets_subscription_flag() {
     // Server returns: a fresh subscription must be re-established.
     let mut endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
     endpoint.ua_session_timeout = Some(123_000);
-    app.on_event_for_test_at(
+    app.record_dispatches_for_test();
+    app.reconnect_session(sid(1));
+    let request = *app.pending_request_ids_for_test(sid(1)).last().unwrap();
+    app.on_event_for_test_with_request(
         sid(1),
+        request,
         EventKind::Connected {
             endpoint,
             info: opcda_egui::bff::model::BackendMsg::raw("подключено"),
@@ -2955,6 +2963,9 @@ fn reconnect_attempts_cap_stops_the_loop_and_shows_exhausted() {
     app.settings.view.options.auto_reconnect = true;
     app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     app.activate_session(sid(1));
+    app.record_dispatches_for_test();
+    app.reconnect_session(sid(1));
+    let connect = *app.pending_request_ids_for_test(sid(1)).last().unwrap();
     // The twentieth automatic Connect is in flight; its failure exhausts the cap.
     {
         let view = app.sessions.iter_mut().find(|s| s.id == sid(1)).unwrap();
@@ -2964,8 +2975,9 @@ fn reconnect_attempts_cap_stops_the_loop_and_shows_exhausted() {
             attempt: 20,
         };
     }
-    app.on_event_for_test_at(
+    app.on_event_for_test_with_request(
         sid(1),
+        connect,
         EventKind::Error {
             operation: opcda_egui::bff::model::Operation::Connect,
             message: opcda_egui::bff::model::BackendMsg::raw("опять"),
@@ -5192,4 +5204,396 @@ fn ua_result_tree_rebuilds_after_same_length_replacement() {
     h.get_by_label_contains("opc.tcp://127.0.0.1:4841").click();
     h.run_steps(3);
     assert_eq!(h.state().dialogs.connect.ua_url, "opc.tcp://127.0.0.1:4841");
+}
+
+#[test]
+fn p2_open_connect_menu_button_and_keyboard_are_equivalent() {
+    use opcda_egui::app::{DaHit, actions::UiAction};
+    use opcda_egui::bff::model::ServerEntry;
+    let mut outcomes = Vec::new();
+    for source in 0..6 {
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        app.record_dispatches_for_test();
+        app.dialogs.connect.da_servers.push(DaHit {
+            server: ServerEntry {
+                id: "Cached.Server".into(),
+                description: "Cached".into(),
+            },
+            host: "localhost".into(),
+        });
+        app.dialogs.connect.da_host = "old host".into();
+        assert!(
+            app.ui_action_unavailable(UiAction::OpenConnectDialog)
+                .is_none()
+        );
+        assert!(app.dispatched_for_test().is_empty());
+        let mut h = harness(app);
+        h.run_steps(3);
+        match source {
+            0 => {
+                h.get_by_label("Добавить сервер").click();
+            }
+            1 => {
+                h.get_by_label("OPC клиент").click();
+                h.run_steps(3);
+                h.get_by_label("Подключиться... Ctrl+N").click();
+            }
+            2 => h.key_press_modifiers(Modifiers::COMMAND, Key::N),
+            3 => h.get_by_label("+").click(),
+            4 => h.get_by_label("Подключиться (Ctrl+N)").click(),
+            _ => h.get_by_label("Подключиться").click(),
+        }
+        h.run_steps(3);
+        let d = &h.state().dialogs.connect;
+        outcomes.push((
+            d.open,
+            d.da_host.clone(),
+            d.da_servers.len(),
+            h.state().dispatched_for_test().len(),
+        ));
+    }
+    assert_eq!(outcomes, vec![(true, String::new(), 1, 0); 6]);
+}
+
+#[test]
+fn p2_availability_is_pure_and_execution_rechecks_modal_state() {
+    use opcda_egui::app::actions::UiAction;
+    use opcda_egui::i18n::Tr;
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.record_dispatches_for_test();
+    app.dialogs.about.open = true;
+    app.dialogs.connect.da_host = "keep".into();
+    for _ in 0..3 {
+        assert_eq!(
+            app.ui_action_unavailable(UiAction::OpenConnectDialog),
+            Some(Tr::ActionModalOpen)
+        );
+    }
+    assert_eq!(
+        app.execute_ui_action(UiAction::OpenConnectDialog),
+        Err(Tr::ActionModalOpen)
+    );
+    assert_eq!(app.dialogs.connect.da_host, "keep");
+    assert!(!app.dialogs.connect.open);
+    assert!(app.dispatched_for_test().is_empty());
+    let mut h = harness(app);
+    h.run_steps(3);
+    assert!(!widget_enabled(&h, "Добавить сервер"));
+    assert!(!widget_enabled(&h, "Подключиться"));
+    assert!(!widget_enabled(&h, "+"));
+    assert!(!widget_enabled(&h, "Подключиться (Ctrl+N)"));
+    use egui_kittest::kittest::NodeT;
+    assert_eq!(
+        h.get_by_label("Добавить сервер")
+            .accesskit_node()
+            .description()
+            .as_deref(),
+        Some("Сначала закройте открытый диалог")
+    );
+    h.key_press_modifiers(Modifiers::COMMAND, Key::N);
+    h.run_steps(3);
+    assert!(!h.state().dialogs.connect.open);
+}
+
+#[test]
+fn p2_write_enter_repeat_never_confirms_or_repeats_a_write() {
+    for confirm in [false, true] {
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        app.record_dispatches_for_test();
+        app.settings.view.options.confirm_write = confirm;
+        seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+        app.select_only(0);
+        app.open_write_dialog(Vec::new());
+        let mut h = harness(app);
+        h.run_steps(3);
+        let event = |pressed| egui::Event::Key {
+            key: Key::Enter,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+        h.event(event(true));
+        h.run_steps(1);
+        for _ in 0..3 {
+            h.event(event(true));
+            h.run_steps(1);
+        }
+        let writes = |app: &App| {
+            app.dispatched_for_test()
+                .iter()
+                .filter(|command| matches!(command.kind, CommandKind::Write { .. }))
+                .count()
+        };
+        if confirm {
+            assert!(h.state().dialogs.confirm.is_some());
+            assert_eq!(writes(h.state()), 0);
+            h.event(event(false));
+            h.run_steps(1);
+            h.event(event(true));
+            h.run_steps(1);
+        }
+        for _ in 0..3 {
+            h.event(event(true));
+            h.run_steps(1);
+        }
+        h.run_steps(5);
+        assert_eq!(writes(h.state()), 1);
+    }
+}
+
+#[test]
+fn p2_write_confirmation_cancel_and_connection_change_do_not_write() {
+    for disconnect in [false, true] {
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        app.record_dispatches_for_test();
+        app.settings.view.options.confirm_write = true;
+        seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+        app.select_only(0);
+        app.open_write_dialog(Vec::new());
+        let mut h = harness(app);
+        h.run_steps(3);
+        h.get_by_label("Записать").click();
+        h.run_steps(3);
+        assert!(h.state().dialogs.confirm.is_some());
+        assert!(!widget_enabled(&h, "Отмена"));
+        if disconnect {
+            h.state_mut().on_event_for_test_at(
+                sid(1),
+                EventKind::Disconnected {
+                    reason: opcda_egui::bff::model::BackendMsg::raw("test disconnect"),
+                },
+            );
+            h.run_steps(2);
+            assert!(h.state().dialogs.confirm.is_none());
+            assert!(h.state().dialogs.write.error.is_some());
+            h.state_mut().reconnect_session(sid(1));
+            let request = *h
+                .state()
+                .pending_request_ids_for_test(sid(1))
+                .last()
+                .unwrap();
+            h.state_mut().on_event_for_test_with_request(
+                sid(1),
+                request,
+                EventKind::Connected {
+                    endpoint: EndpointSpec::da("", "Srv.Test"),
+                    info: opcda_egui::bff::model::BackendMsg::raw("reconnected"),
+                },
+            );
+            assert_eq!(h.state().sessions[0].state, SessionState::Connected);
+            let message = opcda_egui::i18n::tr(
+                opcda_egui::i18n::Lang::Ru,
+                opcda_egui::i18n::Tr::ActionWriteConnectionChanged,
+            );
+            assert!(journal_text(h.state()).contains(message));
+            h.state_mut().confirm_yes();
+        } else {
+            h.get_by_label("Нет").click();
+        }
+        h.run_steps(3);
+        assert!(
+            !h.state()
+                .dispatched_for_test()
+                .iter()
+                .any(|c| matches!(c.kind, CommandKind::Write { .. }))
+        );
+    }
+}
+
+#[test]
+fn p2_write_pending_confirmation_does_not_survive_reconnect() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.record_dispatches_for_test();
+    app.settings.view.options.confirm_write = true;
+    let endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+    app.seed_session(sid(1), endpoint.clone());
+    app.seed_writable_row(sid(1), "ns=2;s=x", "x", Value::I64(42));
+    app.select_only(0);
+    app.open_write_dialog(Vec::new());
+    app.apply_write();
+    assert!(app.dialogs.confirm.is_some());
+    app.reconnect_session(sid(1));
+    assert!(app.dialogs.confirm.is_none());
+    assert!(journal_text(&app).contains(opcda_egui::i18n::tr(
+        opcda_egui::i18n::Lang::Ru,
+        opcda_egui::i18n::Tr::ActionWriteConnectionChanged
+    )));
+    let request = app
+        .dispatched_for_test()
+        .iter()
+        .rev()
+        .find_map(|command| {
+            if matches!(command.kind, CommandKind::Connect { .. }) {
+                command.request_id
+            } else {
+                None
+            }
+        })
+        .expect("reconnect dispatched");
+    app.on_event_for_test_with_request(
+        sid(1),
+        request,
+        EventKind::Connected {
+            endpoint,
+            info: opcda_egui::bff::model::BackendMsg::raw("reconnected"),
+        },
+    );
+    assert_eq!(app.sessions[0].state, SessionState::Connected);
+    app.confirm_yes();
+    assert!(
+        !app.dispatched_for_test()
+            .iter()
+            .any(|c| matches!(c.kind, CommandKind::Write { .. }))
+    );
+}
+
+#[test]
+fn p2_gui_rejected_write_diagnostic_does_not_expose_value() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.record_dispatches_for_test();
+    app.settings.view.options.confirm_write = false;
+    seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+    app.select_only(0);
+    app.open_write_dialog(Vec::new());
+    app.dialogs.write.type_index = 6;
+    app.dialogs.write.text = "write-secret-canary".into();
+    app.on_event_for_test_at(
+        sid(1),
+        EventKind::Disconnected {
+            reason: opcda_egui::bff::model::BackendMsg::raw("test disconnect"),
+        },
+    );
+    app.apply_write();
+    assert_eq!(
+        app.status,
+        opcda_egui::i18n::tr(
+            opcda_egui::i18n::Lang::Ru,
+            opcda_egui::i18n::Tr::ActionSessionNotConnected
+        )
+    );
+    assert!(
+        !app.dispatched_for_test()
+            .iter()
+            .any(|c| matches!(c.kind, CommandKind::Write { .. }))
+    );
+    assert!(!app.status.contains("write-secret-canary"));
+    assert!(!journal_text(&app).contains("write-secret-canary"));
+}
+
+#[test]
+fn p2_disconnected_write_is_disabled_before_confirmation() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.record_dispatches_for_test();
+    app.settings.view.options.confirm_write = true;
+    seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+    app.select_only(0);
+    app.open_write_dialog(Vec::new());
+    app.on_event_for_test_at(
+        sid(1),
+        EventKind::Disconnected {
+            reason: opcda_egui::bff::model::BackendMsg::raw("disconnected"),
+        },
+    );
+    let mut h = harness(app);
+    h.run_steps(3);
+    assert!(!widget_enabled(&h, "Записать"));
+    assert_eq!(
+        h.get_by_label("Записать")
+            .accesskit_node()
+            .description()
+            .as_deref(),
+        Some("Сессия не подключена")
+    );
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().dialogs.confirm.is_none());
+    h.state_mut().apply_write();
+    assert!(h.state().dialogs.confirm.is_none());
+    assert_eq!(h.state().status, "Сессия не подключена");
+    assert!(
+        !h.state()
+            .dispatched_for_test()
+            .iter()
+            .any(|c| matches!(c.kind, CommandKind::Write { .. }))
+    );
+}
+
+#[test]
+fn p2_session_diagnostic_redacts_known_credentials() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    let mut endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+    endpoint.user = "p2-username".into();
+    endpoint.password = "p2-password-secret".into();
+    app.seed_session(sid(1), endpoint);
+    app.on_event_for_test_at(
+        sid(1),
+        EventKind::Log {
+            message: opcda_egui::bff::model::BackendMsg::raw(
+                "p2-username p2-password-secret server failure",
+            ),
+        },
+    );
+    let log = journal_text(&app);
+    assert!(log.contains("server failure"));
+    assert!(!log.contains("p2-username"));
+    assert!(!log.contains("p2-password-secret"));
+}
+
+#[test]
+fn p2_space_repeat_on_confirmation_button_does_not_write() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.record_dispatches_for_test();
+    app.settings.view.options.confirm_write = true;
+    seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+    app.select_only(0);
+    app.open_write_dialog(Vec::new());
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.get_by_label("Записать").focus();
+    h.run_steps(1);
+    let key = |pressed| egui::Event::Key {
+        key: Key::Space,
+        physical_key: None,
+        pressed,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    };
+    h.event(key(true));
+    h.run_steps(2);
+    assert!(h.state().dialogs.confirm.is_some());
+    h.get_by_label("Да").focus();
+    h.run_steps(1);
+    for _ in 0..3 {
+        h.event(key(true));
+        h.run_steps(1);
+    }
+    assert!(h.state().dialogs.confirm.is_some());
+    assert!(
+        !h.state()
+            .dispatched_for_test()
+            .iter()
+            .any(|c| matches!(c.kind, CommandKind::Write { .. }))
+    );
+    h.event(key(false));
+    h.run_steps(1);
+    h.event(key(true));
+    h.run_steps(2);
+    assert_eq!(
+        h.state()
+            .dispatched_for_test()
+            .iter()
+            .filter(|c| matches!(c.kind, CommandKind::Write { .. }))
+            .count(),
+        1
+    );
 }

@@ -21,6 +21,7 @@ use opclook_engine::{DispatchError, Engine};
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
+pub mod actions;
 mod dialogs;
 mod events;
 mod present;
@@ -683,12 +684,47 @@ impl App {
     ) -> Option<RequestId> {
         let owner = owner.into();
         let operation = kind.operation();
-        let dispatch = self.engine.send(owner, protocol, kind, ctx);
+        let dispatch = match (owner, kind) {
+            (
+                Owner::Session(session),
+                CommandKind::Browse {
+                    node_id,
+                    filter,
+                    view_id,
+                },
+            ) => self.engine.execute_action(
+                opclook_contract::actions::DomainAction::Browse {
+                    session,
+                    protocol,
+                    node_id,
+                    filter,
+                    view_id,
+                },
+                ctx,
+            ),
+            (Owner::Session(session), CommandKind::Write { request }) => {
+                self.engine.execute_action(
+                    opclook_contract::actions::DomainAction::Write {
+                        session,
+                        protocol,
+                        request,
+                    },
+                    ctx,
+                )
+            }
+            (owner, kind) => self.engine.send(owner, protocol, kind, ctx),
+        };
         let (request_id, failure) = match dispatch {
             Ok(id) => (id, None),
             Err(DispatchError::Exhausted) => {
                 self.journal.error_l(Tr::RequestIdsExhausted, &[]);
                 self.status = tr(self.lang(), Tr::RequestIdsExhausted).to_string();
+                return None;
+            }
+            Err(DispatchError::ActionUnavailable(reason)) => {
+                let key = actions::action_unavailable_tr(reason);
+                self.journal.error_l(key, &[]);
+                self.status = tr(self.lang(), key).to_string();
                 return None;
             }
             Err(DispatchError::SessionLimit) => {
@@ -778,10 +814,22 @@ impl App {
         }
     }
 
-    /// Forget every outstanding request of `session`. Called when a new
-    /// connect/disconnect lifecycle starts so stale replies from the previous
-    /// link are rejected by `on_event`.
+    /// Cancel a confirmation bound to a connection that is being replaced.
+    fn cancel_write_confirmation_for_session(&mut self, session: SessionId) {
+        let cancel = self.dialogs.confirm.as_ref().is_some_and(|request|
+            matches!(&request.action, ConfirmAction::Write(pending) if pending.session == session));
+        if cancel {
+            self.dialogs.confirm = None;
+            let message = tr(self.lang(), Tr::ActionWriteConnectionChanged).to_string();
+            self.dialogs.write.error = Some(message.clone());
+            self.status.clone_from(&message);
+            self.journal.error(message);
+        }
+    }
+
+    /// Forget requests from the preceding connect/disconnect lifecycle.
     pub(super) fn clear_pending_requests(&mut self, session: SessionId) {
+        self.cancel_write_confirmation_for_session(session);
         let lost_writes = self
             .engine
             .invalidate_session_requests(session)
