@@ -23,13 +23,17 @@ pub(super) fn confirm_dialog(app: &mut App, ui: &mut egui::Ui, was_open: bool) {
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(&ctx, |ui| {
             dialog_spacing(ui);
-            let enter =
-                was_open && ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.is_none());
+            let enter = was_open
+                && crate::ui::key_pressed_once(ui.ctx(), egui::Key::Enter)
+                && ui.input(|i| i.modifiers.is_none());
             let esc = was_open && ui.input(|i| i.key_pressed(egui::Key::Escape));
             ui.label(text);
             ui.separator();
             ui.horizontal(|ui| {
-                if ui.button(tr(lang, Tr::Yes)).clicked() {
+                if ui.button(tr(lang, Tr::Yes)).clicked()
+                    && !crate::ui::key_repeat(ui.ctx(), egui::Key::Enter)
+                    && !crate::ui::key_repeat(ui.ctx(), egui::Key::Space)
+                {
                     yes = true;
                 }
                 if ui.button(tr(lang, Tr::No)).clicked() {

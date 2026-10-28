@@ -224,11 +224,21 @@ pub enum Due {
 pub enum DispatchError {
     Exhausted,
     SessionLimit,
+    ActionUnavailable(ActionUnavailable),
     Closed {
         request_id: RequestId,
         cause: SendError,
     },
 }
+/// A stable, localizable explanation of why a domain action cannot run.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ActionUnavailable {
+    RequestIdsExhausted,
+    SessionMissing,
+    SessionNotConnected,
+    ProtocolMismatch,
+}
+
 pub struct RouteOptions {
     pub adapter: Option<AdapterInfo>,
     pub local_addresses: Vec<IpAddr>,
@@ -532,6 +542,94 @@ impl<C> Engine<C> {
     pub fn has_request_capacity(&self) -> bool {
         self.next.is_some()
     }
+    /// A pure availability check. It neither allocates request IDs nor dispatches.
+    pub fn action_unavailable(
+        &self,
+        action: &opclook_contract::actions::DomainAction,
+    ) -> Option<ActionUnavailable> {
+        if !self.has_request_capacity() {
+            return Some(ActionUnavailable::RequestIdsExhausted);
+        }
+        let (session, protocol, write) = match action {
+            opclook_contract::actions::DomainAction::Browse {
+                session, protocol, ..
+            } => (*session, *protocol, false),
+            opclook_contract::actions::DomainAction::Write {
+                session, protocol, ..
+            } => (*session, *protocol, true),
+        };
+        self.session_action_unavailable(session, protocol, write)
+    }
+
+    pub fn write_session_unavailable(
+        &self,
+        session: SessionId,
+        protocol: Protocol,
+    ) -> Option<ActionUnavailable> {
+        if !self.has_request_capacity() {
+            return Some(ActionUnavailable::RequestIdsExhausted);
+        }
+        self.session_action_unavailable(session, protocol, true)
+    }
+
+    fn session_action_unavailable(
+        &self,
+        session: SessionId,
+        protocol: Protocol,
+        write: bool,
+    ) -> Option<ActionUnavailable> {
+        let Some(runtime) = self.sessions.get(&session) else {
+            return Some(ActionUnavailable::SessionMissing);
+        };
+        if runtime.endpoint.protocol != protocol {
+            return Some(ActionUnavailable::ProtocolMismatch);
+        }
+        // Browses can be queued while connecting; writes cannot.
+        if runtime.state == SessionState::Disconnected
+            || (write && runtime.state != SessionState::Connected)
+        {
+            return Some(ActionUnavailable::SessionNotConnected);
+        }
+        None
+    }
+
+    /// Execute a domain action through the existing request-correlation path.
+    pub fn execute_action(
+        &mut self,
+        action: opclook_contract::actions::DomainAction,
+        ctx: C,
+    ) -> Result<RequestId, DispatchError> {
+        if let Some(reason) = self.action_unavailable(&action) {
+            return Err(match reason {
+                ActionUnavailable::RequestIdsExhausted => DispatchError::Exhausted,
+                reason => DispatchError::ActionUnavailable(reason),
+            });
+        }
+        match action {
+            opclook_contract::actions::DomainAction::Browse {
+                session,
+                protocol,
+                node_id,
+                filter,
+                view_id,
+            } => self.send(
+                session,
+                protocol,
+                CommandKind::Browse {
+                    node_id,
+                    filter,
+                    view_id,
+                },
+                ctx,
+            ),
+            opclook_contract::actions::DomainAction::Write {
+                session,
+                protocol,
+                request,
+            } => self.send(session, protocol, CommandKind::Write { request }, ctx),
+        }
+    }
+
     pub fn send(
         &mut self,
         owner: impl Into<Owner>,
@@ -540,6 +638,15 @@ impl<C> Engine<C> {
         ctx: C,
     ) -> Result<RequestId, DispatchError> {
         let owner = owner.into();
+        if matches!(&kind, CommandKind::Write { .. }) {
+            let reason = match owner {
+                Owner::Session(session) => self.session_action_unavailable(session, protocol, true),
+                Owner::Discovery => Some(ActionUnavailable::SessionMissing),
+            };
+            if let Some(reason) = reason {
+                return Err(DispatchError::ActionUnavailable(reason));
+            }
+        }
         let session = match owner {
             Owner::Session(session) => Some(session),
             Owner::Discovery => None,
@@ -1190,6 +1297,127 @@ mod tests {
         RequestId::new(n).unwrap()
     }
     use opclook_contract::model::BackendMsg;
+    #[test]
+    fn browse_action_availability_is_pure_and_execution_correlates_request() {
+        use opclook_contract::actions::DomainAction;
+        use opclook_contract::model::NodeClassFilter;
+        let mut engine = Engine::<()>::default();
+        engine.test_skip_dispatch = true;
+        let action = DomainAction::Browse {
+            session: sid(1),
+            protocol: Protocol::OpcUa,
+            node_id: "ns=2;s=Plant".into(),
+            filter: NodeClassFilter::Variables,
+            view_id: None,
+        };
+        assert_eq!(
+            engine.action_unavailable(&action),
+            Some(ActionUnavailable::SessionMissing)
+        );
+        assert!(matches!(
+            engine.execute_action(action.clone(), ()),
+            Err(DispatchError::ActionUnavailable(
+                ActionUnavailable::SessionMissing
+            ))
+        ));
+        let mut runtime =
+            SessionRuntime::new(EndpointSpec::ua("opc.tcp://localhost:4840"), Instant::now());
+        engine.sessions.insert(sid(1), runtime.clone());
+        assert_eq!(engine.action_unavailable(&action), None);
+        runtime.state = SessionState::Disconnected;
+        engine.sessions.insert(sid(1), runtime.clone());
+        assert_eq!(
+            engine.action_unavailable(&action),
+            Some(ActionUnavailable::SessionNotConnected)
+        );
+        assert!(matches!(
+            engine.execute_action(action.clone(), ()),
+            Err(DispatchError::ActionUnavailable(
+                ActionUnavailable::SessionNotConnected
+            ))
+        ));
+        runtime.state = SessionState::Connected;
+        runtime.endpoint = EndpointSpec::da("", "test");
+        engine.sessions.insert(sid(1), runtime.clone());
+        assert_eq!(
+            engine.action_unavailable(&action),
+            Some(ActionUnavailable::ProtocolMismatch)
+        );
+        assert!(matches!(
+            engine.execute_action(action.clone(), ()),
+            Err(DispatchError::ActionUnavailable(
+                ActionUnavailable::ProtocolMismatch
+            ))
+        ));
+        runtime.endpoint = EndpointSpec::ua("opc.tcp://localhost:4840");
+        engine.sessions.insert(sid(1), runtime);
+        for _ in 0..3 {
+            assert_eq!(engine.action_unavailable(&action), None);
+        }
+        assert!(engine.requests.is_empty());
+        assert_eq!(engine.next, Some(RequestId::FIRST));
+        let request = engine.execute_action(action.clone(), ()).unwrap();
+        assert_eq!(request, RequestId::FIRST);
+        assert_eq!(
+            engine.requests.get(&(owner(1), request)).unwrap().operation,
+            Operation::Browse
+        );
+        engine.next = None;
+        assert_eq!(
+            engine.action_unavailable(&action),
+            Some(ActionUnavailable::RequestIdsExhausted)
+        );
+        assert!(matches!(
+            engine.execute_action(action, ()),
+            Err(DispatchError::Exhausted)
+        ));
+        assert_eq!(engine.requests.len(), 1);
+    }
+    #[test]
+    fn write_during_connecting_is_rejected_without_allocating_or_dispatching() {
+        use opclook_contract::actions::DomainAction;
+        use opclook_contract::model::{Value, WriteRequest};
+        let mut engine = Engine::<()>::default();
+        engine.test_skip_dispatch = true;
+        engine.sessions.insert(
+            sid(1),
+            SessionRuntime::new(EndpointSpec::ua("opc.tcp://localhost:4840"), Instant::now()),
+        );
+        let action = DomainAction::Write {
+            session: sid(1),
+            protocol: Protocol::OpcUa,
+            request: WriteRequest {
+                key: ItemKey::FIRST,
+                value: Value::I64(7),
+                type_hint: None,
+            },
+        };
+        assert_eq!(
+            engine.action_unavailable(&action),
+            Some(ActionUnavailable::SessionNotConnected)
+        );
+        assert!(matches!(
+            engine.execute_action(action, ()),
+            Err(DispatchError::ActionUnavailable(
+                ActionUnavailable::SessionNotConnected
+            ))
+        ));
+        assert_eq!(engine.next, Some(RequestId::FIRST));
+        assert!(engine.requests.is_empty());
+        let request = WriteRequest {
+            key: ItemKey::FIRST,
+            value: Value::I64(7),
+            type_hint: None,
+        };
+        assert!(matches!(
+            engine.send(sid(1), Protocol::OpcUa, CommandKind::Write { request }, ()),
+            Err(DispatchError::ActionUnavailable(
+                ActionUnavailable::SessionNotConnected
+            ))
+        ));
+        assert_eq!(engine.next, Some(RequestId::FIRST));
+        assert!(engine.requests.is_empty());
+    }
     #[test]
     fn discovery_and_session_correlation_are_isolated() {
         let mut engine = Engine::<()>::default();

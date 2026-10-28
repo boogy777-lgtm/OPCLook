@@ -24,7 +24,7 @@ pub(super) fn keyboard_prepass(app: &mut App, ui: &mut egui::Ui) {
     };
 
     if take(ctrl, egui::Key::N) {
-        app.open_connect_dialog();
+        let _ = app.execute_ui_action(crate::app::actions::UiAction::OpenConnectDialog);
         return;
     }
     if take(ctrl_shift, egui::Key::Tab) || take(ctrl, egui::Key::PageUp) {
@@ -175,7 +175,7 @@ pub(super) fn handle_tree_keys(app: &mut App, ui: &mut egui::Ui) {
     if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
         toggle_tree_item(app, session, focus_id);
     }
-    if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+    if crate::ui::key_pressed_once(ctx, egui::Key::Enter) {
         tree_enter(app, session, focus_id);
     }
     if ctx.input(|i| i.key_pressed(egui::Key::F5)) {

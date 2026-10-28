@@ -460,6 +460,7 @@ impl App {
         view.read_in_flight = false;
         let protocol = endpoint.protocol;
         // Old replies belong to the previous link and must not mutate this one.
+        self.cancel_write_confirmation_for_session(session);
         if let Err(cause) = self.engine.disconnect_untracked(session, protocol) {
             let message = opclook_locale::send_error_text(self.lang(), cause).to_string();
             self.engine.manual_disconnect(session);
@@ -501,11 +502,17 @@ impl App {
             .info_l(Tr::AutoReconnectAtt, &[&attempt.to_string()]);
     }
 
-    /// The toolbar «Подключиться» (A7). Always available: with a disconnected
+    /// The toolbar «Подключиться» (A7). With a disconnected
     /// active session it reconnects that session (the dialog would only make the
     /// user retype what is already known); in every other case, including the
     /// first start with no sessions, it opens the connect dialog.
     pub fn toolbar_connect(&mut self) {
+        if self
+            .ui_action_unavailable(super::actions::UiAction::OpenConnectDialog)
+            .is_some()
+        {
+            return;
+        }
         let disconnected = self
             .active_session
             .and_then(|id| self.sessions.iter().find(|s| s.id == id))
@@ -513,7 +520,9 @@ impl App {
             .map(|s| s.id);
         match disconnected {
             Some(id) => self.reconnect_session(id),
-            None => self.open_connect_dialog(),
+            None => {
+                let _ = self.execute_ui_action(super::actions::UiAction::OpenConnectDialog);
+            }
         }
     }
 
@@ -537,6 +546,7 @@ impl App {
         view.reconnect = ReconnectState::Idle;
         view.read_in_flight = false;
         let protocol = endpoint.protocol;
+        self.cancel_write_confirmation_for_session(session);
         if let Err(cause) = self.engine.disconnect_untracked(session, protocol) {
             let message = opclook_locale::send_error_text(self.lang(), cause).to_string();
             self.engine.manual_disconnect(session);

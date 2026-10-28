@@ -193,3 +193,11 @@ fn p1_focus_scene() {
         .save("docs/screenshots/p1/focus-en.png")
         .unwrap();
 }
+
+#[test]
+#[ignore = "manual visual QA requiring a headless wgpu renderer"]
+fn p2_disabled_action_scene() {
+    let mut app = base(Lang::Ru);
+    app.dialogs.about.open = true;
+    save("p2-disabled-action-ru", app);
+}

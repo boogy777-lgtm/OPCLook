@@ -9,6 +9,7 @@ const EMPTY_PROMPT_HEIGHT: f32 = 110.0;
 /// the arrows stay with the table / tree.
 pub(super) fn empty_table_prompt(
     ui: &mut egui::Ui,
+    app: &crate::app::App,
     lang: crate::i18n::Lang,
     area: egui::Rect,
     has_session: bool,
@@ -42,7 +43,10 @@ pub(super) fn empty_table_prompt(
             );
             if !has_session {
                 ui.add_space(12.0);
-                let button = ui.add(
+                let button = crate::ui::actions::action_button(
+                    app,
+                    ui,
+                    crate::app::actions::UiAction::OpenConnectDialog,
                     egui::Button::new(tr(lang, Tr::TableEmptyConnect))
                         .min_size(egui::vec2(180.0, 28.0)),
                 );

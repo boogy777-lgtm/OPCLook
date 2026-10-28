@@ -220,15 +220,55 @@ fn send(
     protocol: Protocol,
     kind: CommandKind,
 ) -> Result<opclook_contract::model::RequestId, String> {
-    engine
-        .send(SessionId::FIRST, protocol, kind, ())
-        .map_err(|error| match error {
-            DispatchError::Exhausted => "request identifiers exhausted".into(),
-            DispatchError::SessionLimit => "UA session limit reached".into(),
-            DispatchError::Closed { cause, .. } => {
-                opclook_locale::send_error_text(Lang::En, cause).into()
-            }
-        })
+    let dispatch = match kind {
+        CommandKind::Browse {
+            node_id,
+            filter,
+            view_id,
+        } => engine.execute_action(
+            opclook_contract::actions::DomainAction::Browse {
+                session: SessionId::FIRST,
+                protocol,
+                node_id,
+                filter,
+                view_id,
+            },
+            (),
+        ),
+        CommandKind::Write { request } => engine.execute_action(
+            opclook_contract::actions::DomainAction::Write {
+                session: SessionId::FIRST,
+                protocol,
+                request,
+            },
+            (),
+        ),
+        kind => engine.send(SessionId::FIRST, protocol, kind, ()),
+    };
+    dispatch.map_err(|error| match error {
+        DispatchError::Exhausted => "request identifiers exhausted".into(),
+        DispatchError::SessionLimit => "UA session limit reached".into(),
+        DispatchError::ActionUnavailable(reason) => {
+            let key = match reason {
+                opclook_engine::ActionUnavailable::RequestIdsExhausted => {
+                    opclook_locale::Tr::RequestIdsExhausted
+                }
+                opclook_engine::ActionUnavailable::SessionMissing => {
+                    opclook_locale::Tr::ActionSessionMissing
+                }
+                opclook_engine::ActionUnavailable::SessionNotConnected => {
+                    opclook_locale::Tr::ActionSessionNotConnected
+                }
+                opclook_engine::ActionUnavailable::ProtocolMismatch => {
+                    opclook_locale::Tr::ActionProtocolMismatch
+                }
+            };
+            opclook_locale::tr(Lang::En, key).into()
+        }
+        DispatchError::Closed { cause, .. } => {
+            opclook_locale::send_error_text(Lang::En, cause).into()
+        }
+    })
 }
 fn interrupt_receiver() -> Result<Receiver<Result<(), String>>, String> {
     let (tx, rx) = mpsc::channel();
@@ -707,6 +747,39 @@ fn main() {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn browse_reports_unavailable_session_before_dispatch() {
+        let mut engine = opclook_engine::Engine::<()>::default();
+        let result = super::send(
+            &mut engine,
+            opclook_contract::model::Protocol::OpcUa,
+            opclook_contract::model::CommandKind::Browse {
+                node_id: String::new(),
+                filter: opclook_contract::model::NodeClassFilter::All,
+                view_id: None,
+            },
+        );
+        assert_eq!(result.unwrap_err(), "Session not found");
+    }
+    #[test]
+    fn unavailable_write_diagnostic_does_not_expose_value() {
+        let mut engine = opclook_engine::Engine::<()>::default();
+        let secret = "write-secret-canary";
+        let error = super::send(
+            &mut engine,
+            opclook_contract::model::Protocol::OpcUa,
+            opclook_contract::model::CommandKind::Write {
+                request: opclook_contract::model::WriteRequest {
+                    key: opclook_contract::model::ItemKey::FIRST,
+                    value: opclook_contract::model::Value::Str(secret.into()),
+                    type_hint: None,
+                },
+            },
+        )
+        .unwrap_err();
+        assert!(!error.contains(secret));
+        assert_eq!(error, "Session not found");
+    }
     #[test]
     fn interface_index_and_scope_are_nonzero_at_argument_boundary() {
         let args = [

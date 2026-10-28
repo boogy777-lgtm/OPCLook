@@ -450,7 +450,9 @@ fn add_children_disconnect_cancels_job() {
     // A disconnect during the job cancels it.
     app.disconnect_session(crate::bff::model::SessionId::new(1).unwrap());
     assert!(app.add_children.is_none(), "disconnect must cancel the job");
-    // A Disconnected event also cancels (non-triggered link loss path).
+    // Restore a live fixture before exercising a separate unsolicited link loss.
+    app.sessions[0].state = SessionState::Connected;
+    app.tick_for_test();
     app.add_selected_children();
     assert!(app.add_children.is_some());
     app.on_event_for_test_at(

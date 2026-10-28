@@ -53,3 +53,22 @@ pub(super) fn truncate_text(text: &str, max: usize) -> String {
         format!("{cut}…")
     }
 }
+
+/// True only for an initial press, never for an OS key-repeat event.
+fn key_pressed_once(ctx: &egui::Context, key: egui::Key) -> bool {
+    ctx.input(|input| {
+        input.events.iter().any(|event| {
+            matches!(event,
+        egui::Event::Key { key: event_key, pressed: true, repeat: false, .. } if *event_key == key)
+        })
+    })
+}
+
+fn key_repeat(ctx: &egui::Context, key: egui::Key) -> bool {
+    ctx.input(|input| {
+        input.events.iter().any(|event| {
+            matches!(event,
+        egui::Event::Key { key: event_key, pressed: true, repeat: true, .. } if *event_key == key)
+        })
+    })
+}

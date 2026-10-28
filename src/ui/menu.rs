@@ -18,11 +18,15 @@ pub(super) fn menu(app: &mut App, ui: &mut egui::Ui) {
                 theme_menu(app, ui, lang);
             }
             ui.menu_button(tr(lang, Tr::MenuClient), |ui| {
-                if ui
-                    .add(egui::Button::new(tr(lang, Tr::ConnectEllipsis)).shortcut_text("Ctrl+N"))
-                    .clicked()
+                if super::actions::action_button(
+                    app,
+                    ui,
+                    crate::app::actions::UiAction::OpenConnectDialog,
+                    egui::Button::new(tr(lang, Tr::ConnectEllipsis)).shortcut_text("Ctrl+N"),
+                )
+                .clicked()
                 {
-                    app.open_connect_dialog();
+                    let _ = app.execute_ui_action(crate::app::actions::UiAction::OpenConnectDialog);
                     ui.close();
                 }
                 if ui.button(tr(lang, Tr::Disconnect)).clicked() {
@@ -44,12 +48,22 @@ pub(super) fn menu(app: &mut App, ui: &mut egui::Ui) {
             });
 
             ui.menu_button(tr(lang, Tr::MenuServers), |ui| {
-                if ui
-                    .button(tr(lang, Tr::ConnectEllipsis))
-                    .on_hover_text(tr(lang, Tr::HintConnectUa))
-                    .clicked()
-                {
-                    app.open_connect_dialog();
+                let available = app
+                    .ui_action_unavailable(crate::app::actions::UiAction::OpenConnectDialog)
+                    .is_none();
+                let response = super::actions::action_button(
+                    app,
+                    ui,
+                    crate::app::actions::UiAction::OpenConnectDialog,
+                    egui::Button::new(tr(lang, Tr::ConnectEllipsis)),
+                );
+                let response = if available {
+                    response.on_hover_text(tr(lang, Tr::HintConnectUa))
+                } else {
+                    response
+                };
+                if response.clicked() {
+                    let _ = app.execute_ui_action(crate::app::actions::UiAction::OpenConnectDialog);
                     ui.close();
                 }
                 if ui.button(tr(lang, Tr::Disconnect)).clicked() {
