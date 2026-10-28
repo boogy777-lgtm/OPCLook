@@ -139,8 +139,7 @@ impl Row {
     /// the same value too).
     pub fn is_value_change(&self, new: &Value) -> bool {
         if self.pending
-            || self.quality.is_placeholder_no_data()
-            || self.quality.is_placeholder_waiting()
+            || matches!(self.quality, RowQuality::NoData(_) | RowQuality::Waiting(_))
             || self.value == Value::Empty
         {
             return false;

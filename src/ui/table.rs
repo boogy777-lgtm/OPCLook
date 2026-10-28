@@ -302,7 +302,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                             ui,
                                                             show_colors,
                                                             signal.pending,
-                                                            signal.quality.kind,
+                                                            signal.quality.kind(),
                                                         );
                                                         ui.colored_label(color, "●");
                                                     });
@@ -360,7 +360,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                             numeric,
                                                             color,
                                                         )
-                                                        .on_hover_text(&signal.quality.text);
+                                                        .on_hover_text(signal.quality.text());
                                                     });
                                                 }
                                                 ColumnId::Quality => {
@@ -370,12 +370,12 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                                 ui,
                                                                 true,
                                                                 signal.pending,
-                                                                signal.quality.kind,
+                                                                signal.quality.kind(),
                                                             )
                                                         });
                                                         quality_pill(
                                                             ui,
-                                                            &signal.quality.text,
+                                                            signal.quality.text(),
                                                             tint,
                                                         );
                                                     });

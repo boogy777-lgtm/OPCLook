@@ -1,7 +1,7 @@
 use super::present::compose_server_name;
 use crate::bff::model::{
-    BrowseNode, EndpointSpec, ItemKey, NodeClassFilter, Protocol, Quality, RequestId, SessionId,
-    SubscriptionState, Value,
+    BrowseNode, EndpointSpec, ItemKey, NodeClassFilter, Protocol, Quality, QualityKind, RequestId,
+    SessionId, SubscriptionState, Value,
 };
 use crate::i18n::{Lang, Tr, tr};
 use chrono::{DateTime, Local, Utc};
@@ -142,6 +142,32 @@ impl SessionView {
     }
 }
 
+/// Display state is separate from server quality codes, including vendor codes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RowQuality {
+    Server(Quality),
+    NoData(String),
+    Waiting(String),
+    Error(String),
+}
+
+impl RowQuality {
+    pub fn kind(&self) -> QualityKind {
+        match self {
+            Self::Server(quality) => quality.kind,
+            Self::Waiting(_) => QualityKind::Good,
+            Self::NoData(_) | Self::Error(_) => QualityKind::Bad,
+        }
+    }
+
+    pub fn text(&self) -> &str {
+        match self {
+            Self::Server(quality) => &quality.text,
+            Self::NoData(text) | Self::Waiting(text) | Self::Error(text) => text,
+        }
+    }
+}
+
 pub struct Row {
     pub key: ItemKey,
     pub session: SessionId,
@@ -153,7 +179,7 @@ pub struct Row {
     pub write_type: Option<u16>,
     pub writable: bool,
     pub value: Value,
-    pub quality: Quality,
+    pub quality: RowQuality,
     pub timestamp: Option<DateTime<Utc>>,
     pub description: String,
     pub pending: bool,

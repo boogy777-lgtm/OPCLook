@@ -18,7 +18,7 @@ pub fn export_tree_csv(app: &App) -> String {
             csv_escape(&row.item_id),
             csv_escape(&row.display_name),
             csv_escape(&row.value.to_string()),
-            csv_escape(&row.quality.text),
+            csv_escape(row.quality.text()),
             csv_escape(&row.timestamp_text()),
         ));
     }

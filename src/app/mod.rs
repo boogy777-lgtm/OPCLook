@@ -42,8 +42,8 @@ pub use dialogs::{
 };
 pub use present::{CJK_FONT_ENV, compose_server_name, install_fonts};
 pub use state::{
-    AddChildrenJob, BottomTab, CsvImportJob, CsvImportRow, ReconnectState, Row, SessionState,
-    SessionView, TreeItem, WriteKind, WriteTypeChoice, write_type_choices,
+    AddChildrenJob, BottomTab, CsvImportJob, CsvImportRow, ReconnectState, Row, RowQuality,
+    SessionState, SessionView, TreeItem, WriteKind, WriteTypeChoice, write_type_choices,
 };
 pub use view::{CHANGE_FLASH, MAX_FIELD_LINES, TableLine, is_numeric_value};
 
@@ -648,11 +648,7 @@ impl App {
     pub(super) fn mark_session_rows_stale(&mut self, session: SessionId) {
         let text = tr(self.lang(), Tr::StaleData).to_string();
         for row in self.rows.iter_mut().filter(|r| r.session == session) {
-            row.quality = Quality {
-                code: 0,
-                kind: QualityKind::Bad,
-                text: text.clone(),
-            };
+            row.quality = RowQuality::Error(text.clone());
         }
     }
 
@@ -818,11 +814,11 @@ impl App {
             write_type: None,
             writable: false,
             value,
-            quality: Quality {
+            quality: RowQuality::Server(Quality {
                 code: 0xC0,
                 kind: QualityKind::Good,
                 text: "GOOD".to_string(),
-            },
+            }),
             timestamp: None,
             description: String::new(),
             pending: false,

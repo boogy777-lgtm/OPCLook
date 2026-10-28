@@ -5,8 +5,8 @@ use super::*;
 #[cfg(feature = "test-support")]
 use crate::bff::model::RequestId;
 use crate::bff::model::{
-    BrowseNode, Event, EventKind, ItemInfo, ItemKey, NodeKind, Operation, Protocol, Quality,
-    QualityKind, SessionId, SubscriptionState,
+    BrowseNode, Event, EventKind, ItemInfo, ItemKey, NodeKind, Operation, Protocol, SessionId,
+    SubscriptionState,
 };
 use crate::i18n::{Tr, backend_text, fmt, tr};
 use chrono::Utc;
@@ -362,11 +362,7 @@ impl App {
                                 self.row_position(key).and_then(|p| self.rows.get_mut(p))
                             {
                                 row.pending = false;
-                                row.quality = Quality {
-                                    code: 0,
-                                    kind: QualityKind::Bad,
-                                    text: message.clone(),
-                                };
+                                row.quality = RowQuality::Error(message.clone());
                                 let name = row.display_name.clone();
                                 self.journal.error_l(Tr::AddFailedName, &[&name, &message]);
                             }
@@ -483,12 +479,13 @@ impl App {
                             row.changed_at = Some(Instant::now());
                         }
                         row.value = value.value;
-                        row.quality = value.quality;
+                        let mut quality = value.quality;
                         if let Some(reason) = &value.reason {
                             // The backend's reason for a Bad value, in the
                             // interface language.
-                            row.quality.text = backend_text(lang, reason);
+                            quality.text = backend_text(lang, reason);
                         }
+                        row.quality = RowQuality::Server(quality);
                         row.timestamp = value.timestamp;
                         row.pending = false;
                     }
@@ -662,11 +659,7 @@ impl App {
                                     self.row_position(*key).and_then(|p| self.rows.get_mut(p))
                                 {
                                     row.pending = false;
-                                    row.quality = Quality {
-                                        code: 0,
-                                        kind: QualityKind::Bad,
-                                        text: message.clone(),
-                                    };
+                                    row.quality = RowQuality::Error(message.clone());
                                 }
                             }
                         }
@@ -731,12 +724,8 @@ impl App {
             }
             row.writable = info.writable;
             row.pending = false;
-            if row.quality.is_placeholder_no_data() {
-                row.quality = Quality {
-                    code: Quality::CODE_PLACEHOLDER_WAITING,
-                    kind: QualityKind::Good,
-                    text: waiting_value,
-                };
+            if matches!(row.quality, RowQuality::NoData(_)) {
+                row.quality = RowQuality::Waiting(waiting_value);
             }
         }
     }

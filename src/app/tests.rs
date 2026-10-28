@@ -1322,7 +1322,7 @@ fn k1_unanswered_add_items_leaves_the_waiting_state() {
     app.age_pending_requests_for_test(1, 3600);
     app.tick_for_test();
     assert!(!app.rows[0].pending, "row must stop waiting");
-    assert_eq!(app.rows[0].quality.kind, QualityKind::Bad);
+    assert_eq!(app.rows[0].quality.kind(), QualityKind::Bad);
 }
 
 #[test]

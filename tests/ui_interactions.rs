@@ -2486,7 +2486,8 @@ fn disconnect_event_keeps_rows_and_marks_them_stale() {
     assert_eq!(app.rows.len(), 1, "rows must survive a disconnect");
     assert_eq!(app.rows[0].value, Value::I64(5), "last value must be kept");
     assert_eq!(
-        app.rows[0].quality.text, "устаревшие данные",
+        app.rows[0].quality.text(),
+        "устаревшие данные",
         "row quality must be marked stale"
     );
     assert_eq!(app.sessions[0].state, SessionState::Disconnected);
@@ -3961,7 +3962,7 @@ fn disconnect_keeps_container_and_does_not_arm_reconnect() {
         "tab stays visible after manual disconnect"
     );
     assert_eq!(app.rows.len(), 1, "rows must survive a manual disconnect");
-    assert_eq!(app.rows[0].quality.text, "устаревшие данные");
+    assert_eq!(app.rows[0].quality.text(), "устаревшие данные");
 
     // The backend reports the link closed; because this was a manual disconnect
     // it must NOT re-arm the auto-reconnect loop.
@@ -4636,7 +4637,7 @@ fn a3_failed_connectivity_test_marks_rows_stale_like_disconnected() {
     assert!(
         app.rows
             .iter()
-            .all(|r| r.quality.kind == opcda_egui::bff::model::QualityKind::Good)
+            .all(|r| r.quality.kind() == opcda_egui::bff::model::QualityKind::Good)
     );
     app.on_event_for_test_at(
         1,
@@ -4648,8 +4649,8 @@ fn a3_failed_connectivity_test_marks_rows_stale_like_disconnected() {
     assert_eq!(app.sessions[0].state, SessionState::Disconnected);
     let stale = opcda_egui::i18n::tr(opcda_egui::i18n::Lang::Ru, opcda_egui::i18n::Tr::StaleData);
     for row in &app.rows {
-        assert_eq!(row.quality.kind, opcda_egui::bff::model::QualityKind::Bad);
-        assert_eq!(row.quality.text, stale);
+        assert_eq!(row.quality.kind(), opcda_egui::bff::model::QualityKind::Bad);
+        assert_eq!(row.quality.text(), stale);
     }
 }
 

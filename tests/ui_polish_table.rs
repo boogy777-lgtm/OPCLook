@@ -377,11 +377,7 @@ fn ui4_first_value_after_adding_a_row_is_not_highlighted() {
     assert!(changed_at(&app, key).is_none(), "pending → value: no flash");
     // Registered but waiting for the first value (placeholder quality).
     app.rows[0].value = Value::Empty;
-    app.rows[0].quality = Quality {
-        code: Quality::CODE_PLACEHOLDER_WAITING,
-        kind: QualityKind::Good,
-        text: "waiting".into(),
-    };
+    app.rows[0].quality = opcda_egui::app::RowQuality::Waiting("waiting".into());
     push_value(&mut app, key, Value::F64(6.0), QualityKind::Good);
     assert!(changed_at(&app, key).is_none(), "waiting → value: no flash");
 
@@ -576,4 +572,35 @@ fn ui10_enter_with_an_empty_table_opens_nothing() {
     h.run_steps(3);
     assert!(!h.state().dialogs.connect.open);
     assert!(!h.state().dialogs.any_open());
+}
+
+#[test]
+fn server_quality_codes_do_not_collide_with_row_placeholders() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    let key = app.seed_row(1, "ns=2;s=A", "Level", Value::I64(0));
+    for (index, code) in [0xFFFF_FFFE, 0xFFFF_FFFD].into_iter().enumerate() {
+        app.on_event_for_test_at(
+            1,
+            EventKind::Values {
+                values: vec![(
+                    key,
+                    DataValue {
+                        value: Value::I64(index as i64 + 1),
+                        quality: Quality::from_ua(code, "vendor status"),
+                        timestamp: None,
+                        reason: None,
+                    },
+                )],
+            },
+        );
+        let row = &app.rows[0];
+        assert!(matches!(&row.quality, opcda_egui::app::RowQuality::Server(q) if q.code == code));
+        assert!(
+            row.is_value_change(&Value::I64(99)),
+            "a server status must not be treated as a placeholder"
+        );
+        assert_eq!(row.quality.text(), "vendor status");
+    }
 }

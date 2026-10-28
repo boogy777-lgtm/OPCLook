@@ -973,26 +973,6 @@ pub struct Quality {
 }
 
 impl Quality {
-    /// Sentinel `code` for the UI-only "нет данных" placeholder (a row freshly
-    /// added but not yet registered on the server). Chosen outside any valid
-    /// OPC DA/UA status range so it can never collide with a real quality.
-    pub const CODE_PLACEHOLDER_NO_DATA: u32 = 0xFFFF_FFFE;
-    /// Sentinel `code` for the UI-only "ожидание значения" placeholder (a row
-    /// registered on the server whose first value has not arrived yet).
-    pub const CODE_PLACEHOLDER_WAITING: u32 = 0xFFFF_FFFD;
-
-    /// True when this is the pre-registration "нет данных" placeholder, detected
-    /// by its sentinel `code` (never by scanning the localized `text`).
-    pub fn is_placeholder_no_data(&self) -> bool {
-        self.code == Self::CODE_PLACEHOLDER_NO_DATA
-    }
-
-    /// True when this is the registered-but-still-waiting "ожидание значения"
-    /// placeholder.
-    pub fn is_placeholder_waiting(&self) -> bool {
-        self.code == Self::CODE_PLACEHOLDER_WAITING
-    }
-
     pub fn from_da(code: u16) -> Self {
         let code32 = u32::from(code);
         let kind = match code & 0xC0 {

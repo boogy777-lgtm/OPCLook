@@ -1,7 +1,5 @@
 use super::*;
-use crate::bff::model::{
-    CommandKind, ItemKey, ItemSpec, Protocol, Quality, QualityKind, SessionId, Value, WriteRequest,
-};
+use crate::bff::model::{CommandKind, ItemKey, ItemSpec, Protocol, SessionId, Value, WriteRequest};
 use crate::i18n::{Tr, fmt, tr};
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Utc};
 
@@ -41,11 +39,7 @@ impl App {
                 write_type: None,
                 writable: false,
                 value: Value::Empty,
-                quality: Quality {
-                    code: Quality::CODE_PLACEHOLDER_NO_DATA,
-                    kind: QualityKind::Bad,
-                    text: tr(self.lang(), Tr::NoData).to_string(),
-                },
+                quality: RowQuality::NoData(tr(self.lang(), Tr::NoData).to_string()),
                 timestamp: None,
                 description: String::new(),
                 pending: true,

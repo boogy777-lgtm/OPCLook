@@ -237,3 +237,10 @@ U5 app unit test переключения фильтра прошёл (1/1).
 `columns.order`. Файл по-прежнему записывает прежние plain имена. Linux settings
 46/46 и UI interaction 1/1 прошли; Windows GUI all-targets typecheck с test-only
 отключением ресурсов прошёл, Windows runtime и остальные пункты C остаются.
+
+UI RowQuality отделяет реальные коды сервера от NoData/Waiting и локальной
+ошибки. Контрактный DataValue и CLI по-прежнему хранят Quality сервера;
+регрессия проверяет оба прежних sentinel-кода как настоящие серверные коды.
+Linux: `ui_polish_table` 17/17, отбор `stale` в ui_interactions 5/5, CLI unit
+5/5; Windows i686 workspace all-targets typecheck с test-only флагами прошёл.
+PNG не рендерился; полный gate, Windows runtime и остальные A/C открыты.
