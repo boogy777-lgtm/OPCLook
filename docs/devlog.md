@@ -416,3 +416,11 @@ DA больше не содержит UA View/filter/timeout/subscription; UI п
 Linux all-targets с test-support и Windows i686 workspace all-targets typecheck
 (test-only пропуск ресурсов/manifest); fmt. Windows runtime, DA/UAC, PNG,
 финальный exact-head CI, 10k baseline и прочие пункты B/E/F/G/H открыты.
+
+2026-10-28 B5 checkpoint: DA helper lifecycle now owns the pending launcher,
+launched process and connected client in distinct states; display status is
+computed from that state. A request deadline retains an outstanding launcher
+or process for the next attempt, preventing duplicate UAC prompts. Linux route
+manager tests: 17 passed, including pending launch, pipe retry, cancellation
+and lease loss. Windows runtime, actual DA/UAC, shared IPC and typed errors
+remain open; Windows i686 typecheck is reported separately.

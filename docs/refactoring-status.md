@@ -494,3 +494,8 @@ workspace all-targets — только typecheck с test-only пропуском
 manifest. PNG не проверен, Windows runtime, физические DA/UAC и финальный
 exact-head CI остаются открыты. Это только SessionKind: helper/IPC/journal и
 прочие B/E/F/G/H, а также 10k frame/allocation baseline ещё не завершены.
+
+B5 checkpoint: helper launcher, launched process and connection now have
+exclusive lifecycle states and derived status. Pending launch/process survives
+a request deadline. Linux route tests 17/17; actual Windows execution and
+DA/UAC remain open. Shared typed IPC/errors, JournalMessage and E/F/G/H remain.

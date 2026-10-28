@@ -223,30 +223,20 @@ struct LaunchedProcess {
     pid: u32,
 }
 
-#[derive(Debug)]
 struct HelperLaunch {
     rx: std::sync::mpsc::Receiver<Result<LaunchedProcess, HelperLaunchError>>,
     pipe: String,
-    process: Option<LaunchedProcess>,
 }
 
-impl HelperLaunch {
-    fn poll_launch(&mut self) -> Result<bool, HelperLaunchError> {
-        if self.process.is_some() {
-            return Ok(true);
-        }
-        match self.rx.try_recv() {
-            Ok(Ok(process)) => {
-                self.process = Some(process);
-                Ok(true)
-            }
-            Ok(Err(error)) => Err(error),
-            Err(std::sync::mpsc::TryRecvError::Empty) => Ok(false),
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(HelperLaunchError::Failed(
-                "helper launcher exited".to_string(),
-            )),
-        }
-    }
+enum HelperState {
+    Idle,
+    Launching(HelperLaunch),
+    Launched {
+        pipe: String,
+        process: LaunchedProcess,
+    },
+    Connected(HelperClient),
+    Failed,
 }
 
 #[derive(Debug)]
@@ -412,9 +402,7 @@ impl HelperClient {
 }
 
 pub struct DaRouteManager {
-    helper: Option<HelperClient>,
-    launch: Option<HelperLaunch>,
-    status: DaRouteStatus,
+    helper_state: HelperState,
     leases: RouteLeases,
     last_error: Option<DaRouteError>,
 }
@@ -428,16 +416,21 @@ impl Default for DaRouteManager {
 impl DaRouteManager {
     pub fn new() -> Self {
         Self {
-            helper: None,
-            launch: None,
-            status: DaRouteStatus::Idle,
+            helper_state: HelperState::Idle,
             leases: RouteLeases::default(),
             last_error: None,
         }
     }
 
     pub fn status(&self) -> DaRouteStatus {
-        self.status
+        match self.helper_state {
+            HelperState::Idle => DaRouteStatus::Idle,
+            HelperState::Launching(_) | HelperState::Launched { .. } => {
+                DaRouteStatus::HelperStarting
+            }
+            HelperState::Connected(_) => DaRouteStatus::HelperRunning,
+            HelperState::Failed => DaRouteStatus::HelperUnavailable,
+        }
     }
 
     pub fn last_error(&self) -> Option<&DaRouteError> {
@@ -535,7 +528,7 @@ impl DaRouteManager {
                             "route preparation cancelled or timed out".into(),
                         ));
                     }
-                    let Some(helper) = self.helper.as_mut() else {
+                    let Some(helper) = self.helper_mut() else {
                         let error = DaRouteError::HelperUnavailable("no helper client".to_string());
                         self.release_prepared(&mut prepared);
                         self.last_error = Some(error.clone());
@@ -550,8 +543,7 @@ impl DaRouteManager {
                     }
                     if cancelled() || best_route_luid(target) != Some(adapter.luid) {
                         if self
-                            .helper
-                            .as_mut()
+                            .helper_mut()
                             .is_some_and(|helper| helper.remove(plan).is_err())
                         {
                             self.invalidate_helper();
@@ -567,11 +559,6 @@ impl DaRouteManager {
                 }
             }
         }
-        self.status = if self.helper.is_some() {
-            DaRouteStatus::HelperRunning
-        } else {
-            DaRouteStatus::Idle
-        };
         self.last_error = None;
         Ok(prepared)
     }
@@ -580,14 +567,13 @@ impl DaRouteManager {
     /// periodically by the app; a missing helper is not an error (the route
     /// simply expires unless a new operation re-adds it).
     pub fn refresh(&mut self) {
-        if self.helper.is_none() {
+        if !matches!(self.helper_state, HelperState::Connected(_)) {
             return;
         }
         let plans = self.leases.owned_plans();
         for plan in plans {
             if self
-                .helper
-                .as_mut()
+                .helper_mut()
                 .is_some_and(|helper| helper.refresh(plan).is_err())
             {
                 self.invalidate_helper();
@@ -601,9 +587,8 @@ impl DaRouteManager {
     }
 
     fn invalidate_helper(&mut self) {
-        self.helper = None;
+        self.helper_state = HelperState::Failed;
         self.leases.entries.retain(|_, entry| !entry.owned);
-        self.status = DaRouteStatus::HelperUnavailable;
     }
 
     pub(crate) fn lease_is_valid(&self, prepared: &PreparedRoutes) -> bool {
@@ -625,8 +610,7 @@ impl DaRouteManager {
             if let Some((plan, owned)) = self.leases.release(&key, &identity) {
                 if owned {
                     if self
-                        .helper
-                        .as_mut()
+                        .helper_mut()
                         .is_some_and(|helper| helper.remove(plan).is_err())
                     {
                         self.invalidate_helper();
@@ -635,60 +619,57 @@ impl DaRouteManager {
             }
         }
         prepared.targets.clear();
-        if self.leases.entries.is_empty() {
-            self.status = if self.helper.is_some() {
-                DaRouteStatus::HelperRunning
-            } else {
-                DaRouteStatus::Idle
-            };
+    }
+
+    fn helper_mut(&mut self) -> Option<&mut HelperClient> {
+        match &mut self.helper_state {
+            HelperState::Connected(client) => Some(client),
+            _ => None,
         }
     }
 
     fn ensure_helper(&mut self) -> Result<(), DaRouteError> {
-        if self.helper.is_some() {
+        if matches!(self.helper_state, HelperState::Connected(_)) {
             return Ok(());
         }
-        if self.launch.is_none() {
-            self.launch = Some(spawn_helper()?);
-            self.status = DaRouteStatus::HelperStarting;
+        if matches!(self.helper_state, HelperState::Idle | HelperState::Failed) {
+            self.helper_state = HelperState::Launching(spawn_helper()?);
         }
         let deadline = Instant::now() + DA_HELPER_START_TIMEOUT;
         loop {
-            let Some(launch) = self.launch.as_mut() else {
-                return Ok(());
-            };
-            match launch.poll_launch() {
-                Ok(true) => {
-                    let pipe = launch.pipe.clone();
-                    let Some(process) = launch.process.as_ref() else {
-                        continue;
-                    };
+            let state = std::mem::replace(&mut self.helper_state, HelperState::Idle);
+            self.helper_state = match state {
+                HelperState::Launching(launch) => match launch.rx.try_recv() {
+                    Ok(Ok(process)) => HelperState::Launched {
+                        pipe: launch.pipe,
+                        process,
+                    },
+                    Err(std::sync::mpsc::TryRecvError::Empty) => HelperState::Launching(launch),
+                    Ok(Err(HelperLaunchError::Declined)) => {
+                        self.helper_state = HelperState::Failed;
+                        return Err(DaRouteError::UacDeclined);
+                    }
+                    Ok(Err(HelperLaunchError::Failed(error))) => {
+                        self.helper_state = HelperState::Failed;
+                        return Err(DaRouteError::HelperUnavailable(error));
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        self.helper_state = HelperState::Failed;
+                        return Err(DaRouteError::HelperUnavailable(
+                            "helper launcher exited".into(),
+                        ));
+                    }
+                },
+                HelperState::Launched { pipe, process } => {
                     match HelperClient::connect(&pipe, process.pid, Duration::from_millis(250)) {
-                        Ok(client) => {
-                            self.launch = None;
-                            self.helper = Some(client);
-                            self.status = DaRouteStatus::HelperRunning;
-                            return Ok(());
-                        }
-                        Err(_) if Instant::now() < deadline => {}
-                        Err(error) => {
-                            self.launch = None;
-                            self.status = DaRouteStatus::HelperUnavailable;
-                            return Err(DaRouteError::HelperUnavailable(error));
-                        }
+                        Ok(client) => HelperState::Connected(client),
+                        Err(_) => HelperState::Launched { pipe, process },
                     }
                 }
-                Ok(false) => {}
-                Err(HelperLaunchError::Declined) => {
-                    self.launch = None;
-                    self.status = DaRouteStatus::HelperUnavailable;
-                    return Err(DaRouteError::UacDeclined);
-                }
-                Err(HelperLaunchError::Failed(error)) => {
-                    self.launch = None;
-                    self.status = DaRouteStatus::HelperUnavailable;
-                    return Err(DaRouteError::HelperUnavailable(error));
-                }
+                other => other,
+            };
+            if matches!(self.helper_state, HelperState::Connected(_)) {
+                return Ok(());
             }
             if Instant::now() >= deadline {
                 return Err(DaRouteError::HelperStarting);
@@ -702,7 +683,7 @@ impl Drop for DaRouteManager {
     fn drop(&mut self) {
         // Closing the authenticated pipe makes the helper remove its routes.
         // Avoid a separate, potentially slow round trip for each lease.
-        self.helper = None;
+        self.helper_state = HelperState::Idle;
     }
 }
 
@@ -800,11 +781,7 @@ fn spawn_helper() -> Result<HelperLaunch, DaRouteError> {
             let _ = tx.send(result);
         })
         .map_err(|e| DaRouteError::HelperUnavailable(format!("launcher thread: {e}")))?;
-    Ok(HelperLaunch {
-        rx,
-        pipe,
-        process: None,
-    })
+    Ok(HelperLaunch { rx, pipe })
 }
 
 #[cfg(windows)]
@@ -1074,7 +1051,7 @@ mod tests {
     fn cancellation_after_helper_ready_never_attempts_add() {
         use std::cell::Cell;
         let mut manager = super::DaRouteManager::new();
-        manager.helper = Some(super::HelperClient);
+        manager.helper_state = super::HelperState::Connected(super::HelperClient);
         let selected = adapter("192.168.1.20", 24, &[]);
         let target = "192.168.1.50".parse().unwrap();
         let checks = Cell::new(0);
@@ -1350,22 +1327,53 @@ mod tests {
     }
 
     #[test]
-    fn successful_launch_remains_ready_after_first_pipe_retry() {
+    fn pending_launch_survives_request_deadline_and_is_reused() {
         let (tx, rx) = std::sync::mpsc::channel();
-        tx.send(Ok(super::LaunchedProcess {
-            #[cfg(windows)]
-            _handle: None,
-            pid: 123,
-        }))
-        .unwrap();
-        drop(tx);
-        let mut launch = super::HelperLaunch {
+        let mut manager = super::DaRouteManager::new();
+        manager.helper_state = super::HelperState::Launching(super::HelperLaunch {
             rx,
             pipe: String::new(),
-            process: None,
+        });
+        assert!(matches!(
+            manager.ensure_helper(),
+            Err(super::DaRouteError::HelperStarting)
+        ));
+        assert!(matches!(
+            manager.helper_state,
+            super::HelperState::Launching(_)
+        ));
+        tx.send(Err(super::HelperLaunchError::Failed(
+            "launch failed".into(),
+        )))
+        .unwrap();
+        assert_eq!(
+            manager.ensure_helper(),
+            Err(super::DaRouteError::HelperUnavailable(
+                "launch failed".into()
+            ))
+        );
+        assert_eq!(manager.status(), super::DaRouteStatus::HelperUnavailable);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn launched_process_survives_pipe_retry() {
+        let mut manager = super::DaRouteManager::new();
+        manager.helper_state = super::HelperState::Launched {
+            pipe: String::new(),
+            process: super::LaunchedProcess { pid: 123 },
         };
-        assert!(matches!(launch.poll_launch(), Ok(true)));
-        assert!(matches!(launch.poll_launch(), Ok(true)));
+        assert!(matches!(
+            manager.ensure_helper(),
+            Err(super::DaRouteError::HelperStarting)
+        ));
+        assert!(matches!(
+            manager.helper_state,
+            super::HelperState::Launched {
+                process: super::LaunchedProcess { pid: 123 },
+                ..
+            }
+        ));
     }
 
     use super::*;

@@ -154,3 +154,6 @@ Windows GUI typecheck прошли. Остальные ограничения B3
 Проверки и ограничения — в `docs/refactoring-status.md`; остальные B/E/F/G/H,
 PNG, измеренный 10k baseline, Windows runtime, физические DA/UAC и финальный
 exact-head CI остаются открыты.
+
+B5 частично: helper lifecycle типизирован, pending launch/process сохраняется
+при deadline; Linux route tests 17/17. IPC/errors и Windows runtime ещё открыты.
