@@ -1126,6 +1126,125 @@ mod tests {
     }
     #[cfg(windows)]
     #[test]
+    fn helper_client_closes_real_pipe_after_timeout() {
+        use std::time::Duration;
+        let pipe = format!(
+            "opclook-client-timeout-{}-{}",
+            std::process::id(),
+            super::random_hex(super::random_bytes().unwrap())
+        );
+        let name = format!(r"\\.\pipe\{pipe}");
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (closed_tx, closed_rx) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            use tokio::net::windows::named_pipe::ServerOptions;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                let mut server = ServerOptions::new()
+                    .first_pipe_instance(true)
+                    .create(name)
+                    .unwrap();
+                ready_tx.send(()).unwrap();
+                server.connect().await.unwrap();
+                let mut byte = [0u8; 1];
+                loop {
+                    server.read_exact(&mut byte).await.unwrap();
+                    if byte[0] == b'\n' {
+                        break;
+                    }
+                }
+                server.write_all(b"{\"ok\":true}\n").await.unwrap();
+                loop {
+                    server.read_exact(&mut byte).await.unwrap();
+                    if byte[0] == b'\n' {
+                        break;
+                    }
+                }
+                let closed = matches!(server.read(&mut byte).await, Ok(0) | Err(_));
+                closed_tx.send(closed).unwrap();
+            });
+        });
+        ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let mut client =
+            super::HelperClient::connect(&pipe, std::process::id(), Duration::from_secs(1))
+                .unwrap();
+        let error = client
+            .call(super::PipeMessage {
+                version: 2,
+                op: "refresh".into(),
+                target: None,
+                prefix: None,
+                interface_luid: None,
+                next_hop: None,
+                lifetime_secs: None,
+                client_pid: None,
+            })
+            .unwrap_err();
+        assert!(error.contains("timed out"));
+        assert!(client.pipe.is_none());
+        assert!(closed_rx.recv_timeout(Duration::from_secs(2)).unwrap());
+        server.join().unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn real_named_pipe_closes_after_exchange_timeout() {
+        use tokio::io::AsyncReadExt;
+        use tokio::net::windows::named_pipe::{ClientOptions, ServerOptions};
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let name = format!(
+                r"\\.\pipe\opclook-timeout-{}-{}",
+                std::process::id(),
+                super::random_hex(super::random_bytes().unwrap())
+            );
+            let mut server = ServerOptions::new()
+                .first_pipe_instance(true)
+                .create(&name)
+                .unwrap();
+            let mut client = ClientOptions::new().open(&name).unwrap();
+            assert!(super::verify_pipe_server(&client, std::process::id()).is_ok());
+            assert!(
+                super::verify_pipe_server(&client, std::process::id().wrapping_add(1)).is_err()
+            );
+            server.connect().await.unwrap();
+            let message = super::PipeMessage {
+                version: 2,
+                op: "hello".into(),
+                target: None,
+                prefix: None,
+                interface_luid: None,
+                next_hop: None,
+                lifetime_secs: None,
+                client_pid: None,
+            };
+            let error =
+                super::pipe_exchange(&mut client, &message, std::time::Duration::from_millis(50))
+                    .await
+                    .unwrap_err();
+            assert!(error.contains("timed out"));
+            drop(client);
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                let mut buffer = [0; 512];
+                loop {
+                    match server.read(&mut buffer).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                }
+            })
+            .await
+            .expect("server observed pipe closure");
+        });
+    }
+    #[cfg(windows)]
+    #[test]
     fn pipe_server_process_is_verified_before_use() {
         use std::os::windows::io::FromRawHandle;
         use windows::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
