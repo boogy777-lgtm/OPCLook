@@ -16,12 +16,12 @@
 //!
 //! After the process exits there must be no ESTABLISHED client connection to
 //! port 4840 (`netstat -ano | findstr 4840`).
-use opcda_egui::bff::Gateway;
 use opcda_egui::bff::model::{
     BrowseNode, Command, CommandKind, DataValue, EndpointSpec, Event, EventKind, ItemSpec,
     NodeKind, Protocol, QualityKind,
 };
 use opcda_egui::constants::{BROWSE_MAX_REFERENCES_PER_NODE, READ_MAX_ITEMS_PER_CALL};
+use opclook_backend::bff::Gateway;
 use std::collections::{HashSet, VecDeque};
 use std::time::{Duration, Instant};
 

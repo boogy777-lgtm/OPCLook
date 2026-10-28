@@ -515,3 +515,20 @@ PNG настоящего App::update просмотрены: русские и �
 Полная методика, байты, ограничения и воспроизводимая команда —
 `docs/reports/refactor-frame-baseline.md`. Тест 1/1, включая видимые value/time;
 CPU wall, не физический FPS. F/G/H и Windows runtime остаются открыты.
+
+
+**2026-10-28, H — граница компиляции GUI:** normal dependencies GUI теперь
+contract, engine и locale; backend доступен напрямую только как dev dependency
+для низкоуровневых интеграционных тестов. Engine явно предоставляет безопасные
+сетевые и сертификатные метаданные, VT и типизированную проверку UA security;
+Gateway доступен только через test-support. Guard проверяет граф normal
+зависимостей. Остальные структурные задачи H и Settings, оптимизации F/G,
+Windows runtime, физический DA/UAC и финальный exact-head CI остаются открыты.
+
+Измерено: Linux полный набор приложений и библиотек прошёл (GUI unit 211/211,
+UI interactions 148/148 и 1 Windows-only ignored, backend 215/215 включая оба
+B15 live, CLI live 2/2); normal GUI+CLI и отдельный CLI построены. Windows i686
+workspace all-targets проверен по типам с test-only флагами; normal GUI и
+diagnostics, standalone CLI проверены отдельно. Guard прошёл для Linux и Windows.
+Windows runtime и ресурсы cross-check не исполнял. Native whole-workspace check
+неприменим: Windows-only nethelper на Linux не компилирует windows-future.

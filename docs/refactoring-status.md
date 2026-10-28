@@ -598,3 +598,12 @@ Network RU, подтверждение RU. DA error — fixture, не Windows ru
 отдельный журнал 5000 — 75120.0/101021.1 мкс. Это CPU wall для headless
 стенда, не GPU FPS. Аллокации и условия — в `docs/reports/refactor-frame-baseline.md`.
 F оптимизация, G/H, Windows runtime и exact-head CI ещё открыты.
+
+
+**2026-10-28, H — граница компиляции GUI:** normal dependencies GUI теперь
+contract, engine и locale; backend доступен напрямую только как dev dependency
+для низкоуровневых интеграционных тестов. Engine явно предоставляет безопасные
+сетевые и сертификатные метаданные, VT и типизированную проверку UA security;
+Gateway доступен только через test-support. Guard проверяет граф normal
+зависимостей. Остальные структурные задачи H и Settings, оптимизации F/G,
+Windows runtime, физический DA/UAC и финальный exact-head CI остаются открыты.

@@ -1,5 +1,87 @@
 //! GUI-independent session state, command correlation and scheduling.
+//!
+//! Transport workers are not part of the production frontend API:
+//!
+//! ```compile_fail
+//! use opclook_engine::Gateway;
+//! ```
+//!
+//! ```compile_fail
+//! use opclook_engine::metadata::Gateway;
+//! ```
 pub mod constants;
+/// Plain metadata and inventory available to application frontends.
+pub mod metadata {
+    pub use opclook_backend::bff::ua::{
+        SCAN_SUBNET_TOO_LARGE, SECURITY_MODE_AUTO, SECURITY_MODE_NONE, SECURITY_MODE_SIGN,
+        SECURITY_MODE_SIGN_AND_ENCRYPT, SECURITY_POLICY_AUTO, SECURITY_POLICY_BASIC256_SHA256,
+        SECURITY_POLICY_NONE, client_cert_subject, pki_dir_public,
+    };
+    pub use opclook_backend::bff::vt::vt_name;
+    pub use opclook_backend::constants::{
+        BROWSE_MAX_REFERENCES_PER_NODE, DA_HELPER_PROTOCOL_VERSION, DA_HELPER_START_TIMEOUT,
+        DA_ROUTE_LIFETIME, DA_ROUTE_LIFETIME_SECS, DA_ROUTE_REFRESH, DEFAULT_UA_HOST,
+        DEFAULT_UA_PORT, DISCOVERY_GUARD_TIMEOUT, DISCOVERY_URLS, MAX_BROWSE_NODES, MDNS_WINDOW,
+        READ_MAX_ITEMS_PER_CALL, SCAN_ADDRESS_TIMEOUT, SCAN_CONFIRM_THRESHOLD, SCAN_PARALLELISM,
+        SCAN_TCP_CONNECT_TIMEOUT, SCAN_UA_HANDSHAKE_TIMEOUT, UA_SEARCH_TIMEOUT,
+    };
+    pub use opclook_backend::net::{
+        AdapterAddress, AdapterId, AdapterInfo, AdapterSelection, AdapterState, CacheBuild,
+        CacheLoadReport, CacheRejection, CacheSkip, CacheSkipReason, CachedAdapter,
+        NetworkInventory, NetworkLease, NetworkState, SelectionResolution, SelectionState,
+        adapter_is_selected, build_adapter_cache, inventory_adapters, load_cached_adapters,
+        reconcile_selection, selectable_adapters, selected_adapter, selected_adapter_count,
+        synthetic_loopback,
+    };
+    pub use opclook_contract::net::{NetError, SubnetHosts, SubnetSpec};
+    pub fn validate_ua_security(
+        policy: opclook_contract::model::UaSecurityPolicy,
+        mode: opclook_contract::model::UaSecurityMode,
+        endpoints: &[opclook_contract::model::UaEndpointInfo],
+    ) -> Result<(), opclook_contract::model::BackendMsg> {
+        opclook_backend::bff::ua::resolve_security(policy, mode, endpoints)
+            .map(|_| ())
+            .map_err(|detail| opclook_contract::model::BackendMsg::SecurityResolveFailed { detail })
+    }
+    #[cfg(test)]
+    mod tests {
+        use super::validate_ua_security;
+        use opclook_contract::model::{
+            AdvertisedMode, AdvertisedPolicy, BackendMsg, UaEndpointInfo, UaSecurityMode,
+            UaSecurityPolicy,
+        };
+
+        #[test]
+        fn validation_reports_typed_errors_and_accepts_available_pair() {
+            let endpoint = UaEndpointInfo {
+                url: "opc.tcp://localhost:4840".parse().unwrap(),
+                security_policy: AdvertisedPolicy::from_wire("None"),
+                security_mode: AdvertisedMode::from_wire("None"),
+            };
+            assert!(
+                validate_ua_security(
+                    UaSecurityPolicy::None,
+                    UaSecurityMode::None,
+                    std::slice::from_ref(&endpoint)
+                )
+                .is_ok()
+            );
+            assert!(matches!(
+                validate_ua_security(
+                    UaSecurityPolicy::Basic256Sha256,
+                    UaSecurityMode::Sign,
+                    &[endpoint]
+                ),
+                Err(BackendMsg::SecurityResolveFailed { .. })
+            ));
+        }
+    }
+}
+#[cfg(feature = "test-support")]
+pub mod testing {
+    pub use opclook_backend::bff::Gateway as TestGateway;
+    pub use opclook_backend::bff::ua::use_private_pki_dir;
+}
 use opclook_backend::bff::Gateway;
 use opclook_backend::net::AdapterInfo;
 use opclook_backend::route_service::{RouteService, RouteTicket};

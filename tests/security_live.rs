@@ -3,11 +3,11 @@
 //! Run with an OPC UA server at OPCUA_TEST_URL:
 //!
 //!   cargo test --test security_live -- --ignored
-use opcda_egui::bff::Gateway;
 use opcda_egui::bff::model::{
     Command, CommandKind, EndpointSpec, Event, EventKind, Protocol, UaSecurityMode,
     UaSecurityPolicy,
 };
+use opclook_backend::bff::Gateway;
 use std::time::{Duration, Instant};
 
 const DEFAULT_URL: &str = "opc.tcp://127.0.0.1:4840";

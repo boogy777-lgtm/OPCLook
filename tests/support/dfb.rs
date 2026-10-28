@@ -10,7 +10,7 @@
 //! re-implementing connect/wait helpers. The trait is intentionally test-only;
 //! production code keeps the concrete `Gateway` facade.
 
-use opcda_egui::bff::{Command, Event, Gateway};
+use opclook_backend::bff::{Command, Event, Gateway};
 use std::time::{Duration, Instant};
 
 /// A single functional block with explicit input and output handles.

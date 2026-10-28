@@ -1,7 +1,7 @@
-use opcda_egui::bff::Gateway;
 use opcda_egui::bff::model::{
     Command, CommandKind, EndpointSpec, Event, EventKind, ItemSpec, Protocol, Value, WriteRequest,
 };
+use opclook_backend::bff::Gateway;
 use std::process::Command as ScCommand;
 use std::time::{Duration, Instant};
 

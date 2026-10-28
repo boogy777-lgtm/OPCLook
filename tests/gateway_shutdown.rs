@@ -3,7 +3,7 @@
 
 mod support;
 
-use opcda_egui::bff::{Command, CommandKind, Gateway, Protocol, SendError};
+use opclook_backend::bff::{Command, CommandKind, Gateway, Protocol, SendError};
 use std::time::{Duration, Instant};
 use support::dfb::Dfb;
 

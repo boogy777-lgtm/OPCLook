@@ -1,8 +1,11 @@
 # Слои и headless-клиент
 
-Зависимости: GUI → engine и метаданные backend; CLI → engine, contract и
+Зависимости: GUI → engine, contract и locale; CLI → engine, contract и
 locale; engine → backend и contract; backend → contract; locale → contract.
-Контракт не зависит от UI, локали или транспорта. GUI передаёт выбранный
+GUI получает только явно перечисленные безопасные метаданные через engine;
+Gateway и воркеры доступны лишь backend и test-support. Проверка UA security
+возвращает контрактную ошибку без SDK-типов. Контракт не зависит от UI,
+локали или транспорта. GUI передаёт выбранный
 адаптер и локальные адреса, но команды DA discovery/connect и lease принадлежат
 Engine. CLI использует тот же Engine и для DA выбирает системную маршрутизацию
 без обязательного helper; интерактивного восстановления CLI нет.

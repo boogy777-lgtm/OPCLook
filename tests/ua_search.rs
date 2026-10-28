@@ -2,8 +2,8 @@
 //! These require a running OPC UA server (the test rig starts CODESYS at
 //! 127.0.0.1:4840). Run with:
 //!   cargo test --test ua_search -- --ignored --nocapture
-use opcda_egui::bff::Gateway;
 use opcda_egui::bff::model::{Command, CommandKind, Event, EventKind, Protocol};
+use opclook_backend::bff::Gateway;
 use std::time::{Duration, Instant};
 
 const DEFAULT_PORT: u16 = 4840;

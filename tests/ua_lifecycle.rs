@@ -10,10 +10,10 @@
 //! graceful-close semantics (Session::disconnect -> CloseSession +
 //! CloseSecureChannel, then wait for the session event loop) are what close the
 //! sockets, so the observable socket count is the regression signal.
-use opcda_egui::bff::Gateway;
 use opcda_egui::bff::model::{
     Command, CommandKind, EndpointSpec, Event, EventKind, ItemSpec, Protocol,
 };
+use opclook_backend::bff::Gateway;
 use std::time::{Duration, Instant};
 
 const DEFAULT_URL: &str = "opc.tcp://127.0.0.1:4840";

@@ -25,7 +25,7 @@ if metadata.returncode:
     sys.stderr.write(metadata.stderr)
     raise SystemExit(metadata.returncode)
 packages = {p["name"]: p for p in json.loads(metadata.stdout)["packages"]}
-allowed = {"opclook-contract": set(), "opclook-backend": {"opclook-contract"}, "opclook-engine": {"opclook-contract", "opclook-backend"}, "opclook-locale": {"opclook-contract"}, "opclook-cli": {"opclook-contract", "opclook-engine", "opclook-locale"}, "opcda-egui": {"opclook-contract", "opclook-backend", "opclook-engine", "opclook-locale"}}
+allowed = {"opclook-contract": set(), "opclook-backend": {"opclook-contract"}, "opclook-engine": {"opclook-contract", "opclook-backend"}, "opclook-locale": {"opclook-contract"}, "opclook-cli": {"opclook-contract", "opclook-engine", "opclook-locale"}, "opcda-egui": {"opclook-contract", "opclook-engine", "opclook-locale"}}
 for name, permitted in allowed.items():
     package = packages.get(name)
     if package is None:

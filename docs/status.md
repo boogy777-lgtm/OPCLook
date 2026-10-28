@@ -196,3 +196,12 @@ F/G/H, Windows runtime и итоговый exact-head CI остаются отк
 получены headless и просмотрены. Ошибка DA искусственно задана; реальный
 Windows helper/UAC/DA остаётся непроверенным. Оптимизированный F baseline
 ещё измеряется.
+
+
+**2026-10-28, H — граница компиляции GUI:** normal dependencies GUI теперь
+contract, engine и locale; backend доступен напрямую только как dev dependency
+для низкоуровневых интеграционных тестов. Engine явно предоставляет безопасные
+сетевые и сертификатные метаданные, VT и типизированную проверку UA security;
+Gateway доступен только через test-support. Guard проверяет граф normal
+зависимостей. Остальные структурные задачи H и Settings, оптимизации F/G,
+Windows runtime, физический DA/UAC и финальный exact-head CI остаются открыты.

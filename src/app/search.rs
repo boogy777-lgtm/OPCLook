@@ -293,12 +293,12 @@ impl App {
             .cloned()
             .collect();
         if !selected.is_empty() {
-            if let Err(detail) = crate::bff::ua::resolve_security(
+            if let Err(error) = crate::bff::ua::validate_ua_security(
                 d.ua_security_policy,
                 d.ua_security_mode,
                 &selected,
             ) {
-                d.error = Some(fmt(lang, Tr::SecurityResolveFailed, &[&detail]));
+                d.error = Some(crate::i18n::backend_text(lang, &error));
                 return false;
             }
         }

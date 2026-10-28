@@ -1,9 +1,9 @@
-use opcda_egui::bff::Gateway;
 use opcda_egui::bff::model::ItemKey;
 use opcda_egui::bff::model::{
     BrowseNode, Command, CommandKind, EndpointSpec, Event, EventKind, ItemSpec, NodeKind, Protocol,
     Value, WriteRequest,
 };
+use opclook_backend::bff::Gateway;
 use std::time::{Duration, Instant};
 
 const DEFAULT_URL: &str = "opc.tcp://127.0.0.1:4840";

@@ -43,7 +43,6 @@ test-support = ["opclook-engine/test-support"]
 
 [dependencies]
 opclook-engine = { path = "crates/engine" }
-opclook-backend = { path = "crates/backend" }
 opclook-contract = { path = "crates/contract" }
 opclook-locale = { path = "crates/locale" }
 eframe = { version = "0.37", default-features = false, features = ["glow", "clipboard", "default_fonts"] }
@@ -68,6 +67,7 @@ strip = true
 winres = "0.1"
 
 [dev-dependencies]
+opclook-backend = { path = "crates/backend" }
 opcda-egui = { path = ".", features = ["test-support"] }
 egui_kittest = "0.37"
 stats_alloc = "0.1.10"

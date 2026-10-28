@@ -1,6 +1,6 @@
 //! GUI localization for backend route preparation.
 use crate::i18n::{Lang, Tr, tr};
-pub use opclook_backend::da_route::{DaRouteError, DaRouteStatus};
+pub use opclook_contract::da_route::{DaRouteError, DaRouteStatus};
 
 pub trait LocalizedDaRouteError {
     fn localized(&self, lang: Lang) -> String;

@@ -1,6 +1,12 @@
 //! Presentation and route constants.
-pub use opclook_backend::constants::*;
 pub use opclook_engine::constants::*;
+pub use opclook_engine::metadata::{
+    BROWSE_MAX_REFERENCES_PER_NODE, DA_HELPER_PROTOCOL_VERSION, DA_HELPER_START_TIMEOUT,
+    DA_ROUTE_LIFETIME, DA_ROUTE_LIFETIME_SECS, DA_ROUTE_REFRESH, DEFAULT_UA_HOST, DEFAULT_UA_PORT,
+    DISCOVERY_GUARD_TIMEOUT, DISCOVERY_URLS, MAX_BROWSE_NODES, MDNS_WINDOW,
+    READ_MAX_ITEMS_PER_CALL, SCAN_ADDRESS_TIMEOUT, SCAN_CONFIRM_THRESHOLD, SCAN_PARALLELISM,
+    SCAN_TCP_CONNECT_TIMEOUT, SCAN_UA_HANDSHAKE_TIMEOUT, UA_SEARCH_TIMEOUT,
+};
 
 // ---------------------------------------------------------------------------
 // UI layout / sizing

@@ -1,10 +1,10 @@
 //! Live check for BUG 1: after several items are subscribed, an «Обновить»
 //! (Browse "") command must not wait behind queued periodic Read commands.
 //! Requires a live OPC UA server (default CODESYS at 127.0.0.1:4840).
-use opcda_egui::bff::Gateway;
 use opcda_egui::bff::model::{
     Command, CommandKind, EndpointSpec, Event, EventKind, ItemSpec, Protocol,
 };
+use opclook_backend::bff::Gateway;
 use std::time::{Duration, Instant};
 
 const DEFAULT_URL: &str = "opc.tcp://127.0.0.1:4840";
