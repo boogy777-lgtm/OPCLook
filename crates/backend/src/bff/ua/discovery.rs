@@ -181,8 +181,8 @@ fn server_from_record(record: &ServerOnNetwork) -> UaServerInfo {
         .ok()
         .map(|url| UaEndpointInfo {
             url,
-            security_policy: String::new(),
-            security_mode: String::new(),
+            security_policy: crate::bff::model::AdvertisedPolicy::Unspecified,
+            security_mode: crate::bff::model::AdvertisedMode::Unspecified,
         })
         .into_iter()
         .collect();
@@ -221,8 +221,8 @@ pub(super) fn merge_server_info(servers: &mut Vec<UaServerInfo>, incoming: UaSer
                 existing.application_uri = incoming.application_uri;
             }
             for endpoint in incoming.endpoints {
-                let incoming_is_bare =
-                    endpoint.security_policy.is_empty() && endpoint.security_mode.is_empty();
+                let incoming_is_bare = endpoint.security_policy.is_unspecified()
+                    && endpoint.security_mode.is_unspecified();
                 // A bare URL (an LDS record) adds nothing to the same URL that is
                 // already known, with or without security details.
                 if incoming_is_bare
@@ -237,10 +237,12 @@ pub(super) fn merge_server_info(servers: &mut Vec<UaServerInfo>, incoming: UaSer
                 // an LDS record gave.
                 if let Some(bare) = existing.endpoints.iter_mut().find(|e| {
                     e.url.same_endpoint(&endpoint.url)
-                        && e.security_policy.is_empty()
-                        && e.security_mode.is_empty()
+                        && e.security_policy.is_unspecified()
+                        && e.security_mode.is_unspecified()
                 }) {
-                    if !endpoint.security_policy.is_empty() || !endpoint.security_mode.is_empty() {
+                    if !endpoint.security_policy.is_unspecified()
+                        || !endpoint.security_mode.is_unspecified()
+                    {
                         *bare = endpoint;
                     }
                 } else if !existing.endpoints.iter().any(|e| {
@@ -318,8 +320,10 @@ async fn find_servers_at(
                     };
                     Some(UaEndpointInfo {
                         url,
-                        security_policy: e.security_policy_uri.to_string(),
-                        security_mode: format!("{:?}", e.security_mode),
+                        security_policy: crate::bff::model::AdvertisedPolicy::from_wire(
+                            &e.security_policy_uri.to_string(),
+                        ),
+                        security_mode: super::security::advertised_mode(e.security_mode),
                     })
                 })
                 .collect()
@@ -349,8 +353,8 @@ async fn find_servers_at(
                 {
                     endpoints.push(UaEndpointInfo {
                         url: discovery_url,
-                        security_policy: String::new(),
-                        security_mode: String::new(),
+                        security_policy: crate::bff::model::AdvertisedPolicy::Unspecified,
+                        security_mode: crate::bff::model::AdvertisedMode::Unspecified,
                     });
                 }
             }
@@ -398,8 +402,8 @@ async fn find_servers_at(
     ) {
         answering.endpoints.push(UaEndpointInfo {
             url: parsed_url,
-            security_policy: String::new(),
-            security_mode: String::new(),
+            security_policy: crate::bff::model::AdvertisedPolicy::Unspecified,
+            security_mode: crate::bff::model::AdvertisedMode::Unspecified,
         });
     }
 
@@ -1011,8 +1015,8 @@ mod tests {
     fn endpoint(url: &str, policy: &str, mode: &str) -> UaEndpointInfo {
         UaEndpointInfo {
             url: url.parse().unwrap(),
-            security_policy: policy.to_string(),
-            security_mode: mode.to_string(),
+            security_policy: crate::bff::model::AdvertisedPolicy::from_wire(policy),
+            security_mode: crate::bff::model::AdvertisedMode::from_wire(mode),
         }
     }
 
@@ -1053,7 +1057,10 @@ mod tests {
         assert_eq!(servers.len(), 1);
         assert_eq!(servers[0].application_uri, "urn:plant");
         assert_eq!(servers[0].endpoints.len(), 1);
-        assert_eq!(servers[0].endpoints[0].security_policy, "None");
+        assert_eq!(
+            servers[0].endpoints[0].security_policy.known(),
+            Some(crate::bff::model::UaSecurityPolicy::None)
+        );
     }
 
     #[test]

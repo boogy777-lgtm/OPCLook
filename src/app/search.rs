@@ -505,8 +505,8 @@ pub(super) fn merge_ua_results(dialog: &mut ConnectDialog) {
             .filter(|url| !url.trim().is_empty())
             .map(|url| crate::bff::model::UaEndpointInfo {
                 url: url.clone(),
-                security_policy: String::new(),
-                security_mode: String::new(),
+                security_policy: crate::bff::model::AdvertisedPolicy::Unspecified,
+                security_mode: crate::bff::model::AdvertisedMode::Unspecified,
             })
             .collect::<Vec<_>>();
         if network.application_uri.trim().is_empty() && endpoints.is_empty() {

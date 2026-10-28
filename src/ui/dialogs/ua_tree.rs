@@ -92,33 +92,28 @@ pub(crate) struct UaTreePick {
 /// Classify one advertised (policy, mode) pair. `None` means "not advertised"
 /// (both strings empty: the URL is known but its security was never fetched).
 pub(crate) fn classify_security(endpoint: &UaEndpointInfo) -> Option<UaSecurityOption> {
-    let policy_text = endpoint.security_policy.trim();
-    let mode_text = endpoint.security_mode.trim();
-    if policy_text.is_empty() && mode_text.is_empty() {
+    let policy = &endpoint.security_policy;
+    let mode = &endpoint.security_mode;
+    if policy.is_unspecified() && mode.is_unspecified() {
         return None;
     }
-    let short_policy = policy_text
-        .rsplit('#')
-        .next()
-        .unwrap_or(policy_text)
-        .to_string();
-    let parsed = if policy_text.is_empty() || mode_text.is_empty() {
-        None
-    } else {
-        UaSecurityPolicy::from_advertised(policy_text)
-            .zip(UaSecurityMode::from_advertised(mode_text))
-            .filter(|(policy, mode)| {
-                *policy != UaSecurityPolicy::Auto
-                    && *mode != UaSecurityMode::Auto
-                    && validate_security_pair(*policy, *mode).is_ok()
-            })
-    };
+    let parsed = policy
+        .known()
+        .zip(mode.known())
+        .filter(|(policy, mode)| validate_security_pair(*policy, *mode).is_ok());
     Some(match parsed {
         Some((policy, mode)) => UaSecurityOption::Supported { policy, mode },
-        None => UaSecurityOption::Unsupported {
-            policy: short_policy,
-            mode: mode_text.to_string(),
-        },
+        None => {
+            let policy_text = policy.to_string();
+            UaSecurityOption::Unsupported {
+                policy: policy_text
+                    .rsplit('#')
+                    .next()
+                    .unwrap_or(&policy_text)
+                    .to_owned(),
+                mode: mode.to_string(),
+            }
+        }
     })
 }
 
@@ -357,8 +352,8 @@ mod tests {
     fn ep(url: &str, policy: &str, mode: &str) -> UaEndpointInfo {
         UaEndpointInfo {
             url: url.parse().unwrap(),
-            security_policy: policy.to_string(),
-            security_mode: mode.to_string(),
+            security_policy: crate::bff::model::AdvertisedPolicy::from_wire(policy),
+            security_mode: crate::bff::model::AdvertisedMode::from_wire(mode),
         }
     }
 

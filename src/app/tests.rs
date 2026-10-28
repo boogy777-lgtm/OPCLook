@@ -522,13 +522,13 @@ fn security_validation_applies_to_selected_url_only() {
     app.dialogs.connect.ua_discovered_endpoints = vec![
         UaEndpointInfo {
             url: "opc.tcp://server-a:4840".parse().unwrap(),
-            security_policy: "None".to_string(),
-            security_mode: "None".to_string(),
+            security_policy: crate::bff::model::AdvertisedPolicy::from_wire("None"),
+            security_mode: crate::bff::model::AdvertisedMode::from_wire("None"),
         },
         UaEndpointInfo {
             url: "opc.tcp://server-b:4840".parse().unwrap(),
-            security_policy: "Basic256Sha256".to_string(),
-            security_mode: "SignAndEncrypt".to_string(),
+            security_policy: crate::bff::model::AdvertisedPolicy::from_wire("Basic256Sha256"),
+            security_mode: crate::bff::model::AdvertisedMode::from_wire("SignAndEncrypt"),
         },
     ];
     assert!(!app.validate_ua_security());
@@ -552,8 +552,8 @@ fn combined_ua_search_preserves_security_variants_at_same_url() {
                 application_uri: "urn:sim".to_string(),
                 endpoints: vec![UaEndpointInfo {
                     url: "opc.tcp://localhost:4840".parse().unwrap(),
-                    security_policy: policy.to_string(),
-                    security_mode: mode.to_string(),
+                    security_policy: crate::bff::model::AdvertisedPolicy::from_wire(policy),
+                    security_mode: crate::bff::model::AdvertisedMode::from_wire(mode),
                 }],
             }],
         });
@@ -581,8 +581,8 @@ fn combined_ua_search_shows_a_loopback_server_once_while_running() {
                 application_uri: "urn:sim".to_string(),
                 endpoints: vec![UaEndpointInfo {
                     url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
-                    security_policy: "None".to_string(),
-                    security_mode: "None".to_string(),
+                    security_policy: crate::bff::model::AdvertisedPolicy::from_wire("None"),
+                    security_mode: crate::bff::model::AdvertisedMode::from_wire("None"),
                 }],
             }],
         });
@@ -608,8 +608,8 @@ fn lds_urls_merge_into_host_result_instead_of_being_dropped() {
             application_uri: "urn:sim".to_string(),
             endpoints: vec![UaEndpointInfo {
                 url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
-                security_policy: "None".to_string(),
-                security_mode: "None".to_string(),
+                security_policy: crate::bff::model::AdvertisedPolicy::from_wire("None"),
+                security_mode: crate::bff::model::AdvertisedMode::from_wire("None"),
             }],
         }],
     });
@@ -656,8 +656,8 @@ fn different_application_uris_are_never_merged_by_url() {
                 application_uri: uri.to_string(),
                 endpoints: vec![UaEndpointInfo {
                     url: "opc.tcp://shared:4840".parse().unwrap(),
-                    security_policy: String::new(),
-                    security_mode: String::new(),
+                    security_policy: crate::bff::model::AdvertisedPolicy::Unspecified,
+                    security_mode: crate::bff::model::AdvertisedMode::Unspecified,
                 }],
             }],
         );

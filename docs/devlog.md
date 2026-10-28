@@ -300,3 +300,9 @@ grouping 2/2, security-filter 10/10, locale 9/9; Windows typecheck прошёл,
 Исправлен знак смещения FILETIME→Unix для DA дат; 0 остаётся отсутствующим
 временем. Linux checked-conversion regression 1/1; Windows FILETIME wrapper
 прошёл проверку типов, runtime ещё нужен в CI.
+
+Advertised policy/mode представляют отсутствие, известное или неизвестное
+значение; неизвестные и неродной `#None` не понижаются, scanner сохраняет
+несколько вариантов одного URL. Linux UA 62/62, GUI security 10/10, live CLI
+2/2, Windows typecheck и Rust 1.95 contract check прошли. Windows runtime и
+оставшиеся этапы открыты.

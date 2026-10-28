@@ -350,8 +350,10 @@ async fn scan_ua_server_at(
             };
             Some(UaEndpointInfo {
                 url,
-                security_policy: endpoint.security_policy_uri.to_string(),
-                security_mode: format!("{:?}", endpoint.security_mode),
+                security_policy: crate::bff::model::AdvertisedPolicy::from_wire(
+                    &endpoint.security_policy_uri.to_string(),
+                ),
+                security_mode: super::security::advertised_mode(endpoint.security_mode),
             })
         })
         .collect();
@@ -383,10 +385,20 @@ pub(super) fn merge_scan_batch(
                 let mut identities: HashSet<_> = existing
                     .endpoints
                     .iter()
-                    .map(|owned| owned.url.identity())
+                    .map(|owned| {
+                        (
+                            owned.url.identity(),
+                            owned.security_policy.clone(),
+                            owned.security_mode.clone(),
+                        )
+                    })
                     .collect();
                 for endpoint in server.endpoints {
-                    let identity = endpoint.url.identity();
+                    let identity = (
+                        endpoint.url.identity(),
+                        endpoint.security_policy.clone(),
+                        endpoint.security_mode.clone(),
+                    );
                     if identities.insert(identity) {
                         existing.endpoints.push(endpoint.clone());
                         added.push(endpoint);

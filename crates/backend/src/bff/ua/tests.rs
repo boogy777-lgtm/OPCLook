@@ -516,8 +516,8 @@ fn relative_path_parsing() {
 fn ep(url: &str, policy: &str, mode: &str) -> UaEndpointInfo {
     UaEndpointInfo {
         url: url.parse().unwrap(),
-        security_policy: policy.to_string(),
-        security_mode: mode.to_string(),
+        security_policy: crate::bff::model::AdvertisedPolicy::from_wire(policy),
+        security_mode: crate::bff::model::AdvertisedMode::from_wire(mode),
     }
 }
 
@@ -547,7 +547,7 @@ fn auto_prefers_none_then_basic256_sha256() {
     // SignAndEncrypt).
     let no_none: Vec<UaEndpointInfo> = eps()
         .into_iter()
-        .filter(|e| !e.security_policy.ends_with("#None"))
+        .filter(|e| e.security_policy.known() != Some(crate::bff::model::UaSecurityPolicy::None))
         .collect();
     let (uri, mode) = resolve_security(SECURITY_POLICY_AUTO, SECURITY_MODE_AUTO, &no_none).unwrap();
     assert!(uri.ends_with("#Basic256Sha256"), "got {uri}");
@@ -559,7 +559,7 @@ fn auto_sign_mode_matches_over_encrypt() {
     // Auto policy + Sign mode: only the Sign endpoint matches.
     let items: Vec<UaEndpointInfo> = eps()
         .into_iter()
-        .filter(|e| e.security_mode == "Sign")
+        .filter(|e| e.security_mode.known() == Some(crate::bff::model::UaSecurityMode::Sign))
         .collect();
     let (uri, mode) = resolve_security(SECURITY_POLICY_AUTO, SECURITY_MODE_SIGN, &items).unwrap();
     assert_eq!(mode, MessageSecurityMode::Sign);
@@ -655,7 +655,9 @@ fn unknown_advertised_policy_is_an_error_not_none() {
 fn concrete_mode_with_auto_policy_picks_first_matching() {
     let only_encrypt: Vec<UaEndpointInfo> = eps()
         .into_iter()
-        .filter(|e| e.security_mode == "SignAndEncrypt")
+        .filter(|e| {
+            e.security_mode.known() == Some(crate::bff::model::UaSecurityMode::SignAndEncrypt)
+        })
         .collect();
     let (uri, mode) = resolve_security(
         SECURITY_POLICY_AUTO,
@@ -969,8 +971,8 @@ fn scan_server_keys_prefer_application_uri_then_url() {
         application_uri: "urn:Example:A".to_string(),
         endpoints: vec![UaEndpointInfo {
             url: "opc.tcp://10.0.0.5:4840".parse().unwrap(),
-            security_policy: String::new(),
-            security_mode: String::new(),
+            security_policy: crate::bff::model::AdvertisedPolicy::Unspecified,
+            security_mode: crate::bff::model::AdvertisedMode::Unspecified,
         }],
     };
     assert_eq!(
@@ -992,8 +994,12 @@ fn scan_server_keys_prefer_application_uri_then_url() {
 fn scanner_preserves_distinct_url_resources() {
     let endpoint = |url: &str| UaEndpointInfo {
         url: url.parse().unwrap(),
-        security_policy: "None".into(),
-        security_mode: "None".into(),
+        security_policy: crate::bff::model::AdvertisedPolicy::Known(
+            crate::bff::model::UaSecurityPolicy::None,
+        ),
+        security_mode: crate::bff::model::AdvertisedMode::Known(
+            crate::bff::model::UaSecurityMode::None,
+        ),
     };
     let server = |endpoints| UaServerInfo {
         application_name: "A".into(),
@@ -1017,11 +1023,66 @@ fn scanner_preserves_distinct_url_resources() {
 }
 
 #[test]
+fn scanner_preserves_security_variants_at_one_url() {
+    let endpoint = |policy: &str, mode: &str| UaEndpointInfo {
+        url: "opc.tcp://host:4840".parse().unwrap(),
+        security_policy: crate::bff::model::AdvertisedPolicy::from_wire(policy),
+        security_mode: crate::bff::model::AdvertisedMode::from_wire(mode),
+    };
+    let server = |endpoints| UaServerInfo {
+        application_name: "A".into(),
+        application_uri: "urn:A".into(),
+        endpoints,
+    };
+    let mut seen = std::collections::HashMap::new();
+    merge_scan_batch(&mut seen, vec![server(vec![endpoint("None", "None")])]);
+    let (fresh, _) = merge_scan_batch(
+        &mut seen,
+        vec![server(vec![
+            endpoint("None", "None"),
+            endpoint("FuturePolicy", "Sign"),
+        ])],
+    );
+    assert_eq!(fresh[0].endpoints.len(), 1);
+    assert!(
+        matches!(&fresh[0].endpoints[0].security_policy, crate::bff::model::AdvertisedPolicy::Unknown(value) if value == "FuturePolicy")
+    );
+}
+
+#[test]
+fn unknown_or_missing_advertised_security_is_never_coerced_to_none() {
+    let padded = crate::bff::model::AdvertisedPolicy::from_wire("  FuturePolicy  ");
+    assert!(
+        matches!(padded, crate::bff::model::AdvertisedPolicy::Unknown(value) if value == "  FuturePolicy  ")
+    );
+    let unknown = ep("opc.tcp://host", "FuturePolicy", "Sign");
+    assert!(
+        matches!(&unknown.security_policy, crate::bff::model::AdvertisedPolicy::Unknown(value) if value == "FuturePolicy")
+    );
+    assert!(resolve_security(SECURITY_POLICY_AUTO, SECURITY_MODE_AUTO, &[unknown]).is_err());
+    let foreign_none = ep(
+        "opc.tcp://host",
+        "https://example.invalid/policy#None",
+        "None",
+    );
+    assert!(
+        matches!(&foreign_none.security_policy, crate::bff::model::AdvertisedPolicy::Unknown(value) if value == "https://example.invalid/policy#None")
+    );
+    assert!(resolve_security(SECURITY_POLICY_AUTO, SECURITY_MODE_AUTO, &[foreign_none]).is_err());
+    let missing = ep("opc.tcp://host", "", "");
+    assert!(resolve_security(SECURITY_POLICY_AUTO, SECURITY_MODE_AUTO, &[missing]).is_err());
+    assert_eq!(
+        super::security::advertised_mode(opcua::types::MessageSecurityMode::Invalid),
+        crate::bff::model::AdvertisedMode::Unknown("Invalid".into())
+    );
+}
+
+#[test]
 fn scanner_unions_endpoints_for_the_same_application_uri() {
     let endpoint = |url: &str| UaEndpointInfo {
         url: url.parse().unwrap(),
-        security_policy: "None".to_string(),
-        security_mode: "None".to_string(),
+        security_policy: crate::bff::model::AdvertisedPolicy::from_wire("None"),
+        security_mode: crate::bff::model::AdvertisedMode::from_wire("None"),
     };
     let first = UaServerInfo {
         application_name: "CODESYS".to_string(),

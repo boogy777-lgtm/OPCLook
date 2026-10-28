@@ -935,12 +935,81 @@ pub struct ServerEntry {
     pub description: String,
 }
 
+/// An advertised value can be absent, supported, or unknown to this client.
+/// Unknown wire values remain visible and can never become an Auto/None choice.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Advertised<T> {
+    Unspecified,
+    Known(T),
+    Unknown(String),
+}
+
+pub type AdvertisedPolicy = Advertised<UaSecurityPolicy>;
+pub type AdvertisedMode = Advertised<UaSecurityMode>;
+
+impl<T: Copy> Advertised<T> {
+    pub fn known(&self) -> Option<T> {
+        match self {
+            Self::Known(value) => Some(*value),
+            _ => None,
+        }
+    }
+    pub fn is_unspecified(&self) -> bool {
+        matches!(self, Self::Unspecified)
+    }
+}
+impl AdvertisedPolicy {
+    pub fn from_wire(text: &str) -> Self {
+        let raw = text;
+        let text = text.trim();
+        if text.is_empty() {
+            return Self::Unspecified;
+        }
+        // A policy URI is an identity, not just its fragment. Never turn an
+        // unrecognized namespace ending in `#None` into an unprotected choice.
+        if text.contains('#') && !text.starts_with("http://opcfoundation.org/UA/SecurityPolicy#") {
+            return Self::Unknown(raw.to_owned());
+        }
+        match UaSecurityPolicy::from_advertised(text) {
+            Some(policy)
+                if policy != UaSecurityPolicy::Auto
+                    && (!text.contains('#') || policy.as_uri() == Some(text)) =>
+            {
+                Self::Known(policy)
+            }
+            _ => Self::Unknown(raw.to_owned()),
+        }
+    }
+}
+impl AdvertisedMode {
+    pub fn from_wire(text: &str) -> Self {
+        let raw = text;
+        let text = text.trim();
+        if text.is_empty() {
+            return Self::Unspecified;
+        }
+        match UaSecurityMode::from_advertised(text) {
+            Some(mode) if mode != UaSecurityMode::Auto => Self::Known(mode),
+            _ => Self::Unknown(raw.to_owned()),
+        }
+    }
+}
+impl<T: fmt::Display> fmt::Display for Advertised<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unspecified => Ok(()),
+            Self::Known(value) => value.fmt(f),
+            Self::Unknown(value) => f.write_str(value),
+        }
+    }
+}
+
 /// A single OPC UA endpoint as reported by a discovery search.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UaEndpointInfo {
     pub url: UaUrl,
-    pub security_policy: String,
-    pub security_mode: String,
+    pub security_policy: AdvertisedPolicy,
+    pub security_mode: AdvertisedMode,
 }
 
 /// A single OPC UA server found by the discovery search.

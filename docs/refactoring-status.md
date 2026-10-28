@@ -329,3 +329,13 @@ FILETIME DA timestamps теперь вычитают смещение 1601→197
 доля, тик до epoch, ноль и u64::MAX: 1/1); Windows wrapper тест с настоящим
 FILETIME прошёл только i686 backend `--tests` typecheck без resource skip и
 ожидает Windows runtime. Реальный DA и итоговый exact-head CI остаются открыты.
+
+Advertised security теперь `Unspecified/Known/Unknown`: неизвестные wire
+значения сохраняются, не становятся None/Auto, а SDK mode сопоставляется
+напрямую, без Debug-string roundtrip. Неизвестный namespace с `#None` не
+считается стандартной политикой. Scanner сохраняет разные пары security одного
+URL. Linux backend UA 62/62, GUI security 10/10, live CLI sample 2/2;
+Windows workspace all-targets typecheck с test-only флагами и contract check
+на Rust 1.95 прошли. Для Linux локально добавлен codegen-units=1 для engine
+после повреждённого metadata; это не настройка репозитория. Windows runtime,
+NonZero индексы, role IDs и полный gate остаются открыты.

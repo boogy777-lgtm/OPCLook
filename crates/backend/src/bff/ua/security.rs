@@ -1,5 +1,5 @@
 use crate::bff::model::{
-    BackendMsg, UaEndpointInfo, UaProtection, UaSecurityMode, UaSecurityPolicy,
+    AdvertisedMode, BackendMsg, UaEndpointInfo, UaProtection, UaSecurityMode, UaSecurityPolicy,
     validate_security_pair,
 };
 use opcua::types::MessageSecurityMode;
@@ -35,8 +35,8 @@ impl AdvertisedEndpoint {
     /// `None` so they are reported, not silently coerced.
     fn parse(endpoint: &UaEndpointInfo) -> Option<Self> {
         Some(Self {
-            policy: UaSecurityPolicy::from_advertised(&endpoint.security_policy)?,
-            mode: UaSecurityMode::from_advertised(&endpoint.security_mode)?,
+            policy: endpoint.security_policy.known()?,
+            mode: endpoint.security_mode.known()?,
         })
     }
 
@@ -61,6 +61,18 @@ fn message_security_mode(mode: UaSecurityMode) -> Option<MessageSecurityMode> {
     }
 }
 
+/// Translate the SDK enum directly; invalid wire modes remain unknown.
+pub(super) fn advertised_mode(mode: MessageSecurityMode) -> AdvertisedMode {
+    match mode {
+        MessageSecurityMode::None => AdvertisedMode::Known(UaSecurityMode::None),
+        MessageSecurityMode::Sign => AdvertisedMode::Known(UaSecurityMode::Sign),
+        MessageSecurityMode::SignAndEncrypt => {
+            AdvertisedMode::Known(UaSecurityMode::SignAndEncrypt)
+        }
+        MessageSecurityMode::Invalid => AdvertisedMode::Unknown("Invalid".to_string()),
+    }
+}
+
 /// Human/technical summary of what the server offers, used in errors.
 fn advertised_summary(endpoints: &[UaEndpointInfo]) -> String {
     if endpoints.is_empty() {
@@ -69,12 +81,8 @@ fn advertised_summary(endpoints: &[UaEndpointInfo]) -> String {
     endpoints
         .iter()
         .map(|e| {
-            let policy = UaSecurityPolicy::from_advertised(&e.security_policy)
-                .map(|p| p.as_str().to_string())
-                .unwrap_or_else(|| format!("{:?}", e.security_policy));
-            let mode = UaSecurityMode::from_advertised(&e.security_mode)
-                .map(|m| m.as_str().to_string())
-                .unwrap_or_else(|| format!("{:?}", e.security_mode));
+            let policy = &e.security_policy;
+            let mode = &e.security_mode;
             format!("{policy}/{mode}")
         })
         .collect::<Vec<_>>()

@@ -1139,8 +1139,10 @@ pub(super) async fn connect(
         Ok(url) => {
             discovered.push(UaEndpointInfo {
                 url,
-                security_policy: e.security_policy_uri.to_string(),
-                security_mode: format!("{:?}", e.security_mode),
+                security_policy: crate::bff::model::AdvertisedPolicy::from_wire(
+                    &e.security_policy_uri.to_string(),
+                ),
+                security_mode: super::security::advertised_mode(e.security_mode),
             });
             true
         }
