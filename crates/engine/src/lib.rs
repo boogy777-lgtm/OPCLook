@@ -309,7 +309,7 @@ impl<C> Engine<C> {
                 EventKind::Error {
                     operation: Operation::Read,
                     ..
-                } => view.read_in_flight = false,
+                } if correlated_read => view.read_in_flight = false,
                 EventKind::Values { .. } if correlated_read => view.read_in_flight = false,
                 EventKind::SubscriptionState { state } => {
                     view.subscription = *state;
@@ -614,6 +614,36 @@ mod tests {
                 .as_slice(),
             [Due::Read { .. }]
         ));
+    }
+    #[test]
+    fn unsolicited_read_error_does_not_release_pending_read() {
+        let mut engine = Engine::<()>::default();
+        let mut view =
+            SessionRuntime::new(EndpointSpec::ua("opc.tcp://127.0.0.1:4840"), Instant::now());
+        view.state = SessionState::Connected;
+        view.items.insert(7, true);
+        view.read_in_flight = true;
+        engine.sessions.insert(1, view);
+        engine.requests.insert(
+            (1, 22),
+            PendingRequest {
+                operation: Operation::Read,
+                sent: Instant::now(),
+                ctx: (),
+            },
+        );
+        engine
+            .accept(&Event {
+                request_id: 0,
+                session: 1,
+                kind: EventKind::Error {
+                    operation: Operation::Read,
+                    message: BackendMsg::raw("late"),
+                },
+            })
+            .unwrap();
+        assert!(engine.session(1).unwrap().read_in_flight);
+        assert!(engine.has_pending(1, 22));
     }
     #[test]
     fn cap_cannot_be_bypassed_by_reusing_da_id() {
