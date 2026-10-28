@@ -176,7 +176,10 @@ unsafe fn array_to_value(variant: &VARIANT, base: u16, depth: usize) -> Value {
     let count = bounded_array_len(lb, ub);
     // SAFETY: parray is a live SAFEARRAY and exposes its element size.
     let elem_size = unsafe { SafeArrayGetElemsize(parray) } as usize;
-    if expected_array_element_size(base).is_some_and(|expected| expected != elem_size) {
+    let Some(expected_size) = expected_array_element_size(base) else {
+        return Value::Other(format!("Unsupported array element type: {base}"));
+    };
+    if expected_size != elem_size {
         return Value::Other("Invalid array element size".to_string());
     }
     if count == 0 {
@@ -750,6 +753,13 @@ mod tests {
         // before interpreting it as a BSTR pointer.
         let value = unsafe { variant_to_value(&variant) };
         assert_eq!(value, Value::Other("Invalid array element size".into()));
+        set_vt(&mut variant, 0x2000 | 72);
+        // SAFETY: the same live array is deliberately labelled with an unsupported tag.
+        let unsupported = unsafe { variant_to_value(&variant) };
+        assert_eq!(
+            unsupported,
+            Value::Other("Unsupported array element type: 72".into())
+        );
         // Destroy directly because the deliberately mismatched tag is not a valid
         // ownership description for VariantClear.
         // SAFETY: this test owns the live array and did not transfer it elsewhere.
