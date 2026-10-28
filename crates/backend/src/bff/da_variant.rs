@@ -113,6 +113,11 @@ unsafe fn scalar_to_value(variant: &VARIANT, base: u16) -> Value {
     }
 }
 
+/// Limit in i64 before converting to usize, including on 32-bit Windows.
+fn bounded_array_len(lower: i32, upper: i32) -> usize {
+    (i64::from(upper) - i64::from(lower) + 1).clamp(0, MAX_ARRAY_ITEMS as i64) as usize
+}
+
 unsafe fn array_to_value(variant: &VARIANT, base: u16) -> Value {
     let parray = unsafe { variant.Anonymous.Anonymous.Anonymous.parray };
     if parray.is_null() {
@@ -123,22 +128,25 @@ unsafe fn array_to_value(variant: &VARIANT, base: u16) -> Value {
     }
     let lb = unsafe { SafeArrayGetLBound(parray, 1) }.unwrap_or(0);
     let ub = unsafe { SafeArrayGetUBound(parray, 1) }.unwrap_or(-1);
-    let count = (i64::from(ub) - i64::from(lb) + 1).max(0) as usize;
+    let count = bounded_array_len(lb, ub);
+    if count == 0 {
+        return Value::Array(Vec::new());
+    }
     let mut data: *mut core::ffi::c_void = std::ptr::null_mut();
     if unsafe { SafeArrayAccessData(parray, &raw mut data) }.is_err() {
         return Value::Array(Vec::new());
     }
 
-    let mut out = Vec::with_capacity(count.min(MAX_ARRAY_ITEMS));
+    let mut out = Vec::with_capacity(count);
     if base == 12 {
-        let len = count.min(MAX_ARRAY_ITEMS);
+        let len = count;
         let vars = unsafe { std::slice::from_raw_parts(data.cast::<VARIANT>(), len) };
         for v in vars {
             out.push(unsafe { variant_to_value(v) });
         }
     } else {
         let elem_size = unsafe { SafeArrayGetElemsize(parray) } as usize;
-        let len = count.min(MAX_ARRAY_ITEMS);
+        let len = count;
         for i in 0..len {
             let mut tmp = VARIANT::default();
             unsafe {
@@ -582,6 +590,13 @@ mod tests {
             Value::Array(vec![Value::I64(1), Value::Str("not an integer".into())]),
         ]);
         assert!(build_array_variant(&value, 12, 12 | 0x2000).is_err());
+    }
+
+    #[test]
+    fn full_signed_bound_range_is_capped_before_usize_conversion() {
+        assert_eq!(bounded_array_len(i32::MIN, i32::MAX), MAX_ARRAY_ITEMS);
+        assert_eq!(bounded_array_len(i32::MAX, i32::MIN), 0);
+        assert_eq!(bounded_array_len(i32::MIN, i32::MIN + 1), 2);
     }
 
     #[test]
