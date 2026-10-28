@@ -193,3 +193,7 @@ GUI DA discovery/connect переданы Engine и ограниченному r
 ошибки локализуются из типизированных событий. Измерено на Linux: GUI lib 186,
 Engine 11, locale 9 и тест реального кадра App::update прошли. Проверка
 реального Windows pipe/UAC/DA и живого CLI остаётся открытой.
+
+Измерено на Linux: 2 live subprocess-теста CLI прошли против sample UA;
+проверены browse/read/write/read, три принудительных poll, push после 3 секунд
+покоя при timeout 1 секунда, Ctrl+C, отсутствие секретов в ошибке и BrokenPipe.

@@ -117,3 +117,8 @@ GUI теперь ставит DA discovery/connect в очередь Engine, в�
 прошли GUI lib 186, Engine 11, locale 9 и новый тест с реальными кадрами
 `App::update` (по одному измеренному запуску). Windows runtime, реальный DA,
 UAC и live CLI всё ещё не проверены; общий гейт текущего head не завершён.
+
+Измерено на Linux: два subprocess live-теста CLI против sample UA прошли
+(browse/read/write/read, три принудительных poll, push после 3 секунд покоя при
+1-секундном timeout, Ctrl+C, секреты окружения и закрытый stdout). Тесты
+ограничены Unix; Windows DA/UAC и финальный гейт текущего head остаются открыты.
