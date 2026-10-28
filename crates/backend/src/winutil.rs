@@ -34,6 +34,25 @@ impl Drop for OwnedHandle {
     }
 }
 
+/// Owns a table returned by an IP Helper API.
+pub(crate) struct MibTable<T>(*mut T);
+impl<T> MibTable<T> {
+    /// # Safety
+    /// `ptr` must be a uniquely owned, non-null IP Helper table allocation.
+    pub(crate) unsafe fn from_raw(ptr: *mut T) -> Self {
+        Self(ptr)
+    }
+    pub(crate) fn as_ptr(&self) -> *mut T {
+        self.0
+    }
+}
+impl<T> Drop for MibTable<T> {
+    fn drop(&mut self) {
+        // SAFETY: construction transfers the sole FreeMibTable obligation.
+        unsafe { windows::Win32::NetworkManagement::IpHelper::FreeMibTable(self.0.cast()) };
+    }
+}
+
 /// A loaded system DLL, retained for at least as long as any resolved symbol.
 pub(crate) struct SystemLibrary(usize);
 

@@ -11,6 +11,8 @@
 //! The helper only accepts host routes; the application never edits the system
 //! routing table itself.
 
+#![deny(clippy::undocumented_unsafe_blocks)]
+
 use crate::constants::{
     DA_HELPER_EXE_ENV, DA_HELPER_PROTOCOL_VERSION, DA_HELPER_START_TIMEOUT, DA_ROUTE_LIFETIME_SECS,
 };
@@ -937,10 +939,12 @@ fn wait_for_pipe(name: &str, timeout: Duration) -> Result<(), String> {
     use windows::core::HSTRING;
     let wide = HSTRING::from(name);
     let millis = timeout.as_millis().min(u32::MAX as u128) as u32;
+    // SAFETY: the HSTRING is terminated and stays live for the call.
     let ok = unsafe { WaitNamedPipeW(&wide, millis) };
     if ok.as_bool() {
         Ok(())
     } else {
+        // SAFETY: this immediately reads the calling thread's last error.
         let error = unsafe { GetLastError() };
         Err(format!("WaitNamedPipeW failed with {}", error.0))
     }
@@ -955,8 +959,10 @@ fn best_route_luid(target: IpAddr) -> Option<u64> {
     let destination = sockaddr_inet(target);
     let mut best = MIB_IPFORWARD_ROW2::default();
     let mut source = SOCKADDR_INET::default();
+    // SAFETY: destination is initialized and both output structures are writable.
     let result = unsafe { GetBestRoute2(None, 0, None, &destination, 0, &mut best, &mut source) };
     if result == ERROR_SUCCESS {
+        // SAFETY: GetBestRoute2 initialized the returned LUID union.
         Some(unsafe { best.InterfaceLuid.Value })
     } else {
         None
@@ -971,20 +977,23 @@ fn best_route_luid(_target: IpAddr) -> Option<u64> {
 #[cfg(windows)]
 fn host_route_luid(target: IpAddr) -> Option<u64> {
     use windows::Win32::Foundation::ERROR_SUCCESS;
-    use windows::Win32::NetworkManagement::IpHelper::{
-        FreeMibTable, GetIpForwardTable2, MIB_IPFORWARD_TABLE2,
-    };
+    use windows::Win32::NetworkManagement::IpHelper::{GetIpForwardTable2, MIB_IPFORWARD_TABLE2};
     use windows::Win32::Networking::WinSock::{AF_INET, AF_INET6};
 
     let family = if target.is_ipv4() { AF_INET } else { AF_INET6 };
     let mut table: *mut MIB_IPFORWARD_TABLE2 = std::ptr::null_mut();
+    // SAFETY: family is valid and table points to writable output storage.
     let result = unsafe { GetIpForwardTable2(family, &mut table) };
     if result != ERROR_SUCCESS || table.is_null() {
         return None;
     }
+    // SAFETY: success returned a uniquely owned IP Helper allocation.
+    let table = unsafe { crate::winutil::MibTable::from_raw(table) };
     let mut found = None;
+    // SAFETY: the API table contains NumEntries initialized rows and remains
+    // owned by the guard throughout this traversal.
     unsafe {
-        let table_ref = &*table;
+        let table_ref = &*table.as_ptr();
         for index in 0..table_ref.NumEntries as usize {
             let row = &*table_ref.Table.as_ptr().add(index);
             let prefix = row.DestinationPrefix.PrefixLength;
@@ -994,7 +1003,6 @@ fn host_route_luid(target: IpAddr) -> Option<u64> {
                 break;
             }
         }
-        FreeMibTable(table as *const _);
     }
     found
 }
@@ -1046,6 +1054,7 @@ fn sockaddr_inet(ip: IpAddr) -> windows::Win32::Networking::WinSock::SOCKADDR_IN
 #[cfg(windows)]
 fn sockaddr_ip(address: &windows::Win32::Networking::WinSock::SOCKADDR_INET) -> Option<IpAddr> {
     use windows::Win32::Networking::WinSock::{AF_INET, AF_INET6};
+    // SAFETY: the family discriminant selects the corresponding sockaddr union member.
     unsafe {
         match address.si_family {
             AF_INET => {
@@ -1322,6 +1331,7 @@ mod tests {
             )
         };
         assert!(!handle.is_invalid());
+        // SAFETY: CreateNamedPipeW returned the unique handle transferred to File.
         let _server = unsafe { std::fs::File::from_raw_handle(handle.0 as _) };
         let client = std::fs::OpenOptions::new()
             .read(true)
