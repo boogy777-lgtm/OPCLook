@@ -15,7 +15,7 @@
   Исключение — доказуемо безошибочный случай: `.expect("почему не упадёт")`.
 - Ответы серверов OPC, файлы CSV/настроек — враждебный вход: `get()` вместо
   `[i]`, `checked_*`/`saturating_*`, ограниченные аллокации и рекурсия.
-- `unsafe` только в COM/WinAPI-обвязке (`crates/backend/src/bff/da.rs`, `crates/backend/src/bff/da_variant.rs`,
+- `unsafe` только в COM/WinAPI-обвязке (`crates/backend/src/bff/da.rs`, `crates/backend/src/bff/da_variant.rs`, `crates/backend/src/bff/com.rs`,
   `crates/backend/src/net.rs`, `crates/backend/src/bff/net.rs`, `crates/backend/src/bff/mdns.rs`, `src/da_route.rs`,
   `nethelper/`), каждый блок с `// SAFETY:`.
 - Отравленный lock не фатален: `lock().unwrap_or_else(PoisonError::into_inner)`.

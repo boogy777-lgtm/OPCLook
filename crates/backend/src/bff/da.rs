@@ -1,3 +1,4 @@
+use super::com::{CoAllocation, CoString};
 use super::da_clsid::{ClsidLookup, DiscoveredClsids, is_local_host, resolve_clsid};
 use super::da_router::{DaHost, SESSION_JOIN_BUDGET, run_router};
 use super::da_status::{ServerStatusInfo, check_server_state, format_connect_info};
@@ -451,28 +452,27 @@ fn send_error(
     );
 }
 
-/// Owns a nullable COM-allocated string returned by a server or COM API.
-struct CoString(PWSTR);
+/// GetStatus transfers both the structure and its optional vendor string.
+struct ServerStatus(CoAllocation<crate::opc::bindings::da::tagOPCSERVERSTATUS>);
 
-impl CoString {
+impl ServerStatus {
     /// # Safety
-    /// A non-null pointer must own a NUL-terminated CoTaskMem allocation.
-    unsafe fn from_raw(ptr: PWSTR) -> Option<Self> {
-        if ptr.is_null() { None } else { Some(Self(ptr)) }
+    /// `ptr` must be a non-null, uniquely owned GetStatus result.
+    unsafe fn from_raw(ptr: *mut crate::opc::bindings::da::tagOPCSERVERSTATUS) -> Self {
+        // SAFETY: the caller transfers the task allocation to this guard.
+        Self(unsafe { CoAllocation::from_raw(ptr) })
     }
 
-    fn text(&self) -> String {
-        // SAFETY: construction requires a valid NUL-terminated COM string.
-        unsafe { self.0.to_string().unwrap_or_default() }
+    fn get(&self) -> &crate::opc::bindings::da::tagOPCSERVERSTATUS {
+        // SAFETY: construction requires a live non-null GetStatus allocation.
+        unsafe { &*self.0.as_ptr() }
     }
 }
 
-impl Drop for CoString {
+impl Drop for ServerStatus {
     fn drop(&mut self) {
-        // SAFETY: this guard uniquely owns a non-null CoTaskMem allocation.
-        unsafe {
-            CoTaskMemFree(Some(self.0.0 as *const c_void));
-        }
+        // SAFETY: GetStatus transfers the vendor string with the structure.
+        unsafe { drop(CoString::from_raw(self.get().szVendorInfo)) };
     }
 }
 
@@ -544,28 +544,25 @@ impl DaSession {
         })?;
 
         let mut status_info = None;
+        // SAFETY: the live server transfers the GetStatus result to the caller.
         if let Ok(status) = unsafe { server.GetStatus() } {
             if !status.is_null() {
-                // SAFETY: `status` is a non-null block returned by GetStatus; it and
-                // the vendor string are copied here and freed with CoTaskMemFree.
-                unsafe {
-                    let s = &*status;
-                    let vendor = if s.szVendorInfo.is_null() {
-                        String::new()
-                    } else {
-                        let text = s.szVendorInfo.to_string().unwrap_or_default();
-                        CoTaskMemFree(Some(s.szVendorInfo.0 as *const c_void));
-                        text
-                    };
-                    status_info = Some((
-                        s.wMajorVersion,
-                        s.wMinorVersion,
-                        s.wBuildNumber,
-                        s.dwGroupCount,
-                        vendor,
-                    ));
-                    CoTaskMemFree(Some(status as *const c_void));
-                }
+                // SAFETY: a successful non-null GetStatus result is owned here.
+                let status = unsafe { ServerStatus::from_raw(status) };
+                let s = status.get();
+                let vendor = if s.szVendorInfo.is_null() {
+                    String::new()
+                } else {
+                    // SAFETY: GetStatus supplies a NUL-terminated vendor string.
+                    unsafe { s.szVendorInfo.to_string().unwrap_or_default() }
+                };
+                status_info = Some((
+                    s.wMajorVersion,
+                    s.wMinorVersion,
+                    s.wBuildNumber,
+                    s.dwGroupCount,
+                    vendor,
+                ));
             }
         }
         let info = format_connect_info(
@@ -910,16 +907,9 @@ impl DaSession {
         if status.is_null() {
             return Err(BackendMsg::DaNoState);
         }
-        // SAFETY: `status` is a non-null block returned by GetStatus; the state is
-        // copied before it and the vendor string are freed with CoTaskMemFree.
-        let state = unsafe {
-            let state = (*status).dwServerState.0;
-            if !(*status).szVendorInfo.is_null() {
-                CoTaskMemFree(Some((*status).szVendorInfo.0 as *const c_void));
-            }
-            CoTaskMemFree(Some(status as *const c_void));
-            state
-        };
+        // SAFETY: successful GetStatus returned a non-null owned structure.
+        let status = unsafe { ServerStatus::from_raw(status) };
+        let state = status.get().dwServerState.0;
         check_server_state(state)
     }
 
@@ -929,13 +919,13 @@ impl DaSession {
         }
         let mut message = format!("0x{:08X}", hr.0 as u32);
         if let Ok(text) = unsafe { self.server.GetErrorString(hr, 0) } {
-            if !text.is_null() {
-                let localized = unsafe { text.to_string().unwrap_or_default() };
+            // SAFETY: GetErrorString transfers its nullable task allocation.
+            if let Some(text) = unsafe { CoString::from_raw(text) } {
+                let localized = text.text();
                 if !localized.is_empty() {
                     message.push_str(": ");
                     message.push_str(&localized);
                 }
-                unsafe { CoTaskMemFree(Some(text.0 as *const c_void)) };
             }
         } else {
             message.push_str(": ");
@@ -1036,20 +1026,14 @@ fn class_details(list: &IOPCServerList, clsid: &GUID) -> Option<ServerEntry> {
     let mut prog_id = PWSTR::null();
     let mut user_type = PWSTR::null();
     let ok = unsafe { list.GetClassDetails(clsid, &raw mut prog_id, &raw mut user_type) }.is_ok();
-    let prog = if prog_id.is_null() {
-        String::new()
-    } else {
-        let text = unsafe { prog_id.to_string().unwrap_or_default() };
-        unsafe { CoTaskMemFree(Some(prog_id.0 as *const c_void)) };
-        text
-    };
-    let descr = if user_type.is_null() {
-        String::new()
-    } else {
-        let text = unsafe { user_type.to_string().unwrap_or_default() };
-        unsafe { CoTaskMemFree(Some(user_type.0 as *const c_void)) };
-        text
-    };
+    // SAFETY: GetClassDetails transfers each non-null output allocation.
+    let prog = unsafe { CoString::from_raw(prog_id) }
+        .map(|s| s.text())
+        .unwrap_or_default();
+    // SAFETY: the other output is a separate nullable COM allocation.
+    let descr = unsafe { CoString::from_raw(user_type) }
+        .map(|s| s.text())
+        .unwrap_or_default();
     if !ok && prog.is_empty() {
         return None;
     }

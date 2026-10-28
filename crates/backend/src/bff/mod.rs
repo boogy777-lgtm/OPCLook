@@ -2,6 +2,8 @@
 // other hosts (Linux check stand) get a worker that answers every command
 // with an "unsupported on this platform" error.
 #[cfg(windows)]
+mod com;
+#[cfg(windows)]
 pub mod da;
 #[cfg(not(windows))]
 #[path = "da_unsupported.rs"]
