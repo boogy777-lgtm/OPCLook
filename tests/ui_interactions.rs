@@ -4662,3 +4662,28 @@ fn a3_failed_connectivity_test_marks_rows_stale_like_disconnected() {
         assert_eq!(row.quality.text, stale);
     }
 }
+
+#[test]
+fn da_preparation_failure_is_rendered_by_real_update_frames() {
+    with_settings_lock(|| {
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        set_ru(&mut app);
+        app.dialogs.connect.open = true;
+        assert!(app.connect_from_dialog(EndpointSpec::da("10.23.45.67", "Srv.Test")));
+        assert!(app.dialogs.connect.connecting.is_some());
+        let mut h = Harness::builder()
+            .with_size([1200.0, 900.0])
+            .with_accessibility_check(false)
+            .allow_missing_glyphs()
+            .build_ui_state(|ui, app: &mut App| app.update(ui), app);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while h.state().dialogs.connect.error.is_none() && std::time::Instant::now() < deadline {
+            h.run_steps(1);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(h.state().dialogs.connect.error.is_some());
+        assert!(h.state().dialogs.connect.connecting.is_none());
+        assert_eq!(h.state().sessions[0].state, SessionState::Disconnected);
+    });
+}

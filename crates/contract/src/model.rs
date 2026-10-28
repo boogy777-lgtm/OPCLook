@@ -116,6 +116,7 @@ pub struct DaServerStatus {
 pub enum BackendMsg {
     // ---- pass-through / composition ----
     Raw(String),
+    DaRoute(crate::da_route::DaRouteError),
     Context {
         context: String,
         cause: Box<BackendMsg>,

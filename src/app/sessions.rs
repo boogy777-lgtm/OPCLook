@@ -106,21 +106,7 @@ impl App {
         }
 
         let mut endpoint = endpoint;
-        let mut da_prepared = None;
-        if endpoint.protocol == Protocol::OpcDa {
-            match self.prepare_da_route_for_host(&endpoint.host) {
-                Ok(prepared) => da_prepared = Some(prepared),
-                Err(error) => {
-                    let message = error.localized(self.lang());
-                    self.status = message.clone();
-                    self.journal.error(message.clone());
-                    if self.dialogs.connect.open {
-                        self.dialogs.connect.error = Some(message);
-                    }
-                    return false;
-                }
-            }
-        } else if endpoint.ua_bind.is_none() {
+        if endpoint.protocol == Protocol::OpcUa && endpoint.ua_bind.is_none() {
             match self.ua_binding_for_endpoint(&endpoint.address) {
                 Ok(binding) => endpoint.ua_bind = Some(binding),
                 Err(message) => {
@@ -143,13 +129,27 @@ impl App {
         );
         self.sessions
             .push(SessionView::new(id, endpoint.clone(), self.lang()));
-        if let Some(prepared) = da_prepared {
-            let host = endpoint.host.clone();
-            self.hold_da_route(id, &host, prepared);
-        }
         self.active_session = Some(id);
         self.selected_tree = None;
-        self.send(id, endpoint.protocol, CommandKind::Connect { endpoint });
+        if endpoint.protocol == Protocol::OpcDa {
+            if let Err(error) =
+                self.send_da_prepared(id, CommandKind::Connect { endpoint }, PendingCtx::None)
+            {
+                let message = error.localized(self.lang());
+                self.status = message.clone();
+                self.journal.error(message.clone());
+                if let Some(view) = self.sessions.iter_mut().find(|view| view.id == id) {
+                    view.state = SessionState::Disconnected;
+                    view.info = message.clone();
+                }
+                if self.dialogs.connect.open {
+                    self.dialogs.connect.error = Some(message);
+                }
+                return false;
+            }
+        } else {
+            self.send(id, endpoint.protocol, CommandKind::Connect { endpoint });
+        }
         true
     }
 
@@ -381,23 +381,6 @@ impl App {
             self.journal.warn_l(Tr::AttemptsExhausted20, &[]);
             return;
         }
-        if endpoint.protocol == Protocol::OpcDa && !self.has_da_route_hold(session) {
-            match self.prepare_da_route_for_host(&endpoint.host) {
-                Ok(prepared) => self.hold_da_route(session, &endpoint.host, prepared),
-                Err(error) => {
-                    let message = error.localized(self.lang());
-                    self.engine.manual_disconnect(session);
-                    if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
-                        view.state = SessionState::Disconnected;
-                        view.info = message.clone();
-                        view.reconnect = ReconnectState::Stopped;
-                        view.read_in_flight = false;
-                    }
-                    self.journal.error(message);
-                    return;
-                }
-            }
-        }
         let lang = self.lang();
         let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) else {
             return;
@@ -412,7 +395,21 @@ impl App {
         // Old replies belong to the previous link and must not mutate this one.
         self.clear_pending_requests(session);
         self.send(session, protocol, CommandKind::Disconnect);
-        self.send(session, protocol, CommandKind::Connect { endpoint });
+        if protocol == Protocol::OpcDa {
+            if let Err(error) =
+                self.send_da_prepared(session, CommandKind::Connect { endpoint }, PendingCtx::None)
+            {
+                let message = error.localized(self.lang());
+                self.engine.manual_disconnect(session);
+                if let Some(view) = self.sessions.iter_mut().find(|view| view.id == session) {
+                    view.state = SessionState::Disconnected;
+                    view.info = message.clone();
+                }
+                self.journal.error(message);
+            }
+        } else {
+            self.send(session, protocol, CommandKind::Connect { endpoint });
+        }
         self.journal
             .info_l(Tr::AutoReconnectAtt, &[&attempt.to_string()]);
     }
@@ -443,23 +440,6 @@ impl App {
         else {
             return;
         };
-        if endpoint.protocol == Protocol::OpcDa && !self.has_da_route_hold(session) {
-            match self.prepare_da_route_for_host(&endpoint.host) {
-                Ok(prepared) => self.hold_da_route(session, &endpoint.host, prepared),
-                Err(error) => {
-                    let message = error.localized(self.lang());
-                    self.engine.manual_disconnect(session);
-                    if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
-                        view.state = SessionState::Disconnected;
-                        view.info = message.clone();
-                        view.reconnect = ReconnectState::Stopped;
-                        view.read_in_flight = false;
-                    }
-                    self.journal.error(message);
-                    return;
-                }
-            }
-        }
         let lang = self.lang();
         let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) else {
             return;
@@ -471,7 +451,21 @@ impl App {
         let protocol = endpoint.protocol;
         self.clear_pending_requests(session);
         self.send(session, protocol, CommandKind::Disconnect);
-        self.send(session, protocol, CommandKind::Connect { endpoint });
+        if protocol == Protocol::OpcDa {
+            if let Err(error) =
+                self.send_da_prepared(session, CommandKind::Connect { endpoint }, PendingCtx::None)
+            {
+                let message = error.localized(self.lang());
+                self.engine.manual_disconnect(session);
+                if let Some(view) = self.sessions.iter_mut().find(|view| view.id == session) {
+                    view.state = SessionState::Disconnected;
+                    view.info = message.clone();
+                }
+                self.journal.error(message);
+            }
+        } else {
+            self.send(session, protocol, CommandKind::Connect { endpoint });
+        }
         self.journal.info_l(Tr::ReconnectRestoring, &[]);
     }
 

@@ -914,14 +914,6 @@ fn u11_loopback_detection_covers_the_whole_127_block_and_v6() {
 
 // ---- D4 / D5: DA discovery routes ----
 
-fn hold_discovery(app: &mut App, host: &str) {
-    app.da_route_holds.push(DaRouteHold {
-        session: 0,
-        host: host.to_string(),
-        prepared: PreparedRoutes::default(),
-    });
-}
-
 fn pend_discover(app: &mut App, request_id: RequestId, host: &str) {
     app.engine.insert_pending_for_test(
         0,
@@ -938,8 +930,8 @@ fn pend_discover(app: &mut App, request_id: RequestId, host: &str) {
 fn d4_discover_error_releases_only_the_failing_hosts_route() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    hold_discovery(&mut app, "pc-a");
-    hold_discovery(&mut app, "pc-b");
+    app.engine.seed_da_route_for_test(0, 501).unwrap();
+    app.engine.seed_da_route_for_test(0, 502).unwrap();
     pend_discover(&mut app, 501, "pc-a");
     pend_discover(&mut app, 502, "pc-b");
     app.on_event_for_test_with_request(
@@ -950,8 +942,11 @@ fn d4_discover_error_releases_only_the_failing_hosts_route() {
             message: BackendMsg::raw("RPC unavailable"),
         },
     );
-    let hosts: Vec<&str> = app.da_route_holds.iter().map(|h| h.host.as_str()).collect();
-    assert_eq!(hosts, ["pc-b"], "the other search keeps its route");
+    assert!(!app.engine.has_discovery_route_for_test(501));
+    assert!(
+        app.engine.has_discovery_route_for_test(502),
+        "the other search keeps its route"
+    );
 }
 
 #[test]
@@ -959,21 +954,13 @@ fn d5_closing_the_connect_dialog_releases_discovery_routes() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    hold_discovery(&mut app, "pc-a");
-    hold_discovery(&mut app, "pc-b");
-    // A session route (not a discovery one) must survive.
-    app.da_route_holds.push(DaRouteHold {
-        session: 9,
-        host: "pc-c".to_string(),
-        prepared: PreparedRoutes::default(),
-    });
+    app.engine.seed_da_route_for_test(0, 501).unwrap();
+    app.engine.seed_da_route_for_test(0, 502).unwrap();
+    app.engine.seed_da_route_for_test(9, 0).unwrap();
     app.close_connect_dialog();
-    let left: Vec<(SessionId, &str)> = app
-        .da_route_holds
-        .iter()
-        .map(|h| (h.session, h.host.as_str()))
-        .collect();
-    assert_eq!(left, [(9, "pc-c")]);
+    assert!(!app.engine.has_discovery_route_for_test(501));
+    assert!(!app.engine.has_discovery_route_for_test(502));
+    assert!(app.engine.has_da_route(9));
 }
 
 // ---- U14: «Добавить по имени» waits for the resolution ----

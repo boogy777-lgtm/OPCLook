@@ -6,9 +6,7 @@ use crate::bff::net::NetworkBinding;
 
 #[cfg(feature = "test-support")]
 use crate::bff::model::{EndpointSpec, RequestId};
-use crate::da_route::{
-    DaRouteError, DaRouteManager, LocalizedDaRouteError, LocalizedDaRouteStatus, PreparedRoutes,
-};
+use crate::da_route::{DaRouteError, LocalizedDaRouteError, LocalizedDaRouteStatus};
 use crate::i18n::{Lang, Tr, tr};
 use crate::journal::Journal;
 use crate::net::{
@@ -56,10 +54,6 @@ pub struct App {
     pub settings: Settings,
     /// Lazily populated adapter inventory + current network lease.
     pub network: NetworkState,
-    /// DA host-route steering (helper client + refcounted temporary routes).
-    pub da_routes: DaRouteManager,
-    da_route_holds: Vec<DaRouteHold>,
-    last_da_route_refresh: Instant,
     pub sessions: Vec<SessionView>,
     pub rows: Vec<Row>,
     pub journal: Journal,
@@ -151,12 +145,6 @@ pub enum CjkFont {
     Loaded(String),
 }
 
-struct DaRouteHold {
-    session: SessionId,
-    host: String,
-    prepared: PreparedRoutes,
-}
-
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let cjk = install_fonts(&cc.egui_ctx);
@@ -226,9 +214,6 @@ impl App {
             engine: Engine::default(),
             settings,
             network: NetworkState::default(),
-            da_routes: DaRouteManager::new(),
-            da_route_holds: Vec::new(),
-            last_da_route_refresh: Instant::now(),
             sessions: Vec::new(),
             rows: Vec::new(),
             journal: Journal::default(),
@@ -887,110 +872,53 @@ impl App {
     }
 
     pub fn da_route_status_line(&self) -> String {
-        let status = self.da_routes.status().localized(self.lang()).to_string();
-        match self.da_routes.last_error() {
-            Some(error) => format!("{status} — {}", error.localized(self.lang())),
-            None => status,
+        let (status, error) = self.engine.da_route_status();
+        let text = status.localized(self.lang()).to_string();
+        match error {
+            Some(error) => format!("{text} — {}", error.localized(self.lang())),
+            None => text,
         }
     }
 
-    fn local_ips(&self) -> Vec<std::net::IpAddr> {
-        self.network
-            .adapters
-            .iter()
-            .flat_map(|adapter| adapter.addresses.iter().map(|address| address.ip))
-            .collect()
-    }
-
-    pub(super) fn prepare_da_route_for_host(
-        &mut self,
-        host: &str,
-    ) -> Result<PreparedRoutes, DaRouteError> {
+    fn route_options(&self) -> opclook_engine::RouteOptions {
         let adapter = self
             .network
             .lease
             .as_ref()
             .map(|lease| lease.adapter.clone());
-        let local_ips = self.local_ips();
-        let result = self
-            .da_routes
-            .prepare_host(host, adapter.as_ref(), &local_ips);
-        let status = self.da_routes.status();
-        match &result {
-            Ok(prepared) => self.journal.info(format!(
-                "DA route: status={status:?} host=\"{host}\" targets=[{}]",
-                prepared
-                    .targets
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(",")
-            )),
-            Err(error) => self.journal.error(format!(
-                "DA route: status={status:?} host=\"{host}\" error={error:?}"
-            )),
+        let local_addresses = self
+            .network
+            .adapters
+            .iter()
+            .flat_map(|adapter| adapter.addresses.iter().map(|address| address.ip))
+            .collect();
+        let timeout =
+            std::time::Duration::from_secs(self.settings.options.operation_timeout_secs.max(30));
+        opclook_engine::RouteOptions {
+            adapter,
+            local_addresses,
+            deadline: Instant::now()
+                .checked_add(timeout)
+                .unwrap_or_else(Instant::now),
         }
-        result
     }
-
-    pub(super) fn hold_da_route(
+    pub(super) fn send_da_prepared(
         &mut self,
         session: SessionId,
-        host: &str,
-        prepared: PreparedRoutes,
-    ) {
-        if prepared.is_empty() {
-            return;
-        }
-        self.da_route_holds.push(DaRouteHold {
-            session,
-            host: host.trim().to_string(),
-            prepared,
-        });
+        kind: CommandKind,
+        ctx: PendingCtx,
+    ) -> Result<u64, DaRouteError> {
+        let options = self.route_options();
+        self.engine.prepare_da(session, kind, ctx, options)
     }
-
     pub(super) fn release_da_routes_for_session(&mut self, session: SessionId) {
-        let mut index = 0;
-        while index < self.da_route_holds.len() {
-            if self.da_route_holds[index].session == session {
-                let hold = self.da_route_holds.remove(index);
-                self.da_routes.release(hold.prepared);
-            } else {
-                index += 1;
-            }
-        }
+        self.engine.cancel_da_routes(session);
     }
-
-    pub(super) fn release_da_discovery_route(&mut self, host: &str) {
-        let host = host.trim();
-        let mut index = 0;
-        while index < self.da_route_holds.len() {
-            let hold = &self.da_route_holds[index];
-            if hold.session == 0 && hold.host.eq_ignore_ascii_case(host) {
-                let hold = self.da_route_holds.remove(index);
-                self.da_routes.release(hold.prepared);
-            } else {
-                index += 1;
-            }
-        }
+    pub(super) fn release_da_discovery_route(&mut self, _host: &str) {
+        // Correlated discovery completion releases exactly its own ticket in Engine::accept.
     }
-
     pub(super) fn release_da_discovery_routes(&mut self) {
-        let mut index = 0;
-        while index < self.da_route_holds.len() {
-            if self.da_route_holds[index].session == 0 {
-                let hold = self.da_route_holds.remove(index);
-                self.da_routes.release(hold.prepared);
-            } else {
-                index += 1;
-            }
-        }
-    }
-
-    pub(super) fn has_da_route_hold(&self, session: SessionId) -> bool {
-        self.da_route_holds
-            .iter()
-            .any(|hold| hold.session == session)
+        self.engine.cancel_da_routes(0);
     }
 }
 

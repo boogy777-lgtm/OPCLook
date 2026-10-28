@@ -2545,6 +2545,25 @@ fn protection_text(lang: Lang, protection: UaProtection) -> &'static str {
     }
 }
 
+pub fn da_route_error(lang: Lang, error: &opclook_contract::da_route::DaRouteError) -> String {
+    use opclook_contract::da_route::DaRouteError as E;
+    let detail = match error {
+        E::NoAdapter => tr(lang, Tr::DaRouteNoAdapter).to_string(),
+        E::AdapterUnavailable => tr(lang, Tr::SelectAdapterRequired).to_string(),
+        E::Resolve(host) => fmt(lang, Tr::DaRouteResolve, &[host]),
+        E::InvalidTarget(ip) => fmt(lang, Tr::DaRouteResolve, &[&ip.to_string()]),
+        E::NoGateway(ip) => fmt(lang, Tr::DaRouteNoGateway, &[&ip.to_string()]),
+        E::Conflict(ip) => fmt(lang, Tr::DaRouteConflict, &[&ip.to_string()]),
+        E::HelperStarting => tr(lang, Tr::DaRouteHelperStarting).to_string(),
+        E::HelperUnavailable(_) | E::UacDeclined => {
+            tr(lang, Tr::DaRouteHelperUnavailable).to_string()
+        }
+        E::Add(ip, detail) => fmt(lang, Tr::DaRouteAdd, &[&ip.to_string(), detail]),
+        E::Verify(ip) => fmt(lang, Tr::DaRouteVerify, &[&ip.to_string()]),
+    };
+    fmt(lang, Tr::DaRouteError, &[&detail])
+}
+
 /// Renders a backend message in `lang`. Exhaustive: every variant carries all
 /// three wordings, so a new variant cannot ship without a translation.
 pub fn backend_text(lang: Lang, msg: &BackendMsg) -> String {
@@ -2552,6 +2571,7 @@ pub fn backend_text(lang: Lang, msg: &BackendMsg) -> String {
     match msg {
         // ---- pass-through / composition ----
         M::Raw(text) => text.clone(),
+        M::DaRoute(error) => da_route_error(lang, error),
         M::Context { context, cause } => {
             format!("{context}: {}", backend_text(lang, cause))
         }
@@ -3616,6 +3636,10 @@ mod tests {
     fn backend_samples() -> Vec<(BackendMsg, Vec<&'static str>)> {
         vec![
             (BackendMsg::Raw("§v§".to_string()), vec!["§v§"]),
+            (
+                BackendMsg::DaRoute(opclook_contract::da_route::DaRouteError::NoAdapter),
+                vec![],
+            ),
             (
                 BackendMsg::Context {
                     context: "§context§".to_string(),

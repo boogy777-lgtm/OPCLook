@@ -188,3 +188,8 @@ stdout завершает клиент без диагностической о�
 Helper exchange ограничен 3 секундами и 16 КиБ; потеря pipe инвалидирует
 helper-owned leases. Измерено: 14 Linux route-тестов прошли; Windows i686
 backend `cargo check --tests` прошёл, реальный pipe/UAC/DA не запускался.
+
+GUI DA discovery/connect переданы Engine и ограниченному route service;
+ошибки локализуются из типизированных событий. Измерено на Linux: GUI lib 186,
+Engine 11, locale 9 и тест реального кадра App::update прошли. Проверка
+реального Windows pipe/UAC/DA и живого CLI остаётся открытой.

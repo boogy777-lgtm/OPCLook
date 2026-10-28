@@ -2,7 +2,7 @@
 use crate::da_route::{DaRouteManager, PreparedRoutes};
 use crate::net::AdapterInfo;
 use crate::route_resolver::{ResolveTicket, ResolverPool};
-use opclook_contract::da_route::DaRouteError;
+use opclook_contract::da_route::{DaRouteError, DaRouteStatus};
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -70,6 +70,7 @@ pub struct RouteService {
     stop: Arc<AtomicBool>,
     permits: Arc<AtomicUsize>,
     done: mpsc::Receiver<()>,
+    status: Arc<Mutex<(DaRouteStatus, Option<DaRouteError>)>>,
 }
 impl RouteService {
     pub fn new() -> std::io::Result<Self> {
@@ -78,10 +79,12 @@ impl RouteService {
         let (done_tx, done) = mpsc::sync_channel(1);
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
+        let status = Arc::new(Mutex::new((DaRouteStatus::Idle, None)));
+        let worker_status = Arc::clone(&status);
         std::thread::Builder::new()
             .name("da-route-service".into())
             .spawn(move || {
-                run(rx, resolver, worker_stop);
+                run(rx, resolver, worker_stop, worker_status);
                 let _ = done_tx.try_send(());
             })?;
         Ok(Self {
@@ -89,7 +92,14 @@ impl RouteService {
             stop,
             permits: Arc::new(AtomicUsize::new(0)),
             done,
+            status,
         })
+    }
+    pub fn status(&self) -> (DaRouteStatus, Option<DaRouteError>) {
+        self.status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
     /// Nonblocking, bounded enqueue. The ticket controls cancellation and
     /// keeps the lease alive after successful completion.
@@ -134,7 +144,12 @@ impl Drop for RouteService {
         let _ = self.done.recv_timeout(Duration::from_secs(10));
     }
 }
-fn run(rx: mpsc::Receiver<Job>, resolver: ResolverPool, stop: Arc<AtomicBool>) {
+fn run(
+    rx: mpsc::Receiver<Job>,
+    resolver: ResolverPool,
+    stop: Arc<AtomicBool>,
+    status: Arc<Mutex<(DaRouteStatus, Option<DaRouteError>)>>,
+) {
     let mut manager = DaRouteManager::new();
     let mut pending: Vec<Pending> = Vec::new();
     let mut held: Vec<Held> = Vec::new();
@@ -217,6 +232,10 @@ fn run(rx: mpsc::Receiver<Job>, resolver: ResolverPool, stop: Arc<AtomicBool>) {
                 index += 1;
             }
         }
+        *status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            (manager.status(), manager.last_error().cloned());
         if refresh.elapsed() >= Duration::from_secs(1800) {
             manager.refresh();
             refresh = Instant::now();

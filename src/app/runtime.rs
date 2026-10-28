@@ -1,7 +1,6 @@
 use super::*;
 use crate::bff::model::{BackendMsg, Event, EventKind, Operation};
 use crate::bff::model::{CommandKind, Protocol, SessionId};
-use crate::constants::DA_ROUTE_REFRESH_SECS;
 use crate::i18n::{Tr, fmt};
 use std::time::{Duration, Instant};
 
@@ -89,15 +88,6 @@ impl App {
         let interval = Duration::from_secs(options.update_interval_secs.max(1));
         let test_interval = Duration::from_secs(options.test_interval_secs.max(1));
         self.engine.set_auto_reconnect(options.auto_reconnect);
-
-        if now.duration_since(self.last_da_route_refresh)
-            >= Duration::from_secs(DA_ROUTE_REFRESH_SECS)
-        {
-            if self.da_routes.has_owned_routes() {
-                self.da_routes.refresh();
-            }
-            self.last_da_route_refresh = now;
-        }
 
         let test_interval = (self.settings.options.test_interval_secs > 0).then_some(test_interval);
         for work in self.engine.due(now, interval, test_interval) {

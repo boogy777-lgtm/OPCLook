@@ -555,6 +555,7 @@ impl App {
                     }
                 }
                 if let Some(name) = lost {
+                    self.clear_pending_requests(session);
                     // Keep rows and the tree: tags must remain visible with
                     // their last values, just marked stale while the server
                     // is unreachable.

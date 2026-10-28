@@ -3,12 +3,12 @@ pub mod constants;
 use opclook_backend::bff::Gateway;
 use opclook_backend::net::AdapterInfo;
 use opclook_backend::route_service::{RouteService, RouteTicket};
-use opclook_contract::da_route::DaRouteError;
+use opclook_contract::da_route::{DaRouteError, DaRouteStatus};
 use opclook_contract::model::{
-    Command, CommandKind, EndpointSpec, Event, EventKind, ItemKey, Operation, Protocol, SessionId,
-    SubscriptionState,
+    BackendMsg, Command, CommandKind, EndpointSpec, Event, EventKind, ItemKey, Operation, Protocol,
+    SessionId, SubscriptionState,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
@@ -137,7 +137,6 @@ pub enum DispatchError {
     Closed { request_id: u64, message: String },
 }
 pub struct RouteOptions {
-    pub host: String,
     pub adapter: Option<AdapterInfo>,
     pub local_addresses: Vec<IpAddr>,
     pub deadline: Instant,
@@ -147,18 +146,6 @@ struct DeferredRoute {
     request_id: u64,
     kind: CommandKind,
     ticket: RouteTicket,
-}
-pub enum RouteIssue {
-    Preparation {
-        session: SessionId,
-        request_id: u64,
-        operation: Operation,
-        error: DaRouteError,
-    },
-    Lost {
-        session: SessionId,
-        error: DaRouteError,
-    },
 }
 pub struct Engine<C> {
     gateway: Gateway,
@@ -170,6 +157,8 @@ pub struct Engine<C> {
     deferred_routes: Vec<DeferredRoute>,
     session_routes: HashMap<SessionId, RouteTicket>,
     discovery_routes: HashMap<u64, RouteTicket>,
+    route_events: VecDeque<Event>,
+    invalidated: HashMap<SessionId, Vec<Operation>>,
 }
 impl<C> Default for Engine<C> {
     fn default() -> Self {
@@ -183,6 +172,8 @@ impl<C> Default for Engine<C> {
             deferred_routes: Vec::new(),
             session_routes: HashMap::new(),
             discovery_routes: HashMap::new(),
+            route_events: VecDeque::new(),
+            invalidated: HashMap::new(),
         }
     }
 }
@@ -196,14 +187,17 @@ impl<C> Engine<C> {
         ctx: C,
         options: RouteOptions,
     ) -> Result<u64, DaRouteError> {
-        if !matches!(
-            kind,
-            CommandKind::Connect { .. } | CommandKind::Discover { .. }
-        ) {
-            return Err(DaRouteError::HelperUnavailable(
-                "invalid route operation".into(),
-            ));
-        }
+        let host = match &kind {
+            CommandKind::Connect { endpoint } if endpoint.protocol == Protocol::OpcDa => {
+                endpoint.host.clone()
+            }
+            CommandKind::Discover { host } => host.clone(),
+            _ => {
+                return Err(DaRouteError::HelperUnavailable(
+                    "invalid DA route operation".into(),
+                ));
+            }
+        };
         if self.route_service.is_none() {
             self.route_service = Some(
                 RouteService::new().map_err(|e| DaRouteError::HelperUnavailable(e.to_string()))?,
@@ -217,7 +211,7 @@ impl<C> Engine<C> {
             .as_ref()
             .ok_or_else(|| DaRouteError::HelperUnavailable("route service unavailable".into()))?;
         let ticket = service.prepare(
-            options.host,
+            host,
             options.adapter,
             options.local_addresses,
             options.deadline,
@@ -251,10 +245,9 @@ impl<C> Engine<C> {
         });
         Ok(id)
     }
-    /// Advance route preparation and return failures for the presentation layer
-    /// to localize. All successful commands are dispatched by the engine.
-    pub fn pump_da_routes(&mut self) -> Vec<RouteIssue> {
-        let mut issues = Vec::new();
+    /// Advance route preparation; queue typed failures and dispatch successful
+    /// commands through the same correlated event pipeline as backend replies.
+    fn pump_da_routes(&mut self) {
         let mut index = 0;
         while index < self.deferred_routes.len() {
             let Some(result) = self.deferred_routes[index].ticket.result() else {
@@ -280,19 +273,25 @@ impl<C> Engine<C> {
                             self.discovery_routes
                                 .insert(deferred.request_id, deferred.ticket);
                         }
-                        Err(message) => issues.push(RouteIssue::Preparation {
+                        Err(message) => self.route_events.push_back(Event {
                             session: deferred.session,
                             request_id: deferred.request_id,
-                            operation,
-                            error: DaRouteError::HelperUnavailable(message),
+                            kind: EventKind::Error {
+                                operation,
+                                message: BackendMsg::DaRoute(DaRouteError::HelperUnavailable(
+                                    message,
+                                )),
+                            },
                         }),
                     }
                 }
-                Err(error) => issues.push(RouteIssue::Preparation {
+                Err(error) => self.route_events.push_back(Event {
                     session: deferred.session,
                     request_id: deferred.request_id,
-                    operation,
-                    error,
+                    kind: EventKind::Error {
+                        operation,
+                        message: BackendMsg::DaRoute(error),
+                    },
                 }),
             }
         }
@@ -305,24 +304,73 @@ impl<C> Engine<C> {
             })
             .collect();
         for (session, error) in lost {
-            self.session_routes.remove(&session);
-            let _ = self.gateway.send(Command {
-                request_id: 0,
-                session,
-                protocol: Protocol::OpcDa,
-                kind: CommandKind::Disconnect,
-            });
-            issues.push(RouteIssue::Lost { session, error });
+            self.on_da_route_lost(session, error);
         }
-        issues
     }
+    fn on_da_route_lost(&mut self, session: SessionId, error: DaRouteError) {
+        self.session_routes.remove(&session);
+        let _ = self.gateway.send(Command {
+            request_id: 0,
+            session,
+            protocol: Protocol::OpcDa,
+            kind: CommandKind::Disconnect,
+        });
+        let connecting = self
+            .sessions
+            .get(&session)
+            .is_some_and(|view| view.state == SessionState::Connecting);
+        let connect_request = if connecting {
+            self.requests.iter().find_map(|(&(sid, id), pending)| {
+                (sid == session && pending.operation == Operation::Connect).then_some(id)
+            })
+        } else {
+            None
+        };
+        let keys: Vec<_> = self
+            .requests
+            .keys()
+            .filter(|(sid, id)| *sid == session && Some(*id) != connect_request)
+            .copied()
+            .collect();
+        let invalidated: Vec<_> = keys
+            .into_iter()
+            .filter_map(|key| self.requests.remove(&key).map(|pending| pending.operation))
+            .collect();
+        self.invalidated
+            .entry(session)
+            .or_default()
+            .extend(invalidated);
+        let kind = if connecting {
+            EventKind::Error {
+                operation: Operation::Connect,
+                message: BackendMsg::DaRoute(error),
+            }
+        } else {
+            EventKind::Disconnected {
+                reason: BackendMsg::DaRoute(error),
+            }
+        };
+        self.route_events.push_back(Event {
+            session,
+            request_id: connect_request.unwrap_or(0),
+            kind,
+        });
+    }
+
     pub fn cancel_da_routes(&mut self, session: SessionId) {
+        self.route_events.retain(|event| event.session != session);
         self.deferred_routes.retain(|item| item.session != session);
         if session == 0 {
             self.discovery_routes.clear();
         } else {
             self.session_routes.remove(&session);
         }
+    }
+    pub fn da_route_status(&self) -> (DaRouteStatus, Option<DaRouteError>) {
+        self.route_service
+            .as_ref()
+            .map(RouteService::status)
+            .unwrap_or((DaRouteStatus::Idle, None))
     }
     pub fn has_da_route(&self, session: SessionId) -> bool {
         self.session_routes.contains_key(&session)
@@ -611,16 +659,22 @@ impl<C> Engine<C> {
         self.requests.remove(&(session, request));
     }
     pub fn invalidate_session_requests(&mut self, session: SessionId) -> Vec<Operation> {
-        self.cancel_da_routes(session);
+        self.deferred_routes.retain(|item| item.session != session);
+        if session == 0 {
+            self.discovery_routes.clear();
+        }
         let keys: Vec<_> = self
             .requests
             .keys()
             .filter(|(sid, _)| *sid == session)
             .copied()
             .collect();
-        keys.into_iter()
-            .filter_map(|key| self.requests.remove(&key).map(|p| p.operation))
-            .collect()
+        let mut operations = self.invalidated.remove(&session).unwrap_or_default();
+        operations.extend(
+            keys.into_iter()
+                .filter_map(|key| self.requests.remove(&key).map(|p| p.operation)),
+        );
+        operations
     }
     pub fn expired_requests(
         &self,
@@ -665,6 +719,7 @@ impl<C> Engine<C> {
     }
     pub fn remove_session(&mut self, id: SessionId) {
         self.cancel_da_routes(id);
+        self.invalidated.remove(&id);
         self.sessions.remove(&id);
     }
     pub fn manual_disconnect(&mut self, id: SessionId) {
@@ -700,15 +755,52 @@ impl<C> Engine<C> {
             })
             .unwrap_or(ReconnectScheduled::Unchanged)
     }
-    pub fn try_recv(&self) -> Option<Event> {
-        self.gateway.try_recv()
+    pub fn try_recv(&mut self) -> Option<Event> {
+        self.pump_da_routes();
+        self.route_events
+            .pop_front()
+            .or_else(|| self.gateway.try_recv())
     }
     pub fn shutdown(&mut self) {
         self.deferred_routes.clear();
         self.session_routes.clear();
         self.discovery_routes.clear();
+        self.route_events.clear();
+        self.invalidated.clear();
         self.route_service = None;
         self.gateway.shutdown();
+    }
+    #[cfg(feature = "test-support")]
+    pub fn seed_da_route_for_test(
+        &mut self,
+        session: SessionId,
+        request: u64,
+    ) -> Result<(), DaRouteError> {
+        if self.route_service.is_none() {
+            self.route_service = Some(
+                RouteService::new().map_err(|e| DaRouteError::HelperUnavailable(e.to_string()))?,
+            );
+        }
+        let service = self
+            .route_service
+            .as_ref()
+            .ok_or_else(|| DaRouteError::HelperUnavailable("route service unavailable".into()))?;
+        let ticket = service.prepare(
+            "127.0.0.1".into(),
+            None,
+            vec![],
+            Instant::now() + Duration::from_secs(2),
+        )?;
+        if session == 0 {
+            self.discovery_routes.insert(request, ticket);
+        } else {
+            self.session_routes.insert(session, ticket);
+        }
+        Ok(())
+    }
+    #[cfg(feature = "test-support")]
+    pub fn has_discovery_route_for_test(&self, request: u64) -> bool {
+        self.discovery_routes.contains_key(&request)
     }
     #[cfg(feature = "test-support")]
     pub fn gateway_for_test(&self) -> &Gateway {
@@ -749,6 +841,24 @@ mod tests {
     use super::*;
     use opclook_contract::model::BackendMsg;
     #[test]
+    fn da_preparation_rejects_ua_endpoint() {
+        let mut engine = Engine::<()>::default();
+        let result = engine.prepare_da(
+            1,
+            CommandKind::Connect {
+                endpoint: EndpointSpec::ua("opc.tcp://127.0.0.1:4840"),
+            },
+            (),
+            RouteOptions {
+                adapter: None,
+                local_addresses: vec![],
+                deadline: Instant::now() + Duration::from_secs(1),
+            },
+        );
+        assert!(result.is_err());
+        assert!(engine.session(1).is_none());
+    }
+    #[test]
     fn cancelled_route_preparation_never_dispatches_late_connect() {
         let mut engine = Engine::<()>::default();
         let id = engine
@@ -759,7 +869,6 @@ mod tests {
                 },
                 (),
                 RouteOptions {
-                    host: "127.0.0.1".into(),
                     adapter: None,
                     local_addresses: vec![],
                     deadline: Instant::now() + Duration::from_secs(2),
@@ -777,7 +886,8 @@ mod tests {
             })
             .unwrap();
         assert!(!engine.has_da_route(1));
-        assert!(engine.pump_da_routes().is_empty());
+        engine.pump_da_routes();
+        assert!(engine.route_events.is_empty());
         assert!(!engine.has_pending(1, id));
     }
     #[test]
@@ -791,7 +901,6 @@ mod tests {
                 },
                 (),
                 RouteOptions {
-                    host: "127.0.0.1".into(),
                     adapter: None,
                     local_addresses: vec![],
                     deadline: Instant::now() + Duration::from_secs(2),
@@ -800,11 +909,17 @@ mod tests {
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
         while !engine.session_routes.contains_key(&1) && Instant::now() < deadline {
-            assert!(engine.pump_da_routes().is_empty());
+            engine.pump_da_routes();
+            assert!(engine.route_events.is_empty());
             std::thread::yield_now();
         }
         assert!(engine.session_routes.contains_key(&1));
         assert!(engine.has_pending(1, id));
+        engine.invalidate_session_requests(1);
+        assert!(
+            engine.session_routes.contains_key(&1),
+            "request cleanup must retain connected route"
+        );
         engine.cancel_da_routes(1);
         assert!(!engine.has_da_route(1));
     }
@@ -819,7 +934,6 @@ mod tests {
                 },
                 (),
                 RouteOptions {
-                    host: "10.0.0.1".into(),
                     adapter: None,
                     local_addresses: vec![],
                     deadline: Instant::now() + Duration::from_secs(2),
@@ -828,7 +942,8 @@ mod tests {
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
         let issue = loop {
-            if let Some(issue) = engine.pump_da_routes().into_iter().next() {
+            engine.pump_da_routes();
+            if let Some(issue) = engine.route_events.pop_front() {
                 break Some(issue);
             }
             if Instant::now() >= deadline {
@@ -837,9 +952,73 @@ mod tests {
             std::thread::yield_now();
         };
         assert!(
-            matches!(issue, Some(RouteIssue::Preparation { request_id, error: DaRouteError::NoAdapter, .. }) if request_id == id)
+            matches!(issue, Some(Event { request_id, kind: EventKind::Error { message: BackendMsg::DaRoute(DaRouteError::NoAdapter), .. }, .. }) if request_id == id)
         );
         assert!(engine.has_pending(1, id));
+    }
+    #[test]
+    fn route_loss_during_connect_completes_connect_and_rejects_late_reply() {
+        let mut engine = Engine::<()>::default();
+        let endpoint = EndpointSpec::da("10.0.0.1", "Srv");
+        engine
+            .sessions
+            .insert(1, SessionRuntime::new(endpoint.clone(), Instant::now()));
+        engine.requests.insert(
+            (1, 5),
+            PendingRequest {
+                operation: Operation::Connect,
+                sent: Instant::now(),
+                ctx: (),
+            },
+        );
+        engine.on_da_route_lost(1, DaRouteError::HelperUnavailable("lost".into()));
+        let event = engine.route_events.pop_front().unwrap();
+        assert_eq!(event.request_id, 5);
+        assert!(matches!(
+            event.kind,
+            EventKind::Error {
+                operation: Operation::Connect,
+                ..
+            }
+        ));
+        engine.accept(&event).unwrap();
+        assert_eq!(engine.session(1).unwrap().state, SessionState::Disconnected);
+        assert!(
+            engine
+                .accept(&Event {
+                    session: 1,
+                    request_id: 5,
+                    kind: EventKind::Connected {
+                        endpoint,
+                        info: BackendMsg::raw("late")
+                    }
+                })
+                .is_err()
+        );
+    }
+    #[test]
+    fn route_loss_when_connected_invalidates_requests_and_disconnects() {
+        let mut engine = Engine::<()>::default();
+        let mut view = SessionRuntime::new(EndpointSpec::da("10.0.0.1", "Srv"), Instant::now());
+        view.state = SessionState::Connected;
+        engine.sessions.insert(1, view);
+        engine.requests.insert(
+            (1, 7),
+            PendingRequest {
+                operation: Operation::Write,
+                sent: Instant::now(),
+                ctx: (),
+            },
+        );
+        engine.on_da_route_lost(1, DaRouteError::HelperUnavailable("lost".into()));
+        assert!(!engine.has_pending(1, 7));
+        let event = engine.route_events.pop_front().unwrap();
+        engine.accept(&event).unwrap();
+        assert_eq!(engine.session(1).unwrap().state, SessionState::Disconnected);
+        assert_eq!(
+            engine.invalidate_session_requests(1),
+            vec![Operation::Write]
+        );
     }
     #[test]
     fn duplicate_disconnect_does_not_advance_retry_but_failed_attempt_does() {

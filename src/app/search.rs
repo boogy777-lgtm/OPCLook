@@ -7,24 +7,6 @@ use crate::net::{NetworkLease, SubnetSpec};
 
 impl App {
     pub fn discover_da(&mut self, host: String) {
-        let prepared = match self.prepare_da_route_for_host(&host) {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                let message = error.localized(self.lang());
-                let d = &mut self.dialogs.connect;
-                if d.da_auto_pending > 0 {
-                    d.da_auto_pending = d.da_auto_pending.saturating_sub(1);
-                    if d.da_auto_pending == 0 {
-                        d.da_pending = false;
-                    }
-                } else {
-                    d.da_pending = false;
-                }
-                d.error = Some(message.clone());
-                self.journal.error(message);
-                return;
-            }
-        };
         self.dialogs.connect.da_pending = true;
         self.dialogs.connect.error = None;
         let host_suffix = if host.is_empty() {
@@ -33,13 +15,20 @@ impl App {
             fmt(self.lang(), Tr::ServerHostSuffix, &[&host])
         };
         self.journal.info_l(Tr::ReqServerList, &[&host_suffix]);
-        self.send_with(
+        if let Err(error) = self.send_da_prepared(
             0,
-            Protocol::OpcDa,
             CommandKind::Discover { host: host.clone() },
             PendingCtx::Host(host.clone()),
-        );
-        self.hold_da_route(0, &host, prepared);
+        ) {
+            let message = error.localized(self.lang());
+            let d = &mut self.dialogs.connect;
+            d.da_auto_pending = d.da_auto_pending.saturating_sub(1);
+            if d.da_auto_pending == 0 {
+                d.da_pending = false;
+            }
+            d.error = Some(message.clone());
+            self.journal.error(message);
+        }
     }
 
     /// Start a direct DA host search, invalidating all previous popup
