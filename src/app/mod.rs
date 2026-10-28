@@ -664,36 +664,16 @@ impl App {
             let lang = self.lang();
             self.journal
                 .error_l(Tr::ErrorOp, &[&operation_label(lang, operation), &message]);
-            let mut dead: Vec<SessionId> = Vec::new();
-            for view in self
+            let dead: Vec<SessionId> = self
                 .sessions
-                .iter_mut()
+                .iter()
                 .filter(|view| view.protocol() == protocol)
-            {
-                view.state = SessionState::Disconnected;
-                view.info = message.clone();
-                view.read_in_flight = false;
-                view.root_loading = false;
-                if let Some(ua) = view.ua_mut() {
-                    ua.subscription = SubscriptionState::Inactive;
-                }
-                for item in &mut view.tree {
-                    item.loading = false;
-                }
-                dead.push(view.id);
-            }
-            // Replies can never arrive for a dead worker: drop every pending id
-            // (including any queued by an earlier session of that protocol).
-            for id in &dead {
-                self.clear_pending_requests(*id);
-                self.release_da_routes_for_session(*id);
-            }
-            if self
-                .add_children
-                .as_ref()
-                .is_some_and(|job| dead.contains(&job.session))
-            {
-                self.add_children = None;
+                .map(|view| view.id)
+                .collect();
+            for id in dead {
+                self.project_session(id);
+                self.mark_link_lost(id, Some(message));
+                self.release_da_routes_for_session(id);
             }
         }
         if failure.is_some() {
@@ -701,6 +681,28 @@ impl App {
         } else {
             Some(request_id)
         }
+    }
+
+    /// Clear the UI state associated with a link that can no longer answer.
+    /// Reconnect policy remains owned by Engine and is projected separately.
+    pub(super) fn mark_link_lost(&mut self, session: SessionId, reason: Option<&str>) {
+        self.cancel_add_children(session);
+        self.clear_pending_requests(session);
+        if let Some(view) = self.sessions.iter_mut().find(|view| view.id == session) {
+            view.state = SessionState::Disconnected;
+            if let Some(reason) = reason {
+                view.info = reason.to_owned();
+            }
+            view.read_in_flight = false;
+            view.root_loading = false;
+            if let Some(ua) = view.ua_mut() {
+                ua.subscription = SubscriptionState::Inactive;
+            }
+            for item in &mut view.tree {
+                item.loading = false;
+            }
+        }
+        self.mark_session_rows_stale(session);
     }
 
     /// Mark every row of `session` as stale ("нет данных от сервера"): Bad

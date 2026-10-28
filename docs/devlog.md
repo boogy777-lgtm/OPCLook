@@ -540,3 +540,8 @@ workspace all-targets проверен по типам с test-only флагам
 diagnostics, standalone CLI проверены отдельно. Guard прошёл для Linux и Windows.
 Windows runtime и ресурсы cross-check не исполнял. Native whole-workspace check
 неприменим: Windows-only nethelper на Linux не компилирует windows-future.
+
+
+### 2026-10-28 — GUI link-loss cleanup
+
+The coordinator clears stale values, loading indicators, subscription projection and outstanding requests through one path on link loss; the engine owns reconnect policy. A rejected worker dispatch regression covers partial writes and UI state. Measured: Linux GUI library 214 passed; Windows i686 workspace all-target typecheck passed (cross-check flags, no Windows runtime). GUI/Settings structural work and exact-head CI remain open.

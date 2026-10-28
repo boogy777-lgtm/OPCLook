@@ -403,22 +403,16 @@ impl App {
             }
             EventKind::Disconnected { reason } => {
                 let reason = backend_text(lang, &reason);
-                self.cancel_add_children(session);
-                let mut lost: Option<String> = None;
-                if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
-                    view.read_in_flight = false;
-                    if view.state != SessionState::Connecting {
-                        view.state = SessionState::Disconnected;
-                        view.info = reason.clone();
-                        lost = Some(view.endpoint().display_name());
-                    }
-                }
-                if let Some(name) = lost {
-                    self.clear_pending_requests(session);
-                    // Keep rows and the tree: tags must remain visible with
-                    // their last values, just marked stale while the server
-                    // is unreachable.
-                    self.mark_session_rows_stale(session);
+                // A late disconnect from the old link must not interrupt a
+                // new connection attempt.
+                let name = self
+                    .sessions
+                    .iter()
+                    .find(|view| view.id == session)
+                    .filter(|view| view.state != SessionState::Connecting)
+                    .map(|view| view.endpoint().display_name());
+                if let Some(name) = name {
+                    self.mark_link_lost(session, Some(&reason));
                     self.journal.info_l(Tr::ConnectedInfo, &[&name, &reason]);
                     self.log_reconnect(session);
                 }
@@ -433,10 +427,7 @@ impl App {
                 match operation {
                     Operation::Connect => {
                         self.release_da_routes_for_session(session);
-                        if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
-                            view.state = SessionState::Disconnected;
-                            view.info = message.clone();
-                        }
+                        self.mark_link_lost(session, Some(&message));
                         if self.dialogs.connect.connecting == Some(session) {
                             // The failed attempt was started from the dialog:
                             // show the reason there and do not keep retrying in
@@ -457,14 +448,7 @@ impl App {
                     }
                     Operation::Read => {}
                     Operation::Test => {
-                        if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
-                            view.state = SessionState::Disconnected;
-                            view.info = message;
-                            view.read_in_flight = false;
-                        }
-                        // A3: the link is declared dead, so the last Good values
-                        // must not stay on screen as if they were live.
-                        self.mark_session_rows_stale(session);
+                        self.mark_link_lost(session, Some(&message));
                         self.log_reconnect(session);
                     }
                     // Discovery operations belong to Owner::Discovery, never a session.

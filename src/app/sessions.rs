@@ -301,7 +301,6 @@ impl App {
         }
         // A new lifecycle begins: discard replies still in flight for the old
         // link (only the Disconnect sent below may come back).
-        self.clear_pending_requests(session);
         let (protocol, endpoint_name) = {
             let Some(view) = self.sessions.iter().find(|s| s.id == session) else {
                 return;
@@ -309,23 +308,14 @@ impl App {
             (view.protocol(), view.endpoint().display_name())
         };
         self.engine.manual_disconnect(session);
+        self.project_session(session);
+        self.mark_link_lost(session, None);
         if self
             .send(session, protocol, CommandKind::Disconnect)
             .is_none()
         {
             return;
         }
-        if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
-            view.state = SessionState::Disconnected;
-            // A manual disconnect is not a lost link: Stopped prevents both the
-            // backend's Disconnected event and later link-loss paths from
-            // arming auto-reconnect until the user resumes/reconnects.
-            view.reconnect = ReconnectState::Stopped;
-            view.read_in_flight = false;
-        }
-        // Keep rows and the tree: tags remain visible with their last values,
-        // just marked stale while the server is unreachable.
-        self.mark_session_rows_stale(session);
         self.release_da_routes_for_session(session);
         self.journal
             .info_l(Tr::DisconnectingFrom, &[&endpoint_name]);
@@ -360,8 +350,8 @@ impl App {
         }
         self.rows.retain(|row| row.session != session);
         self.rows_changed();
-        self.selected_rows
-            .retain(|key| self.rows.iter().any(|row| row.key == *key));
+        let existing: std::collections::HashSet<_> = self.rows.iter().map(|row| row.key).collect();
+        self.selected_rows.retain(|key| existing.contains(key));
         self.selected_tree = self.selected_tree.filter(|(sid, _)| *sid != session);
         self.tree_focus = self.tree_focus.filter(|(sid, _)| *sid != session);
         let rows_len = self.rows.len();

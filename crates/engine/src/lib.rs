@@ -745,6 +745,7 @@ impl<C> Engine<C> {
                     schedule = view.state == SessionState::Connected;
                     view.state = SessionState::Disconnected;
                     view.read_in_flight = false;
+                    view.subscription = SubscriptionState::Inactive;
                 }
                 EventKind::Error {
                     operation: Operation::Connect,
@@ -753,6 +754,7 @@ impl<C> Engine<C> {
                     let was_connecting = view.state == SessionState::Connecting;
                     view.state = SessionState::Disconnected;
                     view.read_in_flight = false;
+                    view.subscription = SubscriptionState::Inactive;
                     if was_connecting && matches!(view.reconnect, ReconnectState::Waiting { .. }) {
                         schedule = true;
                     } else if was_connecting {
@@ -766,6 +768,7 @@ impl<C> Engine<C> {
                     schedule = view.state == SessionState::Connected;
                     view.state = SessionState::Disconnected;
                     view.read_in_flight = false;
+                    view.subscription = SubscriptionState::Inactive;
                 }
                 EventKind::Error {
                     operation: Operation::Read,
@@ -1014,6 +1017,7 @@ impl<C> Engine<C> {
             view.state = SessionState::Disconnected;
             view.reconnect = ReconnectState::Stopped;
             view.read_in_flight = false;
+            view.subscription = SubscriptionState::Inactive;
         }
     }
     pub fn stop_reconnect(&mut self, id: SessionId) {

@@ -1,5 +1,7 @@
 # Статус
 
+**2026-10-28, GUI link loss:** unified UI cleanup for lost links, including dead worker dispatch and pending writes; Linux GUI library 214/214 and Windows i686 workspace all-target typecheck passed. Remaining GUI/Settings refactoring, runtime Windows/DA/UAC, and exact-head CI remain open.
+
 **2026-10-28, backend G/H:** GUID/subnet, UA parsed-node, worker helpers and session modules, one-session DA worker, contract model and network module splits implemented. Linux backend 218/218 including live UA, contract/locale tests, CLI boundary check and Windows i686 workspace all-target typecheck passed; exact-head CI still needs completion. GUI/Settings structural work, Windows runtime and real DA/UAC remain open. Current matrix: `docs/refactoring-status.md`; older entries below are historical.
 
 **2026-10-28, F:** GUI caches, bounded array expansion and virtualized journal implemented; measured before/after and five images reviewed. Remaining G/H, Windows runtime, physical DA/UAC and exact-head CI remain open. Details: `docs/refactoring-status.md` and `docs/reports/refactor-frame-baseline.md`.

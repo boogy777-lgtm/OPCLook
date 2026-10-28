@@ -167,7 +167,8 @@ impl App {
         } else {
             keys
         };
-        keys.retain(|key| self.rows.iter().any(|row| row.key == *key));
+        let existing: std::collections::HashSet<_> = self.rows.iter().map(|row| row.key).collect();
+        keys.retain(|key| existing.contains(key));
         if keys.is_empty() {
             return;
         }

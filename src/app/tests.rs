@@ -2225,6 +2225,52 @@ fn partial_write_then_closed_worker_finishes_batch() {
 }
 
 #[test]
+fn closed_worker_marks_link_lost_and_finishes_pending_write() {
+    let (_ctx, mut app) = tree_app();
+    let session = SessionId::new(1).unwrap();
+    app.seed_row(session, "Tag1", "Tag1", Value::I64(1));
+    let key = app.rows[0].key;
+    app.seed_tree_item(session, None, 0, branch_node("node", "node", true));
+    app.sessions[0].tree[0].loading = true;
+    app.sessions[0].root_loading = true;
+    app.sessions[0].read_in_flight = true;
+    app.sessions[0].ua_mut().unwrap().subscription = SubscriptionState::Active;
+    app.engine.limit_dispatch_for_test(1);
+    app.pending_writes = 1;
+    app.write_total = 1;
+    let request = app.send_with(
+        session,
+        Protocol::OpcUa,
+        CommandKind::Write {
+            request: WriteRequest {
+                key,
+                value: Value::I64(2),
+                type_hint: None,
+            },
+        },
+        PendingCtx::WriteKey(key),
+    );
+    assert!(request.is_some());
+    assert!(
+        app.send(
+            session,
+            Protocol::OpcUa,
+            CommandKind::Read { keys: vec![key] }
+        )
+        .is_none()
+    );
+    let view = &app.sessions[0];
+    assert_eq!(view.state, SessionState::Disconnected);
+    assert_eq!(view.reconnect, ReconnectState::Stopped);
+    assert!(!view.read_in_flight && !view.root_loading && !view.tree[0].loading);
+    assert_eq!(view.ua().unwrap().subscription, SubscriptionState::Inactive);
+    assert_eq!(app.rows[0].quality.kind(), QualityKind::Bad);
+    assert!(app.pending_request_ids_for_test(session).is_empty());
+    assert_eq!((app.pending_writes, app.write_err), (0, 1));
+    assert!(app.last_write_summary.is_some());
+}
+
+#[test]
 fn exhausted_request_does_not_leave_browse_add_or_search_waiting() {
     let (_ctx, mut app) = tree_app();
     app.engine.exhaust_requests_for_test();
