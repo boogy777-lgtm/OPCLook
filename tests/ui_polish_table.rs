@@ -225,11 +225,11 @@ fn ui2_quality_is_a_pill_and_the_value_is_neutral() {
     assert_ne!(good[0], bad[0], "good and bad differ in colour");
     let fills = rect_fills(&shapes);
     assert!(
-        fills.contains(&good[0].gamma_multiply(0.18)),
+        fills.contains(&good[0].gamma_multiply(0.08)),
         "a soft pill behind GOOD"
     );
     assert!(
-        fills.contains(&bad[0].gamma_multiply(0.18)),
+        fills.contains(&bad[0].gamma_multiply(0.08)),
         "a soft pill behind BAD"
     );
 }
@@ -246,7 +246,7 @@ fn ui2_show_colors_off_makes_the_pill_neutral() {
     assert_eq!(text_colors(&shapes, "GOOD"), vec![neutral]);
     assert_eq!(text_colors(&shapes, "BAD"), vec![neutral]);
     assert!(
-        !rect_fills(&shapes).contains(&good_color.gamma_multiply(0.18)),
+        !rect_fills(&shapes).contains(&good_color.gamma_multiply(0.08)),
         "no coloured pill when colours are off"
     );
 }

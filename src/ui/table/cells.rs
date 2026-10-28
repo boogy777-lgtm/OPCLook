@@ -145,7 +145,7 @@ pub(super) fn quality_pill(ui: &mut egui::Ui, text: &str, tint: Option<egui::Col
 }
 
 /// How strongly the quality color shows through in the pill's background.
-const QUALITY_PILL_BG_STRENGTH: f32 = 0.18;
+const QUALITY_PILL_BG_STRENGTH: f32 = 0.08;
 
 /// One expanded field of a row value, borrowed from its [`TableLine`].
 pub(super) struct FieldLine<'a> {

@@ -1,6 +1,9 @@
 //! UI polish, stream `theme` (UI7-UI9): bottom panel layout, type/spacing
 //! scale and the light/dark/system theme. Headless egui_kittest tests.
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use opcda_egui::app::{App, BottomTab};
 use opcda_egui::i18n::{Lang, Tr, tr};
 
@@ -260,4 +263,146 @@ fn ui9_options_dialog_keeps_save_reachable_in_a_short_window() {
         save.bottom() <= 520.0 && save.top() >= 0.0,
         "Save button {save:?} must stay inside the 520 px window"
     );
+}
+
+#[test]
+fn p1_header_theme_choices_apply_and_persist_without_clobbering_draft() {
+    let dir = std::env::temp_dir().join(format!("opclook-p1-header-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create dir");
+    let _redirect = opcda_egui::settings::thread_dir::redirect(&dir);
+    let mut h = harness(fresh_app());
+    h.state_mut().dialogs.options.draft.update_interval_secs = 17;
+    for (choice, theme) in [
+        (Tr::ThemeLight, Theme::Light),
+        (Tr::ThemeDark, Theme::Dark),
+        (Tr::ThemeSystem, Theme::System),
+    ] {
+        h.run_steps(4);
+        h.get_by_label(tr(Lang::Ru, Tr::ThemeTitle)).click();
+        h.run_steps(3);
+        h.get_by_label(tr(Lang::Ru, choice)).click();
+        h.run_steps(5);
+        assert_eq!(h.state().settings.view.options.theme, theme);
+        assert_eq!(h.state().dialogs.options.draft.theme, theme);
+        assert_eq!(h.state().dialogs.options.draft.update_interval_secs, 17);
+        let loaded = Settings::load();
+        assert_eq!(loaded.settings.view.options.theme, theme);
+        let restarted = App::new_test_with_loaded(&egui::Context::default(), loaded);
+        let mut restarted = harness(restarted);
+        restarted.input_mut().system_theme = Some(egui::Theme::Light);
+        restarted.run_steps(4);
+        assert_eq!(dark_mode(&restarted), theme == Theme::Dark);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn p1_theme_control_is_reachable_in_a_narrow_window_in_each_language() {
+    for lang in [Lang::Ru, Lang::En, Lang::Zh] {
+        let mut app = fresh_app();
+        app.settings.set_lang(lang);
+        let mut h = Harness::builder()
+            .with_size([480.0, 520.0])
+            .with_accessibility_check(false)
+            .allow_missing_glyphs()
+            .build_ui_state(|ui, app| opcda_egui::ui::draw(app, ui), app);
+        h.run_steps(4);
+        let rect = h.get_by_label(tr(lang, Tr::ThemeTitle)).rect();
+        assert!(
+            rect.left() >= 0.0 && rect.right() <= 480.0,
+            "{lang:?}: {rect:?}"
+        );
+        for key in [
+            Tr::MenuClient,
+            Tr::MenuServers,
+            Tr::MenuSignals,
+            Tr::MenuScript,
+            Tr::MenuJournal,
+            Tr::MenuLanguage,
+            Tr::MenuHelp,
+        ] {
+            let node = h
+                .get_all_by_label(tr(lang, key))
+                .min_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+                .expect("top menu item");
+            assert!(!node.accesskit_node().is_disabled(), "{lang:?}: {key:?}");
+            let rect = node.rect();
+            assert!(
+                rect.left() >= 0.0 && rect.right() <= 480.0,
+                "{lang:?}: {key:?} {rect:?}"
+            );
+        }
+        h.get_by_label(tr(lang, Tr::ThemeTitle)).click();
+        h.run_steps(3);
+        for key in [Tr::ThemeSystem, Tr::ThemeLight, Tr::ThemeDark] {
+            let rect = h.get_by_label(tr(lang, key)).rect();
+            assert!(
+                rect.left() >= 0.0 && rect.right() <= 480.0,
+                "{lang:?}: {rect:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn p1_system_without_os_signal_uses_dark() {
+    let mut h = harness(app_with_theme(Theme::System));
+    h.input_mut().system_theme = None;
+    h.run_steps(4);
+    assert!(dark_mode(&h));
+}
+
+#[test]
+fn p1_header_save_failure_is_reported_in_journal() {
+    let dir = std::env::temp_dir().join(format!("opclook-p1-save-error-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create dir");
+    let _redirect = opcda_egui::settings::thread_dir::redirect(&dir);
+    std::fs::create_dir_all(opcda_egui::settings::settings_path()).expect("block settings file");
+    let mut h = harness(fresh_app());
+    h.run_steps(4);
+    h.get_by_label(tr(Lang::Ru, Tr::ThemeTitle)).click();
+    h.run_steps(3);
+    h.get_by_label(tr(Lang::Ru, Tr::ThemeLight)).click();
+    h.run_steps(4);
+    assert_eq!(h.state().settings.view.options.theme, Theme::Light);
+    assert!(h.state().journal.entries().iter().any(|entry| matches!(
+        entry.message,
+        opcda_egui::journal::JournalMessage::Localized {
+            key: Tr::SettingsSaveFailed,
+            ..
+        }
+    )));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn p1_header_change_keeps_an_open_options_draft_consistent() {
+    let dir = std::env::temp_dir().join(format!("opclook-p1-draft-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create dir");
+    let _redirect = opcda_egui::settings::thread_dir::redirect(&dir);
+    let mut app = app_with_theme(Theme::Dark);
+    app.open_options_dialog();
+    app.dialogs.options.draft.update_interval_secs = 17;
+    let mut h = harness(app);
+    h.run_steps(4);
+    h.get_all_by_label(tr(Lang::Ru, Tr::ThemeTitle))
+        .min_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+        .expect("header theme menu")
+        .click();
+    h.run_steps(4);
+    h.get_all_by_label(tr(Lang::Ru, Tr::ThemeLight))
+        .min_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+        .expect("header light option")
+        .click();
+    h.run_steps(4);
+    assert_eq!(h.state().settings.view.options.theme, Theme::Light);
+    assert_eq!(h.state().dialogs.options.draft.theme, Theme::Light);
+    assert_eq!(h.state().dialogs.options.draft.update_interval_secs, 17);
+    h.get_by_label(tr(Lang::Ru, Tr::Save)).click();
+    h.run_steps(4);
+    assert_eq!(h.state().settings.view.options.theme, Theme::Light);
+    assert_eq!(h.state().settings.view.options.update_interval_secs, 17);
 }

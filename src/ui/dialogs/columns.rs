@@ -96,7 +96,7 @@ pub(super) fn columns_dialog(app: &mut App, ui: &mut egui::Ui) {
                         ui.painter().rect_filled(
                             ui.max_rect(),
                             2.0,
-                            egui::Color32::from_rgb(60, 66, 80),
+                            ui.visuals().selection.bg_fill,
                         );
                         ui.add_space(2.0);
                     }

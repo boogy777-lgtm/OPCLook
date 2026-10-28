@@ -7,14 +7,9 @@ use crate::constants::{
     BUTTON_PADDING, ITEM_SPACING, TEXT_SIZE_BODY, TEXT_SIZE_HEADING, TEXT_SIZE_SMALL, WINDOW_MARGIN,
 };
 use crate::settings::Theme;
-use egui::{Color32, FontFamily, FontId, TextStyle};
+use egui::{FontFamily, FontId, TextStyle};
 
-use super::colors::accent_for;
-
-/// Striped-row colour: barely lighter than the dark `panel_fill` (gray 27).
-const DARK_STRIPE: Color32 = Color32::from_gray(31);
-/// Striped-row colour: barely darker than the light `panel_fill` (gray 248).
-const LIGHT_STRIPE: Color32 = Color32::from_gray(243);
+use super::colors::palette;
 
 /// Type scale (Small 12, Body/Button/Monospace 13, Heading 15) and spacing
 /// (item 8x6, button padding 8x4, window margin 12).
@@ -48,22 +43,45 @@ fn apply_scale(style: &mut egui::Style) {
     style.spacing.window_margin = egui::Margin::same(WINDOW_MARGIN);
 }
 
-/// Accent-coloured selection and links for one palette (UI9).
-fn apply_accent(visuals: &mut egui::Visuals) {
-    let dark = visuals.dark_mode;
-    let accent = accent_for(dark);
-    visuals.hyperlink_color = accent;
-    visuals.selection.bg_fill = if dark {
-        Color32::from_rgb(36, 76, 128)
-    } else {
-        Color32::from_rgb(190, 214, 245)
-    };
-    visuals.selection.stroke.color = if dark {
-        Color32::from_rgb(200, 222, 255)
-    } else {
-        Color32::from_rgb(16, 60, 130)
-    };
-    visuals.widgets.hovered.bg_stroke.color = accent;
+/// Apply a complete palette to surfaces and interaction states.
+fn apply_palette(visuals: &mut egui::Visuals) {
+    let p = palette(visuals.dark_mode);
+    visuals.disabled_alpha = 0.65;
+    visuals.panel_fill = p.panel;
+    visuals.window_fill = p.window;
+    visuals.extreme_bg_color = p.input;
+    visuals.text_edit_bg_color = Some(p.input);
+    visuals.code_bg_color = p.stripe;
+    visuals.faint_bg_color = p.stripe;
+    visuals.weak_text_color = Some(p.weak);
+    visuals.hyperlink_color = p.accent;
+    visuals.warn_fg_color = p.warning;
+    visuals.error_fg_color = p.error;
+    visuals.selection.bg_fill = p.selection;
+    visuals.selection.stroke.color = p.accent;
+    visuals.window_stroke.color = p.border;
+    for widget in [
+        &mut visuals.widgets.noninteractive,
+        &mut visuals.widgets.inactive,
+        &mut visuals.widgets.hovered,
+        &mut visuals.widgets.active,
+        &mut visuals.widgets.open,
+    ] {
+        widget.fg_stroke.color = p.text;
+        widget.bg_stroke.color = p.border;
+    }
+    visuals.widgets.noninteractive.bg_fill = p.window;
+    visuals.widgets.noninteractive.weak_bg_fill = p.stripe;
+    visuals.widgets.inactive.bg_fill = p.button;
+    visuals.widgets.inactive.weak_bg_fill = p.button;
+    visuals.widgets.hovered.bg_fill = p.hover;
+    visuals.widgets.hovered.weak_bg_fill = p.hover;
+    visuals.widgets.hovered.bg_stroke.color = p.accent;
+    visuals.widgets.active.bg_fill = p.selection;
+    visuals.widgets.active.weak_bg_fill = p.selection;
+    visuals.widgets.active.bg_stroke = egui::Stroke::new(2.0, p.accent);
+    visuals.widgets.open.bg_fill = p.selection;
+    visuals.widgets.open.weak_bg_fill = p.selection;
 }
 
 /// Apply the application style (both palettes) and the theme preference:
@@ -79,13 +97,11 @@ pub fn apply_style(ctx: &egui::Context, theme: Theme) {
     ctx.set_visuals_of(egui::Theme::Light, egui::Visuals::light());
     ctx.style_mut_of(egui::Theme::Dark, |style| {
         apply_scale(style);
-        style.visuals.faint_bg_color = DARK_STRIPE;
-        apply_accent(&mut style.visuals);
+        apply_palette(&mut style.visuals);
     });
     ctx.style_mut_of(egui::Theme::Light, |style| {
         apply_scale(style);
-        style.visuals.faint_bg_color = LIGHT_STRIPE;
-        apply_accent(&mut style.visuals);
+        apply_palette(&mut style.visuals);
     });
     ctx.data_mut(|d| d.insert_temp(applied_marker(), AppliedTheme(theme)));
 }

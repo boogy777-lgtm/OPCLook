@@ -1,4 +1,4 @@
-use super::colors::{green, red, yellow};
+use super::colors::{green, muted, red, yellow};
 use super::dialogs::{security_mode_label, security_policy_label};
 use super::paint::{paint_lock_icon, painter_x_button};
 use super::truncate_text;
@@ -307,7 +307,7 @@ pub(super) fn server_state_color(state: SessionState) -> egui::Color32 {
     match state {
         SessionState::Connected => green(),
         SessionState::Connecting => yellow(),
-        SessionState::Disconnected => egui::Color32::GRAY,
+        SessionState::Disconnected => muted(),
     }
 }
 

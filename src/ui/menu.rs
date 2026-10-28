@@ -4,11 +4,19 @@ use super::files::{
 use super::tree::{open_add_signal, refresh_selected, request_disconnect};
 use crate::app::{App, MessageDialog};
 use crate::i18n::{Lang, Tr, tr};
+use crate::settings::Theme;
 
 pub(super) fn menu(app: &mut App, ui: &mut egui::Ui) {
     let lang = app.lang();
     egui::Panel::top("menu_bar").show(ui, |ui| {
+        let narrow = ui.available_width() < 700.0;
+        if narrow {
+            egui::MenuBar::new().ui(ui, |ui| theme_menu(app, ui, lang));
+        }
         egui::MenuBar::new().ui(ui, |ui| {
+            if !narrow {
+                theme_menu(app, ui, lang);
+            }
             ui.menu_button(tr(lang, Tr::MenuClient), |ui| {
                 if ui
                     .add(egui::Button::new(tr(lang, Tr::ConnectEllipsis)).shortcut_text("Ctrl+N"))
@@ -235,6 +243,29 @@ pub(super) fn menu(app: &mut App, ui: &mut egui::Ui) {
                 }
             });
         });
+    });
+}
+
+fn theme_menu(app: &mut App, ui: &mut egui::Ui, lang: Lang) {
+    ui.menu_button(tr(lang, Tr::ThemeTitle), |ui| {
+        for (theme, label) in [
+            (Theme::System, Tr::ThemeSystem),
+            (Theme::Light, Tr::ThemeLight),
+            (Theme::Dark, Tr::ThemeDark),
+        ] {
+            if ui
+                .selectable_label(app.settings.view.options.theme == theme, tr(lang, label))
+                .clicked()
+            {
+                app.settings.view.options.theme = theme;
+                // Preserve other unsaved options while preventing a stale draft
+                // from reverting the theme on Save.
+                app.dialogs.options.draft.theme = theme;
+                app.persist_settings();
+                ui.close();
+                ui.ctx().request_repaint();
+            }
+        }
     });
 }
 
