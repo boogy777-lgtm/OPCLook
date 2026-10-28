@@ -190,6 +190,7 @@ pub struct SessionRuntime {
     pub last_test: Instant,
     pub items: HashMap<ItemKey, bool>,
     force_poll: bool,
+    connection_id: Option<RequestId>,
 }
 impl SessionRuntime {
     pub fn new(endpoint: EndpointSpec, now: Instant) -> Self {
@@ -203,6 +204,7 @@ impl SessionRuntime {
             last_test: now,
             items: HashMap::new(),
             force_poll: false,
+            connection_id: None,
         }
     }
 }
@@ -349,6 +351,7 @@ impl<C> Engine<C> {
                 .entry(session)
                 .or_insert_with(|| SessionRuntime::new(endpoint.clone(), Instant::now()));
             view.endpoint = endpoint.clone();
+            view.connection_id = Some(id);
             view.state = SessionState::Connecting;
             view.read_in_flight = false;
             view.subscription = SubscriptionState::Inactive;
@@ -479,7 +482,15 @@ impl<C> Engine<C> {
         };
         self.route_events.push_back(Event {
             owner: Owner::Session(session),
-            origin: connect_request.into(),
+            origin: connect_request
+                .map(Origin::Reply)
+                .or_else(|| {
+                    self.sessions
+                        .get(&session)
+                        .and_then(|view| view.connection_id)
+                        .map(Origin::Session)
+                })
+                .unwrap_or(Origin::Unsolicited),
             kind,
         });
     }
@@ -537,6 +548,9 @@ impl<C> Engine<C> {
             kind: CommandKind::Disconnect,
         })?;
         self.cancel_da_routes(session);
+        if let Some(view) = self.sessions.get_mut(&session) {
+            view.connection_id = None;
+        }
         Ok(())
     }
     pub fn has_request_capacity(&self) -> bool {
@@ -586,7 +600,8 @@ impl<C> Engine<C> {
         }
         // Browses can be queued while connecting; writes cannot.
         if runtime.state == SessionState::Disconnected
-            || (write && runtime.state != SessionState::Connected)
+            || (write
+                && (runtime.state != SessionState::Connected || runtime.connection_id.is_none()))
         {
             return Some(ActionUnavailable::SessionNotConnected);
         }
@@ -732,12 +747,18 @@ impl<C> Engine<C> {
                 cause,
             });
         }
+        if operation == Operation::Disconnect {
+            if let Some(view) = session.and_then(|id| self.sessions.get_mut(&id)) {
+                view.connection_id = None;
+            }
+        }
         if let (Some(endpoint), Some(session)) = (endpoint, session) {
             let view = self
                 .sessions
                 .entry(session)
                 .or_insert_with(|| SessionRuntime::new(endpoint.clone(), Instant::now()));
             view.endpoint = endpoint;
+            view.connection_id = Some(id);
             view.state = SessionState::Connecting;
             view.read_in_flight = false;
             view.subscription = SubscriptionState::Inactive;
@@ -769,7 +790,7 @@ impl<C> Engine<C> {
     }
     pub fn accept(&mut self, event: &Event) -> Result<Option<PendingRequest<C>>, ()> {
         let pending = match event.origin {
-            Origin::Unsolicited => None,
+            Origin::Unsolicited | Origin::Session(_) => None,
             Origin::Reply(id) => {
                 let pending = self.requests.remove(&(event.owner, id)).ok_or(())?;
                 self.timeout_queued.remove(&(event.owner, id));
@@ -782,21 +803,19 @@ impl<C> Engine<C> {
         let Owner::Session(session) = event.owner else {
             return Ok(pending);
         };
-        // Pushes queued by a previous link must not revive stale data while
-        // disconnected or while a new connection is still being established.
-        if event.origin == Origin::Unsolicited
-            && matches!(
-                event.kind,
-                EventKind::Values { .. }
-                    | EventKind::SubscriptionState { .. }
-                    | EventKind::PollOnly { .. }
-            )
-            && !self
-                .sessions
-                .get(&session)
-                .is_some_and(|view| view.state == SessionState::Connected)
-        {
-            return Err(());
+        // Session state changes require the identity of the Connect that created
+        // the producer. Untagged session diagnostics remain visible.
+        let affects_session = !matches!(event.kind, EventKind::Log { .. });
+        match event.origin {
+            Origin::Session(id) => {
+                if !self.sessions.get(&session).is_some_and(|view| {
+                    view.connection_id == Some(id) && view.state == SessionState::Connected
+                }) {
+                    return Err(());
+                }
+            }
+            Origin::Unsolicited if affects_session => return Err(()),
+            _ => {}
         }
         let failed_connect = matches!(
             &event.kind,
@@ -816,7 +835,7 @@ impl<C> Engine<C> {
             self.session_routes.remove(&session);
         }
         let additions = match event.origin {
-            Origin::Unsolicited => None,
+            Origin::Unsolicited | Origin::Session(_) => None,
             Origin::Reply(id) => self.pending_adds.remove(&(event.owner, id)),
         };
         if let EventKind::PollOnly { keys } = &event.kind {
@@ -1248,8 +1267,18 @@ impl<C> Engine<C> {
         &self.gateway
     }
     #[cfg(feature = "test-support")]
-    pub fn seed_session_for_test(&mut self, id: SessionId, session: SessionRuntime) {
+    pub fn seed_session_for_test(&mut self, id: SessionId, mut session: SessionRuntime) {
+        session.connection_id = self
+            .sessions
+            .get(&id)
+            .map_or(Some(RequestId::FIRST), |old| old.connection_id);
         self.sessions.insert(id, session);
+    }
+    #[cfg(feature = "test-support")]
+    pub fn connection_id_for_test(&self, id: SessionId) -> Option<RequestId> {
+        self.sessions
+            .get(&id)
+            .and_then(|session| session.connection_id)
     }
     #[cfg(feature = "test-support")]
     pub fn insert_pending_for_test(
@@ -1419,6 +1448,64 @@ mod tests {
         assert!(engine.requests.is_empty());
     }
     #[test]
+    fn disconnect_blocks_writes_before_state_changes() {
+        use opclook_contract::actions::DomainAction;
+        use opclook_contract::model::{Value, WriteRequest};
+        for tracked in [false, true] {
+            let mut engine = Engine::<()>::default();
+            engine.test_skip_dispatch = true;
+            let mut view =
+                SessionRuntime::new(EndpointSpec::ua("opc.tcp://localhost:4840"), Instant::now());
+            view.state = SessionState::Connected;
+            view.connection_id = Some(rid(77));
+            engine.sessions.insert(sid(1), view);
+            if tracked {
+                engine
+                    .send(sid(1), Protocol::OpcUa, CommandKind::Disconnect, ())
+                    .unwrap();
+            } else {
+                engine
+                    .disconnect_untracked(sid(1), Protocol::OpcUa)
+                    .unwrap();
+            }
+            assert_eq!(
+                engine.session(sid(1)).unwrap().state,
+                SessionState::Connected
+            );
+            let action = DomainAction::Write {
+                session: sid(1),
+                protocol: Protocol::OpcUa,
+                request: WriteRequest {
+                    key: ItemKey::FIRST,
+                    value: Value::I64(7),
+                    type_hint: None,
+                },
+            };
+            let next = engine.next;
+            let count = engine.requests.len();
+            assert_eq!(
+                engine.action_unavailable(&action),
+                Some(ActionUnavailable::SessionNotConnected)
+            );
+            assert!(matches!(
+                engine.execute_action(action.clone(), ()),
+                Err(DispatchError::ActionUnavailable(
+                    ActionUnavailable::SessionNotConnected
+                ))
+            ));
+            if let DomainAction::Write { request, .. } = action {
+                assert!(matches!(
+                    engine.send(sid(1), Protocol::OpcUa, CommandKind::Write { request }, ()),
+                    Err(DispatchError::ActionUnavailable(
+                        ActionUnavailable::SessionNotConnected
+                    ))
+                ));
+            }
+            assert_eq!(engine.next, next);
+            assert_eq!(engine.requests.len(), count);
+        }
+    }
+    #[test]
     fn discovery_and_session_correlation_are_isolated() {
         let mut engine = Engine::<()>::default();
         engine.test_skip_dispatch = true;
@@ -1485,6 +1572,7 @@ mod tests {
         let mut view =
             SessionRuntime::new(EndpointSpec::ua("opc.tcp://127.0.0.1:4840"), Instant::now());
         view.state = SessionState::Connected;
+        view.connection_id = Some(rid(77));
         view.items.insert(ItemKey::FIRST, false);
         engine.sessions.insert(sid(1), view);
         engine.next = RequestId::new(u64::MAX);
@@ -1623,6 +1711,7 @@ mod tests {
                 },
             )
             .unwrap();
+        assert_eq!(engine.session(sid(1)).unwrap().connection_id, Some(id));
         let deadline = Instant::now() + Duration::from_secs(2);
         while !engine.session_routes.contains_key(&sid(1)) && Instant::now() < deadline {
             engine.pump_da_routes();
@@ -1721,6 +1810,7 @@ mod tests {
         let mut engine = Engine::<()>::default();
         let mut view = SessionRuntime::new(EndpointSpec::da("10.0.0.1", "Srv"), Instant::now());
         view.state = SessionState::Connected;
+        view.connection_id = Some(rid(77));
         engine.sessions.insert(sid(1), view);
         engine.requests.insert(
             (owner(1), rid(7)),
@@ -1733,6 +1823,7 @@ mod tests {
         engine.on_da_route_lost(sid(1), DaRouteError::HelperUnavailable("lost".into()));
         assert!(!engine.has_pending(owner(1), rid(7)));
         let event = engine.route_events.pop_front().unwrap();
+        assert_eq!(event.origin, Origin::Session(rid(77)));
         engine.accept(&event).unwrap();
         assert_eq!(
             engine.session(sid(1)).unwrap().state,
@@ -1772,6 +1863,7 @@ mod tests {
         let mut view =
             SessionRuntime::new(EndpointSpec::ua("opc.tcp://127.0.0.1:4840"), Instant::now());
         view.state = SessionState::Connected;
+        view.connection_id = Some(rid(77));
         view.read_in_flight = true;
         engine.sessions.insert(sid(1), view);
         engine.requests.insert(
@@ -1814,6 +1906,7 @@ mod tests {
         let mut view =
             SessionRuntime::new(EndpointSpec::ua("opc.tcp://127.0.0.1:4840"), Instant::now());
         view.state = SessionState::Connected;
+        view.connection_id = Some(rid(77));
         view.subscription = SubscriptionState::Active;
         view.items.insert(key(1), false);
         engine.sessions.insert(sid(1), view);
@@ -1836,7 +1929,7 @@ mod tests {
         let mut engine = pending_add_engine();
         engine
             .accept(&Event {
-                origin: Origin::Unsolicited,
+                origin: Origin::Session(rid(77)),
                 owner: owner(1),
                 kind: EventKind::PollOnly {
                     keys: vec![key(2), key(3)],
@@ -1906,6 +1999,7 @@ mod tests {
         let endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:0");
         let mut view = SessionRuntime::new(endpoint.clone(), Instant::now());
         view.state = SessionState::Connected;
+        view.connection_id = Some(rid(77));
         view.subscription = SubscriptionState::Active;
         view.items.insert(key(4), true);
         engine.sessions.insert(sid(1), view);
@@ -1953,7 +2047,7 @@ mod tests {
         engine
             .accept(&Event {
                 owner: owner(1),
-                origin: Origin::Unsolicited,
+                origin: Origin::Session(connect),
                 kind: EventKind::SubscriptionState {
                     state: SubscriptionState::Active,
                 },
@@ -2018,9 +2112,10 @@ mod tests {
         let mut view =
             SessionRuntime::new(EndpointSpec::ua("opc.tcp://127.0.0.1:4840"), Instant::now());
         view.state = SessionState::Connected;
+        view.connection_id = Some(rid(77));
         engine.sessions.insert(sid(1), view);
         let disconnected = Event {
-            origin: Origin::Unsolicited,
+            origin: Origin::Session(rid(77)),
             owner: owner(1),
             kind: EventKind::Disconnected {
                 reason: BackendMsg::raw("lost"),
@@ -2029,12 +2124,20 @@ mod tests {
         engine.accept(&disconnected).unwrap();
         let first = engine.session(sid(1)).unwrap().reconnect;
         assert!(matches!(first, ReconnectState::Waiting { attempt: 1, .. }));
-        engine.accept(&disconnected).unwrap();
+        assert!(engine.accept(&disconnected).is_err());
         assert_eq!(engine.session(sid(1)).unwrap().reconnect, first);
         engine.sessions.get_mut(&sid(1)).unwrap().state = SessionState::Connecting;
+        engine.requests.insert(
+            (owner(1), rid(78)),
+            PendingRequest {
+                operation: Operation::Connect,
+                sent: Instant::now(),
+                ctx: (),
+            },
+        );
         engine
             .accept(&Event {
-                origin: Origin::Unsolicited,
+                origin: Origin::Reply(rid(78)),
                 owner: owner(1),
                 kind: EventKind::Error {
                     operation: Operation::Connect,
@@ -2048,11 +2151,129 @@ mod tests {
         ));
     }
     #[test]
+    fn delayed_unsolicited_from_previous_connection_is_rejected() {
+        let mut engine = Engine::<()>::default();
+        engine.test_skip_dispatch = true;
+        let endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+        let connect_a = engine
+            .send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::Connect {
+                    endpoint: endpoint.clone(),
+                },
+                (),
+            )
+            .unwrap();
+        engine
+            .accept(&Event {
+                owner: owner(1),
+                origin: Origin::Reply(connect_a),
+                kind: EventKind::Connected {
+                    endpoint: endpoint.clone(),
+                    info: BackendMsg::raw("A"),
+                },
+            })
+            .unwrap();
+        let delayed = [
+            EventKind::SubscriptionState {
+                state: SubscriptionState::Active,
+            },
+            EventKind::Values {
+                values: vec![(
+                    key(1),
+                    opclook_contract::model::DataValue::bad(BackendMsg::raw("old")),
+                )],
+            },
+            EventKind::PollOnly { keys: vec![key(1)] },
+            EventKind::Disconnected {
+                reason: BackendMsg::ConnectionClosed,
+            },
+        ]
+        .map(|kind| Event {
+            owner: owner(1),
+            origin: Origin::Session(connect_a),
+            kind,
+        });
+        let disconnect = engine
+            .send(sid(1), Protocol::OpcUa, CommandKind::Disconnect, ())
+            .unwrap();
+        engine
+            .accept(&Event {
+                owner: owner(1),
+                origin: Origin::Reply(disconnect),
+                kind: EventKind::Disconnected {
+                    reason: BackendMsg::ConnectionClosed,
+                },
+            })
+            .unwrap();
+        let connect_b = engine
+            .send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::Connect {
+                    endpoint: endpoint.clone(),
+                },
+                (),
+            )
+            .unwrap();
+        engine
+            .accept(&Event {
+                owner: owner(1),
+                origin: Origin::Reply(connect_b),
+                kind: EventKind::Connected {
+                    endpoint,
+                    info: BackendMsg::raw("B"),
+                },
+            })
+            .unwrap();
+        engine
+            .sessions
+            .get_mut(&sid(1))
+            .unwrap()
+            .items
+            .insert(key(1), false);
+        for event in delayed {
+            assert!(engine.accept(&event).is_err());
+        }
+        assert_eq!(
+            engine.session(sid(1)).unwrap().items.get(&key(1)),
+            Some(&false)
+        );
+        assert!(
+            engine
+                .accept(&Event {
+                    owner: owner(1),
+                    origin: Origin::Unsolicited,
+                    kind: EventKind::Values { values: vec![] }
+                })
+                .is_err()
+        );
+        assert_eq!(
+            engine.session(sid(1)).unwrap().state,
+            SessionState::Connected
+        );
+        assert_eq!(
+            engine.session(sid(1)).unwrap().subscription,
+            SubscriptionState::Inactive
+        );
+        assert!(
+            engine
+                .accept(&Event {
+                    owner: owner(1),
+                    origin: Origin::Session(connect_b),
+                    kind: EventKind::Values { values: vec![] }
+                })
+                .is_ok()
+        );
+    }
+    #[test]
     fn unsolicited_push_does_not_release_pending_read() {
         let mut engine = Engine::<()>::default();
         let mut view =
             SessionRuntime::new(EndpointSpec::ua("opc.tcp://127.0.0.1:4840"), Instant::now());
         view.state = SessionState::Connected;
+        view.connection_id = Some(rid(77));
         view.items.insert(key(7), true);
         view.read_in_flight = true;
         view.last_poll = Instant::now() - Duration::from_secs(10);
@@ -2067,7 +2288,7 @@ mod tests {
         );
         engine
             .accept(&Event {
-                origin: Origin::Unsolicited,
+                origin: Origin::Session(rid(77)),
                 owner: owner(1),
                 kind: EventKind::Values { values: vec![] },
             })
@@ -2097,6 +2318,7 @@ mod tests {
         let mut view =
             SessionRuntime::new(EndpointSpec::ua("opc.tcp://127.0.0.1:4840"), Instant::now());
         view.state = SessionState::Connected;
+        view.connection_id = Some(rid(77));
         view.items.insert(key(7), true);
         view.read_in_flight = true;
         engine.sessions.insert(sid(1), view);
@@ -2110,7 +2332,7 @@ mod tests {
         );
         engine
             .accept(&Event {
-                origin: Origin::Unsolicited,
+                origin: Origin::Session(rid(77)),
                 owner: owner(1),
                 kind: EventKind::Error {
                     operation: Operation::Read,

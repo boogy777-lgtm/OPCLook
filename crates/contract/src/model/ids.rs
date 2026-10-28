@@ -120,6 +120,8 @@ impl fmt::Display for RequestId {
 pub enum Origin {
     Reply(RequestId),
     Unsolicited,
+    /// Unsolicited event from the connection created by this Connect request.
+    Session(RequestId),
 }
 impl From<Option<RequestId>> for Origin {
     fn from(id: Option<RequestId>) -> Self {

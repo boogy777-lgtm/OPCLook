@@ -29,7 +29,7 @@ fn test_url() -> String {
 }
 
 /// Drain events for a session until `predicate` matches or the timeout expires.
-/// Push events carry Origin::Unsolicited, so the filter is purely on the EventKind.
+/// Push events carry their connection origin; this helper filters on the EventKind.
 fn wait_for(
     gateway: &Gateway,
     session: u64,

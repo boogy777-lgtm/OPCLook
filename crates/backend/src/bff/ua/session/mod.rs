@@ -47,6 +47,7 @@ pub(super) struct UaSession {
     pub(super) info: BackendMsg,
     /// The owning session id, used by the DataChange callback to tag pushes.
     pub(super) session_id: SessionId,
+    pub(super) connection_id: Option<crate::bff::model::RequestId>,
     /// P1: server-assigned subscription ids, the first created lazily on the
     /// first AddItems. A server limits the monitored items of ONE subscription
     /// (`BadTooManyMonitoredItems`), so a large tag list spreads over several.

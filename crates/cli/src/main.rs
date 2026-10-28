@@ -692,10 +692,7 @@ fn run_with_engine(
         if engine.accept(&event).is_err() {
             continue;
         }
-        if options.poll
-            && event.origin == opclook_contract::model::Origin::Unsolicited
-            && matches!(&event.kind, EventKind::Values { .. })
-        {
+        if discard_poll_push(options.poll, &event) {
             continue;
         }
         match event.kind {
@@ -745,8 +742,31 @@ fn main() {
         }
     }
 }
+fn discard_poll_push(poll: bool, event: &Event) -> bool {
+    poll && matches!(
+        event.origin,
+        opclook_contract::model::Origin::Unsolicited | opclook_contract::model::Origin::Session(_)
+    ) && matches!(event.kind, EventKind::Values { .. })
+}
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn poll_discards_both_push_origins_but_keeps_read_reply() {
+        use opclook_contract::model::{Event, EventKind, Origin, Owner, RequestId, SessionId};
+        for (origin, discard) in [
+            (Origin::Unsolicited, true),
+            (Origin::Session(RequestId::FIRST), true),
+            (Origin::Reply(RequestId::FIRST), false),
+        ] {
+            let event = Event {
+                owner: Owner::Session(SessionId::FIRST),
+                origin,
+                kind: EventKind::Values { values: vec![] },
+            };
+            assert_eq!(super::discard_poll_push(true, &event), discard);
+            assert!(!super::discard_poll_push(false, &event));
+        }
+    }
     #[test]
     fn browse_reports_unavailable_session_before_dispatch() {
         let mut engine = opclook_engine::Engine::<()>::default();

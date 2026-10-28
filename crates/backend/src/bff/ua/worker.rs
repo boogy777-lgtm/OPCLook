@@ -626,7 +626,7 @@ impl ConnectJob {
         let outcome = if cancel.is_cancelled() {
             Err(BackendMsg::ConnectCancelled)
         } else {
-            connect(session, endpoint.clone(), &cancel, &event_tx).await
+            connect(session, request_id, endpoint.clone(), &cancel, &event_tx).await
         };
         match outcome {
             Ok(mut ua_session) => {
@@ -899,7 +899,15 @@ impl Actor {
         send(
             &self.event_tx,
             Event {
-                origin: request_id.into(),
+                origin: request_id.map_or_else(
+                    || {
+                        self.session.connection_id.map_or(
+                            crate::bff::model::Origin::Unsolicited,
+                            crate::bff::model::Origin::Session,
+                        )
+                    },
+                    crate::bff::model::Origin::Reply,
+                ),
                 owner: self.id.into(),
                 kind,
             },

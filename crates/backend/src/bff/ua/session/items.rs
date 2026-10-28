@@ -170,7 +170,10 @@ impl UaSession {
                     send(
                         tx,
                         Event {
-                            origin: crate::bff::model::Origin::Unsolicited,
+                            origin: self.connection_id.map_or(
+                                crate::bff::model::Origin::Unsolicited,
+                                crate::bff::model::Origin::Session,
+                            ),
                             owner: self.session_id.into(),
                             kind: EventKind::PollOnly {
                                 keys: outcome.poll_only,

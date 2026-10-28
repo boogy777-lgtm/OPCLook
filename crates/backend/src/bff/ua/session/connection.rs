@@ -77,6 +77,7 @@ where
 
 pub(in crate::bff::ua) async fn connect(
     session_id: SessionId,
+    connection_id: Option<crate::bff::model::RequestId>,
     endpoint: EndpointSpec,
     cancel: &CancellationToken,
     event_tx: &Sender<Event>,
@@ -219,6 +220,7 @@ pub(in crate::bff::ua) async fn connect(
         node_types: HashMap::new(),
         info: security_summary(url, &policy_short, mode, secure_was_available),
         session_id,
+        connection_id,
         subscriptions: Vec::new(),
         publishing_interval_ms: 0,
         deadband: 0.0,

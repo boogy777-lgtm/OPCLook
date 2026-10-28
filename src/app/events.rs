@@ -52,7 +52,11 @@ impl App {
     #[cfg(feature = "test-support")]
     pub fn on_synced_event_for_test_at(&mut self, session: SessionId, kind: EventKind) {
         self.on_event(Event {
-            origin: Origin::Unsolicited,
+            origin: Origin::Session(
+                self.engine
+                    .connection_id_for_test(session)
+                    .unwrap_or(RequestId::FIRST),
+            ),
             owner: Owner::Session(session),
             kind,
         });
@@ -63,7 +67,11 @@ impl App {
     pub fn on_event_for_test_at(&mut self, session: SessionId, kind: EventKind) {
         self.sync_fixture_sessions();
         self.on_event(Event {
-            origin: Origin::Unsolicited,
+            origin: Origin::Session(
+                self.engine
+                    .connection_id_for_test(session)
+                    .unwrap_or(RequestId::FIRST),
+            ),
             owner: Owner::Session(session),
             kind,
         });
@@ -119,7 +127,7 @@ impl App {
                         &[
                             &match event.origin {
                                 Origin::Reply(id) => id.to_string(),
-                                Origin::Unsolicited => String::new(),
+                                Origin::Unsolicited | Origin::Session(_) => String::new(),
                             },
                             &operation_label(self.lang(), pending.operation),
                             &owner_label(self.lang(), owner),
@@ -137,7 +145,7 @@ impl App {
                         &[
                             &match event.origin {
                                 Origin::Reply(id) => id.to_string(),
-                                Origin::Unsolicited => String::new(),
+                                Origin::Unsolicited | Origin::Session(_) => String::new(),
                             },
                             &owner_label(self.lang(), owner),
                         ],
@@ -148,7 +156,7 @@ impl App {
         };
         let request_id = match event.origin {
             Origin::Reply(id) => Some(id),
-            Origin::Unsolicited => None,
+            Origin::Unsolicited | Origin::Session(_) => None,
         };
         let kind = match (event.kind, &ctx) {
             (

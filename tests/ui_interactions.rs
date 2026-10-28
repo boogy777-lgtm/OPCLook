@@ -2688,9 +2688,13 @@ fn reconnect_connected_resubscribes_rows_requests_browse_and_read() {
     );
     assert_eq!(app.rows().len(), 2);
 
-    // Server comes back.
-    app.on_event_for_test_at(
+    // Server comes back in response to a real reconnect request.
+    app.record_dispatches_for_test();
+    app.reconnect_session(sid(1));
+    let request = *app.pending_request_ids_for_test(sid(1)).last().unwrap();
+    app.on_event_for_test_with_request(
         sid(1),
+        request,
         opcda_egui::bff::model::EventKind::Connected {
             endpoint: EndpointSpec::da("", "Srv.Test"),
             info: opcda_egui::bff::model::BackendMsg::raw("подключено"),
@@ -2855,8 +2859,12 @@ fn ua_reconnect_resubscribes_rows_and_resets_subscription_flag() {
     // Server returns: a fresh subscription must be re-established.
     let mut endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
     endpoint.ua_session_timeout = Some(123_000);
-    app.on_event_for_test_at(
+    app.record_dispatches_for_test();
+    app.reconnect_session(sid(1));
+    let request = *app.pending_request_ids_for_test(sid(1)).last().unwrap();
+    app.on_event_for_test_with_request(
         sid(1),
+        request,
         EventKind::Connected {
             endpoint,
             info: opcda_egui::bff::model::BackendMsg::raw("подключено"),
@@ -2955,6 +2963,9 @@ fn reconnect_attempts_cap_stops_the_loop_and_shows_exhausted() {
     app.settings.view.options.auto_reconnect = true;
     app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     app.activate_session(sid(1));
+    app.record_dispatches_for_test();
+    app.reconnect_session(sid(1));
+    let connect = *app.pending_request_ids_for_test(sid(1)).last().unwrap();
     // The twentieth automatic Connect is in flight; its failure exhausts the cap.
     {
         let view = app.sessions.iter_mut().find(|s| s.id == sid(1)).unwrap();
@@ -2964,8 +2975,9 @@ fn reconnect_attempts_cap_stops_the_loop_and_shows_exhausted() {
             attempt: 20,
         };
     }
-    app.on_event_for_test_at(
+    app.on_event_for_test_with_request(
         sid(1),
+        connect,
         EventKind::Error {
             operation: opcda_egui::bff::model::Operation::Connect,
             message: opcda_egui::bff::model::BackendMsg::raw("опять"),
@@ -5359,8 +5371,15 @@ fn p2_write_confirmation_cancel_and_connection_change_do_not_write() {
             h.run_steps(2);
             assert!(h.state().dialogs.confirm.is_none());
             assert!(h.state().dialogs.write.error.is_some());
-            h.state_mut().on_event_for_test_at(
+            h.state_mut().reconnect_session(sid(1));
+            let request = *h
+                .state()
+                .pending_request_ids_for_test(sid(1))
+                .last()
+                .unwrap();
+            h.state_mut().on_event_for_test_with_request(
                 sid(1),
+                request,
                 EventKind::Connected {
                     endpoint: EndpointSpec::da("", "Srv.Test"),
                     info: opcda_egui::bff::model::BackendMsg::raw("reconnected"),
