@@ -113,7 +113,7 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
                     ui.colored_label(red(), error);
                 }
                 {
-                    let confirm_on = app.settings.options.confirm_write;
+                    let confirm_on = app.settings.view.options.confirm_write;
                     if confirm_on {
                         ui.label(egui::RichText::new(tr(lang, Tr::ConfirmAfterWrite)).weak());
                     }

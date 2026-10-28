@@ -281,7 +281,7 @@ fn columns_dialog_keyboard_alt_down_reorders_and_persists() {
         );
         assert_eq!(after[idx], before[idx + 1]);
         assert!(
-            h.state().settings.column_order.is_some(),
+            h.state().settings.view.column_order.is_some(),
             "column_order must be persisted after the keyboard move"
         );
     });
@@ -316,7 +316,7 @@ fn columns_dialog_keyboard_alt_up_reorders_and_persists() {
             "«Значение» must move up via Ctrl+ArrowUp"
         );
         assert_eq!(after[idx], before[idx - 1]);
-        assert!(h.state().settings.column_order.is_some());
+        assert!(h.state().settings.view.column_order.is_some());
     });
 }
 
@@ -472,7 +472,7 @@ fn seed_writable_table(app: &mut App, names: &[(&str, &str, i64)]) -> Vec<ItemKe
 fn write_dialog_shows_confirmation_when_enabled() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.settings.options.confirm_write = true;
+    app.settings.view.options.confirm_write = true;
     seed_writable_table(&mut app, &[("a", "SigA", 42)]);
 
     let mut h = harness(app);
@@ -493,7 +493,7 @@ fn write_dialog_shows_confirmation_when_enabled() {
 fn write_confirm_no_keeps_write_dialog() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.settings.options.confirm_write = true;
+    app.settings.view.options.confirm_write = true;
     seed_writable_table(&mut app, &[("a", "SigA", 42)]);
 
     let mut h = harness(app);
@@ -513,7 +513,7 @@ fn write_confirm_no_keeps_write_dialog() {
 fn write_without_confirm_writes_immediately() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.settings.options.confirm_write = false;
+    app.settings.view.options.confirm_write = false;
     seed_writable_table(&mut app, &[("a", "SigA", 42)]);
 
     let mut h = harness(app);
@@ -533,8 +533,8 @@ fn tab_exclusive_switch_keeps_flags_and_changes_view() {
     let mut app = App::new_test(&ctx);
     // Both panels enabled -> a real tab bar appears; clicking a tab is a view
     // choice only, it does NOT toggle the show_* flags.
-    app.settings.options.show_script = true;
-    app.settings.options.show_log = true;
+    app.settings.view.options.show_script = true;
+    app.settings.view.options.show_log = true;
     app.bottom_tab = BottomTab::Script;
     seed_table(&mut app, &[("a", "SigA", 1)]);
 
@@ -550,8 +550,8 @@ fn tab_exclusive_switch_keeps_flags_and_changes_view() {
     tab.click();
     h.run_steps(10);
     // Flags unchanged; only the selected view changed.
-    assert!(h.state().settings.options.show_script);
-    assert!(h.state().settings.options.show_log);
+    assert!(h.state().settings.view.options.show_script);
+    assert!(h.state().settings.view.options.show_log);
     assert_eq!(h.state().bottom_tab, BottomTab::Journal);
 }
 
@@ -561,8 +561,8 @@ fn single_tab_does_not_show_unavailable_tab() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     // Only script enabled -> journal tab must be absent (view stays Script).
-    app.settings.options.show_script = true;
-    app.settings.options.show_log = false;
+    app.settings.view.options.show_script = true;
+    app.settings.view.options.show_log = false;
     app.bottom_tab = BottomTab::Journal;
     seed_table(&mut app, &[("a", "SigA", 1)]);
 
@@ -571,14 +571,14 @@ fn single_tab_does_not_show_unavailable_tab() {
     assert_eq!(h.state().bottom_tab, BottomTab::Journal);
     h.run_steps(5);
     // Still on script-only view; journal panel not renderable as a tab.
-    assert!(!h.state().settings.options.show_log);
+    assert!(!h.state().settings.view.options.show_log);
 }
 
 #[test]
 fn reconnect_stop_sets_flag_and_changes_hint() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.settings.options.auto_reconnect = true;
+    app.settings.view.options.auto_reconnect = true;
     app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     // Simulate a disconnected session the auto-reconnect loop is looking at.
     {
@@ -764,8 +764,8 @@ fn column_reorder_persists_in_settings() {
 
         // Persisted for save/load via BOTH the legacy columns.order and the new
         // column_order snapshot.
-        assert!(app.settings.column_order.is_some());
-        assert_eq!(app.settings.columns.order[idx - 1], ColumnId::Value);
+        assert!(app.settings.view.column_order.is_some());
+        assert_eq!(app.settings.view.columns.order[idx - 1], ColumnId::Value);
         let resolved = app.settings.resolved_order();
         assert_eq!(resolved[idx - 1], ColumnId::Value);
         // Re-listing the canonical set keeps every column exactly once.
@@ -774,8 +774,7 @@ fn column_reorder_persists_in_settings() {
         // A fresh Settings built from the persisted layout resolves the same order
         // (as it would after a save/load roundtrip).
         let reloaded = Settings {
-            columns: app.settings.columns.clone(),
-            column_order: app.settings.column_order.clone(),
+            view: app.settings.view.clone(),
             ..Settings::default()
         };
         assert_eq!(reloaded.resolved_order()[idx - 1], ColumnId::Value);
@@ -1320,9 +1319,12 @@ fn u15_connect_dialog_has_an_lds_host_field_used_by_the_lds_search() {
         let state = h.state();
         assert!(state.dialogs.connect.ua_search.network_searching());
         assert!(state.dialogs.connect.error.is_none());
-        assert_eq!(state.settings.ua_lds_host, "127.0.0.1:48690");
+        assert_eq!(state.settings.ua.ua_lds_host, "127.0.0.1:48690");
         assert_eq!(
-            opcda_egui::settings::Settings::load().settings.ua_lds_host,
+            opcda_egui::settings::Settings::load()
+                .settings
+                .ua
+                .ua_lds_host,
             "127.0.0.1:48690",
             "the field is persisted"
         );
@@ -1347,7 +1349,7 @@ fn u15_connect_dialog_rejects_a_malformed_lds_host() {
         assert!(!h.state().dialogs.connect.ua_search.network_searching());
         assert!(h.state().dialogs.connect.error.is_some());
         assert!(h.query_all_by_label_contains("LDS-хост:").count() >= 1);
-        assert_eq!(h.state().settings.ua_lds_host, "");
+        assert_eq!(h.state().settings.ua.ua_lds_host, "");
     });
 }
 
@@ -1605,7 +1607,7 @@ fn network_tab_startup_uses_cached_adapters_without_windows_query() {
         let a = "31000000-0000-0000-0000-000000000001";
         let b = "31000000-0000-0000-0000-000000000002";
         let mut settings = Settings::default();
-        settings.cached_adapters = opcda_egui::settings::CachedAdapters::from_vec(vec![
+        settings.network.cached_adapters = opcda_egui::settings::CachedAdapters::from_vec(vec![
             opcda_egui::net::CachedAdapter::from_info(&net_adapter(
                 a,
                 "Cached A",
@@ -1669,8 +1671,9 @@ fn network_tab_stale_guid_has_zero_selection_and_forget_keeps_cache() {
             net_adapter(a, "Ethernet", true, true, &[("192.168.1.20", 24)]),
             net_adapter(b, "Wi-Fi", false, true, &[("10.0.0.5", 24)]),
         ]);
-        app.settings.preferred_adapter = Some(opcda_egui::net::AdapterId::parse(stale).unwrap());
-        app.settings.selected_local_ip = Some("10.9.9.9".parse().unwrap());
+        app.settings.network.preferred_adapter =
+            Some(opcda_egui::net::AdapterId::parse(stale).unwrap());
+        app.settings.network.selected_local_ip = Some("10.9.9.9".parse().unwrap());
         app.open_connect_dialog();
 
         let mut h = harness(app);
@@ -1705,10 +1708,10 @@ fn network_tab_stale_guid_has_zero_selection_and_forget_keeps_cache() {
         h.get_by_label("Забыть").click();
         h.run_steps(5);
         let app = h.state();
-        assert!(app.settings.preferred_adapter.is_none());
-        assert!(app.settings.selected_local_ip.is_none());
+        assert!(app.settings.network.preferred_adapter.is_none());
+        assert!(app.settings.network.selected_local_ip.is_none());
         assert_eq!(
-            app.settings.cached_adapters.adapters.len(),
+            app.settings.network.cached_adapters.adapters.len(),
             2,
             "forgetting a stale GUID must not clear the cached list"
         );
@@ -1758,7 +1761,7 @@ fn network_tab_one_ip_read_only_and_multiple_ip_combo() {
         );
         h.run_steps(5);
         assert_eq!(
-            h.state().settings.selected_local_ip,
+            h.state().settings.network.selected_local_ip,
             Some("10.0.0.5".parse().unwrap())
         );
         assert_eq!(
@@ -1781,7 +1784,7 @@ fn network_tab_one_ip_read_only_and_multiple_ip_combo() {
         h.get_by_label("10.0.0.6/24").click();
         h.run_steps(5);
         assert_eq!(
-            h.state().settings.selected_local_ip,
+            h.state().settings.network.selected_local_ip,
             Some("10.0.0.6".parse().unwrap())
         );
         assert_eq!(
@@ -1854,7 +1857,7 @@ fn network_tab_refresh_button_queries_windows_inventory() {
             app.network.error
         );
         assert_eq!(
-            app.settings.cached_adapters.adapters.len(),
+            app.settings.network.cached_adapters.adapters.len(),
             app.network.adapters.len(),
             "the persisted cache must match the refreshed inventory"
         );
@@ -1874,7 +1877,7 @@ fn network_refresh_replaces_cache_and_filters_down_adapters() {
             net_adapter(a, "Ethernet", true, true, &[("192.168.1.20", 24)]),
             net_adapter(down, "Ethernet Down", true, false, &[("192.168.1.30", 24)]),
         ]);
-        assert_eq!(app.settings.cached_adapters.adapters.len(), 1);
+        assert_eq!(app.settings.network.cached_adapters.adapters.len(), 1);
         assert_eq!(app.network.adapters.len(), 1);
         assert_eq!(app.network.adapters[0].id.to_string(), a);
 
@@ -1885,11 +1888,12 @@ fn network_refresh_replaces_cache_and_filters_down_adapters() {
             true,
             &[("10.0.0.5", 24)],
         )]);
-        assert_eq!(app.settings.cached_adapters.adapters.len(), 1);
+        assert_eq!(app.settings.network.cached_adapters.adapters.len(), 1);
         assert_eq!(app.network.adapters.len(), 1);
         assert_eq!(app.network.adapters[0].id.to_string(), b);
         assert!(
             app.settings
+                .network
                 .cached_adapters
                 .adapters
                 .iter()
@@ -1943,7 +1947,7 @@ fn changing_adapter_does_not_rebind_active_sessions() {
             "future operations use the new adapter"
         );
         assert_eq!(
-            app.settings.selected_local_ip,
+            app.settings.network.selected_local_ip,
             Some("10.0.0.5".parse().unwrap())
         );
     });
@@ -2107,7 +2111,7 @@ fn connect_dialog_security_combos_are_typed_and_persist() {
             UaSecurityPolicy::Basic256Sha256
         );
         assert_eq!(
-            h.state().settings.ua_security_policy,
+            h.state().settings.ua.ua_security_policy,
             UaSecurityPolicy::Auto,
             "uncommitted choice must not modify persisted settings"
         );
@@ -2121,7 +2125,7 @@ fn connect_dialog_security_combos_are_typed_and_persist() {
             h.state().dialogs.connect.ua_security_mode,
             UaSecurityMode::Sign
         );
-        assert_eq!(h.state().settings.ua_security_mode, UaSecurityMode::Auto);
+        assert_eq!(h.state().settings.ua.ua_security_mode, UaSecurityMode::Auto);
     });
 }
 
@@ -2231,8 +2235,8 @@ fn connect_dialog_trust_checkbox_defaults_and_toggles() {
 fn connect_dialog_timeout_restores_but_trust_stays_opt_in() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.settings.ua_trust_server_cert = true;
-    app.settings.ua_session_timeout_ms = 300_000;
+    app.settings.ua.ua_trust_server_cert = true;
+    app.settings.ua.ua_session_timeout_ms = 300_000;
     app.open_connect_dialog();
     app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
     let h = harness(app);
@@ -2288,7 +2292,7 @@ fn esc_closes_write_dialog() {
 fn enter_confirms_write_dialog() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.settings.options.confirm_write = false;
+    app.settings.view.options.confirm_write = false;
     seed_writable_table(&mut app, &[("a", "SigA", 42)]);
 
     let mut h = harness(app);
@@ -2308,7 +2312,7 @@ fn enter_confirms_write_dialog() {
 fn enter_opens_confirmation_without_accepting_it() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.settings.options.confirm_write = true;
+    app.settings.view.options.confirm_write = true;
     seed_writable_table(&mut app, &[("a", "SigA", 42)]);
     let mut h = harness(app);
     h.state_mut().select_only(0);
@@ -2329,7 +2333,7 @@ fn enter_opens_confirmation_without_accepting_it() {
 fn modified_enter_cannot_accept_new_write_confirmation() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.settings.options.confirm_write = true;
+    app.settings.view.options.confirm_write = true;
     seed_writable_table(&mut app, &[("a", "SigA", 42)]);
     let mut h = harness(app);
     h.state_mut().select_only(0);
@@ -2356,7 +2360,7 @@ fn modified_enter_cannot_accept_new_write_confirmation() {
 fn k3_write_dialog_preselects_value_so_typing_replaces_it() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.settings.options.confirm_write = false;
+    app.settings.view.options.confirm_write = false;
     seed_writable_table(&mut app, &[("a", "SigA", 42)]);
 
     let mut h = harness(app);
@@ -2391,7 +2395,7 @@ fn k3_write_dialog_preselects_value_so_typing_replaces_it() {
 fn k3_write_error_reselects_the_value() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.settings.options.confirm_write = false;
+    app.settings.view.options.confirm_write = false;
     let key = seed_writable_table(&mut app, &[("a", "SigA", 42)])[0];
     app.rows_mut_for_test()[0].canonical_vt = Some(opcda_egui::bff::model::VarType::I4); // VT_I4: text is not accepted
     let mut h = harness(app);
@@ -2622,7 +2626,7 @@ fn disconnect_event_keeps_rows_and_marks_them_stale() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     set_ru(&mut app);
-    app.settings.options.auto_reconnect = true;
+    app.settings.view.options.auto_reconnect = true;
     app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     app.seed_tree_item(
         sid(1),
@@ -2948,7 +2952,7 @@ fn reconnect_attempts_cap_stops_the_loop_and_shows_exhausted() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     set_ru(&mut app);
-    app.settings.options.auto_reconnect = true;
+    app.settings.view.options.auto_reconnect = true;
     app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     app.activate_session(sid(1));
     // The twentieth automatic Connect is in flight; its failure exhausts the cap.
@@ -2985,8 +2989,8 @@ fn tree_click_focus_enables_arrow_navigation() {
     let mut app = App::new_test(&ctx);
     // Keep both bottom panels off so the tree pane is tall enough for an empty
     // click point below the nodes.
-    app.settings.options.show_script = false;
-    app.settings.options.show_log = false;
+    app.settings.view.options.show_script = false;
+    app.settings.view.options.show_log = false;
     app.bottom_tab = BottomTab::Journal;
     let (_a, _b) = seed_tree(&mut app);
     assert_eq!(app.tree_focused, false);
@@ -3118,8 +3122,8 @@ fn tree_focus_cleared_by_typing_in_text_field() {
     let mut app = App::new_test(&ctx);
     // Show the script editor (single bottom panel) so there is a real text field
     // into which the user can click.
-    app.settings.options.show_script = true;
-    app.settings.options.show_log = false;
+    app.settings.view.options.show_script = true;
+    app.settings.view.options.show_log = false;
     let (_a, _b) = seed_tree(&mut app);
     app.set_tree_focus(sid(1), _a);
     let mut h = harness(app);
@@ -3457,7 +3461,7 @@ fn rejected_ua_connect_keeps_popup_open_with_error() {
 // ---- Columns dialog ↑/↓ (Task 3) ----
 
 /// The columns dialog's «Вниз» button reorders its own list immediately and the
-/// change is persisted into settings.column_order.
+/// change is persisted into settings.view.column_order.
 #[test]
 fn columns_dialog_down_moves_row_and_persists() {
     with_settings_lock(|| {
@@ -3492,11 +3496,11 @@ fn columns_dialog_down_moves_row_and_persists() {
         );
         assert_eq!(after[target_idx], before[target_idx + 1]);
         assert!(
-            h.state().settings.column_order.is_some(),
+            h.state().settings.view.column_order.is_some(),
             "column_order must be persisted after the dialog move"
         );
         // The in-memory persisted snapshot is typed and reflects the move.
-        let parsed = h.state().settings.column_order.clone().unwrap();
+        let parsed = h.state().settings.view.column_order.clone().unwrap();
         assert_eq!(parsed.len(), ColumnId::ALL.len(), "all columns persisted");
         assert_eq!(
             parsed[target_idx + 1],
@@ -4168,7 +4172,7 @@ fn disconnect_keeps_container_and_does_not_arm_reconnect() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     set_ru(&mut app);
-    app.settings.options.auto_reconnect = true;
+    app.settings.view.options.auto_reconnect = true;
     app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
     app.seed_row(sid(1), "ns=1;s=a", "SigA", Value::I64(5));
     app.activate_session(sid(1));
@@ -4383,7 +4387,7 @@ fn tab_strip_plus_opens_connect_dialog() {
 fn servers_row_reconnect_counter_and_stop_resume_toggle() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.settings.options.auto_reconnect = true;
+    app.settings.view.options.auto_reconnect = true;
     app.seed_session(sid(1), EndpointSpec::da("", "Alpha.Server"));
     app.activate_session(sid(1));
     // Simulate a lost link that armed a reconnect loop at attempt 3.

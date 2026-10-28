@@ -8,8 +8,8 @@ use crate::i18n::{Tr, fmt, tr};
 use crate::journal::Level;
 
 pub(super) fn bottom_panels(app: &mut App, ui: &mut egui::Ui) {
-    let show_script = app.settings.options.show_script;
-    let show_log = app.settings.options.show_log;
+    let show_script = app.settings.view.options.show_script;
+    let show_log = app.settings.view.options.show_log;
     if !show_script && !show_log {
         return;
     }

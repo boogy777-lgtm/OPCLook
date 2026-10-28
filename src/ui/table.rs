@@ -39,7 +39,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                 ui.dnd_drop_zone::<TreeDragPayload, _>(drop_frame, |ui| {
                     ui.set_min_height(drop_height);
                     let mut actions = Vec::new();
-                    let mut columns: Vec<ColumnId> = app.settings.columns.visible().collect();
+                    let mut columns: Vec<ColumnId> = app.settings.view.columns.visible().collect();
 
                     if columns.is_empty() {
                         columns.push(ColumnId::Status);
@@ -242,7 +242,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                         return;
                                     }
                                     body.rows(text_height, lines.len(), |mut row| {
-                                        let show_colors = app.settings.options.show_colors;
+                                        let show_colors = app.settings.view.options.show_colors;
                                         let now = std::time::Instant::now();
                                         // `index` is the visible position (selection and
                                         // keyboard work on it); `position` is in `rows`.

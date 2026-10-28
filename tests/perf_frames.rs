@@ -18,9 +18,9 @@ fn fixture(journal: bool) -> App {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.record_dispatches_for_test();
-    app.settings.options.update_interval_secs = 86_400;
-    app.settings.options.test_interval_secs = 0;
-    app.settings.options.auto_reconnect = false;
+    app.settings.view.options.update_interval_secs = 86_400;
+    app.settings.view.options.test_interval_secs = 0;
+    app.settings.view.options.auto_reconnect = false;
     let session = SessionId::new(1).unwrap();
     app.seed_session(session, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
     for i in 0..if journal { 0 } else { ROWS } {
@@ -41,7 +41,7 @@ fn fixture(journal: bool) -> App {
             app.journal.info(format!("Journal entry {i:05}"));
         }
         assert_eq!(app.journal.entries().len(), 5000);
-        app.settings.options.show_log = true;
+        app.settings.view.options.show_log = true;
     } else {
         assert_eq!(app.rows().len(), ROWS);
     }

@@ -729,8 +729,8 @@ mod dnd_proof {
         frame(&ctx, &mut app, release);
         let order = app.settings.resolved_order();
         assert_eq!(order[2], ColumnId::FullName, "header drop must reorder");
-        assert_eq!(order, app.settings.columns.order);
-        assert!(app.settings.column_order.is_some());
+        assert_eq!(order, app.settings.view.columns.order);
+        assert!(app.settings.view.column_order.is_some());
     }
 
     /// Releasing the grip on the middle of a dialog row must work too:
@@ -821,7 +821,7 @@ mod dnd_proof {
         assert!(!grip.is_negative());
         assert!(!gap.is_negative());
 
-        let before: Vec<ColumnId> = app.settings.columns.order.clone();
+        let before: Vec<ColumnId> = app.settings.view.columns.order.clone();
         assert_eq!(before[1], ColumnId::FullName);
 
         // Press on the FullName grip.
@@ -861,7 +861,7 @@ mod dnd_proof {
         }];
         frame(&ctx, &mut app, rel);
 
-        let after: Vec<ColumnId> = app.settings.columns.order.clone();
+        let after: Vec<ColumnId> = app.settings.view.columns.order.clone();
         assert_eq!(
             after.len(),
             ColumnId::ALL.len(),
@@ -875,13 +875,13 @@ mod dnd_proof {
             "«Полное имя» must move to the slot after «Записываемый тип», got position {full_pos}: {after:?}"
         );
         assert!(
-            app.settings.column_order.is_some(),
+            app.settings.view.column_order.is_some(),
             "column_order must be persisted after the dialog DnD"
         );
         // And persistence is consistent with the reordered legacy list.
         assert_eq!(
             app.settings.resolved_order(),
-            app.settings.columns.order,
+            app.settings.view.columns.order,
             "resolved order must match the persisted columns.order"
         );
     }

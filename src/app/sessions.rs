@@ -600,7 +600,7 @@ impl App {
     /// the state to Idle and, for a disconnected session, schedule attempt 1.
     pub fn resume_reconnect(&mut self, session: SessionId) {
         self.engine.resume_reconnect(session);
-        let auto = self.settings.options.auto_reconnect;
+        let auto = self.settings.view.options.auto_reconnect;
         let disconnected = {
             let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) else {
                 return;
@@ -624,7 +624,7 @@ impl App {
             return Some(tr(lang, Tr::AttemptsExhausted).to_string());
         }
         let aware =
-            view.state == SessionState::Disconnected && self.settings.options.auto_reconnect;
+            view.state == SessionState::Disconnected && self.settings.view.options.auto_reconnect;
         if !aware {
             return None;
         }
@@ -681,7 +681,7 @@ impl App {
     }
 
     pub(super) fn schedule_reconnect(&mut self, session: SessionId) {
-        if !self.settings.options.auto_reconnect {
+        if !self.settings.view.options.auto_reconnect {
             return;
         }
         let cap = RECONNECT_MAX_ATTEMPTS;
@@ -689,7 +689,7 @@ impl App {
             return;
         };
         self.engine
-            .set_auto_reconnect(self.settings.options.auto_reconnect);
+            .set_auto_reconnect(self.settings.view.options.auto_reconnect);
         let (attempt, delay) = match self.engine.schedule_reconnect(session, Instant::now()) {
             opclook_engine::ReconnectScheduled::Unchanged => return,
             opclook_engine::ReconnectScheduled::Exhausted => {

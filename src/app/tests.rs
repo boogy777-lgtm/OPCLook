@@ -1624,7 +1624,7 @@ fn k2_trace_is_off_by_default() {
 #[test]
 fn k2_trace_logs_request_reply_latency_and_dropped_replies() {
     let (_ctx, mut app) = tree_app();
-    app.settings.options.diagnostic_trace = true;
+    app.settings.view.options.diagnostic_trace = true;
     app.browse(crate::bff::model::SessionId::new(1).unwrap(), String::new());
     let request =
         app.pending_request_ids_for_test(crate::bff::model::SessionId::new(1).unwrap())[0];
@@ -2014,7 +2014,7 @@ fn u15_the_lds_host_is_remembered_and_restored() {
     app.search_ua_network();
     assert!(app.dialogs.connect.ua_search.network_searching());
     assert!(app.dialogs.connect.error.is_none());
-    assert_eq!(app.settings.ua_lds_host, "localhost:4850");
+    assert_eq!(app.settings.ua.ua_lds_host, "localhost:4850");
 
     app.close_connect_dialog();
     app.open_connect_dialog();
@@ -2023,7 +2023,7 @@ fn u15_the_lds_host_is_remembered_and_restored() {
     // Clearing the field forgets it.
     app.dialogs.connect.ua_lds_host.clear();
     app.search_ua_network();
-    assert_eq!(app.settings.ua_lds_host, "");
+    assert_eq!(app.settings.ua.ua_lds_host, "");
 }
 
 #[test]
@@ -2048,7 +2048,7 @@ fn u15_a_remote_lds_host_needs_an_adapter_and_a_bad_text_is_reported() {
     let error = app.dialogs.connect.error.clone().unwrap_or_default();
     assert!(error.contains("LDS host"), "{error}");
     assert_eq!(
-        app.settings.ua_lds_host, "",
+        app.settings.ua.ua_lds_host, "",
         "an unusable text is not saved"
     );
 
@@ -2544,8 +2544,10 @@ fn new_da_discovery_keeps_queued_ua_timeout() {
     app.dialogs.connect.ua_search_host = "localhost".into();
     app.search_ua_servers();
     app.age_pending_requests_for_test(Owner::Discovery, 3600);
-    app.engine
-        .expire_requests(Instant::now(), app.settings.options.operation_timeout_secs);
+    app.engine.expire_requests(
+        Instant::now(),
+        app.settings.view.options.operation_timeout_secs,
+    );
     app.restart_da_discovery(String::new());
     app.on_event_for_test(EventKind::Error {
         operation: Operation::Discover,

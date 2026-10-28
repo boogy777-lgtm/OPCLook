@@ -128,7 +128,7 @@ pub(super) fn status_popup(app: &mut App, ui: &mut egui::Ui) {
         SessionState::Disconnected => tr(lang, Tr::NoLink),
     };
     let (reconnect_line, attempts, cap) = {
-        let auto = app.settings.options.auto_reconnect;
+        let auto = app.settings.view.options.auto_reconnect;
         let cap = RECONNECT_MAX_ATTEMPTS;
         let attempts = if matches!(session.reconnect, ReconnectState::Exhausted) {
             cap

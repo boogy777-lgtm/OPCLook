@@ -159,56 +159,52 @@ pub enum SettingsNotice {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
-pub struct Settings {
+pub struct ViewPrefs {
     pub options: Options,
     pub columns: ColumnSet,
     pub script: String,
+    #[serde(default, deserialize_with = "deserialize_column_order")]
+    pub column_order: Option<Vec<ColumnId>>,
+    #[serde(default, deserialize_with = "deserialize_lang")]
+    pub lang: Lang,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UaPrefs {
+    #[serde(default = "default_trust_server_cert")]
+    pub ua_trust_server_cert: bool,
+    #[serde(default = "default_session_timeout")]
+    pub ua_session_timeout_ms: u32,
+    pub ua_security_policy: UaSecurityPolicy,
+    pub ua_security_mode: UaSecurityMode,
+    pub ua_lds_host: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NetworkPrefs {
+    #[serde(default, deserialize_with = "deserialize_adapter_id")]
+    pub preferred_adapter: Option<AdapterId>,
+    #[serde(default, deserialize_with = "deserialize_ip_address")]
+    pub selected_local_ip: Option<IpAddr>,
+    pub cached_adapters: CachedAdapters,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Settings {
+    #[serde(flatten)]
+    pub view: ViewPrefs,
+    #[serde(flatten)]
+    pub ua: UaPrefs,
+    #[serde(flatten)]
+    pub network: NetworkPrefs,
     pub last_da_host: String,
     pub last_da_server: String,
     pub last_ua_url: String,
     pub recent_endpoints: Vec<EndpointSpec>,
-    /// Column order persisted from the header context menu («Влево»/«Вправо»).
-    /// `None` keeps the legacy `columns.order` (backward compatible). Stored as
-    /// plain `ColumnId` names; legacy quoted names are parsed on load.
-    #[serde(default, deserialize_with = "deserialize_column_order")]
-    pub column_order: Option<Vec<ColumnId>>,
-    /// UI language, stored as a legacy-compatible code. Unknown codes fall back to Russian.
-    #[serde(default, deserialize_with = "deserialize_lang")]
-    pub lang: Lang,
-    /// UA connect dialog: trust the server certificate without importing it
-    /// into the PKI trust store. Default OFF (strict PKI trust).
-    #[serde(default = "default_trust_server_cert")]
-    pub ua_trust_server_cert: bool,
-    /// UA connect dialog: requested session timeout in milliseconds. The crate
-    /// accepts the value and the server revises it; the revised timeout is not
-    /// exposed by the API, so it is surfaced from the dialog state.
-    #[serde(default = "default_session_timeout")]
-    pub ua_session_timeout_ms: u32,
-    /// UA connect dialog: last selected security policy (typed; legacy string
-    /// spellings are migrated by the enum deserializer).
-    #[serde(default)]
-    pub ua_security_policy: UaSecurityPolicy,
-    /// UA connect dialog: last selected message security mode.
-    #[serde(default)]
-    pub ua_security_mode: UaSecurityMode,
-    /// UA connect dialog: the optional "LDS host" (`host[:port]`) that the
-    /// LDS/mDNS search asks for the server list. Empty = not used.
-    #[serde(default)]
-    pub ua_lds_host: String,
-    /// Preferred network adapter GUID. `None` means no adapter is selected.
-    /// Old settings files without this field load as unselected.
-    #[serde(default, deserialize_with = "deserialize_adapter_id")]
-    pub preferred_adapter: Option<AdapterId>,
-    /// Local IP selected by the user when the adapter has several addresses.
-    /// `None` lets the resolver pick the best address.
-    #[serde(default, deserialize_with = "deserialize_ip_address")]
-    pub selected_local_ip: Option<IpAddr>,
-    /// Snapshot of usable adapters from the last explicit «Обновить». Missing
-    /// in an old settings file means an empty list until the user refreshes.
-    #[serde(default)]
-    pub cached_adapters: CachedAdapters,
-    /// Set when a damaged settings file could not be backed up: saving would
-    /// destroy the only copy, so `save()` refuses until the app restarts.
+    /// Prevent overwriting an unreadable file or a failed backup.
     #[serde(skip)]
     pub save_blocked: bool,
 }
@@ -263,29 +259,26 @@ fn deserialize_column_order<'de, D: Deserializer<'de>>(
     Ok(Some(order))
 }
 
-impl Default for Settings {
+impl Default for ViewPrefs {
     fn default() -> Self {
         Self {
             options: Options::default(),
             columns: ColumnSet::default(),
             script: "program\nbegin\n\nend.\n".to_string(),
-            last_da_host: String::new(),
-            last_da_server: String::new(),
-            // No preset endpoints: the product requirement is that a fresh
-            // install starts with empty fields (the user chooses or searches).
-            last_ua_url: String::new(),
-            recent_endpoints: Vec::new(),
             column_order: None,
             lang: Lang::default(),
+        }
+    }
+}
+
+impl Default for UaPrefs {
+    fn default() -> Self {
+        Self {
             ua_trust_server_cert: default_trust_server_cert(),
             ua_session_timeout_ms: default_session_timeout(),
             ua_security_policy: UaSecurityPolicy::Auto,
             ua_security_mode: UaSecurityMode::Auto,
             ua_lds_host: String::new(),
-            preferred_adapter: None,
-            selected_local_ip: None,
-            cached_adapters: CachedAdapters::default(),
-            save_blocked: false,
         }
     }
 }
@@ -323,7 +316,7 @@ impl Settings {
         };
         match serde_json::from_slice::<Settings>(&bytes) {
             Ok(mut settings) => {
-                settings.options = settings.options.clamped();
+                settings.view.options = settings.view.options.clamped();
                 Loaded {
                     settings,
                     notices: Vec::new(),
@@ -387,14 +380,14 @@ impl Settings {
 
     /// Current UI language, falling back to Russian for an unknown/missing code.
     pub fn lang(&self) -> Lang {
-        self.lang
+        self.view.lang
     }
 
     /// Remember the LDS host of the connect dialog; saves only on a change.
     pub fn set_ua_lds_host(&mut self, text: &str) -> Result<(), SettingsNotice> {
         let text = text.trim();
-        if self.ua_lds_host != text {
-            self.ua_lds_host = text.to_string();
+        if self.ua.ua_lds_host != text {
+            self.ua.ua_lds_host = text.to_string();
             self.save()?;
         }
         Ok(())
@@ -402,16 +395,17 @@ impl Settings {
 
     /// Set the UI language and normalize its stored code.
     pub fn set_lang(&mut self, lang: Lang) {
-        self.lang = lang;
+        self.view.lang = lang;
     }
 
     /// The normalized order for table headers, the setup dialog and DnD.
     pub fn resolved_order(&self) -> Vec<ColumnId> {
         let saved = self
+            .view
             .column_order
             .as_ref()
             .filter(|order| !order.is_empty())
-            .unwrap_or(&self.columns.order);
+            .unwrap_or(&self.view.columns.order);
         let mut order = Vec::with_capacity(ColumnId::ALL.len());
         for id in saved.iter().copied().chain(ColumnId::ALL) {
             if !order.contains(&id) {
@@ -427,7 +421,7 @@ impl Settings {
         let visible: Vec<_> = order
             .iter()
             .copied()
-            .filter(|column| self.columns.is_visible(*column))
+            .filter(|column| self.view.columns.is_visible(*column))
             .collect();
         let full_gap = if let Some(target) = visible.get(before) {
             order
@@ -448,7 +442,7 @@ impl Settings {
     /// Apply the same move semantics to the effective order no matter whether
     /// it originated in the header menu, dialog, or legacy settings.
     pub fn move_column_to_insert(&mut self, id: ColumnId, before: usize) -> bool {
-        let mut columns = self.columns.clone();
+        let mut columns = self.view.columns.clone();
         columns.order = self.resolved_order();
         if !columns.move_to_insert(id, before) {
             return false;
@@ -466,31 +460,32 @@ impl Settings {
                 normalized.push(id);
             }
         }
-        self.columns.order = normalized.clone();
-        self.column_order = Some(normalized);
+        self.view.columns.order = normalized.clone();
+        self.view.column_order = Some(normalized);
     }
 
     /// Effective adapter selection. Invalid persisted GUIDs load unselected.
     pub fn adapter_selection(&self) -> AdapterSelection {
-        self.preferred_adapter
+        self.network
+            .preferred_adapter
             .map(AdapterSelection::Adapter)
             .unwrap_or(AdapterSelection::None)
     }
 
     pub fn preferred_adapter_id(&self) -> Option<AdapterId> {
-        self.preferred_adapter
+        self.network.preferred_adapter
     }
 
     pub fn set_adapter_selection(&mut self, selection: AdapterSelection) {
-        self.preferred_adapter = selection.adapter_id();
+        self.network.preferred_adapter = selection.adapter_id();
     }
 
     pub fn selected_local_ip(&self) -> Option<IpAddr> {
-        self.selected_local_ip
+        self.network.selected_local_ip
     }
 
     pub fn set_selected_local_ip(&mut self, ip: Option<IpAddr>) {
-        self.selected_local_ip = ip;
+        self.network.selected_local_ip = ip;
     }
 
     /// Store and persist the user's network choice.
@@ -785,9 +780,42 @@ mod tests {
     }
 
     #[test]
+    fn grouped_preferences_keep_the_legacy_flat_json_schema() {
+        let value = serde_json::to_value(Settings::default()).unwrap();
+        let keys: std::collections::BTreeSet<_> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let expected = [
+            "options",
+            "columns",
+            "script",
+            "column_order",
+            "lang",
+            "ua_trust_server_cert",
+            "ua_session_timeout_ms",
+            "ua_security_policy",
+            "ua_security_mode",
+            "ua_lds_host",
+            "preferred_adapter",
+            "selected_local_ip",
+            "cached_adapters",
+            "last_da_host",
+            "last_da_server",
+            "last_ua_url",
+            "recent_endpoints",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(keys, expected);
+    }
+
+    #[test]
     fn settings_defaults_field_values() {
         let d = Settings::default();
-        let o = d.options.clone();
+        let o = d.view.options.clone();
         let od = Options::default();
         assert_eq!(o.update_interval_secs, od.update_interval_secs);
         assert_eq!(o.operation_timeout_secs, od.operation_timeout_secs);
@@ -797,9 +825,9 @@ mod tests {
         assert_eq!(o.confirm_write, od.confirm_write);
         assert_eq!(o.show_script, od.show_script);
         assert_eq!(o.show_log, od.show_log);
-        assert_eq!(d.columns.order, ColumnId::ALL.to_vec());
-        assert!(d.columns.hidden.is_empty());
-        assert!(d.script.contains("program"));
+        assert_eq!(d.view.columns.order, ColumnId::ALL.to_vec());
+        assert!(d.view.columns.hidden.is_empty());
+        assert!(d.view.script.contains("program"));
         assert!(d.last_da_host.is_empty());
         assert!(d.last_da_server.is_empty());
         assert!(
@@ -807,11 +835,14 @@ mod tests {
             "no preset UA URL in fresh settings"
         );
         assert!(d.recent_endpoints.is_empty());
-        assert!(d.column_order.is_none(), "column_order defaults to None");
-        assert_eq!(d.lang, Lang::Ru, "UI language defaults to Russian");
+        assert!(
+            d.view.column_order.is_none(),
+            "column_order defaults to None"
+        );
+        assert_eq!(d.view.lang, Lang::Ru, "UI language defaults to Russian");
         assert_eq!(d.lang(), crate::i18n::Lang::Ru);
-        assert!(d.preferred_adapter.is_none());
-        assert!(d.selected_local_ip.is_none());
+        assert!(d.network.preferred_adapter.is_none());
+        assert!(d.network.selected_local_ip.is_none());
         assert_eq!(d.adapter_selection(), AdapterSelection::None);
     }
 
@@ -820,35 +851,35 @@ mod tests {
         let d = Settings::default();
         // Default OFF: server certs are not auto-trusted.
         assert!(
-            !d.ua_trust_server_cert,
+            !d.ua.ua_trust_server_cert,
             "trust_server_cert must default to false"
         );
         // Session timeout defaults to 120 s.
-        assert_eq!(d.ua_session_timeout_ms, 120_000);
+        assert_eq!(d.ua.ua_session_timeout_ms, 120_000);
     }
 
     #[test]
     fn ua_security_fields_serde_roundtrip() {
         let mut s = Settings::default();
-        s.ua_trust_server_cert = true;
-        s.ua_session_timeout_ms = 300_000;
+        s.ua.ua_trust_server_cert = true;
+        s.ua.ua_session_timeout_ms = 300_000;
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains("\"ua_trust_server_cert\":true"));
         assert!(json.contains("\"ua_session_timeout_ms\":300000"));
         let back: Settings = serde_json::from_str(&json).unwrap();
-        assert!(back.ua_trust_server_cert);
-        assert_eq!(back.ua_session_timeout_ms, 300_000);
+        assert!(back.ua.ua_trust_server_cert);
+        assert_eq!(back.ua.ua_session_timeout_ms, 300_000);
     }
 
     #[test]
     fn ua_security_selection_defaults_to_auto_and_roundtrips() {
         let d = Settings::default();
-        assert_eq!(d.ua_security_policy, UaSecurityPolicy::Auto);
-        assert_eq!(d.ua_security_mode, UaSecurityMode::Auto);
+        assert_eq!(d.ua.ua_security_policy, UaSecurityPolicy::Auto);
+        assert_eq!(d.ua.ua_security_mode, UaSecurityMode::Auto);
 
         let mut s = Settings::default();
-        s.ua_security_policy = UaSecurityPolicy::Basic256Sha256;
-        s.ua_security_mode = UaSecurityMode::SignAndEncrypt;
+        s.ua.ua_security_policy = UaSecurityPolicy::Basic256Sha256;
+        s.ua.ua_security_mode = UaSecurityMode::SignAndEncrypt;
         let json = serde_json::to_string(&s).unwrap();
         assert!(
             json.contains("\"ua_security_policy\":\"Basic256Sha256\""),
@@ -859,8 +890,8 @@ mod tests {
             "got: {json}"
         );
         let back: Settings = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.ua_security_policy, UaSecurityPolicy::Basic256Sha256);
-        assert_eq!(back.ua_security_mode, UaSecurityMode::SignAndEncrypt);
+        assert_eq!(back.ua.ua_security_policy, UaSecurityPolicy::Basic256Sha256);
+        assert_eq!(back.ua.ua_security_mode, UaSecurityMode::SignAndEncrypt);
     }
 
     #[test]
@@ -872,8 +903,8 @@ mod tests {
         obj.insert("ua_security_policy".to_string(), serde_json::json!("Авто"));
         obj.insert("ua_security_mode".to_string(), serde_json::json!("None"));
         let s: Settings = serde_json::from_value(value).unwrap();
-        assert_eq!(s.ua_security_policy, UaSecurityPolicy::Auto);
-        assert_eq!(s.ua_security_mode, UaSecurityMode::None);
+        assert_eq!(s.ua.ua_security_policy, UaSecurityPolicy::Auto);
+        assert_eq!(s.ua.ua_security_mode, UaSecurityMode::None);
 
         // A full URI is accepted as well.
         let mut value = serde_json::to_value(Settings::default()).unwrap();
@@ -882,7 +913,7 @@ mod tests {
             serde_json::json!("http://opcfoundation.org/UA/SecurityPolicy#Basic256"),
         );
         let s: Settings = serde_json::from_value(value).unwrap();
-        assert_eq!(s.ua_security_policy, UaSecurityPolicy::Basic256);
+        assert_eq!(s.ua.ua_security_policy, UaSecurityPolicy::Basic256);
     }
 
     #[test]
@@ -902,19 +933,20 @@ mod tests {
         obj.remove("ua_security_policy");
         obj.remove("ua_security_mode");
         let s: Settings = serde_json::from_value(value).unwrap();
-        assert_eq!(s.ua_security_policy, UaSecurityPolicy::Auto);
-        assert_eq!(s.ua_security_mode, UaSecurityMode::Auto);
+        assert_eq!(s.ua.ua_security_policy, UaSecurityPolicy::Auto);
+        assert_eq!(s.ua.ua_security_mode, UaSecurityMode::Auto);
     }
 
     #[test]
     fn k2_diagnostic_trace_defaults_off_and_survives_old_files() {
         assert!(!Options::default().diagnostic_trace);
         let mut s = Settings::default();
-        s.options.diagnostic_trace = true;
+        s.view.options.diagnostic_trace = true;
         let json = serde_json::to_string(&s).unwrap();
         assert!(
             serde_json::from_str::<Settings>(&json)
                 .unwrap()
+                .view
                 .options
                 .diagnostic_trace
         );
@@ -924,7 +956,7 @@ mod tests {
             .unwrap()
             .remove("diagnostic_trace");
         let legacy: Settings = serde_json::from_value(value).unwrap();
-        assert!(!legacy.options.diagnostic_trace);
+        assert!(!legacy.view.options.diagnostic_trace);
     }
 
     #[test]
@@ -933,11 +965,11 @@ mod tests {
         // settings file without the field deserializes as off.
         assert_eq!(Options::default().ua_deadband, 0.0);
         let mut s = Settings::default();
-        s.options.ua_deadband = 12.5;
+        s.view.options.ua_deadband = 12.5;
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains("\"ua_deadband\":12.5"));
         let back: Settings = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.options.ua_deadband, 12.5);
+        assert_eq!(back.view.options.ua_deadband, 12.5);
 
         let mut value = serde_json::to_value(Settings::default()).unwrap();
         value
@@ -950,7 +982,7 @@ mod tests {
             .remove("ua_deadband");
         let legacy: Settings = serde_json::from_value(value).unwrap();
         assert_eq!(
-            legacy.options.ua_deadband, 0.0,
+            legacy.view.options.ua_deadband, 0.0,
             "missing field must fall back to 0"
         );
     }
@@ -965,8 +997,8 @@ mod tests {
         obj.remove("ua_trust_server_cert");
         obj.remove("ua_session_timeout_ms");
         let s: Settings = serde_json::from_value(value).unwrap();
-        assert!(!s.ua_trust_server_cert);
-        assert_eq!(s.ua_session_timeout_ms, 120_000);
+        assert!(!s.ua.ua_trust_server_cert);
+        assert_eq!(s.ua.ua_session_timeout_ms, 120_000);
     }
 
     #[test]
@@ -980,7 +1012,7 @@ mod tests {
         assert_eq!(missing.lang(), Lang::Ru);
         let mut s = Settings::default();
         s.set_lang(Lang::En);
-        assert_eq!(s.lang, Lang::En);
+        assert_eq!(s.view.lang, Lang::En);
         assert_eq!(serde_json::to_value(&s).unwrap()["lang"], "en");
         let legacy: Settings = serde_json::from_str(r#"{"lang":"English"}"#).unwrap();
         assert_eq!(legacy.lang(), Lang::En);
@@ -989,12 +1021,12 @@ mod tests {
     #[test]
     fn serde_roundtrip_json_preserves_all_fields() {
         let mut s = Settings::default();
-        s.options.update_interval_secs = 5;
-        s.options.operation_timeout_secs = 300;
-        s.options.test_interval_secs = 120;
-        s.options.show_script = false;
-        s.options.show_log = true;
-        s.script = "custom\n".to_string();
+        s.view.options.update_interval_secs = 5;
+        s.view.options.operation_timeout_secs = 300;
+        s.view.options.test_interval_secs = 120;
+        s.view.options.show_script = false;
+        s.view.options.show_log = true;
+        s.view.script = "custom\n".to_string();
         s.last_da_host = "h1".to_string();
         s.last_da_server = "Srv.1".to_string();
         s.last_ua_url = "opc.tcp://x:4840".to_string();
@@ -1002,7 +1034,7 @@ mod tests {
             EndpointSpec::ua("opc.tcp://x:4840"),
             EndpointSpec::da("h", "Srv.1"),
         ];
-        s.columns.order = vec![
+        s.view.columns.order = vec![
             ColumnId::Value,
             ColumnId::Status,
             ColumnId::FullName,
@@ -1013,7 +1045,7 @@ mod tests {
             ColumnId::Server,
             ColumnId::Description,
         ];
-        s.persist_column_order(&s.columns.order.clone());
+        s.persist_column_order(&s.view.columns.order.clone());
         s.set_lang(crate::i18n::Lang::Zh);
         s.set_adapter_selection(AdapterSelection::Adapter(
             AdapterId::parse("aabbccdd-1122-3344-5566-77889900aabb").unwrap(),
@@ -1024,19 +1056,23 @@ mod tests {
         let back: Settings = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back.lang(), crate::i18n::Lang::Zh);
         assert!(json.contains("\"lang\":\"zh\""));
-        assert_eq!(back.options.update_interval_secs, 5);
-        assert_eq!(back.options.operation_timeout_secs, 300);
-        assert_eq!(back.options.test_interval_secs, 120);
-        assert!(!back.options.show_script);
-        assert!(back.options.show_log);
-        assert_eq!(back.script, "custom\n");
+        assert_eq!(back.view.options.update_interval_secs, 5);
+        assert_eq!(back.view.options.operation_timeout_secs, 300);
+        assert_eq!(back.view.options.test_interval_secs, 120);
+        assert!(!back.view.options.show_script);
+        assert!(back.view.options.show_log);
+        assert_eq!(back.view.script, "custom\n");
         assert_eq!(back.last_da_host, "h1");
         assert_eq!(back.last_da_server, "Srv.1");
         assert_eq!(back.last_ua_url, "opc.tcp://x:4840");
         assert_eq!(back.recent_endpoints.len(), 2);
         assert_eq!(back.recent_endpoints[0].protocol, Protocol::OpcUa);
         assert_eq!(back.recent_endpoints[1].address, "Srv.1");
-        let column_order = back.column_order.clone().expect("column_order persisted");
+        let column_order = back
+            .view
+            .column_order
+            .clone()
+            .expect("column_order persisted");
         assert_eq!(column_order.len(), 9);
         assert_eq!(back.resolved_order()[0], ColumnId::Value);
         assert_eq!(back.resolved_order()[1], ColumnId::Status);
@@ -1061,14 +1097,14 @@ mod tests {
         assert_eq!(resolved[1], ColumnId::FullName);
         assert_eq!(resolved[2], ColumnId::Status);
         // Both sources stay in sync.
-        assert_eq!(s.columns.order, resolved);
-        assert_eq!(s.column_order.as_ref().unwrap().len(), 9);
+        assert_eq!(s.view.columns.order, resolved);
+        assert_eq!(s.view.column_order.as_ref().unwrap().len(), 9);
     }
 
     #[test]
     fn resolved_order_falls_back_when_column_order_is_none() {
         let s = Settings::default();
-        assert!(s.column_order.is_none());
+        assert!(s.view.column_order.is_none());
         assert_eq!(s.resolved_order(), ColumnId::ALL.to_vec());
     }
 
@@ -1090,24 +1126,27 @@ mod tests {
         let mut s: Settings =
             serde_json::from_str(r#"{"column_order":["Value","Value","Status","Unknown"]}"#)
                 .unwrap();
-        s.columns.order = vec![ColumnId::Value, ColumnId::Value];
+        s.view.columns.order = vec![ColumnId::Value, ColumnId::Value];
         let resolved = s.resolved_order();
         assert_eq!(resolved.len(), ColumnId::ALL.len());
         assert_eq!(&resolved[..2], &[ColumnId::Value, ColumnId::Status]);
         s.persist_column_order(&[ColumnId::Status, ColumnId::Status]);
-        assert_eq!(s.columns.order.len(), ColumnId::ALL.len());
-        assert_eq!(s.column_order.as_ref().unwrap().len(), ColumnId::ALL.len());
+        assert_eq!(s.view.columns.order.len(), ColumnId::ALL.len());
+        assert_eq!(
+            s.view.column_order.as_ref().unwrap().len(),
+            ColumnId::ALL.len()
+        );
     }
 
     #[test]
     fn visible_column_drag_accounts_for_hidden_columns() {
         let mut settings = Settings::default();
-        settings.columns.set_visible(ColumnId::FullName, false);
+        settings.view.columns.set_visible(ColumnId::FullName, false);
         assert!(settings.move_visible_column_to_insert(ColumnId::Quality, 1));
         let visible: Vec<_> = settings
             .resolved_order()
             .into_iter()
-            .filter(|id| settings.columns.is_visible(*id))
+            .filter(|id| settings.view.columns.is_visible(*id))
             .collect();
         assert_eq!(&visible[..2], &[ColumnId::Status, ColumnId::Quality]);
     }
@@ -1115,11 +1154,11 @@ mod tests {
     #[test]
     fn column_drag_uses_resolved_order_and_persists() {
         let mut s = Settings::default();
-        s.column_order = Some(vec![ColumnId::Value, ColumnId::Status]);
+        s.view.column_order = Some(vec![ColumnId::Value, ColumnId::Status]);
         assert!(s.move_column_to_insert(ColumnId::Status, 0));
         assert_eq!(s.resolved_order()[0], ColumnId::Status);
         assert_eq!(s.resolved_order()[1], ColumnId::Value);
-        assert_eq!(s.columns.order, s.resolved_order());
+        assert_eq!(s.view.columns.order, s.resolved_order());
         assert!(!s.move_column_to_insert(ColumnId::Status, 0));
     }
 
@@ -1170,7 +1209,7 @@ mod tests {
             ColumnId::Time,
             ColumnId::Description,
         ]);
-        let stored = s.column_order.as_ref().unwrap();
+        let stored = s.view.column_order.as_ref().unwrap();
         // Persisted entries are plain variant names, NOT "\"Server\"" encodings.
         assert_eq!(stored[0], ColumnId::Value);
         assert_eq!(stored[3], ColumnId::Server);
@@ -1197,7 +1236,7 @@ mod tests {
         obj.remove("selected_local_ip");
         let s: Settings = serde_json::from_value(value).unwrap();
         assert_eq!(s.adapter_selection(), AdapterSelection::None);
-        assert!(s.selected_local_ip.is_none());
+        assert!(s.network.selected_local_ip.is_none());
     }
 
     #[test]
@@ -1207,8 +1246,8 @@ mod tests {
         let mut s = Settings::default();
         s.set_adapter_selection(AdapterSelection::Adapter(id));
         s.set_selected_local_ip(Some(ip));
-        assert_eq!(s.preferred_adapter, Some(id));
-        assert_eq!(s.selected_local_ip, Some(ip));
+        assert_eq!(s.network.preferred_adapter, Some(id));
+        assert_eq!(s.network.selected_local_ip, Some(ip));
         assert_eq!(s.adapter_selection(), AdapterSelection::Adapter(id));
         assert_eq!(s.selected_local_ip(), Some(ip));
 
@@ -1259,7 +1298,7 @@ mod tests {
     #[test]
     fn cached_adapters_roundtrip_and_load() {
         let mut s = Settings::default();
-        s.cached_adapters = CachedAdapters::from_vec(vec![cached_fixture()]);
+        s.network.cached_adapters = CachedAdapters::from_vec(vec![cached_fixture()]);
         s.set_adapter_selection(AdapterSelection::Adapter(cached_fixture().id));
         s.set_selected_local_ip(Some("172.28.76.90".parse().unwrap()));
         let json = serde_json::to_string(&s).unwrap();
@@ -1268,9 +1307,9 @@ mod tests {
         assert!(json.contains("\"name\":\"Wi-Fi\""), "got: {json}");
 
         let back: Settings = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.cached_adapters.adapters.len(), 1);
-        assert!(back.cached_adapters.rejected.is_empty());
-        assert_eq!(back.cached_adapters.adapters[0], cached_fixture());
+        assert_eq!(back.network.cached_adapters.adapters.len(), 1);
+        assert!(back.network.cached_adapters.rejected.is_empty());
+        assert_eq!(back.network.cached_adapters.adapters[0], cached_fixture());
         assert_eq!(
             back.selected_local_ip(),
             Some("172.28.76.90".parse().unwrap())
@@ -1282,8 +1321,8 @@ mod tests {
         let mut value = serde_json::to_value(Settings::default()).unwrap();
         value.as_object_mut().unwrap().remove("cached_adapters");
         let s: Settings = serde_json::from_value(value).unwrap();
-        assert!(s.cached_adapters.adapters.is_empty());
-        assert!(s.cached_adapters.rejected.is_empty());
+        assert!(s.network.cached_adapters.adapters.is_empty());
+        assert!(s.network.cached_adapters.rejected.is_empty());
     }
 
     #[test]
@@ -1292,7 +1331,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         with_appdata(&dir, || {
             let s = Settings::load().settings;
-            assert!(s.cached_adapters.adapters.is_empty());
+            assert!(s.network.cached_adapters.adapters.is_empty());
             assert_eq!(s.adapter_selection(), AdapterSelection::None);
         });
     }
@@ -1306,12 +1345,12 @@ mod tests {
             serde_json::json!([good, {"id": "not-a-guid", "name": "broken"}]),
         );
         let s: Settings = serde_json::from_value(value).unwrap();
-        assert_eq!(s.cached_adapters.adapters.len(), 1);
-        assert_eq!(s.cached_adapters.rejected.len(), 1);
+        assert_eq!(s.network.cached_adapters.adapters.len(), 1);
+        assert_eq!(s.network.cached_adapters.rejected.len(), 1);
         assert!(
-            s.cached_adapters.rejected[0].contains("cached_adapters[1]"),
+            s.network.cached_adapters.rejected[0].contains("cached_adapters[1]"),
             "got: {:?}",
-            s.cached_adapters.rejected
+            s.network.cached_adapters.rejected
         );
     }
 
@@ -1323,7 +1362,7 @@ mod tests {
             .unwrap()
             .insert("cached_adapters".to_string(), serde_json::Value::Null);
         let s: Settings = serde_json::from_value(value).unwrap();
-        assert!(s.cached_adapters.adapters.is_empty());
+        assert!(s.network.cached_adapters.adapters.is_empty());
     }
 
     #[test]
@@ -1334,8 +1373,8 @@ mod tests {
             serde_json::json!({"unexpected": true}),
         );
         let s: Settings = serde_json::from_value(value).unwrap();
-        assert!(s.cached_adapters.adapters.is_empty());
-        assert_eq!(s.cached_adapters.rejected.len(), 1);
+        assert!(s.network.cached_adapters.adapters.is_empty());
+        assert_eq!(s.network.cached_adapters.rejected.len(), 1);
     }
 
     #[test]
@@ -1403,7 +1442,7 @@ mod tests {
             let s = Settings::load().settings;
             // Falls back wholesale to Default.
             assert_eq!(
-                serde_json::to_string(&s.options).unwrap(),
+                serde_json::to_string(&s.view.options).unwrap(),
                 serde_json::to_string(&Options::default()).unwrap()
             );
             assert!(
@@ -1437,14 +1476,14 @@ mod tests {
         with_appdata(&dir, || {
             let mut s = Settings::default();
             s.set_ua_lds_host("  lds.plant:4850 ").unwrap();
-            assert_eq!(Settings::load().settings.ua_lds_host, "lds.plant:4850");
+            assert_eq!(Settings::load().settings.ua.ua_lds_host, "lds.plant:4850");
             s.set_ua_lds_host("").unwrap();
-            assert_eq!(Settings::load().settings.ua_lds_host, "");
+            assert_eq!(Settings::load().settings.ua.ua_lds_host, "");
         });
         let mut value = serde_json::to_value(Settings::default()).unwrap();
         value.as_object_mut().unwrap().remove("ua_lds_host");
         let old: Settings = serde_json::from_value(value).unwrap();
-        assert_eq!(old.ua_lds_host, "");
+        assert_eq!(old.ua.ua_lds_host, "");
     }
 
     #[test]
@@ -1460,11 +1499,11 @@ mod tests {
             let loaded = loaded_result.settings;
             assert_eq!(loaded.last_da_host, "legacy-host");
             assert_eq!(
-                loaded.options.update_interval_secs,
+                loaded.view.options.update_interval_secs,
                 UPDATE_INTERVAL_MAX_SECS
             );
             assert_eq!(
-                loaded.options.auto_reconnect,
+                loaded.view.options.auto_reconnect,
                 Options::default().auto_reconnect
             );
             assert_eq!(loaded.last_ua_url, Settings::default().last_ua_url);
@@ -1477,18 +1516,21 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         with_appdata(&dir, || {
             let mut settings = Settings::default();
-            settings.options.update_interval_secs = u64::MAX;
-            settings.options.test_interval_secs = u64::MAX;
-            settings.options.operation_timeout_secs = u64::MAX;
+            settings.view.options.update_interval_secs = u64::MAX;
+            settings.view.options.test_interval_secs = u64::MAX;
+            settings.view.options.operation_timeout_secs = u64::MAX;
             settings.save().unwrap();
             let loaded = Settings::load().settings;
             assert_eq!(
-                loaded.options.update_interval_secs,
+                loaded.view.options.update_interval_secs,
                 UPDATE_INTERVAL_MAX_SECS
             );
-            assert_eq!(loaded.options.test_interval_secs, TEST_INTERVAL_MAX_SECS);
             assert_eq!(
-                loaded.options.operation_timeout_secs,
+                loaded.view.options.test_interval_secs,
+                TEST_INTERVAL_MAX_SECS
+            );
+            assert_eq!(
+                loaded.view.options.operation_timeout_secs,
                 OPERATION_TIMEOUT_MAX_SECS
             );
         });
@@ -1500,8 +1542,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         with_appdata(&dir, || {
             let mut s = Settings::default();
-            s.options.update_interval_secs = 3;
-            s.options.show_log = true;
+            s.view.options.update_interval_secs = 3;
+            s.view.options.show_log = true;
             s.last_da_host = "box".to_string();
             s.remember(&EndpointSpec::da("box", "Matrikon.OPC.Simulation"));
             s.set_lang(crate::i18n::Lang::En);
@@ -1509,8 +1551,8 @@ mod tests {
             assert!(settings_path().exists());
 
             let loaded = Settings::load().settings;
-            assert_eq!(loaded.options.update_interval_secs, 3);
-            assert!(loaded.options.show_log);
+            assert_eq!(loaded.view.options.update_interval_secs, 3);
+            assert!(loaded.view.options.show_log);
             assert_eq!(loaded.last_da_host, "box");
             assert_eq!(loaded.recent_endpoints.len(), 1);
             assert_eq!(loaded.lang(), crate::i18n::Lang::En);
@@ -1535,7 +1577,10 @@ mod tests {
 
             let loaded_result = Settings::load();
             let loaded = loaded_result.settings;
-            assert_eq!(loaded.options.update_interval_secs, 1, "defaults are used");
+            assert_eq!(
+                loaded.view.options.update_interval_secs, 1,
+                "defaults are used"
+            );
             let notices = loaded_result.notices;
             assert_eq!(notices.len(), 1, "{notices:?}");
             let SettingsNotice::ParseFailed { backup, .. } = &notices[0] else {

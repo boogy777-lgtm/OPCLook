@@ -16,9 +16,9 @@ fn base(lang: Lang) -> App {
         host: "plant-a".into(),
     });
     app.settings.set_lang(lang);
-    app.settings.options.update_interval_secs = 86_400;
-    app.settings.options.test_interval_secs = 0;
-    app.settings.options.auto_reconnect = false;
+    app.settings.view.options.update_interval_secs = 86_400;
+    app.settings.view.options.test_interval_secs = 0;
+    app.settings.view.options.auto_reconnect = false;
     app
 }
 fn save(name: &str, app: App) {

@@ -12,11 +12,12 @@ impl App {
     pub(super) fn configure_ua_subscription(&mut self, session: SessionId) {
         let interval_ms = self
             .settings
+            .view
             .options
             .update_interval_secs
             .max(1)
             .saturating_mul(1000);
-        let deadband = self.settings.options.ua_deadband;
+        let deadband = self.settings.view.options.ua_deadband;
         self.send(
             session,
             Protocol::OpcUa,
@@ -29,19 +30,20 @@ impl App {
     /// Ask Engine to expire requests; ordinary correlated events update the UI.
     pub(super) fn expire_pending_requests(&mut self, now: Instant) {
         self.engine
-            .expire_requests(now, self.settings.options.operation_timeout_secs);
+            .expire_requests(now, self.settings.view.options.operation_timeout_secs);
         self.poll_events();
     }
 
     pub(super) fn tick(&mut self) {
         let now = Instant::now();
         self.expire_pending_requests(now);
-        let options = &self.settings.options;
+        let options = &self.settings.view.options;
         let interval = Duration::from_secs(options.update_interval_secs.max(1));
         let test_interval = Duration::from_secs(options.test_interval_secs.max(1));
         self.engine.set_auto_reconnect(options.auto_reconnect);
 
-        let test_interval = (self.settings.options.test_interval_secs > 0).then_some(test_interval);
+        let test_interval =
+            (self.settings.view.options.test_interval_secs > 0).then_some(test_interval);
         for work in self.engine.due(now, interval, test_interval) {
             match work {
                 opclook_engine::Due::Read {

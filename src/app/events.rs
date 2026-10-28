@@ -92,10 +92,10 @@ impl App {
         // Correlated replies are accepted once while their command is outstanding;
         // unsolicited pushes and worker runtime errors have no request token.
         self.engine
-            .set_auto_reconnect(self.settings.options.auto_reconnect);
+            .set_auto_reconnect(self.settings.view.options.auto_reconnect);
         let ctx = match self.engine.accept(&event) {
             Ok(Some(pending)) => {
-                if self.settings.options.diagnostic_trace {
+                if self.settings.view.options.diagnostic_trace {
                     let latency = pending.sent.elapsed().as_millis();
                     self.journal.info_l(
                         Tr::TraceReply,
@@ -114,7 +114,7 @@ impl App {
             }
             Ok(None) => PendingCtx::None,
             Err(()) => {
-                if self.settings.options.diagnostic_trace {
+                if self.settings.view.options.diagnostic_trace {
                     self.journal.info_l(
                         Tr::TraceDropped,
                         &[

@@ -126,7 +126,7 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                 // The name never wraps, so the row height stays <= 28 px.
                 for (id, name, state, info, is_da, reconnect_state) in &snapshot {
                     let selected = app.active_session == Some(*id);
-                    let auto = app.settings.options.auto_reconnect;
+                    let auto = app.settings.view.options.auto_reconnect;
                     let reconnecting = *state == SessionState::Connecting;
                     let exhausted = matches!(reconnect_state, ReconnectState::Exhausted);
                     let stopped = matches!(reconnect_state, ReconnectState::Stopped);

@@ -794,11 +794,11 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                 if endpoint.protocol == Protocol::OpcUa {
                     // Persist the dialog's security/trust/timeout choices so
                     // they survive restarts.
-                    app.settings.ua_security_policy = endpoint.ua_security_policy;
-                    app.settings.ua_security_mode = endpoint.ua_security_mode;
+                    app.settings.ua.ua_security_policy = endpoint.ua_security_policy;
+                    app.settings.ua.ua_security_mode = endpoint.ua_security_mode;
                     // U13: «Доверять сертификату» is a per-connection choice
                     // (kept on the recent endpoint), never a global setting.
-                    app.settings.ua_session_timeout_ms = endpoint
+                    app.settings.ua.ua_session_timeout_ms = endpoint
                         .ua_session_timeout
                         .unwrap_or_else(crate::settings::default_session_timeout);
                     app.persist_settings();
@@ -821,9 +821,9 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                 return;
             }
             if endpoint.protocol == Protocol::OpcUa {
-                app.settings.ua_security_policy = endpoint.ua_security_policy;
-                app.settings.ua_security_mode = endpoint.ua_security_mode;
-                app.settings.ua_session_timeout_ms = endpoint
+                app.settings.ua.ua_security_policy = endpoint.ua_security_policy;
+                app.settings.ua.ua_security_mode = endpoint.ua_security_mode;
+                app.settings.ua.ua_session_timeout_ms = endpoint
                     .ua_session_timeout
                     .unwrap_or_else(crate::settings::default_session_timeout);
                 app.persist_settings();

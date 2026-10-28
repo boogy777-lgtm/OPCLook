@@ -222,7 +222,7 @@ impl App {
         }
         // With confirm_write enabled, keep the dialog open and ask explicitly,
         // mirroring the original message before the write is sent.
-        if self.settings.options.confirm_write {
+        if self.settings.view.options.confirm_write {
             let names: Vec<String> = keys
                 .iter()
                 .filter_map(|key| self.rows.iter().find(|r| r.key == *key))

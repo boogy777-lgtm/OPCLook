@@ -1,5 +1,7 @@
 # Статус
 
+**2026-10-28, settings groups:** ViewPrefs, UaPrefs and NetworkPrefs now own related preferences while retaining the legacy flat JSON schema. Linux GUI 217 library, 149 interaction (one Windows-only ignored), 14 theme tests and Windows i686 all-target typecheck passed. Remaining GUI decomposition, localization, exact-head CI and Windows runtime remain open.
+
 **2026-10-28, settings and late pushes:** Settings returns load notices and save errors without shared mutable diagnostics; exit reports save and shutdown failures in the native error dialog. Queued unsolicited data is rejected while disconnected or connecting. Linux GUI 216 library tests, 149 interaction tests (one Windows-only ignored), 14 theme and isolation test passed; Windows i686 all-target typecheck passed. Settings grouping, GUI structure, exact-head CI and Windows runtime remain open.
 
 **2026-10-28, GUI link loss:** unified UI cleanup for lost links, including dead worker dispatch and pending writes; Linux GUI library 214/214 and Windows i686 workspace all-target typecheck passed. Remaining GUI/Settings refactoring, runtime Windows/DA/UAC, and exact-head CI remain open.

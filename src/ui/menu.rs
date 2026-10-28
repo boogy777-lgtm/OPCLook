@@ -166,7 +166,7 @@ pub(super) fn menu(app: &mut App, ui: &mut egui::Ui) {
                 ui.separator();
                 if ui
                     .checkbox(
-                        &mut app.settings.options.show_script,
+                        &mut app.settings.view.options.show_script,
                         tr(lang, Tr::ShowScript),
                     )
                     .clicked()
@@ -175,7 +175,7 @@ pub(super) fn menu(app: &mut App, ui: &mut egui::Ui) {
                 }
                 if ui
                     .checkbox(
-                        &mut app.settings.options.show_log,
+                        &mut app.settings.view.options.show_log,
                         tr(lang, Tr::ShowJournal),
                     )
                     .clicked()
@@ -187,7 +187,7 @@ pub(super) fn menu(app: &mut App, ui: &mut egui::Ui) {
             ui.menu_button(tr(lang, Tr::MenuJournal), |ui| {
                 if ui
                     .checkbox(
-                        &mut app.settings.options.show_log,
+                        &mut app.settings.view.options.show_log,
                         tr(lang, Tr::ShowWorkJournal),
                     )
                     .clicked()

@@ -193,7 +193,7 @@ fn push_value(app: &mut App, key: ItemKey, value: Value, kind: QualityKind) {
 fn two_quality_rows(show_colors: bool) -> Harness<'static, App> {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.settings.options.show_colors = show_colors;
+    app.settings.view.options.show_colors = show_colors;
     app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
     let good = app.seed_row(sid(1), "ns=2;s=A", "Level", Value::F64(21.5));
     let bad = app.seed_row(sid(1), "ns=2;s=B", "Pressure", Value::F64(7.25));

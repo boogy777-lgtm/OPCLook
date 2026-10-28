@@ -187,7 +187,7 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let cjk = install_fonts(&cc.egui_ctx);
         let loaded = Settings::load();
-        crate::ui::apply_style(&cc.egui_ctx, loaded.settings.options.theme);
+        crate::ui::apply_style(&cc.egui_ctx, loaded.settings.view.options.theme);
         let mut app = Self::new_inner(loaded.settings);
         for notice in loaded.notices {
             app.report_settings_notice(notice);
@@ -260,7 +260,7 @@ impl App {
     }
 
     fn new_inner(settings: Settings) -> Self {
-        let script_text = settings.script.clone();
+        let script_text = settings.view.script.clone();
         let lang = settings.lang();
         let mut app = Self {
             engine: Engine::default(),
@@ -301,13 +301,13 @@ impl App {
             cjk_font: CjkFont::NotProbed,
             row_index: row_index::RowIndex::default(),
         };
-        app.dialogs.options.draft = app.settings.options.clone();
+        app.dialogs.options.draft = app.settings.view.options.clone();
         app.init_network_from_cache();
         app
     }
 
     pub fn save_settings(&mut self) -> Option<String> {
-        self.settings.script.clone_from(&self.script_text);
+        self.settings.view.script.clone_from(&self.script_text);
         self.persist_settings()
     }
 
@@ -350,11 +350,11 @@ impl App {
         crate::i18n::fmt(self.lang(), key, &refs)
     }
 
-    /// Populate the network state from `settings.cached_adapters` without
+    /// Populate the network state from `settings.network.cached_adapters` without
     /// querying Windows. Missing/old configs simply start with an empty list.
     fn init_network_from_cache(&mut self) {
-        let cached = self.settings.cached_adapters.adapters.clone();
-        for warning in self.settings.cached_adapters.rejected.clone() {
+        let cached = self.settings.network.cached_adapters.adapters.clone();
+        for warning in self.settings.network.cached_adapters.rejected.clone() {
             self.journal.warn(format!("network cache: {warning}"));
         }
         self.journal
@@ -418,7 +418,7 @@ impl App {
         let cached = build.cached;
         self.network
             .set_adapters(cached.iter().map(CachedAdapter::to_info).collect());
-        self.settings.cached_adapters = CachedAdapters::from_vec(cached);
+        self.settings.network.cached_adapters = CachedAdapters::from_vec(cached);
         let _ = self.sync_network_from_settings();
         self.persist_settings();
         self.journal.info(format!(
@@ -477,7 +477,9 @@ impl App {
             SelectionState::Selected => {
                 let id = resolution.selection.adapter_id();
                 let ip = resolution.local_ip;
-                if self.settings.preferred_adapter != id || self.settings.selected_local_ip != ip {
+                if self.settings.network.preferred_adapter != id
+                    || self.settings.network.selected_local_ip != ip
+                {
                     self.settings
                         .set_adapter_selection(resolution.selection.clone());
                     self.settings.set_selected_local_ip(resolution.local_ip);
@@ -497,6 +499,7 @@ impl App {
                 self.network.resolve(AdapterSelection::None, None);
                 let id = self
                     .settings
+                    .network
                     .preferred_adapter
                     .map(|value| value.to_string())
                     .unwrap_or_default();
@@ -505,8 +508,8 @@ impl App {
                 ));
             }
             SelectionState::NotSelected => {
-                if self.settings.preferred_adapter.is_some()
-                    || self.settings.selected_local_ip.is_some()
+                if self.settings.network.preferred_adapter.is_some()
+                    || self.settings.network.selected_local_ip.is_some()
                 {
                     self.settings.set_adapter_selection(AdapterSelection::None);
                     self.settings.set_selected_local_ip(None);
@@ -589,10 +592,12 @@ impl App {
                 self.journal.info(format!(
                     "network selection: adapter={} ip={} binding={} lease_generation={}",
                     self.settings
+                        .network
                         .preferred_adapter
                         .map(|value| value.to_string())
                         .unwrap_or_default(),
                     self.settings
+                        .network
                         .selected_local_ip
                         .map(|value| value.to_string())
                         .unwrap_or_default(),
@@ -604,6 +609,7 @@ impl App {
                 self.network.resolve(AdapterSelection::None, None);
                 let id = self
                     .settings
+                    .network
                     .preferred_adapter
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "unknown".to_string());
@@ -616,7 +622,7 @@ impl App {
 
     pub fn update(&mut self, ui: &mut egui::Ui) {
         self.engine
-            .set_auto_reconnect(self.settings.options.auto_reconnect);
+            .set_auto_reconnect(self.settings.view.options.auto_reconnect);
         self.poll_events();
         self.tick();
         self.sync_table_view();
@@ -668,7 +674,7 @@ impl App {
                 Some(opclook_locale::send_error_text(self.lang(), cause).to_string()),
             ),
         };
-        if self.settings.options.diagnostic_trace {
+        if self.settings.view.options.diagnostic_trace {
             self.journal.info_l(
                 Tr::TraceSent,
                 &[
@@ -980,8 +986,9 @@ impl App {
             .iter()
             .flat_map(|adapter| adapter.addresses.iter().map(|address| address.ip))
             .collect();
-        let timeout =
-            std::time::Duration::from_secs(self.settings.options.operation_timeout_secs.max(30));
+        let timeout = std::time::Duration::from_secs(
+            self.settings.view.options.operation_timeout_secs.max(30),
+        );
         opclook_engine::RouteOptions {
             adapter,
             local_addresses,
@@ -1032,7 +1039,7 @@ impl App {
         d.da_pending = false;
         d.ua_search_host.clear();
         d.ua_search_port.clear();
-        d.ua_lds_host = self.settings.ua_lds_host.clone();
+        d.ua_lds_host = self.settings.ua.ua_lds_host.clone();
         d.ua_url.clear();
         d.ua_search = UaSearch::Idle;
         // Reuse discovered UA results across popup visits. A new search
@@ -1042,13 +1049,13 @@ impl App {
         d.focus_pending = true;
         d.ua_user.clear();
         d.ua_password.clear();
-        d.ua_security_policy = self.settings.ua_security_policy;
-        d.ua_security_mode = self.settings.ua_security_mode;
+        d.ua_security_policy = self.settings.ua.ua_security_policy;
+        d.ua_security_mode = self.settings.ua.ua_security_mode;
         // U13: trust is opt-in per connection; the legacy global flag is never
         // re-applied (recent endpoints carry their own).
         d.ua_trust_server_cert = crate::settings::default_trust_server_cert();
         d.ua_identity = UaIdentity::Anonymous;
-        d.ua_session_timeout = self.settings.ua_session_timeout_ms;
+        d.ua_session_timeout = self.settings.ua.ua_session_timeout_ms;
         d.ua_scan_checked = 0;
         d.ua_scan_total = 0;
         d.ua_scan_found = 0;
@@ -1088,14 +1095,14 @@ impl App {
     }
 
     pub fn open_options_dialog(&mut self) {
-        self.dialogs.options.draft = self.settings.options.clone();
+        self.dialogs.options.draft = self.settings.view.options.clone();
         self.dialogs.options.open = true;
         self.dialogs.options.focus_pending = true;
     }
 
     pub fn apply_options(&mut self) {
         let draft = clamp_options(self.dialogs.options.draft.clone());
-        self.settings.options = draft;
+        self.settings.view.options = draft;
         self.persist_settings();
         self.dialogs.options.open = false;
         // Reconfigure UA push subscriptions so a newly created subscription
@@ -1115,11 +1122,12 @@ impl App {
                 CommandKind::ConfigureUaSubscription {
                     publishing_interval_ms: self
                         .settings
+                        .view
                         .options
                         .update_interval_secs
                         .max(1)
                         .saturating_mul(1000),
-                    deadband: self.settings.options.ua_deadband,
+                    deadband: self.settings.view.options.ua_deadband,
                 },
             );
         }
@@ -1127,7 +1135,7 @@ impl App {
     }
 
     pub fn save_script(&mut self) {
-        self.settings.script = self.script_text.clone();
+        self.settings.view.script = self.script_text.clone();
         self.persist_settings();
         self.journal.info_l(Tr::ScriptSaved, &[]);
     }

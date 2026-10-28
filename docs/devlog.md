@@ -550,3 +550,8 @@ The coordinator clears stale values, loading indicators, subscription projection
 ### 2026-10-28 — settings diagnostics and late data
 
 Load returns settings with notices, saves return typed failures, and the application reports errors immediately; on exit the existing native dialog includes save failures with shutdown errors. Unsolicited values, subscription and poll-only updates from an old link are ignored until connected. Regression tests cover both changes. Measured: Linux GUI 216 library, 149 interaction (one Windows-only ignored), 14 theme and one isolation test passed; Windows i686 all-target typecheck passed with cross-check flags. Settings grouping and other GUI structure remain open.
+
+
+### 2026-10-28 — grouped settings
+
+View, UA and network preferences are grouped with flattened serialization preserving all legacy keys; existing default, clamp, security, adapter and column migration tests remain in place, with an exact top-level key regression. Measured: Linux GUI 217 library, 149 interaction (one Windows-only ignored), 14 theme tests, and Windows i686 all-target typecheck passed. Other GUI structural work and exact-head CI remain open.

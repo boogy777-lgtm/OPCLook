@@ -67,8 +67,8 @@ fn ui7_bottom_panel_default_is_compact_and_flags_keep_their_logic() {
     assert!(opcda_egui::constants::BOTTOM_PANEL_DEFAULT_HEIGHT <= 180.0);
     // Journal-only: no tab bar, script toolbar absent.
     let mut app = fresh_app();
-    app.settings.options.show_script = false;
-    app.settings.options.show_log = true;
+    app.settings.view.options.show_script = false;
+    app.settings.view.options.show_log = true;
     let mut h = harness(app);
     h.run_steps(3);
     assert!(
@@ -78,8 +78,8 @@ fn ui7_bottom_panel_default_is_compact_and_flags_keep_their_logic() {
     assert!(h.query_by_label(tr(Lang::Ru, Tr::SaveJournal)).is_some());
     // Script-only: script toolbar shown, no journal toolbar.
     let mut app = fresh_app();
-    app.settings.options.show_script = true;
-    app.settings.options.show_log = false;
+    app.settings.view.options.show_script = true;
+    app.settings.view.options.show_log = false;
     let mut h = harness(app);
     h.run_steps(3);
     assert!(
@@ -143,7 +143,7 @@ fn dark_mode(h: &Harness<'_, App>) -> bool {
 
 fn app_with_theme(theme: Theme) -> App {
     let mut app = fresh_app();
-    app.settings.options.theme = theme;
+    app.settings.view.options.theme = theme;
     app
 }
 
@@ -168,9 +168,9 @@ fn ui9_theme_setting_roundtrips_through_the_settings_file() {
         let _redirect = opcda_egui::settings::thread_dir::redirect(&dir);
         for theme in [Theme::Light, Theme::Dark, Theme::System] {
             let mut s = Settings::default();
-            s.options.theme = theme;
+            s.view.options.theme = theme;
             s.save().unwrap();
-            assert_eq!(Settings::load().settings.options.theme, theme);
+            assert_eq!(Settings::load().settings.view.options.theme, theme);
         }
     }
     let _ = std::fs::remove_dir_all(&dir);
@@ -182,11 +182,11 @@ fn ui9_changing_the_theme_setting_switches_the_visuals() {
     h.run_steps(4);
     assert!(dark_mode(&h));
 
-    h.state_mut().settings.options.theme = Theme::Light;
+    h.state_mut().settings.view.options.theme = Theme::Light;
     h.run_steps(4);
     assert!(!dark_mode(&h));
 
-    h.state_mut().settings.options.theme = Theme::Dark;
+    h.state_mut().settings.view.options.theme = Theme::Dark;
     h.run_steps(4);
     assert!(dark_mode(&h));
 }
@@ -220,11 +220,11 @@ fn ui9_options_dialog_picks_the_theme_and_save_applies_it() {
     h.get_by_label(tr(Lang::Ru, Tr::ThemeLight)).click();
     h.run_steps(4);
     // Only the draft changes until Save.
-    assert_eq!(h.state().settings.options.theme, Theme::Dark);
+    assert_eq!(h.state().settings.view.options.theme, Theme::Dark);
     assert_eq!(h.state().dialogs.options.draft.theme, Theme::Light);
     h.get_by_label(tr(Lang::Ru, Tr::Save)).click();
     h.run_steps(6);
-    assert_eq!(h.state().settings.options.theme, Theme::Light);
+    assert_eq!(h.state().settings.view.options.theme, Theme::Light);
     assert!(!dark_mode(&h));
 }
 
