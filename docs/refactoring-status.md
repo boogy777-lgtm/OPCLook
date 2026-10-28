@@ -137,3 +137,24 @@ Linux. Отмена после готовности helper повторно пр
 маршрута; Linux-регрессия прошла. Полный Linux gate и Windows CI нового head
 должны быть повторены. Реальные DA, UAC, отрицательные IPC-тесты на Windows и
 остальные этапы RAII/newtype/enum/производительности остаются открытыми.
+
+## Гейт слоя и передача
+
+Измерено для исходников `a7d07ab`: `scripts/check-linux.sh` прошёл полностью;
+backend 189, Engine 17, contract 23, locale 9, CLI unit 5 и live 2, GUI lib
+186, `ui_interactions` 139 passed / 1 ignored; остальные integration-наборы
+прошли с предусмотренными ignored-тестами. Использован `codegen-units=1` для
+`async-opcua-core-namespace` из-за нулевого объектного файла rustc 1.99.1.
+Windows i686 `cargo check --locked --workspace --all-targets` прошёл с
+`OPCLOOK_CHECK_ONLY_SKIP_RESOURCES=1` и `OPCLOOK_HELPER_TEST_NO_MANIFEST=1`:
+это проверка типов, а не сборка выпускных ресурсов или запуск Windows-тестов.
+Финальный CI точного head на Linux и Windows ещё обязателен.
+
+Поведенческая регрессия GUI использует реальные кадры `App::update`, но PNG
+диалога не рендерился и не осматривался. Это остаётся обязательной проверкой
+следующего UI/performance этапа вместе с измерением кадров и аллокаций на
+реальных 10k строках; прежний `perf_rows` не является таким измерением.
+Также остаются реальные DA/UAC/маршруты и Windows pipe runtime, полноценный
+RAII COM/WinAPI и оставшиеся этапы newtype, enum, производительности и модулей.
+При последующем изменении timeout-дренирования сохранить grace-период того же
+future перед закрытием сессии; замена на отбрасывающий future timeout неверна.

@@ -4,9 +4,9 @@
 `docs/refactoring-plan.md` выполнен частично; статусы B1–B20 и оставшиеся
 проверки перечислены в `docs/refactoring-status.md`. GUI DA-подготовка теперь
 проходит через ограниченный сервис Engine; Linux live UA CLI проверки прошли.
-Полный гейт нового head выполняется. GitHub Linux и Windows CI для `2a6d017`
-прошли; Windows runtime/UAC/DA и остальные этапы плана не проверены или не
-завершены.
+Полный Linux gate для `a7d07ab` прошёл; Windows i686 workspace прошёл
+проверку типов с test-only флагами. Финальный CI нового head, Windows
+runtime/UAC/DA и остальные этапы плана ещё не завершены.
 
 **Текущая работа:** пункты аудита `docs/audit-2026-10-27.md` закрыты и сведены
 в `main` (PR #3, PR #4); статус каждого пункта — в таблице аудита,
