@@ -1446,6 +1446,11 @@ pub fn pki_dir_public() -> PathBuf {
     if let Some(dir) = PKI_DIR_OVERRIDE.get() {
         return dir.clone();
     }
+    // Unit tests that build a discovery client before live test setup must not
+    // create certificates in the repository or the user's profile.
+    #[cfg(test)]
+    return use_private_pki_dir();
+    #[cfg(not(test))]
     std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
@@ -1475,6 +1480,11 @@ pub fn client_cert_subject() -> Option<String> {
 
 #[cfg(test)]
 mod build_client_tests {
+    #[test]
+    fn tests_use_a_temporary_pki_store() {
+        assert!(super::pki_dir_public().starts_with(std::env::temp_dir()));
+    }
+
     use super::*;
     use opcua::client::ClientBuilder;
     use opcua::crypto::CertificateStore;

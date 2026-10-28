@@ -336,3 +336,5 @@ Windows/Linux CI 557fca20 проверил D hotfix, но не последую�
 **2026-10-28 — A, ItemKey:** ненулевой тип вместо u32 по контракту, Engine и GUI/CLI; UA/DA передают числовой handle через get, входящий UA zero отклоняется с локализованной записью в журнал. Checked successor сохраняет ранее исправленное исчерпание. Compile-fail защищает смешение ItemKey/ScanId. Linux GUI exhaustion и headless удаление строки 1/1 каждое; Linux all-targets и Windows i686 workspace all-targets typecheck с test-only флагами прошли. Реальный DA, UAC, Windows runtime и PNG всё ещё не проверены; SessionId/RequestId/Origin/Owner открыты.
 
 Измерено после ItemKey: Linux backend 199/199, Engine 19/19, CLI 6/6; Windows backend/CLI standalone all-targets typecheck без resource skip прошёл. Первый backend run выявил тестовый fallback, вычислявший недопустимый zero; исправлен и полный набор повторно прошёл.
+
+**2026-10-28 — изоляция PKI тестов:** backend unit tests используют временный каталог до инициализации live fixture, а не рабочий каталог/профиль. Linux regression 1/1 и Windows i686 backend tests typecheck без resource skip прошли. Runtime Windows не проверен.
