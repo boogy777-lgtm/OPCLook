@@ -162,7 +162,7 @@ pub(crate) fn spawn(event_tx: Sender<Event>) -> super::WorkerHandle {
                 send(
                     &event_tx,
                     Event {
-                        request_id: 0,
+                        origin: crate::bff::model::Origin::Unsolicited,
                         session: 0,
                         kind: EventKind::Log {
                             message: BackendMsg::DaDcomSecurityNotSet { detail: e },
@@ -193,7 +193,7 @@ fn handle_command(
             Ok(servers) => send(
                 tx,
                 Event {
-                    request_id,
+                    origin: request_id.into(),
                     session: session_id,
                     kind: EventKind::Servers { host, servers },
                 },
@@ -201,7 +201,7 @@ fn handle_command(
             Err(message) => send(
                 tx,
                 Event {
-                    request_id,
+                    origin: request_id.into(),
                     session: session_id,
                     kind: EventKind::Error {
                         operation: Operation::Discover,
@@ -241,7 +241,7 @@ fn handle_command(
                     send(
                         tx,
                         Event {
-                            request_id,
+                            origin: request_id.into(),
                             session: session_id,
                             kind: EventKind::Connected { endpoint, info },
                         },
@@ -251,7 +251,7 @@ fn handle_command(
                 Err(message) => send(
                     tx,
                     Event {
-                        request_id,
+                        origin: request_id.into(),
                         session: session_id,
                         kind: EventKind::Error {
                             operation: Operation::Connect,
@@ -267,7 +267,7 @@ fn handle_command(
                 send(
                     tx,
                     Event {
-                        request_id,
+                        origin: request_id.into(),
                         session: session_id,
                         kind: EventKind::Disconnected { reason },
                     },
@@ -283,7 +283,7 @@ fn handle_command(
                 Ok(children) => send(
                     tx,
                     Event {
-                        request_id,
+                        origin: request_id.into(),
                         session: session_id,
                         kind: EventKind::Browse { node_id, children },
                     },
@@ -318,7 +318,7 @@ fn handle_command(
                 send(
                     tx,
                     Event {
-                        request_id,
+                        origin: request_id.into(),
                         session: session_id,
                         kind: EventKind::AddItems { results },
                     },
@@ -332,7 +332,7 @@ fn handle_command(
                 send(
                     tx,
                     Event {
-                        request_id,
+                        origin: request_id.into(),
                         session: session_id,
                         kind: EventKind::AddItems { results },
                     },
@@ -345,7 +345,7 @@ fn handle_command(
                 send(
                     tx,
                     Event {
-                        request_id,
+                        origin: request_id.into(),
                         session: session_id,
                         kind: EventKind::Removed { keys },
                     },
@@ -365,7 +365,7 @@ fn handle_command(
                 send(
                     tx,
                     Event {
-                        request_id,
+                        origin: request_id.into(),
                         session: session_id,
                         kind: EventKind::Values { values },
                     },
@@ -379,7 +379,7 @@ fn handle_command(
                 send(
                     tx,
                     Event {
-                        request_id,
+                        origin: request_id.into(),
                         session: session_id,
                         kind: EventKind::Values { values },
                     },
@@ -393,7 +393,7 @@ fn handle_command(
                 send(
                     tx,
                     Event {
-                        request_id,
+                        origin: request_id.into(),
                         session: session_id,
                         kind: EventKind::Wrote { key, result },
                     },
@@ -412,7 +412,7 @@ fn handle_command(
                 Ok(message) => send(
                     tx,
                     Event {
-                        request_id,
+                        origin: request_id.into(),
                         session: session_id,
                         kind: EventKind::Log { message },
                     },
@@ -440,7 +440,7 @@ fn send(tx: &Sender<Event>, event: Event) {
 
 fn send_error(
     tx: &Sender<Event>,
-    request_id: u64,
+    request_id: Option<crate::bff::model::RequestId>,
     session: SessionId,
     operation: Operation,
     message: BackendMsg,
@@ -448,7 +448,7 @@ fn send_error(
     send(
         tx,
         Event {
-            request_id,
+            origin: request_id.into(),
             session,
             kind: EventKind::Error { operation, message },
         },

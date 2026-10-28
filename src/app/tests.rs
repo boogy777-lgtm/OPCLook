@@ -944,21 +944,29 @@ fn pend_discover(app: &mut App, request_id: RequestId, host: &str) {
 fn d4_discover_error_releases_only_the_failing_hosts_route() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
-    app.engine.seed_da_route_for_test(0, 501).unwrap();
-    app.engine.seed_da_route_for_test(0, 502).unwrap();
-    pend_discover(&mut app, 501, "pc-a");
-    pend_discover(&mut app, 502, "pc-b");
+    app.engine
+        .seed_da_route_for_test(0, RequestId::new(501).unwrap())
+        .unwrap();
+    app.engine
+        .seed_da_route_for_test(0, RequestId::new(502).unwrap())
+        .unwrap();
+    pend_discover(&mut app, RequestId::new(501).unwrap(), "pc-a");
+    pend_discover(&mut app, RequestId::new(502).unwrap(), "pc-b");
     app.on_event_for_test_with_request(
         0,
-        501,
+        RequestId::new(501).unwrap(),
         EventKind::Error {
             operation: Operation::Discover,
             message: BackendMsg::raw("RPC unavailable"),
         },
     );
-    assert!(!app.engine.has_discovery_route_for_test(501));
     assert!(
-        app.engine.has_discovery_route_for_test(502),
+        !app.engine
+            .has_discovery_route_for_test(RequestId::new(501).unwrap())
+    );
+    assert!(
+        app.engine
+            .has_discovery_route_for_test(RequestId::new(502).unwrap()),
         "the other search keeps its route"
     );
 }
@@ -968,12 +976,24 @@ fn d5_closing_the_connect_dialog_releases_discovery_routes() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.engine.seed_da_route_for_test(0, 501).unwrap();
-    app.engine.seed_da_route_for_test(0, 502).unwrap();
-    app.engine.seed_da_route_for_test(9, 0).unwrap();
+    app.engine
+        .seed_da_route_for_test(0, RequestId::new(501).unwrap())
+        .unwrap();
+    app.engine
+        .seed_da_route_for_test(0, RequestId::new(502).unwrap())
+        .unwrap();
+    app.engine
+        .seed_da_route_for_test(9, RequestId::FIRST)
+        .unwrap();
     app.close_connect_dialog();
-    assert!(!app.engine.has_discovery_route_for_test(501));
-    assert!(!app.engine.has_discovery_route_for_test(502));
+    assert!(
+        !app.engine
+            .has_discovery_route_for_test(RequestId::new(501).unwrap())
+    );
+    assert!(
+        !app.engine
+            .has_discovery_route_for_test(RequestId::new(502).unwrap())
+    );
     assert!(app.engine.has_da_route(9));
 }
 
@@ -1184,7 +1204,7 @@ fn k1_fresh_requests_do_not_expire() {
     let (_ctx, mut app) = tree_app();
     app.engine.insert_pending_for_test(
         1,
-        501,
+        RequestId::new(501).unwrap(),
         PendingRequest {
             operation: Operation::Browse,
             sent: Instant::now(),
@@ -1906,4 +1926,61 @@ fn item_ids_stop_after_maximum_and_keep_earlier_items() {
     assert_eq!(app.status, tr(app.lang(), Tr::ItemIdsExhausted));
     app.add_items(1, vec![("three".into(), "three".into())]);
     assert_eq!(app.rows.len(), 1);
+}
+
+#[test]
+fn partial_write_then_closed_worker_finishes_batch() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(1, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.engine.limit_dispatch_for_test(1);
+    app.perform_write(PendingWrites {
+        session: 1,
+        protocol: Protocol::OpcUa,
+        requests: vec![
+            WriteRequest {
+                key: ItemKey::new(1).unwrap(),
+                value: Value::Bool(true),
+                type_hint: None,
+            },
+            WriteRequest {
+                key: ItemKey::new(2).unwrap(),
+                value: Value::Bool(true),
+                type_hint: None,
+            },
+        ],
+        type_label: String::new(),
+    });
+    assert_eq!(app.pending_writes, 0);
+    assert_eq!(app.write_total, 1);
+    assert_eq!(app.write_err, 1);
+    assert!(app.last_write_summary.is_some());
+}
+
+#[test]
+fn exhausted_request_does_not_leave_browse_add_or_search_waiting() {
+    let (_ctx, mut app) = tree_app();
+    app.engine.exhaust_requests_for_test();
+    assert!(app.browse(1, String::new()).is_none());
+    assert!(!app.sessions[0].root_loading);
+    assert!(!app.add_items(1, vec![("ns=2;s=Rejected".into(), "Rejected".into())]));
+    assert!(!app.rows.iter().any(|row| row.item_id == "ns=2;s=Rejected"));
+    app.dialogs.connect.ua_search_host = "localhost".into();
+    app.search_ua_servers();
+    assert!(!app.dialogs.connect.ua_searching);
+    assert!(app.dialogs.connect.error.is_some());
+}
+
+#[test]
+fn exhausted_reconnect_preserves_pending_and_existing_state() {
+    let (_ctx, mut app) = tree_app();
+    app.engine.limit_dispatch_for_test(1);
+    let request = app
+        .send(1, Protocol::OpcUa, CommandKind::Read { keys: vec![] })
+        .unwrap();
+    app.engine.exhaust_requests_for_test();
+    let before = app.sessions[0].state;
+    app.reconnect_session(1);
+    assert_eq!(app.sessions[0].state, before);
+    assert!(app.engine.has_pending(1, request));
 }

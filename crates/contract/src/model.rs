@@ -35,7 +35,52 @@ impl fmt::Display for ItemKey {
         self.get().fmt(f)
     }
 }
-pub type RequestId = u64;
+/// Nonzero identity of one tracked request.
+///
+/// ```compile_fail
+/// use opclook_contract::model::{RequestId, ScanId};
+/// let _: ScanId = RequestId::FIRST;
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RequestId(std::num::NonZeroU64);
+impl RequestId {
+    pub const FIRST: Self = Self(std::num::NonZeroU64::MIN);
+    pub const fn new(value: u64) -> Option<Self> {
+        match std::num::NonZeroU64::new(value) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
+    }
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+    pub const fn successor(self) -> Option<Self> {
+        match self.get().checked_add(1) {
+            Some(value) => Self::new(value),
+            None => None,
+        }
+    }
+}
+impl fmt::Display for RequestId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.get().fmt(f)
+    }
+}
+
+/// Whether an event answers a tracked command or is a spontaneous update.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Origin {
+    Reply(RequestId),
+    Unsolicited,
+}
+impl From<Option<RequestId>> for Origin {
+    fn from(id: Option<RequestId>) -> Self {
+        match id {
+            Some(id) => Self::Reply(id),
+            None => Self::Unsolicited,
+        }
+    }
+}
 
 /// Identity of one streaming UA subnet scan. Zero is never a scan identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -1440,7 +1485,7 @@ pub struct WriteRequest {
 
 #[derive(Clone, Debug)]
 pub struct Command {
-    pub request_id: RequestId,
+    pub request_id: Option<RequestId>,
     pub session: SessionId,
     pub protocol: Protocol,
     pub kind: CommandKind,
@@ -1488,7 +1533,7 @@ pub enum CommandKind {
         lds: Option<LdsTarget>,
     },
     /// Streaming N+1 subnet scan: loopback first, then the local address and the
-    /// subnet hosts. Results arrive as `UaScan*` events with `request_id: 0`.
+    /// subnet hosts. Results arrive as `UaScan*` events with `Origin::Unsolicited`.
     ScanUaNetwork {
         scan_id: ScanId,
         bind: crate::net::NetworkBinding,
@@ -1588,11 +1633,8 @@ pub enum SubscriptionState {
 
 #[derive(Clone, Debug)]
 pub struct Event {
-    /// Identity of the command that produced this event. `0` means an
-    /// unsolicited push/runtime event (DataChange, worker startup error),
-    /// which is always accepted by the app; non-zero events are only accepted
-    /// while their `(session, request_id)` pair is outstanding.
-    pub request_id: RequestId,
+    /// Correlation with a tracked command, or an unsolicited update.
+    pub origin: Origin,
     pub session: SessionId,
     pub kind: EventKind,
 }
@@ -1611,7 +1653,7 @@ pub enum EventKind {
     UaNetworkFound {
         servers: Vec<UaNetworkInfo>,
     },
-    /// Live progress of a running N+1 subnet scan (streaming, `request_id: 0`).
+    /// Live progress of a running N+1 subnet scan (streaming, `Origin::Unsolicited`).
     UaScanProgress {
         scan_id: ScanId,
         total: usize,

@@ -12,7 +12,7 @@ fn main() -> Result<(), String> {
     let session = 1;
     let probe = Probe::new();
     probe.send(Command {
-        request_id: 1,
+        request_id: Some(opcda_egui::bff::model::RequestId::FIRST),
         session,
         protocol: Protocol::OpcUa,
         kind: CommandKind::Connect {
@@ -20,7 +20,9 @@ fn main() -> Result<(), String> {
         },
     })?;
 
-    let mut request = 2;
+    let mut request = opcda_egui::bff::model::RequestId::FIRST
+        .successor()
+        .ok_or("request identifiers exhausted")?;
     let mut connected = false;
     let deadline = Instant::now() + Duration::from_secs(40);
     let mut next_step = Instant::now();
@@ -31,7 +33,7 @@ fn main() -> Result<(), String> {
                 EventKind::Connected { .. } => {
                     connected = true;
                     probe.send(Command {
-                        request_id: request,
+                        request_id: Some(request),
                         session,
                         protocol: Protocol::OpcUa,
                         kind: CommandKind::Browse {
@@ -40,19 +42,19 @@ fn main() -> Result<(), String> {
                             view_id: None,
                         },
                     })?;
-                    request += 1;
+                    request = request.successor().ok_or("request identifiers exhausted")?;
                     probe.send(Command {
-                        request_id: request,
+                        request_id: Some(request),
                         session,
                         protocol: Protocol::OpcUa,
                         kind: CommandKind::AddItems {
                             items: vec![ItemSpec {
-                                key: 1,
+                                key: opcda_egui::bff::model::ItemKey::FIRST,
                                 item_id: "i=2259".to_string(),
                             }],
                         },
                     })?;
-                    request += 1;
+                    request = request.successor().ok_or("request identifiers exhausted")?;
                     next_step = Instant::now() + Duration::from_secs(5);
                 }
                 EventKind::AddItems { .. } | EventKind::Browse { .. } => {
@@ -68,30 +70,30 @@ fn main() -> Result<(), String> {
         }
         if connected && Instant::now() >= next_step {
             probe.send(Command {
-                request_id: request,
+                request_id: Some(request),
                 session,
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Read {
-                    keys: vec![1 as ItemKey],
+                    keys: vec![ItemKey::FIRST],
                 },
             })?;
-            request += 1;
+            request = request.successor().ok_or("request identifiers exhausted")?;
             probe.send(Command {
-                request_id: request,
+                request_id: Some(request),
                 session,
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Write {
                     request: WriteRequest {
-                        key: 1,
+                        key: opcda_egui::bff::model::ItemKey::FIRST,
                         value: opcda_egui::bff::model::Value::I64(0),
                         type_hint: None,
                     },
                 },
             })?;
-            request += 1;
+            request = request.successor().ok_or("request identifiers exhausted")?;
             std::thread::sleep(Duration::from_secs(3));
             probe.send(Command {
-                request_id: request,
+                request_id: Some(request),
                 session,
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Disconnect,

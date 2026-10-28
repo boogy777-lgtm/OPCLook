@@ -1,6 +1,7 @@
 use super::*;
-use crate::bff::model::{CommandKind, Operation, Protocol, SessionId};
-use crate::i18n::Tr;
+#[cfg(test)]
+use crate::bff::model::Operation;
+use crate::bff::model::{CommandKind, Protocol, SessionId};
 use std::time::{Duration, Instant};
 
 impl App {
@@ -27,21 +28,8 @@ impl App {
     }
     /// Ask Engine to expire requests; ordinary correlated events update the UI.
     pub(super) fn expire_pending_requests(&mut self, now: Instant) {
-        let disconnects = self
-            .engine
+        self.engine
             .expire_requests(now, self.settings.options.operation_timeout_secs);
-        if self.settings.options.diagnostic_trace {
-            for session in disconnects {
-                self.journal.info_l(
-                    Tr::TraceSent,
-                    &[
-                        &"0",
-                        &operation_label(self.lang(), Operation::Disconnect),
-                        &session.to_string(),
-                    ],
-                );
-            }
-        }
         self.poll_events();
     }
 
@@ -63,7 +51,12 @@ impl App {
                     keys,
                 } => {
                     self.project_session(session);
-                    self.send(session, protocol, CommandKind::Read { keys });
+                    if self
+                        .send(session, protocol, CommandKind::Read { keys })
+                        .is_none()
+                    {
+                        self.project_session(session);
+                    }
                 }
                 opclook_engine::Due::Test { session, protocol } => {
                     self.project_session(session);

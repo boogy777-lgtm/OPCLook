@@ -119,3 +119,5 @@ CI 557fca20 относится к D hotfix, не к текущему head.
 ItemKey теперь ненулевой отдельный тип до backend/CLI и явных UA/DA wire handles; SessionId, RequestId, Origin/Owner и финальный CI ещё открыты.
 
 Backend unit tests теперь по умолчанию используют временный PKI-каталог; Windows runtime остаётся открытым.
+
+**2026-10-28, A RequestId/Origin:** ненулевой RequestId, явный Origin и необязательный токен команды проходят через Engine, воркеры и клиенты; отказы отправки не оставляют ложных ожиданий в UI. Измеренные проверки и оставшиеся SessionId/Owner, B/E/F/G/H и точный Windows CI указаны в `docs/refactoring-status.md`. Текущая Windows проверка локально только typecheck; runtime и физический DA/UAC остаются открыты.

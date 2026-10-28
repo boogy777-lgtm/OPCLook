@@ -610,7 +610,7 @@ fn stale_reply_with_unknown_request_id_is_ignored() {
 
     app.on_event_for_test_with_request(
         1,
-        9_999,
+        opcda_egui::bff::model::RequestId::new(9_999).unwrap(),
         EventKind::Connected {
             endpoint: EndpointSpec::da("", "Srv.Stale"),
             info: opcda_egui::bff::model::BackendMsg::raw("stale"),
@@ -624,7 +624,7 @@ fn stale_reply_with_unknown_request_id_is_ignored() {
 
     app.on_event_for_test_with_request(
         1,
-        9_999,
+        opcda_egui::bff::model::RequestId::new(9_999).unwrap(),
         EventKind::Browse {
             node_id: String::new(),
             children: vec![BrowseNode {
@@ -4430,7 +4430,7 @@ fn on_exit_shuts_down_the_gateway() {
         let error = app
             .gateway_for_test()
             .send(Command {
-                request_id: 1,
+                request_id: opcda_egui::bff::model::RequestId::new(1),
                 session: 1,
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::Test,
@@ -4442,7 +4442,7 @@ fn on_exit_shuts_down_the_gateway() {
 
 // ---- U9: the connect dialog waits for Connected / Error of its attempt ----
 
-fn u9_start_attempt(app: &mut App, url: &str) -> (u64, u64) {
+fn u9_start_attempt(app: &mut App, url: &str) -> (u64, opcda_egui::bff::model::RequestId) {
     app.open_connect_dialog();
     app.dialogs.connect.protocol = Protocol::OpcUa;
     app.dialogs.connect.ua_url = url.to_string();

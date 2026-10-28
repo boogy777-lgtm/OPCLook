@@ -1,11 +1,11 @@
 use crate::bff::model::{
-    BrowseNode, CommandKind, ItemKey, Operation, Protocol, Quality, QualityKind, ScanId, SessionId,
-    SubscriptionState, Value,
+    BrowseNode, CommandKind, ItemKey, Operation, Protocol, Quality, QualityKind, RequestId, ScanId,
+    SessionId, SubscriptionState, Value,
 };
 use crate::bff::net::NetworkBinding;
 
 #[cfg(feature = "test-support")]
-use crate::bff::model::{EndpointSpec, RequestId};
+use crate::bff::model::EndpointSpec;
 use crate::da_route::{DaRouteError, LocalizedDaRouteError, LocalizedDaRouteStatus};
 use crate::i18n::{Lang, Tr, tr};
 use crate::journal::Journal;
@@ -94,7 +94,7 @@ pub struct App {
     next_key: Option<ItemKey>,
     /// Monotonic id for streaming subnet scans (independent of request ids).
     next_scan: Option<ScanId>,
-    /// Outstanding `(session, request_id)` pairs. Non-zero events are accepted
+    /// Outstanding `(session, request_id)` pairs. Correlated events are accepted
     /// only while their pair is present; the pair is removed on receipt. A
     /// session's entries are cleared whenever a new connect/disconnect lifecycle
     /// starts, so a reply from a superseded connection cannot mutate this one.
@@ -562,7 +562,7 @@ impl App {
         session: SessionId,
         protocol: Protocol,
         kind: CommandKind,
-    ) -> u64 {
+    ) -> Option<RequestId> {
         self.send_with(session, protocol, kind, PendingCtx::None)
     }
 
@@ -573,14 +573,15 @@ impl App {
         protocol: Protocol,
         kind: CommandKind,
         ctx: PendingCtx,
-    ) -> u64 {
+    ) -> Option<RequestId> {
         let operation = kind.operation();
         let dispatch = self.engine.send(session, protocol, kind, ctx);
         let (request_id, failure) = match dispatch {
             Ok(id) => (id, None),
             Err(DispatchError::Exhausted) => {
                 self.journal.error_l(Tr::RequestIdsExhausted, &[]);
-                return 0;
+                self.status = tr(self.lang(), Tr::RequestIdsExhausted).to_string();
+                return None;
             }
             Err(DispatchError::SessionLimit) => {
                 self.journal.error_l(
@@ -592,7 +593,7 @@ impl App {
                     Tr::UaSessionLimitReached,
                     &[&crate::constants::MAX_UA_SESSIONS.to_string()],
                 );
-                return 0;
+                return None;
             }
             Err(DispatchError::Closed {
                 request_id,
@@ -609,11 +610,12 @@ impl App {
                 ],
             );
         }
-        if let Some(message) = failure {
+        if let Some(ref message) = failure {
             // A closed command channel means the protocol worker is gone, so
             // every session routed to it is dead. Surface the failure instead of
             // silently dropping the command; do not arm reconnect (a reconnect
             // command could never reach the dead worker).
+            self.status = message.clone();
             let lang = self.lang();
             self.journal
                 .error_l(Tr::ErrorOp, &[&operation_label(lang, operation), &message]);
@@ -647,7 +649,11 @@ impl App {
                 self.add_children = None;
             }
         }
-        request_id
+        if failure.is_some() {
+            None
+        } else {
+            Some(request_id)
+        }
     }
 
     /// Mark every row of `session` as stale ("нет данных от сервера"): Bad
@@ -911,7 +917,7 @@ impl App {
         session: SessionId,
         kind: CommandKind,
         ctx: PendingCtx,
-    ) -> Result<u64, DaRouteError> {
+    ) -> Result<RequestId, DaRouteError> {
         let options = self.route_options();
         self.engine.prepare_da(session, kind, ctx, options)
     }
@@ -1080,7 +1086,7 @@ impl eframe::App for App {
             .map(|session| (session.id, session.protocol()))
             .collect();
         for (session, protocol) in sessions {
-            self.send(session, protocol, CommandKind::Disconnect);
+            let _ = self.engine.disconnect_untracked(session, protocol);
         }
         self.engine.shutdown();
     }

@@ -107,15 +107,21 @@ impl App {
         self.dialogs.connect.error = None;
         self.journal
             .info_l(Tr::SearchingUaHost, &[&host, &port.to_string()]);
-        self.send(
-            0,
-            Protocol::OpcUa,
-            CommandKind::SearchUaServers {
-                host,
-                port,
-                bind: Some(bind),
-            },
-        );
+        if self
+            .send(
+                0,
+                Protocol::OpcUa,
+                CommandKind::SearchUaServers {
+                    host,
+                    port,
+                    bind: Some(bind),
+                },
+            )
+            .is_none()
+        {
+            self.dialogs.connect.ua_searching = false;
+            self.dialogs.connect.error = Some(self.status.clone());
+        }
     }
 
     /// Combined "empty host" UA search: `FindServersOnNetwork` (mDNS/LDS) plus
@@ -143,7 +149,10 @@ impl App {
         let commands = ua_all_commands(bind, lds);
         d.ua_auto_pending = commands.len();
         for kind in commands {
-            self.send(0, Protocol::OpcUa, kind);
+            if self.send(0, Protocol::OpcUa, kind).is_none() {
+                self.ua_auto_step_done(|_| {});
+                self.dialogs.connect.error = Some(self.status.clone());
+            }
         }
     }
 
@@ -290,11 +299,17 @@ impl App {
             }
             None => self.journal.info_l(Tr::SearchingUaNetwork, &[]),
         }
-        self.send(
-            0,
-            Protocol::OpcUa,
-            CommandKind::SearchUaNetwork { bind, lds },
-        );
+        if self
+            .send(
+                0,
+                Protocol::OpcUa,
+                CommandKind::SearchUaNetwork { bind, lds },
+            )
+            .is_none()
+        {
+            self.dialogs.connect.ua_network_searching = false;
+            self.dialogs.connect.error = Some(self.status.clone());
+        }
     }
 
     /// Start the N+1 subnet scan for the current lease. An over-large subnet is
@@ -384,16 +399,23 @@ impl App {
         d.ua_auto_pending = 0;
         d.error = None;
         self.journal.info_l(Tr::SearchingUaSubnet, &[]);
-        self.send(
-            0,
-            Protocol::OpcUa,
-            CommandKind::ScanUaNetwork {
-                scan_id,
-                bind: binding,
-                subnet,
-                local_ip,
-            },
-        );
+        if self
+            .send(
+                0,
+                Protocol::OpcUa,
+                CommandKind::ScanUaNetwork {
+                    scan_id,
+                    bind: binding,
+                    subnet,
+                    local_ip,
+                },
+            )
+            .is_none()
+        {
+            self.dialogs.connect.ua_scan_id = None;
+            self.dialogs.connect.ua_subnet_searching = false;
+            self.dialogs.connect.ua_scan_error = Some(self.status.clone());
+        }
     }
 
     /// Stop the running subnet scan, keeping the partial results already

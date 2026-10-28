@@ -30,7 +30,7 @@ fn wait_for_servers(gateway: &Gateway, host: &str, port: u16, timeout: Duration)
     let request_id = next_id();
     gateway
         .send(Command {
-            request_id,
+            request_id: opcda_egui::bff::model::RequestId::new(request_id),
             session: 0,
             protocol: Protocol::OpcUa,
             kind: CommandKind::SearchUaServers {
@@ -43,7 +43,11 @@ fn wait_for_servers(gateway: &Gateway, host: &str, port: u16, timeout: Duration)
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         while let Some(event) = gateway.try_recv() {
-            if event.request_id == request_id {
+            if event.origin
+                == opcda_egui::bff::model::Origin::Reply(
+                    opcda_egui::bff::model::RequestId::new(request_id).unwrap(),
+                )
+            {
                 return Some(event);
             }
         }

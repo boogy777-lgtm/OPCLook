@@ -32,7 +32,7 @@ fn wait_for(
     let deadline = started + timeout;
     while Instant::now() < deadline {
         while let Some(event) = gateway.try_recv() {
-            if event.request_id != request_id || event.session != session {
+            if event.origin != request_id.into() || event.session != session {
                 continue;
             }
             if predicate(&event.kind) {
@@ -48,7 +48,7 @@ fn connect(gateway: &Gateway, session: u64) {
     let connected = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
             session,
             protocol: Protocol::OpcUa,
             kind: CommandKind::Connect {
@@ -66,7 +66,7 @@ fn disconnect(gateway: &Gateway, session: u64) {
     let _ = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
             session,
             protocol: Protocol::OpcUa,
             kind: CommandKind::Disconnect,
@@ -109,7 +109,7 @@ fn browse_refresh_jumps_over_queued_reads() {
         let add = wait_for(
             &gateway,
             Command {
-                request_id: next_id(),
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
                 session,
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::AddItems { items },
@@ -134,7 +134,7 @@ fn browse_refresh_jumps_over_queued_reads() {
             let read = wait_for(
                 &gateway,
                 Command {
-                    request_id: next_id(),
+                    request_id: opcda_egui::bff::model::RequestId::new(next_id()),
                     session,
                     protocol: Protocol::OpcUa,
                     kind: CommandKind::Read {
@@ -155,7 +155,7 @@ fn browse_refresh_jumps_over_queued_reads() {
         let browse = wait_for(
             &gateway,
             Command {
-                request_id: next_id(),
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
                 session,
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Browse {

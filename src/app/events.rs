@@ -5,8 +5,8 @@ use super::*;
 #[cfg(feature = "test-support")]
 use crate::bff::model::RequestId;
 use crate::bff::model::{
-    BrowseNode, Event, EventKind, ItemInfo, ItemKey, NodeKind, Operation, Protocol, SessionId,
-    SubscriptionState,
+    BrowseNode, Event, EventKind, ItemInfo, ItemKey, NodeKind, Operation, Origin, Protocol,
+    SessionId, SubscriptionState,
 };
 use crate::i18n::{Tr, backend_text, fmt, tr};
 use chrono::Utc;
@@ -24,7 +24,7 @@ impl App {
     pub fn on_event_for_test(&mut self, kind: EventKind) {
         self.sync_fixture_sessions();
         self.on_event(Event {
-            request_id: 0,
+            origin: Origin::Unsolicited,
             session: 0,
             kind,
         });
@@ -35,7 +35,7 @@ impl App {
     pub fn on_event_for_test_at(&mut self, session: SessionId, kind: EventKind) {
         self.sync_fixture_sessions();
         self.on_event(Event {
-            request_id: 0,
+            origin: Origin::Unsolicited,
             session,
             kind,
         });
@@ -52,7 +52,7 @@ impl App {
     ) {
         self.sync_fixture_sessions();
         self.on_event(Event {
-            request_id,
+            origin: Origin::Reply(request_id),
             session,
             kind,
         });
@@ -78,10 +78,8 @@ impl App {
 
     pub(super) fn on_event(&mut self, event: Event) {
         let session = event.session;
-        // Request-id correlation: a non-zero reply is accepted only once, and
-        // only while its command is still outstanding. Superseded/session-old
-        // replies are dropped before they can touch any state. `0` is reserved
-        // for unsolicited pushes and worker runtime errors.
+        // Correlated replies are accepted once while their command is outstanding;
+        // unsolicited pushes and worker runtime errors have no request token.
         self.engine
             .set_auto_reconnect(self.settings.options.auto_reconnect);
         let ctx = match self.engine.accept(&event) {
@@ -91,7 +89,10 @@ impl App {
                     self.journal.info_l(
                         Tr::TraceReply,
                         &[
-                            &event.request_id.to_string(),
+                            &match event.origin {
+                                Origin::Reply(id) => id.to_string(),
+                                Origin::Unsolicited => String::new(),
+                            },
                             &operation_label(self.lang(), pending.operation),
                             &session.to_string(),
                             &latency.to_string(),
@@ -105,14 +106,23 @@ impl App {
                 if self.settings.options.diagnostic_trace {
                     self.journal.info_l(
                         Tr::TraceDropped,
-                        &[&event.request_id.to_string(), &session.to_string()],
+                        &[
+                            &match event.origin {
+                                Origin::Reply(id) => id.to_string(),
+                                Origin::Unsolicited => String::new(),
+                            },
+                            &session.to_string(),
+                        ],
                     );
                 }
                 return;
             }
         };
         self.project_session(session);
-        let request_id = event.request_id;
+        let request_id = match event.origin {
+            Origin::Reply(id) => Some(id),
+            Origin::Unsolicited => None,
+        };
         let lang = self.lang();
         let kind = match (event.kind, &ctx) {
             (
@@ -408,7 +418,9 @@ impl App {
                 // Drive the recursive add-children job. The job is keyed by the
                 // request id it issued, so a manual browse or a stale reply is
                 // never consumed as one of its pages.
-                self.advance_add_children(session, request_id, &node_id, target);
+                if let Some(request_id) = request_id {
+                    self.advance_add_children(session, request_id, &node_id, target);
+                }
             }
             EventKind::Views { children } => {
                 // Seed a synthetic «Представления» root node; browsing it lists
@@ -453,14 +465,17 @@ impl App {
                 let PendingCtx::ResolvePath { requested, name } = ctx else {
                     return;
                 };
-                if self.dialogs.add_signal.resolving != Some((session, request_id)) {
+                if self.dialogs.add_signal.resolving != request_id.map(|id| (session, id)) {
                     return;
                 }
                 self.dialogs.add_signal.resolving = None;
                 if let Some(first) = targets.first() {
                     let display = if name.is_empty() { first.clone() } else { name };
-                    self.add_items(session, vec![(first.clone(), display)]);
-                    self.close_add_signal_dialog();
+                    if self.add_items(session, vec![(first.clone(), display)]) {
+                        self.close_add_signal_dialog();
+                    } else {
+                        self.dialogs.add_signal.error = Some(self.status.clone());
+                    }
                 } else {
                     self.dialogs.add_signal.error =
                         Some(fmt(self.lang(), Tr::NameNotResolved, &[&requested]));
@@ -645,7 +660,10 @@ impl App {
                     Operation::ResolveBrowsePath => {
                         // U14: the error belongs in the (still open) dialog and
                         // frees its pending state.
-                        if self.dialogs.add_signal.resolving == Some((session, request_id)) {
+                        if request_id.is_some()
+                            && self.dialogs.add_signal.resolving
+                                == request_id.map(|id| (session, id))
+                        {
                             self.dialogs.add_signal.resolving = None;
                             self.dialogs.add_signal.error = Some(message);
                         }

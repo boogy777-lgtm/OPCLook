@@ -5,8 +5,8 @@ use opclook_backend::net::AdapterInfo;
 use opclook_backend::route_service::{RouteService, RouteTicket};
 use opclook_contract::da_route::{DaRouteError, DaRouteStatus};
 use opclook_contract::model::{
-    BackendMsg, Command, CommandKind, EndpointSpec, Event, EventKind, ItemKey, Operation, Protocol,
-    SessionId, SubscriptionState,
+    BackendMsg, Command, CommandKind, EndpointSpec, Event, EventKind, ItemKey, Operation, Origin,
+    Protocol, RequestId, SessionId, SubscriptionState,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
@@ -142,7 +142,10 @@ pub enum Due {
 pub enum DispatchError {
     Exhausted,
     SessionLimit,
-    Closed { request_id: u64, message: String },
+    Closed {
+        request_id: RequestId,
+        message: String,
+    },
 }
 pub struct RouteOptions {
     pub adapter: Option<AdapterInfo>,
@@ -151,26 +154,28 @@ pub struct RouteOptions {
 }
 struct DeferredRoute {
     session: SessionId,
-    request_id: u64,
+    request_id: RequestId,
     kind: CommandKind,
     ticket: RouteTicket,
 }
 pub struct Engine<C> {
     gateway: Gateway,
-    next: Option<u64>,
-    requests: HashMap<(u64, u64), PendingRequest<C>>,
-    pending_adds: HashMap<(u64, u64), HashMap<ItemKey, bool>>,
+    next: Option<RequestId>,
+    requests: HashMap<(SessionId, RequestId), PendingRequest<C>>,
+    pending_adds: HashMap<(SessionId, RequestId), HashMap<ItemKey, bool>>,
     sessions: HashMap<SessionId, SessionRuntime>,
     auto_reconnect: bool,
     route_service: Option<RouteService>,
     deferred_routes: Vec<DeferredRoute>,
     session_routes: HashMap<SessionId, RouteTicket>,
-    discovery_routes: HashMap<u64, RouteTicket>,
+    discovery_routes: HashMap<RequestId, RouteTicket>,
     route_events: VecDeque<Event>,
     invalidated: HashMap<SessionId, Vec<Operation>>,
-    timeout_queued: HashSet<(SessionId, u64)>,
+    timeout_queued: HashSet<(SessionId, RequestId)>,
     #[cfg(test)]
     test_skip_dispatch: bool,
+    #[cfg(feature = "test-support")]
+    test_dispatch_limit: std::cell::Cell<Option<usize>>,
 }
 impl<C> Default for Engine<C> {
     fn default() -> Self {
@@ -178,7 +183,7 @@ impl<C> Default for Engine<C> {
         let _ = opclook_backend::bff::ua::use_private_pki_dir();
         Self {
             gateway: Gateway::new(),
-            next: Some(1),
+            next: Some(RequestId::FIRST),
             requests: HashMap::new(),
             pending_adds: HashMap::new(),
             sessions: HashMap::new(),
@@ -192,6 +197,8 @@ impl<C> Default for Engine<C> {
             timeout_queued: HashSet::new(),
             #[cfg(test)]
             test_skip_dispatch: false,
+            #[cfg(feature = "test-support")]
+            test_dispatch_limit: std::cell::Cell::new(None),
         }
     }
 }
@@ -204,7 +211,7 @@ impl<C> Engine<C> {
         kind: CommandKind,
         ctx: C,
         options: RouteOptions,
-    ) -> Result<u64, DaRouteError> {
+    ) -> Result<RequestId, DaRouteError> {
         let host = match &kind {
             CommandKind::Connect { endpoint } if endpoint.protocol == Protocol::OpcDa => {
                 endpoint.host.clone()
@@ -232,7 +239,7 @@ impl<C> Engine<C> {
             options.local_addresses,
             options.deadline,
         )?;
-        self.next = id.checked_add(1);
+        self.next = id.successor();
         let operation = kind.operation();
         if let CommandKind::Connect { endpoint } = &kind {
             self.cancel_da_routes(session);
@@ -278,7 +285,7 @@ impl<C> Engine<C> {
             match result {
                 Ok(()) => {
                     let result = self.gateway.send(Command {
-                        request_id: deferred.request_id,
+                        request_id: Some(deferred.request_id),
                         session: deferred.session,
                         protocol: Protocol::OpcDa,
                         kind: deferred.kind,
@@ -294,7 +301,7 @@ impl<C> Engine<C> {
                         }
                         Err(message) => self.route_events.push_back(Event {
                             session: deferred.session,
-                            request_id: deferred.request_id,
+                            origin: Origin::Reply(deferred.request_id),
                             kind: EventKind::Error {
                                 operation,
                                 message: BackendMsg::DaRoute(DaRouteError::HelperUnavailable(
@@ -306,7 +313,7 @@ impl<C> Engine<C> {
                 }
                 Err(error) => self.route_events.push_back(Event {
                     session: deferred.session,
-                    request_id: deferred.request_id,
+                    origin: Origin::Reply(deferred.request_id),
                     kind: EventKind::Error {
                         operation,
                         message: BackendMsg::DaRoute(error),
@@ -329,7 +336,7 @@ impl<C> Engine<C> {
     fn on_da_route_lost(&mut self, session: SessionId, error: DaRouteError) {
         self.session_routes.remove(&session);
         let _ = self.gateway.send(Command {
-            request_id: 0,
+            request_id: None,
             session,
             protocol: Protocol::OpcDa,
             kind: CommandKind::Disconnect,
@@ -372,7 +379,7 @@ impl<C> Engine<C> {
         };
         self.route_events.push_back(Event {
             session,
-            request_id: connect_request.unwrap_or(0),
+            origin: connect_request.into(),
             kind,
         });
     }
@@ -400,11 +407,37 @@ impl<C> Engine<C> {
                 .any(|item| item.session == session)
     }
     fn dispatch(&self, command: Command) -> Result<(), String> {
+        #[cfg(feature = "test-support")]
+        if let Some(left) = self.test_dispatch_limit.get() {
+            if left == 0 {
+                return Err("test worker closed".into());
+            }
+            self.test_dispatch_limit.set(Some(left - 1));
+            return Ok(());
+        }
         #[cfg(test)]
         if self.test_skip_dispatch {
             return Ok(());
         }
         self.gateway.send(command)
+    }
+    /// Tear down an old transport during reconnection without allocating a request ID.
+    pub fn disconnect_untracked(
+        &mut self,
+        session: SessionId,
+        protocol: Protocol,
+    ) -> Result<(), String> {
+        self.dispatch(Command {
+            request_id: None,
+            session,
+            protocol,
+            kind: CommandKind::Disconnect,
+        })?;
+        self.cancel_da_routes(session);
+        Ok(())
+    }
+    pub fn has_request_capacity(&self) -> bool {
+        self.next.is_some()
     }
     pub fn send(
         &mut self,
@@ -412,7 +445,7 @@ impl<C> Engine<C> {
         protocol: Protocol,
         kind: CommandKind,
         ctx: C,
-    ) -> Result<u64, DispatchError> {
+    ) -> Result<RequestId, DispatchError> {
         if matches!(&kind, CommandKind::Connect { endpoint } if endpoint.protocol == Protocol::OpcUa)
             && !self
                 .sessions
@@ -441,14 +474,24 @@ impl<C> Engine<C> {
             CommandKind::RemoveItems { keys } => keys.clone(),
             _ => Vec::new(),
         };
-        let id = self.next.ok_or(DispatchError::Exhausted)?;
+        let Some(id) = self.next else {
+            if matches!(&kind, CommandKind::Read { .. }) {
+                let pending_read = self.requests.iter().any(|(&(sid, _), pending)| {
+                    sid == session && pending.operation == Operation::Read
+                });
+                if let Some(view) = self.sessions.get_mut(&session) {
+                    view.read_in_flight = pending_read;
+                }
+            }
+            return Err(DispatchError::Exhausted);
+        };
         if matches!(&kind, CommandKind::Connect { .. } | CommandKind::Disconnect) {
             self.cancel_da_routes(session);
             self.timeout_queued.retain(|(id, _)| *id != session);
             self.requests.retain(|(id, _), _| *id != session);
             self.pending_adds.retain(|(id, _), _| *id != session);
         }
-        self.next = id.checked_add(1);
+        self.next = id.successor();
         let operation = kind.operation();
         if !matches!(
             &kind,
@@ -464,7 +507,7 @@ impl<C> Engine<C> {
             );
         }
         if let Err(message) = self.dispatch(Command {
-            request_id: id,
+            request_id: Some(id),
             session,
             protocol,
             kind,
@@ -521,23 +564,17 @@ impl<C> Engine<C> {
         Ok(id)
     }
     pub fn accept(&mut self, event: &Event) -> Result<Option<PendingRequest<C>>, ()> {
-        let pending = if event.request_id == 0 {
-            None
-        } else {
-            Some(
-                self.requests
-                    .remove(&(event.session, event.request_id))
-                    .ok_or(())?,
-            )
+        let pending = match event.origin {
+            Origin::Unsolicited => None,
+            Origin::Reply(id) => {
+                let pending = self.requests.remove(&(event.session, id)).ok_or(())?;
+                self.timeout_queued.remove(&(event.session, id));
+                self.deferred_routes
+                    .retain(|item| !(item.session == event.session && item.request_id == id));
+                self.discovery_routes.remove(&id);
+                Some(pending)
+            }
         };
-        if event.request_id != 0 {
-            self.timeout_queued
-                .remove(&(event.session, event.request_id));
-            self.deferred_routes.retain(|item| {
-                !(item.session == event.session && item.request_id == event.request_id)
-            });
-            self.discovery_routes.remove(&event.request_id);
-        }
         let failed_connect = matches!(
             &event.kind,
             EventKind::Error {
@@ -555,10 +592,9 @@ impl<C> Engine<C> {
         if failed_connect || disconnected {
             self.session_routes.remove(&event.session);
         }
-        let additions = if event.request_id == 0 {
-            None
-        } else {
-            self.pending_adds.remove(&(event.session, event.request_id))
+        let additions = match event.origin {
+            Origin::Unsolicited => None,
+            Origin::Reply(id) => self.pending_adds.remove(&(event.session, id)),
         };
         if let EventKind::PollOnly { keys } = &event.kind {
             for (&(sid, _), additions) in &mut self.pending_adds {
@@ -722,10 +758,10 @@ impl<C> Engine<C> {
         }
         work
     }
-    pub fn has_pending(&self, session: SessionId, request: u64) -> bool {
+    pub fn has_pending(&self, session: SessionId, request: RequestId) -> bool {
         self.requests.contains_key(&(session, request))
     }
-    pub fn discard_pending(&mut self, session: SessionId, request: u64) {
+    pub fn discard_pending(&mut self, session: SessionId, request: RequestId) {
         self.timeout_queued.remove(&(session, request));
         self.pending_adds.remove(&(session, request));
         self.deferred_routes
@@ -786,7 +822,7 @@ impl<C> Engine<C> {
                 if let Some(view) = self.sessions.get(&session) {
                     disconnects.push(session);
                     let _ = self.gateway.send(Command {
-                        request_id: 0,
+                        request_id: None,
                         session,
                         protocol: view.endpoint.protocol,
                         kind: CommandKind::Disconnect,
@@ -796,7 +832,7 @@ impl<C> Engine<C> {
             self.timeout_queued.insert((session, request_id));
             self.route_events.push_back(Event {
                 session,
-                request_id,
+                origin: Origin::Reply(request_id),
                 kind: EventKind::Error {
                     operation,
                     message: BackendMsg::RequestTimeout { seconds },
@@ -809,7 +845,7 @@ impl<C> Engine<C> {
         &self,
         now: Instant,
         configured: u64,
-    ) -> Vec<(SessionId, u64, Operation, C, u64)>
+    ) -> Vec<(SessionId, RequestId, Operation, C, u64)>
     where
         C: Clone,
     {
@@ -894,7 +930,8 @@ impl<C> Engine<C> {
         // The request identity is authoritative when a worker reports a
         // legacy operation label for a correlated failure.
         if let EventKind::Error { operation, .. } = &mut event.kind
-            && let Some(pending) = self.requests.get(&(event.session, event.request_id))
+            && let Origin::Reply(id) = event.origin
+            && let Some(pending) = self.requests.get(&(event.session, id))
         {
             *operation = pending.operation;
         }
@@ -915,7 +952,7 @@ impl<C> Engine<C> {
     pub fn seed_da_route_for_test(
         &mut self,
         session: SessionId,
-        request: u64,
+        request: RequestId,
     ) -> Result<(), DaRouteError> {
         if self.route_service.is_none() {
             self.route_service = Some(
@@ -940,8 +977,16 @@ impl<C> Engine<C> {
         Ok(())
     }
     #[cfg(feature = "test-support")]
-    pub fn has_discovery_route_for_test(&self, request: u64) -> bool {
+    pub fn has_discovery_route_for_test(&self, request: RequestId) -> bool {
         self.discovery_routes.contains_key(&request)
+    }
+    #[cfg(feature = "test-support")]
+    pub fn exhaust_requests_for_test(&mut self) {
+        self.next = None;
+    }
+    #[cfg(feature = "test-support")]
+    pub fn limit_dispatch_for_test(&self, accepted: usize) {
+        self.test_dispatch_limit.set(Some(accepted));
     }
     #[cfg(feature = "test-support")]
     pub fn gateway_for_test(&self) -> &Gateway {
@@ -952,11 +997,16 @@ impl<C> Engine<C> {
         self.sessions.insert(id, session);
     }
     #[cfg(feature = "test-support")]
-    pub fn insert_pending_for_test(&mut self, sid: SessionId, id: u64, pending: PendingRequest<C>) {
+    pub fn insert_pending_for_test(
+        &mut self,
+        sid: SessionId,
+        id: RequestId,
+        pending: PendingRequest<C>,
+    ) {
         self.requests.insert((sid, id), pending);
     }
     #[cfg(feature = "test-support")]
-    pub fn pending_ids_for_test(&self, sid: SessionId) -> Vec<u64> {
+    pub fn pending_ids_for_test(&self, sid: SessionId) -> Vec<RequestId> {
         let mut ids: Vec<_> = self
             .requests
             .keys()
@@ -980,16 +1030,52 @@ impl<C> Engine<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn rid(n: u64) -> RequestId {
+        RequestId::new(n).unwrap()
+    }
     use opclook_contract::model::BackendMsg;
+    #[test]
+    fn rejected_reads_preserve_real_pending_and_release_unsent_poll() {
+        let mut engine = Engine::<()>::default();
+        engine.test_skip_dispatch = true;
+        let mut view =
+            SessionRuntime::new(EndpointSpec::ua("opc.tcp://127.0.0.1:4840"), Instant::now());
+        view.state = SessionState::Connected;
+        view.items.insert(ItemKey::FIRST, false);
+        engine.sessions.insert(1, view);
+        engine.next = RequestId::new(u64::MAX);
+        let id = engine
+            .send(
+                1,
+                Protocol::OpcUa,
+                CommandKind::Read {
+                    keys: vec![ItemKey::FIRST],
+                },
+                (),
+            )
+            .unwrap();
+        assert!(matches!(
+            engine.send(1, Protocol::OpcUa, CommandKind::Read { keys: vec![] }, ()),
+            Err(DispatchError::Exhausted)
+        ));
+        assert!(engine.session(1).unwrap().read_in_flight);
+        engine.discard_pending(1, id);
+        engine.sessions.get_mut(&1).unwrap().read_in_flight = true;
+        assert!(matches!(
+            engine.send(1, Protocol::OpcUa, CommandKind::Read { keys: vec![] }, ()),
+            Err(DispatchError::Exhausted)
+        ));
+        assert!(!engine.session(1).unwrap().read_in_flight);
+    }
     #[test]
     fn request_exhaustion_keeps_pending_work_and_reports_da_error() {
         let mut engine = Engine::<()>::default();
         engine.test_skip_dispatch = true;
-        engine.next = Some(u64::MAX);
+        engine.next = RequestId::new(u64::MAX);
         let id = engine
             .send(1, Protocol::OpcUa, CommandKind::Read { keys: vec![] }, ())
             .unwrap();
-        assert_eq!(id, u64::MAX);
+        assert_eq!(id.get(), u64::MAX);
         assert!(engine.has_pending(1, id));
         assert!(matches!(
             engine.send(1, Protocol::OpcUa, CommandKind::Disconnect, ()),
@@ -1048,7 +1134,7 @@ mod tests {
             .unwrap();
         engine
             .accept(&Event {
-                request_id: id,
+                origin: Origin::Reply(id),
                 session: 1,
                 kind: EventKind::Error {
                     operation: Operation::Connect,
@@ -1123,7 +1209,7 @@ mod tests {
             std::thread::yield_now();
         };
         assert!(
-            matches!(issue, Some(Event { request_id, kind: EventKind::Error { message: BackendMsg::DaRoute(DaRouteError::NoAdapter), .. }, .. }) if request_id == id)
+            matches!(issue, Some(Event { origin: Origin::Reply(request_id), kind: EventKind::Error { message: BackendMsg::DaRoute(DaRouteError::NoAdapter), .. }, .. }) if request_id == id)
         );
         assert!(engine.has_pending(1, id));
     }
@@ -1135,7 +1221,7 @@ mod tests {
             .sessions
             .insert(1, SessionRuntime::new(endpoint.clone(), Instant::now()));
         engine.requests.insert(
-            (1, 5),
+            (1, rid(5)),
             PendingRequest {
                 operation: Operation::Connect,
                 sent: Instant::now(),
@@ -1144,7 +1230,7 @@ mod tests {
         );
         engine.on_da_route_lost(1, DaRouteError::HelperUnavailable("lost".into()));
         let event = engine.route_events.pop_front().unwrap();
-        assert_eq!(event.request_id, 5);
+        assert_eq!(event.origin, Origin::Reply(rid(5)));
         assert!(matches!(
             event.kind,
             EventKind::Error {
@@ -1158,7 +1244,7 @@ mod tests {
             engine
                 .accept(&Event {
                     session: 1,
-                    request_id: 5,
+                    origin: Origin::Reply(rid(5)),
                     kind: EventKind::Connected {
                         endpoint,
                         info: BackendMsg::raw("late")
@@ -1174,7 +1260,7 @@ mod tests {
         view.state = SessionState::Connected;
         engine.sessions.insert(1, view);
         engine.requests.insert(
-            (1, 7),
+            (1, rid(7)),
             PendingRequest {
                 operation: Operation::Write,
                 sent: Instant::now(),
@@ -1182,7 +1268,7 @@ mod tests {
             },
         );
         engine.on_da_route_lost(1, DaRouteError::HelperUnavailable("lost".into()));
-        assert!(!engine.has_pending(1, 7));
+        assert!(!engine.has_pending(1, rid(7)));
         let event = engine.route_events.pop_front().unwrap();
         engine.accept(&event).unwrap();
         assert_eq!(engine.session(1).unwrap().state, SessionState::Disconnected);
@@ -1223,7 +1309,7 @@ mod tests {
         view.read_in_flight = true;
         engine.sessions.insert(1, view);
         engine.requests.insert(
-            (1, 19),
+            (1, rid(19)),
             PendingRequest {
                 operation: Operation::Read,
                 sent: Instant::now() - Duration::from_secs(100),
@@ -1234,6 +1320,7 @@ mod tests {
         engine.expire_requests(Instant::now(), 1);
         assert_eq!(engine.route_events.len(), 1);
         let timeout = engine.route_events.pop_front().unwrap();
+        assert_eq!(timeout.origin, Origin::Reply(rid(19)));
         assert!(matches!(
             timeout.kind,
             EventKind::Error {
@@ -1247,7 +1334,7 @@ mod tests {
             engine
                 .accept(&Event {
                     session: 1,
-                    request_id: 19,
+                    origin: Origin::Reply(rid(19)),
                     kind: EventKind::Values { values: vec![] }
                 })
                 .is_err()
@@ -1265,7 +1352,7 @@ mod tests {
         view.items.insert(key(1), false);
         engine.sessions.insert(1, view);
         engine.requests.insert(
-            (1, 9),
+            (1, rid(9)),
             PendingRequest {
                 operation: Operation::AddItems,
                 sent: Instant::now() - Duration::from_secs(100),
@@ -1273,7 +1360,7 @@ mod tests {
             },
         );
         engine.pending_adds.insert(
-            (1, 9),
+            (1, rid(9)),
             [(key(2), false), (key(3), false)].into_iter().collect(),
         );
         engine
@@ -1283,7 +1370,7 @@ mod tests {
         let mut engine = pending_add_engine();
         engine
             .accept(&Event {
-                request_id: 0,
+                origin: Origin::Unsolicited,
                 session: 1,
                 kind: EventKind::PollOnly {
                     keys: vec![key(2), key(3)],
@@ -1297,7 +1384,7 @@ mod tests {
         };
         engine
             .accept(&Event {
-                request_id: 9,
+                origin: Origin::Reply(rid(9)),
                 session: 1,
                 kind: EventKind::AddItems {
                     results: vec![
@@ -1331,7 +1418,7 @@ mod tests {
         };
         engine
             .accept(&Event {
-                request_id: 9,
+                origin: Origin::Reply(rid(9)),
                 session: 1,
                 kind: EventKind::AddItems {
                     results: vec![(key(2), Ok(info))],
@@ -1364,7 +1451,7 @@ mod tests {
         engine
             .accept(&Event {
                 session: 1,
-                request_id: connect,
+                origin: Origin::Reply(connect),
                 kind: EventKind::Connected {
                     endpoint,
                     info: BackendMsg::raw("connected"),
@@ -1372,7 +1459,7 @@ mod tests {
             })
             .unwrap();
         engine.requests.insert(
-            (1, 50),
+            (1, rid(50)),
             PendingRequest {
                 operation: Operation::AddItems,
                 sent: Instant::now(),
@@ -1381,11 +1468,11 @@ mod tests {
         );
         engine
             .pending_adds
-            .insert((1, 50), [(key(4), false)].into_iter().collect());
+            .insert((1, rid(50)), [(key(4), false)].into_iter().collect());
         engine
             .accept(&Event {
                 session: 1,
-                request_id: 50,
+                origin: Origin::Reply(rid(50)),
                 kind: EventKind::AddItems {
                     results: vec![(key(4), Err(BackendMsg::raw("rejected")))],
                 },
@@ -1394,7 +1481,7 @@ mod tests {
         engine
             .accept(&Event {
                 session: 1,
-                request_id: 0,
+                origin: Origin::Unsolicited,
                 kind: EventKind::SubscriptionState {
                     state: SubscriptionState::Active,
                 },
@@ -1407,7 +1494,7 @@ mod tests {
     fn legacy_add_error_uses_correlated_operation_identity() {
         let mut engine = pending_add_engine();
         engine.route_events.push_back(Event {
-            request_id: 9,
+            origin: Origin::Reply(rid(9)),
             session: 1,
             kind: EventKind::Error {
                 operation: Operation::Add,
@@ -1434,7 +1521,7 @@ mod tests {
                 engine.route_events.pop_front().unwrap()
             } else {
                 Event {
-                    request_id: 9,
+                    origin: Origin::Reply(rid(9)),
                     session: 1,
                     kind: EventKind::Error {
                         operation: Operation::Add,
@@ -1461,7 +1548,7 @@ mod tests {
         view.state = SessionState::Connected;
         engine.sessions.insert(1, view);
         let disconnected = Event {
-            request_id: 0,
+            origin: Origin::Unsolicited,
             session: 1,
             kind: EventKind::Disconnected {
                 reason: BackendMsg::raw("lost"),
@@ -1475,7 +1562,7 @@ mod tests {
         engine.sessions.get_mut(&1).unwrap().state = SessionState::Connecting;
         engine
             .accept(&Event {
-                request_id: 0,
+                origin: Origin::Unsolicited,
                 session: 1,
                 kind: EventKind::Error {
                     operation: Operation::Connect,
@@ -1499,7 +1586,7 @@ mod tests {
         view.last_poll = Instant::now() - Duration::from_secs(10);
         engine.sessions.insert(1, view);
         engine.requests.insert(
-            (1, 22),
+            (1, rid(22)),
             PendingRequest {
                 operation: Operation::Read,
                 sent: Instant::now(),
@@ -1508,7 +1595,7 @@ mod tests {
         );
         engine
             .accept(&Event {
-                request_id: 0,
+                origin: Origin::Unsolicited,
                 session: 1,
                 kind: EventKind::Values { values: vec![] },
             })
@@ -1520,7 +1607,7 @@ mod tests {
         );
         engine
             .accept(&Event {
-                request_id: 22,
+                origin: Origin::Reply(rid(22)),
                 session: 1,
                 kind: EventKind::Values { values: vec![] },
             })
@@ -1542,7 +1629,7 @@ mod tests {
         view.read_in_flight = true;
         engine.sessions.insert(1, view);
         engine.requests.insert(
-            (1, 22),
+            (1, rid(22)),
             PendingRequest {
                 operation: Operation::Read,
                 sent: Instant::now(),
@@ -1551,7 +1638,7 @@ mod tests {
         );
         engine
             .accept(&Event {
-                request_id: 0,
+                origin: Origin::Unsolicited,
                 session: 1,
                 kind: EventKind::Error {
                     operation: Operation::Read,
@@ -1560,7 +1647,7 @@ mod tests {
             })
             .unwrap();
         assert!(engine.session(1).unwrap().read_in_flight);
-        assert!(engine.has_pending(1, 22));
+        assert!(engine.has_pending(1, rid(22)));
     }
     #[test]
     fn cap_cannot_be_bypassed_by_reusing_da_id() {
@@ -1601,7 +1688,7 @@ mod tests {
         view.read_in_flight = true;
         engine.sessions.insert(1, view);
         engine.requests.insert(
-            (1, 8),
+            (1, rid(8)),
             PendingRequest {
                 operation: Operation::Read,
                 sent: Instant::now(),
@@ -1614,12 +1701,12 @@ mod tests {
                 .send(1, Protocol::OpcUa, CommandKind::Disconnect, ())
                 .is_err()
         );
-        assert!(!engine.has_pending(1, 8));
+        assert!(!engine.has_pending(1, rid(8)));
         assert!(!engine.session(1).unwrap().read_in_flight);
         assert!(
             engine
                 .accept(&Event {
-                    request_id: 8,
+                    origin: Origin::Reply(rid(8)),
                     session: 1,
                     kind: EventKind::Values { values: vec![] }
                 })

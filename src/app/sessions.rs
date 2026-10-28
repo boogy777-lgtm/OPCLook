@@ -187,7 +187,19 @@ impl App {
                 return false;
             }
         } else {
-            self.send(id, endpoint.protocol, CommandKind::Connect { endpoint });
+            if self
+                .send(id, endpoint.protocol, CommandKind::Connect { endpoint })
+                .is_none()
+            {
+                if let Some(view) = self.sessions.iter_mut().find(|view| view.id == id) {
+                    view.state = SessionState::Disconnected;
+                    view.info = self.status.clone();
+                }
+                if self.dialogs.connect.open {
+                    self.dialogs.connect.error = Some(self.status.clone());
+                }
+                return false;
+            }
         }
         true
     }
@@ -277,6 +289,12 @@ impl App {
     /// stale and the tab stays visible + active. This is the only non-destructive
     /// teardown path; `remove_session` fully drops the container.
     pub fn disconnect_session(&mut self, session: SessionId) {
+        if !self.engine.has_request_capacity() {
+            let message = tr(self.lang(), Tr::RequestIdsExhausted).to_string();
+            self.status = message.clone();
+            self.journal.error(message);
+            return;
+        }
         self.cancel_add_children(session);
         if self.dialogs.connect.connecting == Some(session) {
             self.dialogs.connect.connecting = None;
@@ -291,7 +309,12 @@ impl App {
             (view.protocol(), view.endpoint.display_name())
         };
         self.engine.manual_disconnect(session);
-        self.send(session, protocol, CommandKind::Disconnect);
+        if self
+            .send(session, protocol, CommandKind::Disconnect)
+            .is_none()
+        {
+            return;
+        }
         if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
             view.state = SessionState::Disconnected;
             // A manual disconnect is not a lost link: Stopped prevents both the
@@ -312,6 +335,12 @@ impl App {
     /// This disconnects the server and removes the session and all its rows.
     /// It is the only destructive way to remove a container.
     pub fn remove_session(&mut self, session: SessionId) {
+        if !self.engine.has_request_capacity() {
+            let message = tr(self.lang(), Tr::RequestIdsExhausted).to_string();
+            self.status = message.clone();
+            self.journal.error(message);
+            return;
+        }
         self.cancel_add_children(session);
         if self.dialogs.connect.connecting == Some(session) {
             self.dialogs.connect.connecting = None;
@@ -323,7 +352,12 @@ impl App {
             };
             (view.protocol(), view.endpoint.display_name())
         };
-        self.send(session, protocol, CommandKind::Disconnect);
+        if self
+            .send(session, protocol, CommandKind::Disconnect)
+            .is_none()
+        {
+            return;
+        }
         self.rows.retain(|row| row.session != session);
         self.selected_rows
             .retain(|key| self.rows.iter().any(|row| row.key == *key));
@@ -420,6 +454,14 @@ impl App {
             self.journal.warn_l(Tr::AttemptsExhausted20, &[]);
             return;
         }
+        if !self.engine.has_request_capacity() {
+            self.engine.stop_reconnect(session);
+            self.project_session(session);
+            let message = tr(self.lang(), Tr::RequestIdsExhausted).to_string();
+            self.status = message.clone();
+            self.journal.error(message);
+            return;
+        }
         let lang = self.lang();
         let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) else {
             return;
@@ -432,8 +474,17 @@ impl App {
         view.read_in_flight = false;
         let protocol = endpoint.protocol;
         // Old replies belong to the previous link and must not mutate this one.
+        if let Err(message) = self.engine.disconnect_untracked(session, protocol) {
+            self.engine.manual_disconnect(session);
+            if let Some(view) = self.sessions.iter_mut().find(|view| view.id == session) {
+                view.state = SessionState::Disconnected;
+                view.info = message.clone();
+            }
+            self.status = message.clone();
+            self.journal.error(message);
+            return;
+        }
         self.clear_pending_requests(session);
-        self.send(session, protocol, CommandKind::Disconnect);
         if protocol == Protocol::OpcDa {
             if let Err(error) =
                 self.send_da_prepared(session, CommandKind::Connect { endpoint }, PendingCtx::None)
@@ -447,7 +498,17 @@ impl App {
                 self.journal.error(message);
             }
         } else {
-            self.send(session, protocol, CommandKind::Connect { endpoint });
+            if self
+                .send(session, protocol, CommandKind::Connect { endpoint })
+                .is_none()
+            {
+                self.engine.manual_disconnect(session);
+                if let Some(view) = self.sessions.iter_mut().find(|view| view.id == session) {
+                    view.state = SessionState::Disconnected;
+                    view.info = self.status.clone();
+                }
+                return;
+            }
         }
         self.journal
             .info_l(Tr::AutoReconnectAtt, &[&attempt.to_string()]);
@@ -470,6 +531,12 @@ impl App {
     }
 
     pub fn reconnect_session(&mut self, session: SessionId) {
+        if !self.engine.has_request_capacity() {
+            let message = tr(self.lang(), Tr::RequestIdsExhausted).to_string();
+            self.status = message.clone();
+            self.journal.error(message);
+            return;
+        }
         self.engine.resume_reconnect(session);
         let Some(endpoint) = self
             .sessions
@@ -488,8 +555,17 @@ impl App {
         view.reconnect = ReconnectState::Idle;
         view.read_in_flight = false;
         let protocol = endpoint.protocol;
+        if let Err(message) = self.engine.disconnect_untracked(session, protocol) {
+            self.engine.manual_disconnect(session);
+            if let Some(view) = self.sessions.iter_mut().find(|view| view.id == session) {
+                view.state = SessionState::Disconnected;
+                view.info = message.clone();
+            }
+            self.status = message.clone();
+            self.journal.error(message);
+            return;
+        }
         self.clear_pending_requests(session);
-        self.send(session, protocol, CommandKind::Disconnect);
         if protocol == Protocol::OpcDa {
             if let Err(error) =
                 self.send_da_prepared(session, CommandKind::Connect { endpoint }, PendingCtx::None)
@@ -503,7 +579,17 @@ impl App {
                 self.journal.error(message);
             }
         } else {
-            self.send(session, protocol, CommandKind::Connect { endpoint });
+            if self
+                .send(session, protocol, CommandKind::Connect { endpoint })
+                .is_none()
+            {
+                self.engine.manual_disconnect(session);
+                if let Some(view) = self.sessions.iter_mut().find(|view| view.id == session) {
+                    view.state = SessionState::Disconnected;
+                    view.info = self.status.clone();
+                }
+                return;
+            }
         }
         self.journal.info_l(Tr::ReconnectRestoring, &[]);
     }

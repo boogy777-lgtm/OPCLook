@@ -6,9 +6,9 @@ use crate::i18n::{Tr, fmt, tr};
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Utc};
 
 impl App {
-    pub fn add_items(&mut self, session: SessionId, items: Vec<(String, String)>) {
+    pub fn add_items(&mut self, session: SessionId, items: Vec<(String, String)>) -> bool {
         let Some(view) = self.sessions.iter().find(|s| s.id == session) else {
-            return;
+            return false;
         };
         let protocol = view.protocol();
         let server_label = view.endpoint.display_name();
@@ -62,16 +62,24 @@ impl App {
             if !exhausted {
                 self.journal.info_l(Tr::AddFailedEmpty, &[]);
             }
-            return;
+            return false;
         }
         let keys: Vec<ItemKey> = specs.iter().map(|spec| spec.key).collect();
-        self.send_with(
-            session,
-            protocol,
-            CommandKind::AddItems { items: specs },
-            PendingCtx::AddKeys(keys),
-        );
-        self.journal.info_l(Tr::AddedSignals, &[&added.to_string()]);
+        if self
+            .send_with(
+                session,
+                protocol,
+                CommandKind::AddItems { items: specs },
+                PendingCtx::AddKeys(keys.clone()),
+            )
+            .is_some()
+        {
+            self.journal.info_l(Tr::AddedSignals, &[&added.to_string()]);
+            true
+        } else {
+            self.remove_rows(&keys.into_iter().collect());
+            false
+        }
     }
 
     pub(super) fn register_rows(&mut self, session: SessionId) {
@@ -91,12 +99,19 @@ impl App {
         }
         if !specs.is_empty() {
             let keys: Vec<ItemKey> = specs.iter().map(|spec| spec.key).collect();
-            self.send_with(
-                session,
-                protocol,
-                CommandKind::AddItems { items: specs },
-                PendingCtx::AddKeys(keys),
-            );
+            if self
+                .send_with(
+                    session,
+                    protocol,
+                    CommandKind::AddItems { items: specs },
+                    PendingCtx::AddKeys(keys.clone()),
+                )
+                .is_none()
+            {
+                for row in self.rows.iter_mut().filter(|row| keys.contains(&row.key)) {
+                    row.pending = false;
+                }
+            }
         }
     }
 
@@ -118,17 +133,28 @@ impl App {
                 }
             }
         }
+        let mut removed = std::collections::HashSet::new();
         for (session, protocol, keys) in by_session {
-            self.send(session, protocol, CommandKind::RemoveItems { keys });
+            if self
+                .send(
+                    session,
+                    protocol,
+                    CommandKind::RemoveItems { keys: keys.clone() },
+                )
+                .is_some()
+            {
+                removed.extend(keys);
+            }
         }
-        let count = self.selected_rows.len();
-        self.rows
-            .retain(|row| !self.selected_rows.contains(&row.key));
-        self.selected_rows.clear();
+        let count = removed.len();
+        self.remove_rows(&removed);
+        self.selected_rows.retain(|key| !removed.contains(key));
         self.table_focus = None;
         self.table_anchor = None;
-        self.journal
-            .info_l(Tr::RemovedSignals, &[&count.to_string()]);
+        if count > 0 {
+            self.journal
+                .info_l(Tr::RemovedSignals, &[&count.to_string()]);
+        }
     }
 }
 
@@ -283,30 +309,38 @@ impl App {
     }
 
     pub(super) fn perform_write(&mut self, pending: PendingWrites) {
-        let count = pending.requests.len();
+        let starting_new_batch = self.pending_writes == 0;
+        let mut count = 0;
         for request in pending.requests {
             let key = request.key;
-            self.send_with(
-                pending.session,
-                pending.protocol,
-                CommandKind::Write { request },
-                PendingCtx::WriteKey(key),
-            );
+            if self
+                .send_with(
+                    pending.session,
+                    pending.protocol,
+                    CommandKind::Write { request },
+                    PendingCtx::WriteKey(key),
+                )
+                .is_some()
+            {
+                if starting_new_batch && count == 0 {
+                    self.write_total = 0;
+                    self.write_ok = 0;
+                    self.write_err = 0;
+                    self.last_write_summary = None;
+                }
+                count += 1;
+                self.pending_writes += 1;
+                self.write_total += 1;
+            }
         }
-        self.dialogs.write.open = false;
-        // A11: a batch started while an earlier one is still running adds to
-        // the same counters; they restart only when nothing is outstanding.
-        if self.pending_writes == 0 {
-            self.write_total = 0;
-            self.write_ok = 0;
-            self.write_err = 0;
+        if count > 0 {
+            self.dialogs.write.open = false;
         }
-        self.pending_writes += count;
-        self.write_total += count;
-        self.last_write_summary = None;
         let type_label = pending.type_label.clone();
-        self.journal
-            .info_l(Tr::WriteRequested, &[&count.to_string(), &type_label]);
+        if count > 0 {
+            self.journal
+                .info_l(Tr::WriteRequested, &[&count.to_string(), &type_label]);
+        }
     }
 
     /// Execute a queued confirm-dialog action (Yes).

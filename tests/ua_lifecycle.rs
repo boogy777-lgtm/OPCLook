@@ -45,7 +45,7 @@ fn wait_for(
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         while let Some(event) = gateway.try_recv() {
-            if event.request_id != request_id || event.session != session {
+            if event.origin != request_id.into() || event.session != session {
                 continue;
             }
             if predicate(&event.kind) {
@@ -61,7 +61,7 @@ fn connect(gateway: &Gateway, session: u64) -> Event {
     wait_for(
         gateway,
         Command {
-            request_id: next_id(),
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
             session,
             protocol: Protocol::OpcUa,
             kind: CommandKind::Connect {
@@ -78,7 +78,7 @@ fn disconnect(gateway: &Gateway, session: u64) -> Event {
     wait_for(
         gateway,
         Command {
-            request_id: next_id(),
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
             session,
             protocol: Protocol::OpcUa,
             kind: CommandKind::Disconnect,
@@ -106,7 +106,7 @@ fn run_cycle(gateway: &Gateway, session: u64, cycle: u32) {
     let browse = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
             session,
             protocol: Protocol::OpcUa,
             kind: CommandKind::Browse {
@@ -135,7 +135,7 @@ fn run_cycle(gateway: &Gateway, session: u64, cycle: u32) {
     let add = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
             session,
             protocol: Protocol::OpcUa,
             kind: CommandKind::AddItems {
@@ -172,7 +172,7 @@ fn run_cycle(gateway: &Gateway, session: u64, cycle: u32) {
     let read = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
             session,
             protocol: Protocol::OpcUa,
             kind: CommandKind::Read { keys: vec![k1, k2] },
@@ -209,7 +209,7 @@ fn run_search(gateway: &Gateway, session: u64, index: u32) {
     let found = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
             session,
             protocol: Protocol::OpcUa,
             kind: CommandKind::SearchUaServers {

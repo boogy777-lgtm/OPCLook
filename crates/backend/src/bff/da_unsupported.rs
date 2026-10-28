@@ -36,7 +36,7 @@ fn reply(command: Command, tx: &Sender<Event>) {
         | CommandKind::CancelUaScan { .. } => {}
         kind => {
             let _ = tx.send(Event {
-                request_id: command.request_id,
+                origin: command.request_id.into(),
                 session: command.session,
                 kind: EventKind::Error {
                     operation: kind.operation(),

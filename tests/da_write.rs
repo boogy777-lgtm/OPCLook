@@ -46,7 +46,7 @@ fn wait_for(
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         while let Some(event) = gateway.try_recv() {
-            if event.request_id != request_id || event.session != session {
+            if event.origin != request_id.into() || event.session != session {
                 continue;
             }
             if predicate(&event.kind) {
@@ -90,7 +90,7 @@ fn da_write_roundtrip() {
         match wait_for(
             &gateway,
             Command {
-                request_id: next_id(),
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
                 session,
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::Connect {
@@ -116,7 +116,7 @@ fn da_write_roundtrip() {
         let browse = wait_for(
             &gateway,
             Command {
-                request_id: next_id(),
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
                 session,
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::Browse {
@@ -149,7 +149,7 @@ fn da_write_roundtrip() {
         let add = wait_for(
             &gateway,
             Command {
-                request_id: next_id(),
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
                 session,
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::AddItems {
@@ -185,7 +185,7 @@ fn da_write_roundtrip() {
         let read = wait_for(
             &gateway,
             Command {
-                request_id: next_id(),
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
                 session,
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::Read {
@@ -213,7 +213,7 @@ fn da_write_roundtrip() {
         let write_ok = wait_for(
             &gateway,
             Command {
-                request_id: next_id(),
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
                 session,
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::Write {
@@ -240,7 +240,7 @@ fn da_write_roundtrip() {
     let _ = wait_for(
         &gateway,
         Command {
-            request_id: next_id(),
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
             session,
             protocol: Protocol::OpcDa,
             kind: CommandKind::Disconnect,

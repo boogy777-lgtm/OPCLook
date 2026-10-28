@@ -447,7 +447,7 @@ pub(super) fn scan_server_key(server: &UaServerInfo) -> ScanServerKey {
 
 fn send_scan_event(tx: &Sender<Event>, kind: EventKind) {
     let _ = tx.send(Event {
-        request_id: 0,
+        origin: crate::bff::model::Origin::Unsolicited,
         session: 0,
         kind,
     });

@@ -9,7 +9,7 @@ use support::dfb::Dfb;
 
 fn test_command() -> Command {
     Command {
-        request_id: 1,
+        request_id: opcda_egui::bff::model::RequestId::new(1),
         session: 1,
         protocol: Protocol::OpcUa,
         kind: CommandKind::Test,

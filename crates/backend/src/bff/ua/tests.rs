@@ -218,7 +218,7 @@ fn ua_type_name_mapping() {
 
 fn cmd(kind: CommandKind) -> Command {
     Command {
-        request_id: 0,
+        request_id: None,
         session: 1,
         protocol: Protocol::OpcUa,
         kind,

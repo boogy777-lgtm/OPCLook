@@ -55,7 +55,7 @@ pub(super) fn spawn(event_tx: Sender<Event>) -> crate::bff::WorkerHandle {
                 Ok(rt) => rt,
                 Err(err) => {
                     let _ = event_tx.send(Event {
-                        request_id: 0,
+                        origin: crate::bff::model::Origin::Unsolicited,
                         session: 0,
                         kind: EventKind::Error {
                             operation: Operation::UaRuntime,
@@ -91,7 +91,7 @@ enum Internal {
     ConnectEnded {
         session: SessionId,
         generation: u64,
-        request_id: u64,
+        request_id: Option<crate::bff::model::RequestId>,
         message: BackendMsg,
     },
     /// An actor has finished and released its session.
@@ -101,7 +101,7 @@ enum Internal {
 struct Ready {
     session: SessionId,
     generation: u64,
-    request_id: u64,
+    request_id: Option<crate::bff::model::RequestId>,
     endpoint: EndpointSpec,
     info: BackendMsg,
     commands: UnboundedSender<ActorMsg>,
@@ -191,7 +191,7 @@ impl Host {
                             send(
                                 &tx,
                                 Event {
-                                    request_id,
+                                    origin: request_id.into(),
                                     session,
                                     kind: EventKind::UaServersFound {
                                         host,
@@ -216,7 +216,7 @@ impl Host {
                             send(
                                 &tx,
                                 Event {
-                                    request_id,
+                                    origin: request_id.into(),
                                     session,
                                     kind: EventKind::UaNetworkFound {
                                         servers: searched.found,
@@ -285,7 +285,12 @@ impl Host {
         self.tails.insert(session, joined);
     }
 
-    fn start_connect(&mut self, request_id: u64, session: SessionId, endpoint: EndpointSpec) {
+    fn start_connect(
+        &mut self,
+        request_id: Option<crate::bff::model::RequestId>,
+        session: SessionId,
+        endpoint: EndpointSpec,
+    ) {
         if self.live(session).is_some() {
             send_error(
                 &self.event_tx,
@@ -464,7 +469,7 @@ impl Host {
         send(
             &self.event_tx,
             Event {
-                request_id,
+                origin: request_id.into(),
                 session,
                 kind: EventKind::Connected { endpoint, info },
             },
@@ -553,7 +558,10 @@ impl Host {
     }
 }
 
-fn command_for_disconnect(request_id: u64, session: SessionId) -> Command {
+fn command_for_disconnect(
+    request_id: Option<crate::bff::model::RequestId>,
+    session: SessionId,
+) -> Command {
     Command {
         request_id,
         session,
@@ -567,7 +575,7 @@ fn command_for_disconnect(request_id: u64, session: SessionId) -> Command {
 // ---------------------------------------------------------------------------
 
 struct ConnectJob {
-    request_id: u64,
+    request_id: Option<crate::bff::model::RequestId>,
     session: SessionId,
     generation: u64,
     endpoint: EndpointSpec,
@@ -768,7 +776,7 @@ impl Actor {
         match initial {
             InitialLoad::Finished(Err(cause)) => {
                 self.send_event(
-                    0,
+                    None,
                     EventKind::Log {
                         message: BackendMsg::StructTypesUnavailable {
                             cause: Box::new(cause),
@@ -779,7 +787,7 @@ impl Actor {
                     self.inbox.close();
                     self.session.close().await;
                     self.send_event(
-                        0,
+                        None,
                         EventKind::Disconnected {
                             reason: BackendMsg::SessionClosedAfterTimeout,
                         },
@@ -857,15 +865,20 @@ impl Actor {
         });
     }
 
-    fn send_error(&self, request_id: u64, operation: Operation, message: BackendMsg) {
+    fn send_error(
+        &self,
+        request_id: Option<crate::bff::model::RequestId>,
+        operation: Operation,
+        message: BackendMsg,
+    ) {
         send_error(&self.event_tx, request_id, self.id, operation, message);
     }
 
-    fn send_event(&self, request_id: u64, kind: EventKind) {
+    fn send_event(&self, request_id: Option<crate::bff::model::RequestId>, kind: EventKind) {
         send(
             &self.event_tx,
             Event {
-                request_id,
+                origin: request_id.into(),
                 session: self.id,
                 kind,
             },
@@ -932,7 +945,7 @@ impl Actor {
                     .apply_subscription_settings(publishing_interval_ms, deadband)
                     .await;
                 for message in problems {
-                    self.send_event(0, EventKind::Log { message });
+                    self.send_event(None, EventKind::Log { message });
                 }
                 if self.session.timed_out {
                     return self
@@ -951,7 +964,7 @@ impl Actor {
                     // A command may produce exactly one request-id-correlated
                     // reply; ancillary diagnostics are unsolicited (id 0) so
                     // they cannot consume the AddItems reply's pending entry.
-                    self.send_event(0, EventKind::Log { message });
+                    self.send_event(None, EventKind::Log { message });
                 }
                 self.send_event(request_id, EventKind::AddItems { results });
                 if self.session.timed_out {
@@ -967,7 +980,7 @@ impl Actor {
             }
             CommandKind::RemoveItems { keys } => {
                 for message in self.session.remove_items(&tx, &keys).await {
-                    self.send_event(0, EventKind::Log { message });
+                    self.send_event(None, EventKind::Log { message });
                 }
                 self.send_event(request_id, EventKind::Removed { keys });
                 if self.session.timed_out {
@@ -1041,7 +1054,7 @@ impl Actor {
     /// that stays open.
     async fn settle<T>(
         &mut self,
-        request_id: u64,
+        request_id: Option<crate::bff::model::RequestId>,
         operation: Operation,
         result: Result<T, BackendMsg>,
         on_success: impl FnOnce(T) -> EventKind,
@@ -1082,7 +1095,7 @@ impl Actor {
     /// `GRACEFUL_CLOSE_TIMEOUT`.
     async fn close_timed_out(
         &mut self,
-        request_id: u64,
+        request_id: Option<crate::bff::model::RequestId>,
         operation: Operation,
         message: BackendMsg,
     ) -> Flow {
@@ -1096,7 +1109,7 @@ impl Actor {
         // the session loss itself is an unsolicited runtime event, always
         // accepted.
         self.send_event(
-            0,
+            None,
             EventKind::Disconnected {
                 reason: BackendMsg::SessionClosedAfterTimeout,
             },
@@ -1120,7 +1133,7 @@ fn send_notes(tx: &Sender<Event>, session: SessionId, notes: Vec<BackendMsg>) {
         send(
             tx,
             Event {
-                request_id: 0,
+                origin: crate::bff::model::Origin::Unsolicited,
                 session,
                 kind: EventKind::Log { message },
             },
@@ -1130,7 +1143,7 @@ fn send_notes(tx: &Sender<Event>, session: SessionId, notes: Vec<BackendMsg>) {
 
 fn send_error(
     tx: &Sender<Event>,
-    request_id: u64,
+    request_id: Option<crate::bff::model::RequestId>,
     session: SessionId,
     operation: Operation,
     message: BackendMsg,
@@ -1138,7 +1151,7 @@ fn send_error(
     send(
         tx,
         Event {
-            request_id,
+            origin: request_id.into(),
             session,
             kind: EventKind::Error { operation, message },
         },
@@ -1170,7 +1183,7 @@ pub(super) fn reply_no_connection(tx: &Sender<Event>, command: Command) {
         CommandKind::Read { keys } => send(
             tx,
             Event {
-                request_id,
+                origin: request_id.into(),
                 session,
                 kind: EventKind::Values {
                     values: keys
@@ -1219,7 +1232,7 @@ mod initial_load_regression {
         runtime.block_on(async {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             tx.send(ActorMsg::Command(Command {
-                request_id: 8,
+                request_id: crate::bff::model::RequestId::new(8),
                 session: 1,
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Disconnect,
@@ -1233,7 +1246,7 @@ mod initial_load_regression {
             .await;
             assert!(matches!(
                 result,
-                Ok(InitialLoad::Disconnect(Command { request_id: 8, .. }))
+                Ok(InitialLoad::Disconnect(Command { request_id: Some(id), .. })) if id.get() == 8
             ));
         });
     }

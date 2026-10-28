@@ -38,7 +38,7 @@ fn wait_for(
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         while let Some(event) = gateway.try_recv() {
-            if event.request_id != request_id || event.session != session {
+            if event.origin != request_id.into() || event.session != session {
                 continue;
             }
             if predicate(&event.kind) {
@@ -54,7 +54,7 @@ fn connect(gateway: &Gateway, session: u64) -> Event {
     wait_for(
         gateway,
         Command {
-            request_id: next_id(),
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
             session,
             protocol: Protocol::OpcUa,
             kind: CommandKind::Connect {
@@ -71,7 +71,7 @@ fn disconnect(gateway: &Gateway, session: u64) {
     let _ = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
             session,
             protocol: Protocol::OpcUa,
             kind: CommandKind::Disconnect,
@@ -85,7 +85,7 @@ fn browse_children(gateway: &Gateway, session: u64, node_id: &str) -> Vec<Browse
     let event = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
             session,
             protocol: Protocol::OpcUa,
             kind: CommandKind::Browse {
@@ -154,7 +154,7 @@ fn add_items(gateway: &Gateway, session: u64, items: &[String]) -> Event {
     wait_for(
         gateway,
         Command {
-            request_id: next_id(),
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
             session,
             protocol: Protocol::OpcUa,
             kind: CommandKind::AddItems { items: specs },
@@ -169,7 +169,7 @@ fn read_value(gateway: &Gateway, session: u64, key: ItemKey) -> Value {
     let event = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
             session,
             protocol: Protocol::OpcUa,
             kind: CommandKind::Read { keys: vec![key] },
@@ -195,7 +195,7 @@ fn write_value(gateway: &Gateway, session: u64, key: ItemKey, value: Value) {
     let event = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
             session,
             protocol: Protocol::OpcUa,
             kind: CommandKind::Write {
@@ -295,7 +295,7 @@ fn find_writable(
         let wrote = wait_for(
             gateway,
             Command {
-                request_id: next_id(),
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
                 session,
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Write {
@@ -321,7 +321,7 @@ fn find_writable(
             // Not sticky -> write back the original so we don't leave the value mutated.
             gateway
                 .send(Command {
-                    request_id: next_id(),
+                    request_id: opcda_egui::bff::model::RequestId::new(next_id()),
                     session,
                     protocol: Protocol::OpcUa,
                     kind: CommandKind::Write {

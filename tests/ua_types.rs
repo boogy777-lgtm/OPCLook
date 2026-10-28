@@ -35,7 +35,7 @@ fn wait_for(
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         while let Some(event) = gateway.try_recv() {
-            if event.request_id != request_id || event.session != session {
+            if event.origin != request_id.into() || event.session != session {
                 continue;
             }
             if predicate(&event.kind) {
@@ -51,7 +51,7 @@ fn connect(gateway: &Gateway, session: u64) -> Event {
     wait_for(
         gateway,
         Command {
-            request_id: next_id(),
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
             session,
             protocol: Protocol::OpcUa,
             kind: CommandKind::Connect {
@@ -68,7 +68,7 @@ fn disconnect(gateway: &Gateway, session: u64) {
     let _ = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
             session,
             protocol: Protocol::OpcUa,
             kind: CommandKind::Disconnect,
@@ -99,7 +99,7 @@ fn browse(gateway: &Gateway, session: u64, node_id: &str) -> Vec<BrowseNode> {
     let event = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
             session,
             protocol: Protocol::OpcUa,
             kind: CommandKind::Browse {
@@ -122,7 +122,7 @@ fn read_values(gateway: &Gateway, session: u64, items: &[ItemSpec]) -> Event {
     wait_for(
         gateway,
         Command {
-            request_id: next_id(),
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
             session,
             protocol: Protocol::OpcUa,
             kind: CommandKind::AddItems {
@@ -137,7 +137,7 @@ fn read_values(gateway: &Gateway, session: u64, items: &[ItemSpec]) -> Event {
     wait_for(
         gateway,
         Command {
-            request_id: next_id(),
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
             session,
             protocol: Protocol::OpcUa,
             kind: CommandKind::Read { keys },
@@ -220,7 +220,7 @@ fn ua_variable_filter_browse_returns_variables_only() {
         let filtered = wait_for(
             gateway,
             Command {
-                request_id: next_id(),
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
                 session,
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Browse {
@@ -261,7 +261,7 @@ fn ua_browse_views_lists_views_and_browsing_in_them_does_not_error() {
         let views = wait_for(
             gateway,
             Command {
-                request_id: next_id(),
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
                 session,
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::BrowseViews,
@@ -289,7 +289,7 @@ fn ua_browse_views_lists_views_and_browsing_in_them_does_not_error() {
         let event = wait_for(
             gateway,
             Command {
-                request_id: next_id(),
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
                 session,
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Browse {
@@ -317,7 +317,7 @@ fn ua_resolve_browse_path_resolves_objects() {
         let resolved = wait_for(
             gateway,
             Command {
-                request_id: next_id(),
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
                 session,
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::ResolveBrowsePath {

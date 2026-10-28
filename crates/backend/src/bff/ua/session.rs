@@ -446,7 +446,7 @@ impl UaSession {
                     send(
                         tx,
                         Event {
-                            request_id: 0,
+                            origin: crate::bff::model::Origin::Unsolicited,
                             session: self.session_id,
                             kind: EventKind::PollOnly {
                                 keys: outcome.poll_only,
@@ -499,7 +499,7 @@ impl UaSession {
             DataChangeCallback::new(move |data_value: UaDataValue, item: &MonitoredItem| {
                 let Some(key) = ItemKey::new(item.client_handle()) else {
                     let _ = event_tx.send(Event {
-                        request_id: 0,
+                        origin: crate::bff::model::Origin::Unsolicited,
                         session: session_id,
                         kind: EventKind::Log {
                             message: BackendMsg::InvalidItemHandle,
@@ -508,7 +508,7 @@ impl UaSession {
                     return;
                 };
                 let _ = event_tx.send(Event {
-                    request_id: 0,
+                    origin: crate::bff::model::Origin::Unsolicited,
                     session: session_id,
                     kind: EventKind::Values {
                         values: vec![(key, ua_data_value_typed(&data_value, types.as_deref()))],
@@ -925,7 +925,7 @@ impl UaSession {
         send(
             tx,
             Event {
-                request_id: 0,
+                origin: crate::bff::model::Origin::Unsolicited,
                 session: self.session_id,
                 kind: EventKind::SubscriptionState { state },
             },
@@ -937,7 +937,7 @@ impl UaSession {
         send(
             tx,
             Event {
-                request_id: 0,
+                origin: crate::bff::model::Origin::Unsolicited,
                 session: self.session_id,
                 kind: EventKind::Log { message },
             },
@@ -1157,7 +1157,7 @@ pub(super) async fn connect(
         }
         Err(_) => {
             let _ = event_tx.send(Event {
-                request_id: 0,
+                origin: crate::bff::model::Origin::Unsolicited,
                 session: session_id,
                 kind: EventKind::Log {
                     message: BackendMsg::InvalidDiscoveredUaUrl,

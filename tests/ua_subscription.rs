@@ -29,7 +29,7 @@ fn test_url() -> String {
 }
 
 /// Drain events for a session until `predicate` matches or the timeout expires.
-/// Push events carry request_id == 0, so the filter is purely on the EventKind.
+/// Push events carry Origin::Unsolicited, so the filter is purely on the EventKind.
 fn wait_for(
     gateway: &Gateway,
     session: u64,
@@ -54,7 +54,7 @@ fn wait_for(
 fn connect(gateway: &Gateway, session: u64) {
     gateway
         .send(Command {
-            request_id: next_id(),
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
             session,
             protocol: Protocol::OpcUa,
             kind: CommandKind::Connect {
@@ -75,7 +75,7 @@ fn connect(gateway: &Gateway, session: u64) {
 fn send(gateway: &Gateway, session: u64, kind: CommandKind) {
     gateway
         .send(Command {
-            request_id: next_id(),
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
             session,
             protocol: Protocol::OpcUa,
             kind,
@@ -219,7 +219,7 @@ fn find_sticky_writable(gateway: &Gateway, session: u64) -> Option<(ItemKey, Str
             // Not sticky -> the PLC reverted it; restore and keep looking.
             gateway
                 .send(Command {
-                    request_id: next_id(),
+                    request_id: opcda_egui::bff::model::RequestId::new(next_id()),
                     session,
                     protocol: Protocol::OpcUa,
                     kind: CommandKind::Write {

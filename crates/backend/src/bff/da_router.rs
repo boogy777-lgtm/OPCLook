@@ -84,7 +84,7 @@ pub fn route_of(kind: &CommandKind) -> Route {
 
 fn error_event(command: &Command, operation: Operation, message: BackendMsg) -> Event {
     Event {
-        request_id: command.request_id,
+        origin: command.request_id.into(),
         session: command.session,
         kind: EventKind::Error { operation, message },
     }
@@ -132,7 +132,7 @@ pub fn no_connection_reply(command: &Command) -> Option<Event> {
         },
     };
     Some(Event {
-        request_id: command.request_id,
+        origin: command.request_id.into(),
         session: command.session,
         kind,
     })
@@ -267,7 +267,7 @@ impl<H: DaHost> Router<H> {
                 }));
                 if outcome.is_err() {
                     let _ = events.send(Event {
-                        request_id: 0,
+                        origin: crate::bff::model::Origin::Unsolicited,
                         session: id,
                         kind: EventKind::Log {
                             message: BackendMsg::DaSessionThreadCrashed,
@@ -327,7 +327,7 @@ impl<H: DaHost> Router<H> {
                 }));
                 if outcome.is_err() {
                     let _ = events.send(Event {
-                        request_id,
+                        origin: request_id.into(),
                         session,
                         kind: EventKind::Error {
                             operation: Operation::Discover,
@@ -339,7 +339,7 @@ impl<H: DaHost> Router<H> {
         match spawned {
             Ok(join) => self.discoveries.push(join),
             Err(e) => self.send(Event {
-                request_id,
+                origin: request_id.into(),
                 session,
                 kind: EventKind::Error {
                     operation: Operation::Discover,
@@ -419,7 +419,7 @@ mod tests {
 
     fn command(request_id: u64, session: SessionId, kind: CommandKind) -> Command {
         Command {
-            request_id,
+            request_id: crate::bff::model::RequestId::new(request_id),
             session,
             protocol: Protocol::OpcDa,
             kind,
@@ -484,7 +484,7 @@ mod tests {
                 let (request_id, sid) = (cmd.request_id, cmd.session);
                 let reply = |kind| {
                     let _ = events.send(Event {
-                        request_id,
+                        origin: request_id.into(),
                         session: sid,
                         kind,
                     });
@@ -569,7 +569,7 @@ mod tests {
                 }
             }
             let _ = events.send(Event {
-                request_id: command.request_id,
+                origin: command.request_id.into(),
                 session: command.session,
                 kind: EventKind::Servers {
                     host: String::new(),
@@ -588,8 +588,14 @@ mod tests {
         rx.recv_timeout(WAIT).expect("event expected")
     }
 
+    fn event_id(event: &Event) -> u64 {
+        match event.origin {
+            crate::bff::model::Origin::Reply(id) => id.get(),
+            crate::bff::model::Origin::Unsolicited => 0,
+        }
+    }
     fn is_kind(event: &Event, request_id: u64) -> bool {
-        event.request_id == request_id
+        event_id(event) == request_id
     }
 
     #[test]
@@ -645,7 +651,7 @@ mod tests {
             },
         ));
         release.send(()).unwrap();
-        let ids: Vec<u64> = (0..3).map(|_| next(&rx).request_id).collect();
+        let ids: Vec<u64> = (0..3).map(|_| event_id(&next(&rx))).collect();
         assert_eq!(ids, vec![1, 2, 3]);
     }
 
@@ -757,7 +763,7 @@ mod tests {
         }
         let mut seen = std::collections::HashMap::<u64, usize>::new();
         while let Ok(event) = rx.recv_timeout(Duration::from_millis(300)) {
-            *seen.entry(event.request_id).or_default() += 1;
+            *seen.entry(event_id(&event)).or_default() += 1;
         }
         for id in 2..6 {
             assert_eq!(
@@ -852,7 +858,7 @@ mod tests {
         router.dispatch(command(2, 1, CommandKind::Test));
         let mut seen = std::collections::HashSet::new();
         while let Ok(event) = rx.recv_timeout(Duration::from_millis(500)) {
-            seen.insert(event.request_id);
+            seen.insert(event_id(&event));
             if let EventKind::Log { message } = &event.kind {
                 assert!(!crate::i18n::backend_text(crate::i18n::Lang::En, &message).is_empty());
             }
@@ -884,11 +890,11 @@ mod tests {
                 host: "other".into(),
             },
         ));
-        let mut got = [next(&rx).request_id, next(&rx).request_id];
+        let mut got = [event_id(&next(&rx)), event_id(&next(&rx))];
         got.sort_unstable();
         assert_eq!(got, [2, 3]);
         disc_release.send(()).unwrap();
-        assert_eq!(next(&rx).request_id, 1);
+        assert_eq!(event_id(&next(&rx)), 1);
     }
 
     #[test]

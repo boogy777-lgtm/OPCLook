@@ -8,18 +8,18 @@ use std::time::{Duration, Instant};
 
 fn main() -> Result<(), String> {
     let probe = Probe::new();
-    let mut request = 1u64;
+    let mut request = opcda_egui::bff::model::RequestId::FIRST;
     let session = 7u64;
 
     probe.send(Command {
-        request_id: request,
+        request_id: Some(request),
         session: 0,
         protocol: Protocol::OpcDa,
         kind: CommandKind::Discover {
             host: String::new(),
         },
     })?;
-    request += 1;
+    request = request.successor().ok_or("request identifiers exhausted")?;
 
     let Some(servers) = wait(&probe, Duration::from_secs(20), |event| {
         matches!(
@@ -41,14 +41,14 @@ fn main() -> Result<(), String> {
     println!("Using server {id}");
 
     probe.send(Command {
-        request_id: request,
+        request_id: Some(request),
         session,
         protocol: Protocol::OpcDa,
         kind: CommandKind::Connect {
             endpoint: EndpointSpec::da(String::new(), id.clone()),
         },
     })?;
-    request += 1;
+    request = request.successor().ok_or("request identifiers exhausted")?;
 
     let Some(connected) = wait(&probe, Duration::from_secs(20), |event| {
         matches!(
@@ -65,7 +65,7 @@ fn main() -> Result<(), String> {
     }
 
     probe.send(Command {
-        request_id: request,
+        request_id: Some(request),
         session,
         protocol: Protocol::OpcDa,
         kind: CommandKind::Browse {
@@ -74,7 +74,7 @@ fn main() -> Result<(), String> {
             view_id: None,
         },
     })?;
-    request += 1;
+    request = request.successor().ok_or("request identifiers exhausted")?;
 
     let Some(root) = wait(&probe, Duration::from_secs(20), |event| {
         matches!(
@@ -106,7 +106,7 @@ fn main() -> Result<(), String> {
     if item.is_none() {
         if let Some(branch) = branch {
             probe.send(Command {
-                request_id: request,
+                request_id: Some(request),
                 session,
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::Browse {
@@ -115,7 +115,7 @@ fn main() -> Result<(), String> {
                     view_id: None,
                 },
             })?;
-            request += 1;
+            request = request.successor().ok_or("request identifiers exhausted")?;
             if let Some(event) = wait(&probe, Duration::from_secs(20), |event| {
                 matches!(
                     event.kind,
@@ -143,17 +143,17 @@ fn main() -> Result<(), String> {
     };
 
     probe.send(Command {
-        request_id: request,
+        request_id: Some(request),
         session,
         protocol: Protocol::OpcDa,
         kind: CommandKind::AddItems {
             items: vec![ItemSpec {
-                key: 1,
+                key: opcda_egui::bff::model::ItemKey::FIRST,
                 item_id: item_id.clone(),
             }],
         },
     })?;
-    request += 1;
+    request = request.successor().ok_or("request identifiers exhausted")?;
     if let Some(event) = wait(&probe, Duration::from_secs(20), |event| {
         matches!(
             event.kind,
@@ -164,14 +164,14 @@ fn main() -> Result<(), String> {
     }
 
     probe.send(Command {
-        request_id: request,
+        request_id: Some(request),
         session,
         protocol: Protocol::OpcDa,
         kind: CommandKind::Read {
-            keys: vec![1 as ItemKey],
+            keys: vec![ItemKey::FIRST],
         },
     })?;
-    request += 1;
+    request = request.successor().ok_or("request identifiers exhausted")?;
     if let Some(event) = wait(&probe, Duration::from_secs(20), |event| {
         matches!(
             event.kind,
@@ -204,9 +204,13 @@ fn main() -> Result<(), String> {
     Ok(())
 }
 
-fn disconnect(probe: &Probe, session: u64, request: u64) -> Result<(), String> {
+fn disconnect(
+    probe: &Probe,
+    session: u64,
+    request: opcda_egui::bff::model::RequestId,
+) -> Result<(), String> {
     probe.send(Command {
-        request_id: request,
+        request_id: Some(request),
         session,
         protocol: Protocol::OpcDa,
         kind: CommandKind::Disconnect,

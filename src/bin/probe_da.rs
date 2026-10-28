@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 fn main() -> Result<(), String> {
     let probe = Probe::new();
     probe.send(Command {
-        request_id: 1,
+        request_id: Some(opcda_egui::bff::model::RequestId::FIRST),
         session: 0,
         protocol: Protocol::OpcDa,
         kind: CommandKind::Discover {

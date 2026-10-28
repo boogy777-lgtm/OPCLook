@@ -28,7 +28,7 @@ fn wait_for(
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         while let Some(event) = gateway.try_recv() {
-            if event.request_id != request_id || event.session != session {
+            if event.origin != request_id.into() || event.session != session {
                 continue;
             }
             if predicate(&event.kind) {
@@ -44,7 +44,7 @@ fn connect(gateway: &Gateway, session: u64) -> Event {
     wait_for(
         gateway,
         Command {
-            request_id: next_id(),
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
             session,
             protocol: Protocol::OpcUa,
             kind: CommandKind::Connect {
@@ -61,7 +61,7 @@ fn disconnect(gateway: &Gateway, session: u64) {
     let _ = wait_for(
         gateway,
         Command {
-            request_id: next_id(),
+            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
             session,
             protocol: Protocol::OpcUa,
             kind: CommandKind::Disconnect,
@@ -95,7 +95,7 @@ fn server_browse_add_and_read() {
         let browse = wait_for(
             gateway,
             Command {
-                request_id: next_id(),
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
                 session,
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Browse {
@@ -120,7 +120,7 @@ fn server_browse_add_and_read() {
         let add = wait_for(
             gateway,
             Command {
-                request_id: next_id(),
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
                 session,
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::AddItems {
@@ -151,7 +151,7 @@ fn server_browse_add_and_read() {
         let read = wait_for(
             gateway,
             Command {
-                request_id: next_id(),
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
                 session,
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Read {
@@ -214,7 +214,7 @@ fn server_invalid_node_read_does_not_panic() {
         let add = wait_for(
             gateway,
             Command {
-                request_id: next_id(),
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
                 session,
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::AddItems {
@@ -236,7 +236,7 @@ fn server_invalid_node_read_does_not_panic() {
         let read = wait_for(
             gateway,
             Command {
-                request_id: next_id(),
+                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
                 session,
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Read {

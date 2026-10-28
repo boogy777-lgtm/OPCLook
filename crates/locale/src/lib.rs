@@ -3673,6 +3673,7 @@ mod tests {
             ),
             (BackendMsg::Lines(vec![BackendMsg::raw("§v§")]), vec!["§v§"]),
             (BackendMsg::NoConnection, vec![]),
+            (BackendMsg::InvalidItemHandle, vec![]),
             (BackendMsg::SessionAlreadyConnected, vec![]),
             (BackendMsg::ConnectInProgress, vec![]),
             (BackendMsg::ConnectCancelled, vec![]),

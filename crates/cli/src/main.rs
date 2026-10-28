@@ -214,7 +214,11 @@ fn redact(mut text: String, endpoint: &EndpointSpec) -> String {
 fn message(msg: &BackendMsg, endpoint: &EndpointSpec) -> String {
     redact(backend_text(Lang::En, msg), endpoint)
 }
-fn send(engine: &mut Engine<()>, protocol: Protocol, kind: CommandKind) -> Result<u64, String> {
+fn send(
+    engine: &mut Engine<()>,
+    protocol: Protocol,
+    kind: CommandKind,
+) -> Result<opclook_contract::model::RequestId, String> {
     engine
         .send(1, protocol, kind, ())
         .map_err(|error| match error {
@@ -300,7 +304,7 @@ fn next_event(
 }
 fn response(
     engine: &mut Engine<()>,
-    request: u64,
+    request: opclook_contract::model::RequestId,
     timeout: Duration,
     stop: &Receiver<Result<(), String>>,
     endpoint: &EndpointSpec,
@@ -308,7 +312,7 @@ fn response(
     let deadline = Instant::now() + timeout;
     loop {
         let event = next_event(engine, deadline, stop)?;
-        if event.request_id == request {
+        if event.origin == opclook_contract::model::Origin::Reply(request) {
             return match event.kind {
                 EventKind::Error { message: err, .. } => Err(message(&err, endpoint)),
                 kind => Ok(kind),
@@ -625,7 +629,9 @@ fn run(options: &Options) -> Result<(), String> {
         if engine.accept(&event).is_err() {
             continue;
         }
-        if options.poll && event.request_id == 0 && matches!(&event.kind, EventKind::Values { .. })
+        if options.poll
+            && event.origin == opclook_contract::model::Origin::Unsolicited
+            && matches!(&event.kind, EventKind::Values { .. })
         {
             continue;
         }

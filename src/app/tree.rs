@@ -74,6 +74,7 @@ impl App {
             Some(id) if !node_id.is_empty() => PendingCtx::TreeItem(id),
             _ => PendingCtx::None,
         };
+        let is_root = node_id.is_empty();
         let request_id = self.send_with(
             session,
             protocol,
@@ -84,9 +85,18 @@ impl App {
             },
             ctx,
         );
-        self.engine
-            .has_pending(session, request_id)
-            .then_some(request_id)
+        if request_id.is_none() {
+            if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
+                if is_root {
+                    view.root_loading = false;
+                } else if let Some(id) = item_id {
+                    if let Some(item) = view.tree.iter_mut().find(|t| t.id == id) {
+                        item.loading = false;
+                    }
+                }
+            }
+        }
+        request_id
     }
 
     /// Requests the list of server Views (UA) and, on success, seeds the tree
@@ -99,7 +109,14 @@ impl App {
         if protocol == Protocol::OpcUa {
             view.root_loading = true;
         }
-        self.send(session, protocol, CommandKind::BrowseViews);
+        if self
+            .send(session, protocol, CommandKind::BrowseViews)
+            .is_none()
+        {
+            if let Some(view) = self.sessions.iter_mut().find(|s| s.id == session) {
+                view.root_loading = false;
+            }
+        }
     }
 
     /// Sets the active server View for UA browsing. `None` returns to the
@@ -343,8 +360,8 @@ impl App {
         }
         if !items.is_empty() {
             let before = self.rows.len();
-            self.add_items(session, items);
-            if let Some(job) = self.add_children.as_mut() {
+            let sent = self.add_items(session, items);
+            if sent && let Some(job) = self.add_children.as_mut() {
                 job.added += self.rows.len().saturating_sub(before);
             }
         }
@@ -487,23 +504,20 @@ impl App {
                     name,
                 },
             );
-            if self.engine.has_pending(session, request_id) {
+            if let Some(request_id) = request_id {
                 self.dialogs.add_signal.resolving = Some((session, request_id));
             } else {
                 // The command never left (dead worker): the journal has the
                 // reason; say it in the dialog as well.
-                self.dialogs.add_signal.error = Some(
-                    self.sessions
-                        .iter()
-                        .find(|s| s.id == session)
-                        .map(|s| s.info.clone())
-                        .unwrap_or_default(),
-                );
+                self.dialogs.add_signal.error = Some(self.status.clone());
             }
             return;
         }
-        self.add_items(session, vec![(item_id, name)]);
-        self.close_add_signal_dialog();
+        if self.add_items(session, vec![(item_id, name)]) {
+            self.close_add_signal_dialog();
+        } else {
+            self.dialogs.add_signal.error = Some(self.status.clone());
+        }
     }
 
     /// Close «Добавить по имени» and reset its fields (also abandons a pending

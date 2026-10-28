@@ -400,7 +400,7 @@ future (E), измеренный 10k frame/allocation baseline и произво
 | Пункт | Состояние | Проверка и ограничения |
 |---|---|---|
 | ScanId | Ненулевой отдельный тип от GUI до scanner; checked выдача последнего значения ровно один раз, после исчерпания локализованная ошибка в UI и журнале | Linux exhaustion 1/1, scanner 10/10, stale UI 1/1; Windows i686 workspace all-targets typecheck с test-only флагами. Runtime и финальный exact-head CI ещё нужны |
-| SessionId, RequestId, ItemKey, Origin/Owner | Открыто | Сохраняются прежние sentinel и маршрутизация; нельзя считать этап A завершённым |
+| SessionId и Owner | Открыто | SessionId остаётся числовым alias, discovery использует session 0; RequestId, ItemKey и Origin выполнены в последующих checkpoints |
 
 PNG проверка UI и физические DA/UAC/маршруты остаются открытыми.
 
@@ -411,3 +411,5 @@ Request allocator уже использовал checked successor; теперь 
 ItemKey типизирован ненулевым приватным NonZeroU32; проверенная выдача сохраняет прежнее поведение исчерпания. UA и DA делают явные преобразования в wire handle, UA callback отклоняет zero и пишет локализованную диагностику; compile-fail проверяет несовместимость ItemKey/ScanId. Linux GUI exhaustion 1/1, headless удаление 1/1, contract compile-fail 1/1; Linux all-targets и Windows i686 workspace all-targets typecheck (test-only флаги) прошли. SessionId/RequestId и Origin/Owner ещё открыты, физический DA/UAC и Windows runtime не проверены.
 
 Измерено после ItemKey: Linux backend 199/199, Engine 19/19, CLI 6/6; Windows backend/CLI standalone all-targets typecheck без resource skip прошёл. Первый backend run выявил тестовый fallback, вычислявший недопустимый zero; исправлен и полный набор повторно прошёл.
+
+**2026-10-28 — A, RequestId и Origin:** RequestId — приватный ненулевой тип с checked successor; Event различает Reply и Unsolicited, Command несёт Option<RequestId>. Engine и DA/UA сохраняют корреляцию ответов, таймаут использует тот же токен, поздний ответ отбрасывается; внутренние Disconnect не расходуют ID. UI обрабатывает отказ отправки без ложного ожидания browse, search, scan, add, resolve, reconnect и записи; частичная запись корректно завершает ранее принятую часть при закрытии worker. Измерено на Linux: backend 200/200, CLI 6/6 и live 2/2, contract 25/25 и doctest 2/2, locale 9/9, Engine 20/20; GUI unit 196/196 и headless UI interactions 139/139 (1 ignored). Windows i686 workspace all-targets — только typecheck с test-only пропуском ресурсов, standalone backend/CLI — без пропуска; Linux и Windows diagnostics bins отдельно typechecked, Windows с test-only пропуском ресурсов; Windows runtime/DA/UAC и exact-head CI не проверены. SessionId/Owner (включая session 0 discovery), B/E/F/G/H, PNG и 10k baseline остаются открыты. В locale sample добавлен пропущенный InvalidItemHandle, обнаруженный Linux CI предыдущего checkpoint; проверка полноты не ослаблена.

@@ -331,7 +331,7 @@ impl Harness {
         self.next_request += 1;
         let request_id = self.next_request;
         let command = Command {
-            request_id,
+            request_id: crate::bff::model::RequestId::new(request_id),
             session,
             protocol: Protocol::OpcUa,
             kind,
@@ -377,7 +377,11 @@ impl Harness {
     /// The reply (`request_id`-correlated) to a command.
     pub fn reply(&mut self, request_id: u64, timeout: Duration) -> Option<Event> {
         self.wait(timeout, |event| {
-            (event.request_id == request_id).then(|| event.clone())
+            (event.origin
+                == crate::bff::model::Origin::Reply(
+                    crate::bff::model::RequestId::new(request_id).unwrap(),
+                ))
+            .then(|| event.clone())
         })
     }
 
@@ -846,7 +850,11 @@ fn u1_disconnect_is_reported_before_the_next_connect_of_the_same_session() {
     );
     let connected_at = |app: &Harness| {
         app.seen.iter().position(|(e, _)| {
-            matches!(e.kind, EventKind::Connected { .. }) && e.request_id == connect
+            matches!(e.kind, EventKind::Connected { .. })
+                && e.origin
+                    == crate::bff::model::Origin::Reply(
+                        crate::bff::model::RequestId::new(connect).unwrap(),
+                    )
         })
     };
     let reply = app
@@ -860,7 +868,11 @@ fn u1_disconnect_is_reported_before_the_next_connect_of_the_same_session() {
         .seen
         .iter()
         .position(|(e, _)| {
-            matches!(e.kind, EventKind::Disconnected { .. }) && e.request_id == disconnect
+            matches!(e.kind, EventKind::Disconnected { .. })
+                && e.origin
+                    == crate::bff::model::Origin::Reply(
+                        crate::bff::model::RequestId::new(disconnect).unwrap(),
+                    )
         })
         .expect("Disconnected was reported");
     let connected_at = connected_at(&app).expect("Connected was reported");
@@ -1328,7 +1340,7 @@ fn a9_network_search_reports_its_problems_as_journal_lines() {
     ));
     let mut lines = Vec::new();
     while let Some(message) = app.wait(Duration::from_millis(200), |event| match &event.kind {
-        EventKind::Log { message } if event.request_id == 0 => {
+        EventKind::Log { message } if event.origin == crate::bff::model::Origin::Unsolicited => {
             Some(crate::i18n::backend_text(crate::i18n::Lang::En, &message))
         }
         _ => None,
@@ -1379,7 +1391,7 @@ fn u15_the_named_lds_host_is_the_one_that_is_asked() {
     ));
     let mut lines = Vec::new();
     while let Some(line) = app.wait(Duration::from_millis(200), |event| match &event.kind {
-        EventKind::Log { message } if event.request_id == 0 => {
+        EventKind::Log { message } if event.origin == crate::bff::model::Origin::Unsolicited => {
             Some(crate::i18n::backend_text(crate::i18n::Lang::En, &message))
         }
         _ => None,

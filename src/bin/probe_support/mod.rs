@@ -15,7 +15,7 @@ impl Probe {
             .borrow_mut()
             .send(command.session, command.protocol, command.kind, ())
             .map_err(|error| format!("dispatch failed: {error:?}"))?;
-        if id != expected {
+        if Some(id) != expected {
             return Err("probe request sequence diverged".into());
         }
         Ok(())
