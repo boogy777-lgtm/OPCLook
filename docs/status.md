@@ -1,5 +1,11 @@
 # Статус
 
+**2026-10-28, продолжение этапа D:** COM/WinAPI ownership и safety lint
+продвинуты; подробная матрица реализации, проверок и открытых пунктов — в
+`docs/refactoring-status.md`. Локальная Windows i686 проверка типов и Clippy не
+являются выполнением Windows тестов. Текущий exact-head CI, реальный DA/UAC и
+остальные этапы плана ещё обязательны.
+
 **2026-10-28, ветка refactor/layers-headless:** первый этап проверки
 `docs/refactoring-plan.md` выполнен частично; статусы B1–B20 и оставшиеся
 проверки перечислены в `docs/refactoring-status.md`. GUI DA-подготовка теперь

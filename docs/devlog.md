@@ -211,3 +211,12 @@ Engine подтверждает AddItems по результатам каждо�
 Финальный Windows CI и реальный DA/UAC ещё не выполнены. PNG GUI не рендерился;
 его проверка и настоящий 10k frame/allocation benchmark переданы следующему
 UI/performance этапу. Grace-дренирование того же future при timeout сохранить.
+
+
+2026-10-28, этап D: guard для COM строк, массивов, VARIANT, статуса и группы;
+helper token/LocalAlloc/impersonation и системной библиотеки DNS; Windows
+safety lint расширен до изменённых платформенных модулей. Добавлены Windows
+регрессии B11/B12/B19 и resource cleanup, пока только typecheck. Локально
+измерено: locale 9/9, K1 GUI 1/1, diagnostics `cargo check`; финальный CI
+текущего head и внешние DA/UAC проверки открыты. См. матрицу
+`docs/refactoring-status.md`.

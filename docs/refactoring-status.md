@@ -158,3 +158,34 @@ Windows i686 `cargo check --locked --workspace --all-targets` прошёл с
 RAII COM/WinAPI и оставшиеся этапы newtype, enum, производительности и модулей.
 При последующем изменении timeout-дренирования сохранить grace-период того же
 future перед закрытием сессии; замена на отбрасывающий future timeout неверна.
+
+## Этап D: ownership и Windows safety (промежуточный отчёт)
+
+| Пункт | Реализация и проверка | Оставшееся |
+|---|---|---|
+| B11 | Guard разблокирует и уничтожает SAFEARRAY; Windows тест наблюдает первый BSTR, нулевой счётчик блокировок и успешный настоящий `SafeArrayDestroy` ровно один раз при ошибке вложенного элемента | Запуск теста на Windows CI; реальный DA |
+| B12 | COM mock успешно создаёт группу, возвращает интерфейс без `IOPCItemMgt`; тест проверяет один forced `RemoveGroup` | Запуск Windows CI; реальный DA |
+| B13 / CoString | Nullable COM-строки discovery, browse и ошибок обёрнуты guard; null-регрессия существует | Запуск текущего head на Windows CI |
+| B19 | Длина ограничивается в i64 до преобразования в 32-bit usize; тест полного диапазона i32 и реальные небольшие массивы с крайними нижними границами | Запуск Windows CI |
+| B20 / LocalAlloc | Дескриптор и SID helper освобождаются guard; ключ маршрута сохраняет next hop | Запуск Windows CI и реальный UAC/маршруты |
+| COM arrays / VARIANT | `ComArray` освобождает вложенные blobs и read VARIANT, `OwnedVariant` — запись; тест счётчика cleanup при ошибке/unwind | Windows runtime и реальный DA |
+| Группа / COM status | Группа защищена до передачи сессии; status и vendor освобождаются guard | Windows runtime |
+| WinAPI handles / tables | Guard для helper token, SID, дескриптора, процесса и IP Helper table; тест закрытия handle и тест возврата impersonation | Windows runtime, UAC и реальные маршруты; pipe connect worker может ждать до завершения процесса после timeout |
+| DNS / символы / UTF-16 | System32-only загрузка DLL с владением библиотекой; типизированные символы и общий конвертер; Windows тесты символов и Unicode | Windows runtime и сетевое обнаружение |
+| Безопасные границы | `deny(clippy::undocumented_unsafe_blocks)` в `com`, `da`, `da_variant`, `winutil`, DA route, Windows inventory, сетевом binding, Windows mDNS и helper; generated COM bindings не менялись | Независимый review инвариантов и финальный Windows CI; другие этапы и проверки плана не завершены |
+| Tr / diagnostics | enum и `ALL` генерируются вместе без transmute или последнего sentinel; dispatch ошибок probes проходит через Engine и `Result` | Полный gate актуального head |
+| CI-исправления | Тест свежего запроса использует детерминированный pending; после ошибки helper pipe и Tokio runtime уничтожаются вместе | Реальная Windows pipe-регрессия и финальный exact-head CI |
+
+Измерено локально: locale 9/9 и свежий K1 GUI-тест 1/1 на Linux; `cargo check`
+Linux диагностических binaries с feature `diagnostics` прошёл. Windows i686
+backend `--tests` и helper `--tests` прошли проверку типов и Clippy; для helper
+использован test-only `OPCLOOK_HELPER_TEST_NO_MANIFEST=1`. Clippy backend тестов
+запускался с командным `-A clippy::approx_constant` для ранее существовавшего
+тестового литерала; это не настройка исходников и не blanket allow. Windows
+тесты здесь не запускались. Rust 1.99.1 потребовал локальных codegen-units=1
+для `read-fonts`, `async-opcua-core-namespace` и host build scripts из-за
+повреждённого metadata/link output; изменения Cargo-конфигурации не коммитились.
+Все прежние числа Linux gate относятся к обозначенному старому head, не к
+этому этапу. Рендер PNG, 10k frame/allocation benchmark, реальные DA/UAC,
+pipe runtime, новые типы/enum, производительность и разделение модулей остаются
+открытыми. При изменении UA timeout сохранять grace-дренирование того же future.
