@@ -1,4 +1,5 @@
 //! Bounded route preparation and lease ownership off the frontend thread.
+use crate::constants::DA_ROUTE_REFRESH;
 use crate::da_route::{DaRouteManager, PreparedRoutes};
 use crate::net::AdapterInfo;
 use crate::route_resolver::{ResolveTicket, ResolverPool};
@@ -236,7 +237,7 @@ fn run(
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
             (manager.status(), manager.last_error().cloned());
-        if refresh.elapsed() >= Duration::from_secs(1800) {
+        if refresh.elapsed() >= DA_ROUTE_REFRESH {
             manager.refresh();
             refresh = Instant::now();
         }

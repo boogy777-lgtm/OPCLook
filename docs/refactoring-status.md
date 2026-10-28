@@ -249,3 +249,9 @@ PNG не рендерился; полный gate, Windows runtime и остал�
 код и отсутствие поля дают русский, запись сохраняет коды ru/en/zh. Linux
 settings 46/46, взаимодействие меню языка 1/1 и Windows GUI all-targets
  typecheck с test-only отключением ресурсов прошли. Остальные A/C открыты.
+
+Интервал refresh DA-маршрута централизован как Duration в backend и реально
+используется сервисом; compile-time assert проверяет refresh < lifetime и UA
+lifetime count >= 3 × keepalive. Wire lifetime остаётся u32 секундами. Linux
+тест констант 1/1, Windows i686 workspace all-targets typecheck с test-only
+флагами и fmt прошли; Windows runtime и остальная типизация времени открыты.

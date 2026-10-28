@@ -3,13 +3,6 @@ pub use opclook_backend::constants::*;
 pub use opclook_engine::constants::*;
 
 // ---------------------------------------------------------------------------
-// DA route steering
-// ---------------------------------------------------------------------------
-
-/// How often owned DA host routes are refreshed before their finite lifetime.
-pub const DA_ROUTE_REFRESH_SECS: u64 = 1800;
-
-// ---------------------------------------------------------------------------
 // UI layout / sizing
 // ---------------------------------------------------------------------------
 
@@ -173,8 +166,8 @@ mod tests {
     #[test]
     fn da_route_lifetime_is_finite_and_helper_wait_is_bounded() {
         assert!(DA_ROUTE_LIFETIME_SECS > 0);
-        assert!(DA_ROUTE_REFRESH_SECS > 0);
-        assert!(DA_ROUTE_REFRESH_SECS < u64::from(DA_ROUTE_LIFETIME_SECS));
+        assert!(!DA_ROUTE_REFRESH.is_zero());
+        assert!(DA_ROUTE_REFRESH < DA_ROUTE_LIFETIME);
         assert!(!DA_HELPER_START_TIMEOUT.is_zero());
         assert_eq!(DA_HELPER_PROTOCOL_VERSION, 2);
     }

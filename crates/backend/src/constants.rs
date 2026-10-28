@@ -49,6 +49,7 @@ pub const UA_SAMPLING_INTERVAL_MS: f64 = -1.0;
 /// Subscription lifetime / keep-alive counts (lifetime must be >= 3 * keep-alive).
 pub const UA_SUBSCRIPTION_LIFETIME_COUNT: u32 = 60;
 pub const UA_SUBSCRIPTION_KEEPALIVE_COUNT: u32 = 20;
+const _: () = assert!(UA_SUBSCRIPTION_KEEPALIVE_COUNT <= UA_SUBSCRIPTION_LIFETIME_COUNT / 3);
 /// Worker threads of the OPC UA runtime. Sessions, searches and connects are
 /// separate tasks; a couple of threads keep the CPU-bound part of a secure
 /// handshake (RSA) of one session from stalling the I/O of the others.
@@ -92,7 +93,13 @@ pub const BROWSE_MAX_REFERENCES_PER_NODE: u32 = 100;
 pub const READ_MAX_ITEMS_PER_CALL: usize = 100;
 
 // DA helper protocol and lease settings used by the platform service.
+// The helper wire protocol represents this duration in whole u32 seconds.
 pub const DA_ROUTE_LIFETIME_SECS: u32 = 3600;
+pub const DA_ROUTE_LIFETIME: std::time::Duration =
+    std::time::Duration::from_secs(DA_ROUTE_LIFETIME_SECS as u64);
+pub const DA_ROUTE_REFRESH: std::time::Duration = std::time::Duration::from_secs(1800);
+const _: () = assert!(DA_ROUTE_REFRESH.as_secs() > 0);
+const _: () = assert!(DA_ROUTE_REFRESH.as_secs() < DA_ROUTE_LIFETIME.as_secs());
 pub const DA_HELPER_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 pub const DA_HELPER_PROTOCOL_VERSION: u32 = 2;
 pub const DA_HELPER_EXE_ENV: &str = "OPCDA_NETHELPER_EXE";

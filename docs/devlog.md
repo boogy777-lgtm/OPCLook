@@ -260,3 +260,7 @@ Linux UI polish 17/17, stale interactions 5/5, CLI unit 5/5, Windows typecheck;
 Settings хранит типизированный Lang и сохраняет совместимые коды языка;
 старые синонимы и неизвестный код проверены на границе. Linux settings 46/46,
 меню языка 1/1 и Windows GUI typecheck прошли.
+
+Сервис DA использует общий Duration refresh; отношения lease и UA keepalive
+проверяются при компиляции. Linux тест констант 1/1, Windows typecheck прошли;
+прочие временные границы и полный gate остаются открыты.
