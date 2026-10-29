@@ -1,5 +1,5 @@
 mod probe_support;
-use opcda_egui::bff::model::{
+use opclook::bff::model::{
     Command, CommandKind, EndpointSpec, Event, EventKind, ItemSpec, Protocol,
 };
 use probe_support::Probe;
@@ -9,9 +9,9 @@ fn main() -> Result<(), String> {
     let url = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "opc.tcp://milo.digitalpetri.com:62541/milo".to_string());
-    let session = opcda_egui::bff::model::SessionId::FIRST;
+    let session = opclook::bff::model::SessionId::FIRST;
     let probe = Probe::new();
-    let mut request = opcda_egui::bff::model::RequestId::FIRST;
+    let mut request = opclook::bff::model::RequestId::FIRST;
     probe.send(Command {
         request_id: Some(request),
         owner: session.into(),
@@ -42,11 +42,11 @@ fn main() -> Result<(), String> {
         kind: CommandKind::AddItems {
             items: vec![
                 ItemSpec {
-                    key: opcda_egui::bff::model::ItemKey::FIRST,
+                    key: opclook::bff::model::ItemKey::FIRST,
                     item_id: "i=2259".to_string(),
                 },
                 ItemSpec {
-                    key: opcda_egui::bff::model::ItemKey::new(2).ok_or("invalid item key")?,
+                    key: opclook::bff::model::ItemKey::new(2).ok_or("invalid item key")?,
                     item_id: "i=2258".to_string(),
                 },
             ],
@@ -63,8 +63,8 @@ fn main() -> Result<(), String> {
         protocol: Protocol::OpcUa,
         kind: CommandKind::Read {
             keys: vec![
-                opcda_egui::bff::model::ItemKey::FIRST,
-                opcda_egui::bff::model::ItemKey::new(2).ok_or("invalid item key")?,
+                opclook::bff::model::ItemKey::FIRST,
+                opclook::bff::model::ItemKey::new(2).ok_or("invalid item key")?,
             ],
         },
     })?;

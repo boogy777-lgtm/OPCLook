@@ -2,14 +2,14 @@
 //! egui_kittest: accessibility labels, clicks and the painted shapes.
 use egui::{Modifiers, PointerButton};
 use egui_kittest::{Harness, kittest::Queryable};
-use opcda_egui::app::App;
-use opcda_egui::bff::model::{
+use opclook::app::App;
+use opclook::bff::model::{
     DataValue, EndpointSpec, EventKind, ItemKey, Quality, QualityKind, Value,
 };
 
 fn harness(app: App) -> Harness<'static, App> {
     let mut app = app;
-    app.settings.set_lang(opcda_egui::i18n::Lang::Ru);
+    app.settings.set_lang(opclook::i18n::Lang::Ru);
     Harness::builder()
         .with_size([1200.0, 900.0])
         .with_max_steps(60)
@@ -17,7 +17,7 @@ fn harness(app: App) -> Harness<'static, App> {
         .allow_missing_glyphs()
         .build_ui_state(
             |ui, app| {
-                opcda_egui::ui::draw(app, ui);
+                opclook::ui::draw(app, ui);
             },
             app,
         )
@@ -377,7 +377,7 @@ fn ui4_first_value_after_adding_a_row_is_not_highlighted() {
     assert!(changed_at(&app, key).is_none(), "pending → value: no flash");
     // Registered but waiting for the first value (placeholder quality).
     app.rows_mut_for_test()[0].value = Value::Empty;
-    app.rows_mut_for_test()[0].quality = opcda_egui::app::RowQuality::Waiting("waiting".into());
+    app.rows_mut_for_test()[0].quality = opclook::app::RowQuality::Waiting("waiting".into());
     push_value(&mut app, key, Value::F64(6.0), QualityKind::Good);
     assert!(changed_at(&app, key).is_none(), "waiting → value: no flash");
 
@@ -596,7 +596,7 @@ fn server_quality_codes_do_not_collide_with_row_placeholders() {
             },
         );
         let row = &app.rows()[0];
-        assert!(matches!(&row.quality, opcda_egui::app::RowQuality::Server(q) if q.code == code));
+        assert!(matches!(&row.quality, opclook::app::RowQuality::Server(q) if q.code == code));
         assert!(
             row.is_value_change(&Value::I64(99)),
             "a server status must not be treated as a placeholder"
@@ -605,8 +605,8 @@ fn server_quality_codes_do_not_collide_with_row_placeholders() {
     }
 }
 
-fn sid(raw: u64) -> opcda_egui::bff::model::SessionId {
-    opcda_egui::bff::model::SessionId::new(raw).unwrap()
+fn sid(raw: u64) -> opclook::bff::model::SessionId {
+    opclook::bff::model::SessionId::new(raw).unwrap()
 }
 
 #[test]
@@ -622,10 +622,10 @@ fn expanded_large_array_respects_the_field_budget() {
     );
     app.toggle_value(key, vec![]);
     let lines = app.table_lines(&app.visible_row_positions());
-    assert_eq!(lines.len(), 1 + opcda_egui::app::MAX_FIELD_LINES);
-    assert!(matches!(&lines[1], opcda_egui::app::TableLine::Field { name, .. } if name == "[0]"));
+    assert_eq!(lines.len(), 1 + opclook::app::MAX_FIELD_LINES);
+    assert!(matches!(&lines[1], opclook::app::TableLine::Field { name, .. } if name == "[0]"));
     assert!(
-        matches!(&lines[lines.len() - 1], opcda_egui::app::TableLine::Field { name, .. } if name == "[9999]")
+        matches!(&lines[lines.len() - 1], opclook::app::TableLine::Field { name, .. } if name == "[9999]")
     );
 }
 
@@ -646,7 +646,7 @@ fn expanded_fields_and_display_refresh_after_value_update() {
     app.toggle_value(key, vec![]);
     let visible = app.visible_row_positions();
     let old = app.table_lines(&visible);
-    assert!(matches!(&old[1], opcda_egui::app::TableLine::Field { name, .. } if name == "OldName"));
+    assert!(matches!(&old[1], opclook::app::TableLine::Field { name, .. } if name == "OldName"));
     assert!(app.rows()[0].value_text().contains("OldName"));
     app.on_event_for_test_at(
         sid(1),
@@ -671,7 +671,7 @@ fn expanded_fields_and_display_refresh_after_value_update() {
     let new = app.table_lines(&app.visible_row_positions());
     assert_eq!(new.len(), 3);
     assert!(
-        matches!(&new[1], opcda_egui::app::TableLine::Field { name, value_text, .. } if name == "NewName" && value_text == "2")
+        matches!(&new[1], opclook::app::TableLine::Field { name, value_text, .. } if name == "NewName" && value_text == "2")
     );
     assert!(app.rows()[0].value_text().contains("NewName"));
 }

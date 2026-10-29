@@ -3,7 +3,7 @@
 //! network search. Run with an OPC UA server at OPCUA_TEST_URL:
 //!
 //!   cargo test --test ua_security -- --ignored
-use opcda_egui::bff::model::{Command, CommandKind, EndpointSpec, Event, EventKind, Protocol};
+use opclook::bff::model::{Command, CommandKind, EndpointSpec, Event, EventKind, Protocol};
 use opclook_backend::bff::Gateway;
 use std::time::{Duration, Instant};
 
@@ -48,9 +48,9 @@ fn connect_endpoint(gateway: &Gateway, session: u64, endpoint: EndpointSpec) -> 
     wait_for(
         gateway,
         Command {
-            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            owner: opcda_egui::bff::model::Owner::Session(
-                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            request_id: opclook::bff::model::RequestId::new(next_id()),
+            owner: opclook::bff::model::Owner::Session(
+                opclook::bff::model::SessionId::new(session).unwrap(),
             ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Connect { endpoint },
@@ -65,9 +65,9 @@ fn disconnect(gateway: &Gateway, session: u64) {
     let _ = wait_for(
         gateway,
         Command {
-            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            owner: opcda_egui::bff::model::Owner::Session(
-                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            request_id: opclook::bff::model::RequestId::new(next_id()),
+            owner: opclook::bff::model::Owner::Session(
+                opclook::bff::model::SessionId::new(session).unwrap(),
             ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Disconnect,
@@ -87,9 +87,9 @@ fn server_search_enumerates_endpoints() {
     let events = wait_for(
         &gateway,
         Command {
-            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            owner: opcda_egui::bff::model::Owner::Session(
-                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            request_id: opclook::bff::model::RequestId::new(next_id()),
+            owner: opclook::bff::model::Owner::Session(
+                opclook::bff::model::SessionId::new(session).unwrap(),
             ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::SearchUaServers {
@@ -126,15 +126,15 @@ fn server_connect_explicit_none_policy() {
     let gateway = Gateway::new();
     let session = next_id();
     let mut endpoint = EndpointSpec::ua(test_url());
-    endpoint.ua_security_policy = opcda_egui::bff::ua::SECURITY_POLICY_NONE;
-    endpoint.ua_security_mode = opcda_egui::bff::ua::SECURITY_MODE_NONE;
+    endpoint.ua_security_policy = opclook::bff::ua::SECURITY_POLICY_NONE;
+    endpoint.ua_security_mode = opclook::bff::ua::SECURITY_MODE_NONE;
     endpoint.ua_trust_server_cert = true;
     endpoint.ua_session_timeout = Some(90_000);
     let connected = connect_endpoint(&gateway, session, endpoint);
     match connected.kind {
         EventKind::Connected { endpoint, info } => {
             assert_eq!(endpoint.ua_session_timeout, Some(90_000));
-            let info = opcda_egui::i18n::backend_text(opcda_egui::i18n::Lang::En, &info);
+            let info = opclook::i18n::backend_text(opclook::i18n::Lang::En, &info);
             assert!(
                 info.contains("None"),
                 "session info should include the resolved policy: {info}"
@@ -156,7 +156,7 @@ fn server_connect_auto_resolves_security() {
     let connected = connect_endpoint(&gateway, session, EndpointSpec::ua(test_url()));
     match connected.kind {
         EventKind::Connected { info, .. } => {
-            let info = opcda_egui::i18n::backend_text(opcda_egui::i18n::Lang::En, &info);
+            let info = opclook::i18n::backend_text(opclook::i18n::Lang::En, &info);
             assert!(
                 info.contains('[') && info.contains('/'),
                 "session info should describe policy/mode: {info}"
@@ -178,9 +178,9 @@ fn server_network_search_reaches_server() {
     let events = wait_for(
         &gateway,
         Command {
-            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            owner: opcda_egui::bff::model::Owner::Session(
-                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            request_id: opclook::bff::model::RequestId::new(next_id()),
+            owner: opclook::bff::model::Owner::Session(
+                opclook::bff::model::SessionId::new(session).unwrap(),
             ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::SearchUaNetwork {

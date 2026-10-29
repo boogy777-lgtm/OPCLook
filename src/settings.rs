@@ -606,7 +606,7 @@ pub mod thread_dir {
         }
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
-            "opcda-egui-thread-settings-{}-{n}",
+            "opclook-thread-settings-{}-{n}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
@@ -626,10 +626,10 @@ pub fn app_dir() -> PathBuf {
     // by the application itself.
     #[cfg(test)]
     if let Some(dir) = test_isolation::current_override() {
-        return dir.join("opcda-egui");
+        return dir.join("opclook");
     }
     if let Some(dir) = thread_dir::current() {
-        return dir.join("opcda-egui");
+        return dir.join("opclook");
     }
     #[cfg(test)]
     let base = test_isolation::fallback_dir();
@@ -637,7 +637,7 @@ pub fn app_dir() -> PathBuf {
     let base = std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
-    base.join("opcda-egui")
+    base.join("opclook")
 }
 
 pub fn settings_path() -> PathBuf {
@@ -678,7 +678,7 @@ pub mod test_isolation {
         FALLBACK
             .get_or_init(|| {
                 let dir =
-                    std::env::temp_dir().join(format!("opcda-egui-libtest-{}", std::process::id()));
+                    std::env::temp_dir().join(format!("opclook-libtest-{}", std::process::id()));
                 let _ = std::fs::create_dir_all(&dir);
                 dir
             })
@@ -712,7 +712,7 @@ pub mod test_isolation {
         /// Create a fresh private temp directory owned by this guard.
         pub fn temp(label: &str) -> Self {
             let dir = std::env::temp_dir()
-                .join(format!("opcda-egui-libtest-{label}-{}", std::process::id()));
+                .join(format!("opclook-libtest-{label}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             let _ = std::fs::create_dir_all(&dir);
             Self::at(dir, true)
@@ -748,7 +748,7 @@ mod tests {
     }
 
     #[test]
-    fn options_defaults_match_elesy() {
+    fn options_defaults_match_the_spec() {
         let d = Options::default();
         assert_eq!(d.update_interval_secs, 1);
         assert_eq!(d.operation_timeout_secs, 60);
@@ -1328,7 +1328,7 @@ mod tests {
 
     #[test]
     fn deleted_config_loads_with_empty_adapter_cache() {
-        let dir = std::env::temp_dir().join("opcda-egui-settings-no-adapter-cache");
+        let dir = std::env::temp_dir().join("opclook-settings-no-adapter-cache");
         let _ = std::fs::remove_dir_all(&dir);
         with_appdata(&dir, || {
             let s = Settings::load().settings;
@@ -1436,7 +1436,7 @@ mod tests {
 
     #[test]
     fn load_missing_file_falls_back_to_defaults() {
-        let dir = std::env::temp_dir().join("opcda-egui-settings-missing");
+        let dir = std::env::temp_dir().join("opclook-settings-missing");
         let _ = std::fs::remove_dir_all(&dir);
         with_appdata(&dir, || {
             assert_eq!(settings_path().file_name().unwrap(), "settings.json");
@@ -1455,7 +1455,7 @@ mod tests {
 
     #[test]
     fn save_network_selection_persists_through_load() {
-        let dir = std::env::temp_dir().join("opcda-egui-settings-network");
+        let dir = std::env::temp_dir().join("opclook-settings-network");
         let _ = std::fs::remove_dir_all(&dir);
         with_appdata(&dir, || {
             let id = AdapterId::parse("aabbccdd-1122-3344-5566-77889900aabb").unwrap();
@@ -1472,7 +1472,7 @@ mod tests {
 
     #[test]
     fn u15_lds_host_persists_and_old_files_load_without_it() {
-        let dir = std::env::temp_dir().join("opcda-egui-settings-lds-host");
+        let dir = std::env::temp_dir().join("opclook-settings-lds-host");
         let _ = std::fs::remove_dir_all(&dir);
         with_appdata(&dir, || {
             let mut s = Settings::default();
@@ -1489,7 +1489,7 @@ mod tests {
 
     #[test]
     fn load_partial_legacy_file_preserves_fields_and_clamps_options() {
-        let dir = std::env::temp_dir().join("opcda-egui-settings-partial-legacy");
+        let dir = std::env::temp_dir().join("opclook-settings-partial-legacy");
         let _ = std::fs::remove_dir_all(&dir);
         with_appdata(&dir, || {
             let path = settings_path();
@@ -1513,7 +1513,7 @@ mod tests {
 
     #[test]
     fn load_clamps_hostile_timing_options() {
-        let dir = std::env::temp_dir().join("opcda-egui-settings-extreme-interval");
+        let dir = std::env::temp_dir().join("opclook-settings-extreme-interval");
         let _ = std::fs::remove_dir_all(&dir);
         with_appdata(&dir, || {
             let mut settings = Settings::default();
@@ -1539,7 +1539,7 @@ mod tests {
 
     #[test]
     fn save_then_load_roundtrips() {
-        let dir = std::env::temp_dir().join("opcda-egui-settings-roundtrip");
+        let dir = std::env::temp_dir().join("opclook-settings-roundtrip");
         let _ = std::fs::remove_dir_all(&dir);
         with_appdata(&dir, || {
             let mut s = Settings::default();
@@ -1563,7 +1563,7 @@ mod tests {
     // ---- A2: no silent loss, atomic writes ----
 
     fn fresh_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("opcda-egui-settings-{name}"));
+        let dir = std::env::temp_dir().join(format!("opclook-settings-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }

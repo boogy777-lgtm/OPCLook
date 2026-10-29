@@ -1,4 +1,4 @@
-"""Generate the OPC DA/UA Test Client icon.
+"""Generate the OPCLook icon.
 
 Creates a multi-size assets/icon.ico (16..256 px) for the Windows resource
 embedded by build.rs, plus a raw 32x32 RGBA blob (assets/icon_32.rgba) used as

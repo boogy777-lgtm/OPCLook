@@ -3,7 +3,7 @@
 //! Run with an OPC UA server at OPCUA_TEST_URL:
 //!
 //!   cargo test --test security_live -- --ignored
-use opcda_egui::bff::model::{
+use opclook::bff::model::{
     Command, CommandKind, EndpointSpec, Event, EventKind, Protocol, UaSecurityMode,
     UaSecurityPolicy,
 };
@@ -50,9 +50,9 @@ fn connect_endpoint(gateway: &Gateway, session: u64, endpoint: EndpointSpec) -> 
     wait_for(
         gateway,
         Command {
-            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            owner: opcda_egui::bff::model::Owner::Session(
-                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            request_id: opclook::bff::model::RequestId::new(next_id()),
+            owner: opclook::bff::model::Owner::Session(
+                opclook::bff::model::SessionId::new(session).unwrap(),
             ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Connect { endpoint },
@@ -67,9 +67,9 @@ fn disconnect(gateway: &Gateway, session: u64) {
     let _ = wait_for(
         gateway,
         Command {
-            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            owner: opcda_egui::bff::model::Owner::Session(
-                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            request_id: opclook::bff::model::RequestId::new(next_id()),
+            owner: opclook::bff::model::Owner::Session(
+                opclook::bff::model::SessionId::new(session).unwrap(),
             ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Disconnect,
@@ -93,7 +93,7 @@ fn live_auto_security_still_connects() {
     let event = connect_endpoint(&gateway, session, endpoint);
     match event.kind {
         EventKind::Connected { info, .. } => {
-            let info = opcda_egui::i18n::backend_text(opcda_egui::i18n::Lang::En, &info);
+            let info = opclook::i18n::backend_text(opclook::i18n::Lang::En, &info);
             assert!(
                 info.contains("None") || info.contains("Basic256"),
                 "info should name the resolved policy: {info}"
@@ -120,8 +120,7 @@ fn live_explicit_unadvertised_security_is_an_error() {
     let event = connect_endpoint(&gateway, session, endpoint);
     match event.kind {
         EventKind::Error { message, .. } => {
-            let opcda_egui::bff::model::BackendMsg::SecurityResolveFailed { detail } = &message
-            else {
+            let opclook::bff::model::BackendMsg::SecurityResolveFailed { detail } = &message else {
                 panic!("expected the security-resolution error, got: {message:?}");
             };
             assert!(

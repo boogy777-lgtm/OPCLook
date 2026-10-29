@@ -1,14 +1,13 @@
-# Architecture Audit — opcda-egui (skeleton, Rust idioms vs GoF)
+# Architecture Audit — opclook (skeleton, Rust idioms vs GoF)
 
 Scope: original read-only review of the program skeleton. The 2026-10-25 pass
 marked fixed items inline (`FIXED`) and added a status section (§9); unmarked
 items remain open. Files read:
 `src/{lib,main,app,ui,settings,columns,journal,i18n,constants}.rs`,
 `src/bff/{mod,model,da,ua,da_variant}.rs`, `tests/*`, skimmed
-`docs/{ui-parity,test-matrix}.md`.
+`docs/test-matrix.md`.
 
-Audience: the team that maintains this egui rewrite of the EleSy OPC DA/UA test
-client. Verdict style: per-area findings first, then a prioritized plan with
+Audience: the team that maintains this OPC DA/UA client. Verdict style: per-area findings first, then a prioritized plan with
 minimal-diff sketches. Nothing here requires a behavior change.
 
 ---
@@ -579,7 +578,7 @@ Fixed in this pass (behavior-preserving apart from the added guards):
 Verification: `cargo test --lib` 148 ✅, `cargo test --test ui_interactions`
 84 ✅, all non-ignored integration tests ✅, live `ua_*` ✅
 (`ua_smoke`/`ua_write`/`ua_search`/`ua_types`/`ua_security`/`ua_subscription`/
-`ua_refresh_speed`/`ua_lifecycle`/`ua_large`), `cargo build --bin opcda-egui`
+`ua_refresh_speed`/`ua_lifecycle`/`ua_large`), `cargo build --bin opclook`
 clean.
 
 ## 11. Remediation status — typed UA security (2026-10-26)
@@ -604,7 +603,7 @@ Fixed:
 
 Verification: `cargo test --lib` 162 ✅, `cargo test --test ui_interactions`
 87 ✅, all non-ignored integration tests ✅, live `ua_*` + `security_live` ✅,
-`cargo build --bin opcda-egui` clean without warnings.
+`cargo build --bin opclook` clean without warnings.
 
 Remaining backlog (outside this pass): typed `BffError`, newtype IDs, settings
 path injection, test-hook gating, dialog extraction, dual column-order store,

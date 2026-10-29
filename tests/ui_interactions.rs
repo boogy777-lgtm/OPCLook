@@ -5,12 +5,12 @@ use egui_kittest::{
     Harness,
     kittest::{NodeT, Queryable},
 };
-use opcda_egui::app::{App, ReconnectState, SessionState};
-use opcda_egui::bff::model::{
+use opclook::app::{App, ReconnectState, SessionState};
+use opclook::bff::model::{
     BrowseNode, Command, CommandKind, EndpointSpec, EventKind, ItemKey, NodeKind, Protocol, ScanId,
     SubscriptionState, UaSecurityMode, UaSecurityPolicy, Value,
 };
-use opcda_egui::settings::Settings;
+use opclook::settings::Settings;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -26,13 +26,11 @@ static SETTINGS_DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 /// environment).
 fn with_settings_lock<R>(f: impl FnOnce() -> R) -> R {
     let seq = SETTINGS_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-        "opcda-egui-ui-settings-{}-{seq}",
-        std::process::id()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("opclook-ui-settings-{}-{seq}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create isolated settings directory");
-    let _redirect = opcda_egui::settings::thread_dir::redirect(&dir);
+    let _redirect = opclook::settings::thread_dir::redirect(&dir);
     let _cleanup = RemoveDir(dir);
     f()
 }
@@ -51,7 +49,7 @@ impl Drop for RemoveDir {
 /// labels keep opting in to Ru explicitly so the tests stay robust regardless of
 /// a persisted `settings.json` language.
 fn set_ru(app: &mut App) {
-    app.settings.set_lang(opcda_egui::i18n::Lang::Ru);
+    app.settings.set_lang(opclook::i18n::Lang::Ru);
 }
 
 fn harness(app: App) -> Harness<'static, App> {
@@ -64,7 +62,7 @@ fn harness(app: App) -> Harness<'static, App> {
         .allow_missing_glyphs()
         .build_ui_state(
             |ui, app| {
-                opcda_egui::ui::draw(app, ui);
+                opclook::ui::draw(app, ui);
             },
             app,
         )
@@ -254,7 +252,7 @@ fn row_menu_wins_over_panel_menu_and_background_opens_panel() {
 #[test]
 fn columns_dialog_keyboard_alt_down_reorders_and_persists() {
     with_settings_lock(|| {
-        use opcda_egui::columns::ColumnId;
+        use opclook::columns::ColumnId;
         let ctx = egui::Context::default();
         let mut app = App::new_test(&ctx);
         seed_table(&mut app, &[("a", "SigA", 1)]);
@@ -292,7 +290,7 @@ fn columns_dialog_keyboard_alt_down_reorders_and_persists() {
 #[test]
 fn columns_dialog_keyboard_alt_up_reorders_and_persists() {
     with_settings_lock(|| {
-        use opcda_egui::columns::ColumnId;
+        use opclook::columns::ColumnId;
         let ctx = egui::Context::default();
         let mut app = App::new_test(&ctx);
         seed_table(&mut app, &[("a", "SigA", 1)]);
@@ -442,15 +440,15 @@ fn csv_save_load_roundtrip_preserves_rows() {
         &[("ns=1;s=a", "SigA", 1), ("ns=1;s=b", "SigB", 2)],
     );
 
-    let tmp = std::env::temp_dir().join("opcda-egui-ui-roundtrip.csv");
-    opcda_egui::ui::export_tree_csv_to_path(&app, &tmp).expect("export");
+    let tmp = std::env::temp_dir().join("opclook-ui-roundtrip.csv");
+    opclook::ui::export_tree_csv_to_path(&app, &tmp).expect("export");
     let text = std::fs::read_to_string(&tmp).expect("read csv");
     assert!(text.contains("SigA"));
     assert!(text.contains("SigB"));
 
     let mut loaded = App::new_test(&ctx);
     loaded.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
-    let count = opcda_egui::ui::import_tree_csv_from_path(&mut loaded, &tmp).expect("import");
+    let count = opclook::ui::import_tree_csv_from_path(&mut loaded, &tmp).expect("import");
     let _ = std::fs::remove_file(&tmp);
 
     assert_eq!(count, 2);
@@ -528,7 +526,7 @@ fn write_without_confirm_writes_immediately() {
 
 #[test]
 fn tab_exclusive_switch_keeps_flags_and_changes_view() {
-    use opcda_egui::app::BottomTab;
+    use opclook::app::BottomTab;
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     // Both panels enabled -> a real tab bar appears; clicking a tab is a view
@@ -557,7 +555,7 @@ fn tab_exclusive_switch_keeps_flags_and_changes_view() {
 
 #[test]
 fn single_tab_does_not_show_unavailable_tab() {
-    use opcda_egui::app::BottomTab;
+    use opclook::app::BottomTab;
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     // Only script enabled -> journal tab must be absent (view stays Script).
@@ -610,10 +608,10 @@ fn stale_reply_with_unknown_request_id_is_ignored() {
 
     app.on_event_for_test_with_request(
         sid(1),
-        opcda_egui::bff::model::RequestId::new(9_999).unwrap(),
+        opclook::bff::model::RequestId::new(9_999).unwrap(),
         EventKind::Connected {
             endpoint: EndpointSpec::da("", "Srv.Stale"),
-            info: opcda_egui::bff::model::BackendMsg::raw("stale"),
+            info: opclook::bff::model::BackendMsg::raw("stale"),
         },
     );
     assert_eq!(app.sessions[0].state, SessionState::Connected);
@@ -624,7 +622,7 @@ fn stale_reply_with_unknown_request_id_is_ignored() {
 
     app.on_event_for_test_with_request(
         sid(1),
-        opcda_egui::bff::model::RequestId::new(9_999).unwrap(),
+        opclook::bff::model::RequestId::new(9_999).unwrap(),
         EventKind::Browse {
             node_id: String::new(),
             children: vec![BrowseNode {
@@ -657,7 +655,7 @@ fn matching_request_id_reply_is_accepted() {
             connect_id,
             EventKind::Connected {
                 endpoint: EndpointSpec::da("", "Srv.Match"),
-                info: opcda_egui::bff::model::BackendMsg::raw("ok"),
+                info: opclook::bff::model::BackendMsg::raw("ok"),
             },
         );
         assert_eq!(app.sessions[0].state, SessionState::Connected);
@@ -669,7 +667,7 @@ fn matching_request_id_reply_is_accepted() {
             connect_id,
             EventKind::Connected {
                 endpoint: EndpointSpec::da("", "Srv.Match"),
-                info: opcda_egui::bff::model::BackendMsg::raw("replayed"),
+                info: opclook::bff::model::BackendMsg::raw("replayed"),
             },
         );
         assert_eq!(
@@ -718,7 +716,7 @@ fn disconnect_connect_does_not_let_old_connected_mutate_new_state() {
             old_connect,
             EventKind::Connected {
                 endpoint: EndpointSpec::da("", "Srv.Old"),
-                info: opcda_egui::bff::model::BackendMsg::raw("old"),
+                info: opclook::bff::model::BackendMsg::raw("old"),
             },
         );
         assert_eq!(
@@ -738,7 +736,7 @@ fn disconnect_connect_does_not_let_old_connected_mutate_new_state() {
             new_connect,
             EventKind::Connected {
                 endpoint: EndpointSpec::da("", "Srv.Old"),
-                info: opcda_egui::bff::model::BackendMsg::raw("new"),
+                info: opclook::bff::model::BackendMsg::raw("new"),
             },
         );
         assert_eq!(app.sessions[0].state, SessionState::Connected);
@@ -749,7 +747,7 @@ fn disconnect_connect_does_not_let_old_connected_mutate_new_state() {
 #[test]
 fn column_reorder_persists_in_settings() {
     with_settings_lock(|| {
-        use opcda_egui::columns::ColumnId;
+        use opclook::columns::ColumnId;
         let ctx = egui::Context::default();
         let mut app = App::new_test(&ctx);
         seed_table(&mut app, &[("a", "SigA", 1)]);
@@ -861,8 +859,8 @@ fn connect_dialog_ua_search_empty_on_open() {
     assert_eq!(h.query_all_by_value("4840").count(), 0);
 }
 
-fn lease_with_subnet(ip: &str, prefix: u8) -> opcda_egui::net::NetworkLease {
-    use opcda_egui::net::{
+fn lease_with_subnet(ip: &str, prefix: u8) -> opclook::net::NetworkLease {
+    use opclook::net::{
         AdapterAddress, AdapterId, AdapterInfo, AdapterSelection, AdapterState, NetworkLease,
         SubnetSpec,
     };
@@ -901,8 +899,8 @@ fn net_adapter(
     physical: bool,
     up: bool,
     addresses: &[(&str, u8)],
-) -> opcda_egui::net::AdapterInfo {
-    use opcda_egui::net::{AdapterAddress, AdapterId, AdapterInfo, AdapterState};
+) -> opclook::net::AdapterInfo {
+    use opclook::net::{AdapterAddress, AdapterId, AdapterInfo, AdapterState};
     AdapterInfo {
         id: AdapterId::parse(guid).unwrap(),
         name: name.to_string(),
@@ -931,14 +929,14 @@ fn net_adapter(
     }
 }
 
-fn scan_server() -> opcda_egui::bff::model::UaServerInfo {
-    opcda_egui::bff::model::UaServerInfo {
+fn scan_server() -> opclook::bff::model::UaServerInfo {
+    opclook::bff::model::UaServerInfo {
         application_name: "SCAN".to_string(),
         application_uri: "urn:scan".to_string(),
-        endpoints: vec![opcda_egui::bff::model::UaEndpointInfo {
+        endpoints: vec![opclook::bff::model::UaEndpointInfo {
             url: "opc.tcp://10.0.0.9:4840".parse().unwrap(),
-            security_policy: opcda_egui::bff::model::AdvertisedPolicy::from_wire("None"),
-            security_mode: opcda_egui::bff::model::AdvertisedMode::from_wire("None"),
+            security_policy: opclook::bff::model::AdvertisedPolicy::from_wire("None"),
+            security_mode: opclook::bff::model::AdvertisedMode::from_wire("None"),
         }],
     }
 }
@@ -952,7 +950,7 @@ fn ua_scan_events_ignore_stale_scan_ids() {
     app.open_connect_dialog();
     {
         let d = &mut app.dialogs.connect;
-        d.ua_search = opcda_egui::app::UaSearch::Subnet {
+        d.ua_search = opclook::app::UaSearch::Subnet {
             scan_id: ScanId::new(2).unwrap(),
         };
         d.ua_scan_total = 10;
@@ -970,7 +968,7 @@ fn ua_scan_events_ignore_stale_scan_ids() {
     app.on_event_for_test(EventKind::UaScanFinished {
         scan_id: ScanId::new(1).unwrap(),
         found: 3,
-        end: opcda_egui::bff::model::ScanEnd::Completed,
+        end: opclook::bff::model::ScanEnd::Completed,
     });
     let d = &app.dialogs.connect;
     assert_eq!(d.ua_search.scan_id(), ScanId::new(2));
@@ -993,7 +991,7 @@ fn ua_scan_events_ignore_stale_scan_ids() {
     app.on_event_for_test(EventKind::UaScanFinished {
         scan_id: ScanId::new(2).unwrap(),
         found: 1,
-        end: opcda_egui::bff::model::ScanEnd::Completed,
+        end: opclook::bff::model::ScanEnd::Completed,
     });
     let d = &app.dialogs.connect;
     assert_eq!(d.ua_search.scan_id(), None);
@@ -1046,25 +1044,25 @@ fn ua_subnet_scan_commands_are_not_pending_requests() {
     app.open_connect_dialog();
     app.network.loaded = true;
     app.network.lease = Some(lease_with_subnet("10.0.0.5", 30));
-    let before = app.pending_request_ids_for_test(opcda_egui::bff::model::Owner::Discovery);
+    let before = app.pending_request_ids_for_test(opclook::bff::model::Owner::Discovery);
     app.start_ua_subnet_scan();
     assert!(app.dialogs.connect.ua_search.scan_id().is_some());
     assert_eq!(
-        app.pending_request_ids_for_test(opcda_egui::bff::model::Owner::Discovery),
+        app.pending_request_ids_for_test(opclook::bff::model::Owner::Discovery),
         before
     );
     app.cancel_ua_subnet_scan();
     assert_eq!(
-        app.pending_request_ids_for_test(opcda_egui::bff::model::Owner::Discovery),
+        app.pending_request_ids_for_test(opclook::bff::model::Owner::Discovery),
         before
     );
 }
 
-fn start_recorded_ua_host(app: &mut App) -> opcda_egui::bff::model::RequestId {
+fn start_recorded_ua_host(app: &mut App) -> opclook::bff::model::RequestId {
     app.record_dispatches_for_test();
     app.dialogs.connect.ua_search_host = "127.0.0.1".into();
     app.search_ua_servers();
-    let opcda_egui::app::UaSearch::SingleHost { request } = app.dialogs.connect.ua_search else {
+    let opclook::app::UaSearch::SingleHost { request } = app.dialogs.connect.ua_search else {
         panic!("host search")
     };
     request
@@ -1077,19 +1075,19 @@ fn ua_servers_found_populates_results_state() {
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
     let request = start_recorded_ua_host(&mut app);
-    let servers = vec![opcda_egui::bff::model::UaServerInfo {
+    let servers = vec![opclook::bff::model::UaServerInfo {
         application_name: "CODESYS".to_string(),
         application_uri: "urn:test".to_string(),
-        endpoints: vec![opcda_egui::bff::model::UaEndpointInfo {
+        endpoints: vec![opclook::bff::model::UaEndpointInfo {
             url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
-            security_policy: opcda_egui::bff::model::AdvertisedPolicy::from_wire("None"),
-            security_mode: opcda_egui::bff::model::AdvertisedMode::from_wire("None"),
+            security_policy: opclook::bff::model::AdvertisedPolicy::from_wire("None"),
+            security_mode: opclook::bff::model::AdvertisedMode::from_wire("None"),
         }],
     }];
     app.on_event_for_test_with_request(
-        opcda_egui::bff::model::Owner::Discovery,
+        opclook::bff::model::Owner::Discovery,
         request,
-        opcda_egui::bff::model::EventKind::UaServersFound {
+        opclook::bff::model::EventKind::UaServersFound {
             host: "127.0.0.1".to_string(),
             port: 4840,
             servers,
@@ -1110,8 +1108,8 @@ fn ua_servers_found_populates_results_state() {
 
 #[test]
 fn ua_discovery_reply_arrives_on_network_pane() {
-    use opcda_egui::app::ConnectPane;
-    use opcda_egui::bff::model::{AdvertisedMode, AdvertisedPolicy, UaEndpointInfo, UaServerInfo};
+    use opclook::app::ConnectPane;
+    use opclook::bff::model::{AdvertisedMode, AdvertisedPolicy, UaEndpointInfo, UaServerInfo};
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
@@ -1123,7 +1121,7 @@ fn ua_discovery_reply_arrives_on_network_pane() {
     h.get_by_label("Сетевые настройки").click();
     h.run_steps(3);
     h.state_mut().on_event_for_test_with_request(
-        opcda_egui::bff::model::Owner::Discovery,
+        opclook::bff::model::Owner::Discovery,
         request,
         EventKind::UaServersFound {
             host: "127.0.0.1".into(),
@@ -1157,7 +1155,7 @@ fn ua_discovery_reply_arrives_on_network_pane() {
 /// DA list is already populated.
 #[test]
 fn connect_dialog_reopen_keeps_discovered_servers() {
-    use opcda_egui::bff::model::{ServerEntry, UaEndpointInfo, UaServerInfo};
+    use opclook::bff::model::{ServerEntry, UaEndpointInfo, UaServerInfo};
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
@@ -1177,7 +1175,7 @@ fn connect_dialog_reopen_keeps_discovered_servers() {
     // security-combo endpoint source.
     let request = start_recorded_ua_host(&mut app);
     app.on_event_for_test_with_request(
-        opcda_egui::bff::model::Owner::Discovery,
+        opclook::bff::model::Owner::Discovery,
         request,
         EventKind::UaServersFound {
             host: "127.0.0.1".to_string(),
@@ -1187,8 +1185,8 @@ fn connect_dialog_reopen_keeps_discovered_servers() {
                 application_uri: "urn:test".to_string(),
                 endpoints: vec![UaEndpointInfo {
                     url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
-                    security_policy: opcda_egui::bff::model::AdvertisedPolicy::from_wire("None"),
-                    security_mode: opcda_egui::bff::model::AdvertisedMode::from_wire("None"),
+                    security_policy: opclook::bff::model::AdvertisedPolicy::from_wire("None"),
+                    security_mode: opclook::bff::model::AdvertisedMode::from_wire("None"),
                 }],
             }],
         },
@@ -1219,7 +1217,7 @@ fn connect_dialog_reopen_keeps_discovered_servers() {
     // discovery (no fresh pending request on session 0).
     assert_eq!(app.dialogs.connect.da_auto_pending, 0);
     assert!(
-        app.pending_request_ids_for_test(opcda_egui::bff::model::Owner::Discovery)
+        app.pending_request_ids_for_test(opclook::bff::model::Owner::Discovery)
             .is_empty(),
         "reopening with a populated DA list must not restart discovery"
     );
@@ -1277,11 +1275,8 @@ fn connect_dialog_ua_security_controls_render() {
     h.get_by_label("OPC UA").click();
     h.run_steps(5);
     let d = &h.state().dialogs.connect;
-    assert_eq!(
-        d.ua_security_policy,
-        opcda_egui::bff::ua::SECURITY_POLICY_AUTO
-    );
-    assert_eq!(d.ua_security_mode, opcda_egui::bff::ua::SECURITY_MODE_AUTO);
+    assert_eq!(d.ua_security_policy, opclook::bff::ua::SECURITY_POLICY_AUTO);
+    assert_eq!(d.ua_security_mode, opclook::bff::ua::SECURITY_MODE_AUTO);
     assert_eq!(d.ua_session_timeout, 120_000);
     // The trust checkbox, the identity combo and the network-search button are
     // all present on the UA tab.
@@ -1321,10 +1316,7 @@ fn u15_connect_dialog_has_an_lds_host_field_used_by_the_lds_search() {
         assert!(state.dialogs.connect.error.is_none());
         assert_eq!(state.settings.ua.ua_lds_host, "127.0.0.1:48690");
         assert_eq!(
-            opcda_egui::settings::Settings::load()
-                .settings
-                .ua
-                .ua_lds_host,
+            opclook::settings::Settings::load().settings.ua.ua_lds_host,
             "127.0.0.1:48690",
             "the field is persisted"
         );
@@ -1358,7 +1350,7 @@ fn u15_connect_dialog_rejects_a_malformed_lds_host() {
 /// rewrite the saved selection.
 #[test]
 fn connect_dialog_network_tab_renders_single_adapter_combo() {
-    use opcda_egui::bff::model::Protocol;
+    use opclook::bff::model::Protocol;
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
@@ -1369,7 +1361,7 @@ fn connect_dialog_network_tab_renders_single_adapter_combo() {
     h.run_steps(5);
     assert!(matches!(
         h.state().dialogs.connect.pane,
-        opcda_egui::app::ConnectPane::Network { .. }
+        opclook::app::ConnectPane::Network { .. }
     ));
     assert_eq!(
         h.query_all_by_label("Сетевые адаптеры").count(),
@@ -1381,7 +1373,7 @@ fn connect_dialog_network_tab_renders_single_adapter_combo() {
     assert!(h.query_all_by_label("Сетевой адаптер").count() >= 1);
     assert_eq!(
         h.state().settings.adapter_selection(),
-        opcda_egui::net::AdapterSelection::None,
+        opclook::net::AdapterSelection::None,
         "opening the tab must not rewrite the saved selection"
     );
     assert_eq!(
@@ -1408,7 +1400,7 @@ fn connect_dialog_network_tab_renders_single_adapter_combo() {
     h.state_mut().open_connect_dialog();
     assert_eq!(
         h.state().dialogs.connect.pane,
-        opcda_egui::app::ConnectPane::Ua
+        opclook::app::ConnectPane::Ua
     );
     h.state_mut().dialogs.connect.ua_url = "opc.tcp://localhost:4840".into();
     h.state_mut().dialogs.connect.da_manual = "Draft.DA".into();
@@ -1425,7 +1417,7 @@ fn connect_dialog_network_tab_renders_single_adapter_combo() {
     h.run_steps(5);
     assert!(!matches!(
         h.state().dialogs.connect.pane,
-        opcda_egui::app::ConnectPane::Network { .. }
+        opclook::app::ConnectPane::Network { .. }
     ));
 }
 
@@ -1437,7 +1429,7 @@ fn remote_ua_search_without_adapter_is_blocked() {
     let mut app = App::new_test(&ctx);
     set_ru(&mut app);
     app.open_connect_dialog();
-    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
+    app.dialogs.connect.pane = opclook::app::ConnectPane::Ua;
     app.dialogs.connect.ua_search_host = "192.0.2.10".to_string();
     app.dialogs.connect.ua_search_port = "4840".to_string();
     app.search_ua_servers();
@@ -1556,8 +1548,8 @@ fn connect_dialog_active_ua_tab_keeps_scan() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
-    app.dialogs.connect.ua_search = opcda_egui::app::UaSearch::Subnet {
+    app.dialogs.connect.pane = opclook::app::ConnectPane::Ua;
+    app.dialogs.connect.ua_search = opclook::app::UaSearch::Subnet {
         scan_id: ScanId::new(1).unwrap(),
     };
     let mut h = harness(app);
@@ -1607,15 +1599,15 @@ fn network_tab_startup_uses_cached_adapters_without_windows_query() {
         let a = "31000000-0000-0000-0000-000000000001";
         let b = "31000000-0000-0000-0000-000000000002";
         let mut settings = Settings::default();
-        settings.network.cached_adapters = opcda_egui::settings::CachedAdapters::from_vec(vec![
-            opcda_egui::net::CachedAdapter::from_info(&net_adapter(
+        settings.network.cached_adapters = opclook::settings::CachedAdapters::from_vec(vec![
+            opclook::net::CachedAdapter::from_info(&net_adapter(
                 a,
                 "Cached A",
                 true,
                 true,
                 &[("192.168.1.20", 24)],
             )),
-            opcda_egui::net::CachedAdapter::from_info(&net_adapter(
+            opclook::net::CachedAdapter::from_info(&net_adapter(
                 b,
                 "Cached B",
                 false,
@@ -1623,8 +1615,8 @@ fn network_tab_startup_uses_cached_adapters_without_windows_query() {
                 &[("10.0.0.5", 24)],
             )),
         ]);
-        settings.set_adapter_selection(opcda_egui::net::AdapterSelection::Adapter(
-            opcda_egui::net::AdapterId::parse(a).unwrap(),
+        settings.set_adapter_selection(opclook::net::AdapterSelection::Adapter(
+            opclook::net::AdapterId::parse(a).unwrap(),
         ));
         settings.set_selected_local_ip(Some("192.168.1.20".parse().unwrap()));
 
@@ -1632,7 +1624,7 @@ fn network_tab_startup_uses_cached_adapters_without_windows_query() {
         app.open_connect_dialog();
         assert_eq!(app.network.adapters.len(), 2);
         assert_eq!(
-            opcda_egui::net::selected_adapter_count(
+            opclook::net::selected_adapter_count(
                 &app.network.adapters,
                 &app.settings.adapter_selection()
             ),
@@ -1672,7 +1664,7 @@ fn network_tab_stale_guid_has_zero_selection_and_forget_keeps_cache() {
             net_adapter(b, "Wi-Fi", false, true, &[("10.0.0.5", 24)]),
         ]);
         app.settings.network.preferred_adapter =
-            Some(opcda_egui::net::AdapterId::parse(stale).unwrap());
+            Some(opclook::net::AdapterId::parse(stale).unwrap());
         app.settings.network.selected_local_ip = Some("10.9.9.9".parse().unwrap());
         app.open_connect_dialog();
 
@@ -1688,7 +1680,7 @@ fn network_tab_stale_guid_has_zero_selection_and_forget_keeps_cache() {
         assert!(h.query_all_by_label("Забыть").count() >= 1);
         assert_eq!(h.query_all_by_label("10.9.9.9").count(), 0);
         assert_eq!(
-            opcda_egui::net::selected_adapter_count(
+            opclook::net::selected_adapter_count(
                 &h.state().network.adapters,
                 &h.state().settings.adapter_selection()
             ),
@@ -1740,9 +1732,7 @@ fn network_tab_one_ip_read_only_and_multiple_ip_combo() {
             ),
         ]);
         app.apply_network_selection(
-            opcda_egui::net::AdapterSelection::Adapter(
-                opcda_egui::net::AdapterId::parse(a).unwrap(),
-            ),
+            opclook::net::AdapterSelection::Adapter(opclook::net::AdapterId::parse(a).unwrap()),
             None,
         );
         app.open_connect_dialog();
@@ -1754,9 +1744,7 @@ fn network_tab_one_ip_read_only_and_multiple_ip_combo() {
         assert_eq!(h.query_all_by_label("192.168.1.20/24").count(), 1);
 
         h.state_mut().apply_network_selection(
-            opcda_egui::net::AdapterSelection::Adapter(
-                opcda_egui::net::AdapterId::parse(b).unwrap(),
-            ),
+            opclook::net::AdapterSelection::Adapter(opclook::net::AdapterId::parse(b).unwrap()),
             None,
         );
         h.run_steps(5);
@@ -1917,9 +1905,7 @@ fn changing_adapter_does_not_rebind_active_sessions() {
             net_adapter(b, "Wi-Fi", false, true, &[("10.0.0.5", 24)]),
         ]);
         app.apply_network_selection(
-            opcda_egui::net::AdapterSelection::Adapter(
-                opcda_egui::net::AdapterId::parse(a).unwrap(),
-            ),
+            opclook::net::AdapterSelection::Adapter(opclook::net::AdapterId::parse(a).unwrap()),
             None,
         );
         app.open_tab_for_endpoint(EndpointSpec::ua("opc.tcp://192.0.2.50:4840"));
@@ -1931,9 +1917,7 @@ fn changing_adapter_does_not_rebind_active_sessions() {
         );
 
         app.apply_network_selection(
-            opcda_egui::net::AdapterSelection::Adapter(
-                opcda_egui::net::AdapterId::parse(b).unwrap(),
-            ),
+            opclook::net::AdapterSelection::Adapter(opclook::net::AdapterId::parse(b).unwrap()),
             None,
         );
         assert_eq!(
@@ -1971,7 +1955,7 @@ fn connect_dialog_anonymous_identity_does_not_send_credentials() {
             d.ua_url = "opc.tcp://127.0.0.1:4840".to_string();
             d.ua_user = "operator".to_string();
             d.ua_password = "secret".to_string();
-            d.ua_identity = opcda_egui::app::UaIdentity::Anonymous;
+            d.ua_identity = opclook::app::UaIdentity::Anonymous;
         }
         h.run_steps(2);
         {
@@ -2004,12 +1988,12 @@ fn connect_dialog_anonymous_identity_does_not_send_credentials() {
 
 #[test]
 fn connect_identity_switch_preserves_buffers_and_certificate_auth() {
-    use opcda_egui::app::UaIdentity;
+    use opclook::app::UaIdentity;
     with_settings_lock(|| {
         let ctx = egui::Context::default();
         let mut app = App::new_test(&ctx);
         app.open_connect_dialog();
-        app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
+        app.dialogs.connect.pane = opclook::app::ConnectPane::Ua;
         app.dialogs.connect.ua_url = "opc.tcp://127.0.0.1:4840".into();
         app.dialogs.connect.ua_user = "operator".into();
         app.dialogs.connect.ua_password = "secret".into();
@@ -2059,7 +2043,7 @@ fn connect_dialog_username_identity_requires_user() {
             d.ua_url = "opc.tcp://127.0.0.1:4840".to_string();
             d.ua_user.clear();
             d.ua_password.clear();
-            d.ua_identity = opcda_egui::app::UaIdentity::UserName;
+            d.ua_identity = opclook::app::UaIdentity::UserName;
         }
         h.run_steps(2);
         {
@@ -2093,7 +2077,7 @@ fn connect_dialog_security_combos_are_typed_and_persist() {
         let ctx = egui::Context::default();
         let mut app = App::new_test(&ctx);
         app.open_connect_dialog();
-        app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
+        app.dialogs.connect.pane = opclook::app::ConnectPane::Ua;
         let mut h = harness(app);
         h.run_steps(5);
         // Both typed combos start on Auto (selected text is the a11y value).
@@ -2136,7 +2120,7 @@ fn connect_dialog_invalid_security_pair_shows_error_and_does_not_connect() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
+    app.dialogs.connect.pane = opclook::app::ConnectPane::Ua;
     app.dialogs.connect.ua_url = "opc.tcp://127.0.0.1:4840".to_string();
     app.dialogs.connect.ua_security_policy = UaSecurityPolicy::None;
     app.dialogs.connect.ua_security_mode = UaSecurityMode::SignAndEncrypt;
@@ -2170,17 +2154,17 @@ fn connect_dialog_unadvertised_security_choice_shows_error_and_does_not_connect(
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
+    app.dialogs.connect.pane = opclook::app::ConnectPane::Ua;
     app.dialogs.connect.ua_url = "opc.tcp://127.0.0.1:4840".to_string();
     // A non-empty host makes the seeded endpoint list appear to belong to the
     // current search context; opening the tab no longer auto-starts a search.
     app.dialogs.connect.ua_search_host = "127.0.0.1".to_string();
     app.dialogs.connect.ua_security_policy = UaSecurityPolicy::Basic256Sha256;
     app.dialogs.connect.ua_security_mode = UaSecurityMode::SignAndEncrypt;
-    app.dialogs.connect.ua_discovered_endpoints = vec![opcda_egui::bff::model::UaEndpointInfo {
+    app.dialogs.connect.ua_discovered_endpoints = vec![opclook::bff::model::UaEndpointInfo {
         url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
-        security_policy: opcda_egui::bff::model::AdvertisedPolicy::from_wire("None"),
-        security_mode: opcda_egui::bff::model::AdvertisedMode::from_wire("None"),
+        security_policy: opclook::bff::model::AdvertisedPolicy::from_wire("None"),
+        security_mode: opclook::bff::model::AdvertisedMode::from_wire("None"),
     }];
     let mut h = harness(app);
     h.run_steps(5);
@@ -2238,7 +2222,7 @@ fn connect_dialog_timeout_restores_but_trust_stays_opt_in() {
     app.settings.ua.ua_trust_server_cert = true;
     app.settings.ua.ua_session_timeout_ms = 300_000;
     app.open_connect_dialog();
-    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
+    app.dialogs.connect.pane = opclook::app::ConnectPane::Ua;
     let h = harness(app);
     assert!(!h.state().dialogs.connect.ua_trust_server_cert);
     assert_eq!(h.state().dialogs.connect.ua_session_timeout, 300_000);
@@ -2399,7 +2383,7 @@ fn k3_write_error_reselects_the_value() {
     let mut app = App::new_test(&ctx);
     app.settings.view.options.confirm_write = false;
     let key = seed_writable_table(&mut app, &[("a", "SigA", 42)])[0];
-    app.rows_mut_for_test()[0].canonical_vt = Some(opcda_egui::bff::model::VarType::I4); // VT_I4: text is not accepted
+    app.rows_mut_for_test()[0].canonical_vt = Some(opclook::bff::model::VarType::I4); // VT_I4: text is not accepted
     let mut h = harness(app);
     h.state_mut().open_write_dialog(vec![key]);
     h.run_steps(3);
@@ -2651,8 +2635,8 @@ fn disconnect_event_keeps_rows_and_marks_them_stale() {
 
     app.on_event_for_test_at(
         sid(1),
-        opcda_egui::bff::model::EventKind::Disconnected {
-            reason: opcda_egui::bff::model::BackendMsg::raw("связь потеряна"),
+        opclook::bff::model::EventKind::Disconnected {
+            reason: opclook::bff::model::BackendMsg::raw("связь потеряна"),
         },
     );
 
@@ -2690,8 +2674,8 @@ fn reconnect_connected_resubscribes_rows_requests_browse_and_read() {
     // Drop the connection.
     app.on_event_for_test_at(
         sid(1),
-        opcda_egui::bff::model::EventKind::Disconnected {
-            reason: opcda_egui::bff::model::BackendMsg::raw("связь потеряна"),
+        opclook::bff::model::EventKind::Disconnected {
+            reason: opclook::bff::model::BackendMsg::raw("связь потеряна"),
         },
     );
     assert_eq!(app.rows().len(), 2);
@@ -2703,9 +2687,9 @@ fn reconnect_connected_resubscribes_rows_requests_browse_and_read() {
     app.on_event_for_test_with_request(
         sid(1),
         request,
-        opcda_egui::bff::model::EventKind::Connected {
+        opclook::bff::model::EventKind::Connected {
             endpoint: EndpointSpec::da("", "Srv.Test"),
-            info: opcda_egui::bff::model::BackendMsg::raw("подключено"),
+            info: opclook::bff::model::BackendMsg::raw("подключено"),
         },
     );
 
@@ -2852,12 +2836,12 @@ fn ua_reconnect_resubscribes_rows_and_resets_subscription_flag() {
         let ua = view.ua_mut().unwrap();
         ua.subscription = SubscriptionState::Active;
         ua.ua_view_id = Some("ns=1;s=view".into());
-        ua.ua_browse_filter = opcda_egui::bff::model::NodeClassFilter::Variables;
+        ua.ua_browse_filter = opclook::bff::model::NodeClassFilter::Variables;
     }
     app.on_event_for_test_at(
         sid(1),
         EventKind::Disconnected {
-            reason: opcda_egui::bff::model::BackendMsg::raw("связь потеряна"),
+            reason: opclook::bff::model::BackendMsg::raw("связь потеряна"),
         },
     );
     // While disconnected the subscription is gone.
@@ -2875,7 +2859,7 @@ fn ua_reconnect_resubscribes_rows_and_resets_subscription_flag() {
         request,
         EventKind::Connected {
             endpoint,
-            info: opcda_egui::bff::model::BackendMsg::raw("подключено"),
+            info: opclook::bff::model::BackendMsg::raw("подключено"),
         },
     );
     let view = app.sessions.iter().find(|s| s.id == sid(1)).unwrap();
@@ -2892,12 +2876,11 @@ fn ua_reconnect_resubscribes_rows_and_resets_subscription_flag() {
     );
     assert_eq!(
         view.ua().unwrap().ua_browse_filter,
-        opcda_egui::bff::model::NodeClassFilter::Variables
+        opclook::bff::model::NodeClassFilter::Variables
     );
     assert_eq!(view.ua().unwrap().ua_session_timeout_ms, 123_000);
     // Rows offered for re-add (AddItems dispatched via register_rows).
-    let rows: Vec<&opcda_egui::app::Row> =
-        app.rows().iter().filter(|r| r.session == sid(1)).collect();
+    let rows: Vec<&opclook::app::Row> = app.rows().iter().filter(|r| r.session == sid(1)).collect();
     assert_eq!(rows.len(), 2);
     assert!(
         rows.iter().all(|r| r.pending),
@@ -2987,8 +2970,8 @@ fn reconnect_attempts_cap_stops_the_loop_and_shows_exhausted() {
         sid(1),
         connect,
         EventKind::Error {
-            operation: opcda_egui::bff::model::Operation::Connect,
-            message: opcda_egui::bff::model::BackendMsg::raw("опять"),
+            operation: opclook::bff::model::Operation::Connect,
+            message: opclook::bff::model::BackendMsg::raw("опять"),
         },
     );
     // Re-scheduling must refuse: the state becomes Exhausted, no new timer.
@@ -3004,7 +2987,7 @@ fn reconnect_attempts_cap_stops_the_loop_and_shows_exhausted() {
 /// ArrowDown then starts navigating from the first visible node.
 #[test]
 fn tree_click_focus_enables_arrow_navigation() {
-    use opcda_egui::app::BottomTab;
+    use opclook::app::BottomTab;
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     // Keep both bottom panels off so the tree pane is tall enough for an empty
@@ -3130,7 +3113,7 @@ fn tree_enter_on_unsubscribed_item_adds_row_without_dialog() {
         .journal
         .entries()
         .back()
-        .map(|e| e.render(opcda_egui::i18n::Lang::Ru))
+        .map(|e| e.render(opclook::i18n::Lang::Ru))
         .unwrap_or_default();
     assert!(note.contains("Сигнал добавлен в таблицу"), "got: {note}");
 }
@@ -3163,7 +3146,7 @@ fn tree_focus_cleared_by_typing_in_text_field() {
 // ---- Unified connect dialog (Task 2) ----
 
 /// The connect dialog always opens on the OPC DA tab and immediately starts
-/// local discovery (da_pending == true), like the original Delphi.
+/// local discovery (da_pending == true) as the dialog opens.
 #[test]
 fn connect_dialog_opens_on_da_tab_with_auto_discovery() {
     let ctx = egui::Context::default();
@@ -3173,7 +3156,7 @@ fn connect_dialog_opens_on_da_tab_with_auto_discovery() {
     h.run_steps(3);
     assert_eq!(
         h.state().dialogs.connect.pane.protocol(),
-        opcda_egui::bff::model::Protocol::OpcDa
+        opclook::bff::model::Protocol::OpcDa
     );
     assert_eq!(
         h.state().dialogs.connect.da_pending,
@@ -3192,7 +3175,7 @@ fn connect_dialog_da_auto_search_uses_combined_flag() {
     // sub-search; without an adapter only the local search would run.
     app.network.loaded = true;
     app.network.lease = Some(lease_with_subnet("10.0.0.5", 24));
-    use opcda_egui::bff::model::Protocol;
+    use opclook::bff::model::Protocol;
     app.settings
         .recent_endpoints
         .push(EndpointSpec::da("127.0.0.1", "Alpha.Server"));
@@ -3217,7 +3200,7 @@ fn connect_dialog_da_auto_search_uses_combined_flag() {
 #[test]
 fn tab_strip_is_in_tags_area_not_top_panel() {
     assert!(
-        !opcda_egui::ui::top_tab_panel_enabled(),
+        !opclook::ui::top_tab_panel_enabled(),
         "the old 'session_tabs' top panel must not be mounted"
     );
     let ctx = egui::Context::default();
@@ -3237,11 +3220,11 @@ fn connect_dialog_ua_empty_host_without_adapter_searches_loopback_only() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
+    app.dialogs.connect.pane = opclook::app::ConnectPane::Ua;
     app.record_dispatches_for_test();
     app.search_ua_all();
-    let opcda_egui::app::UaSearch::Auto {
-        pending: opcda_egui::app::AutoPending::Host(request),
+    let opclook::app::UaSearch::Auto {
+        pending: opclook::app::AutoPending::Host(request),
     } = app.dialogs.connect.ua_search
     else {
         panic!("host auto search")
@@ -3260,20 +3243,18 @@ fn connect_dialog_ua_empty_host_without_adapter_searches_loopback_only() {
     let hosts = [("127.0.0.1".to_string(), 4840)];
     for (h_name, p) in hosts {
         app.on_event_for_test_with_request(
-            opcda_egui::bff::model::Owner::Discovery,
+            opclook::bff::model::Owner::Discovery,
             request,
             EventKind::UaServersFound {
                 host: h_name.clone(),
                 port: p,
-                servers: vec![opcda_egui::bff::model::UaServerInfo {
+                servers: vec![opclook::bff::model::UaServerInfo {
                     application_name: "SRV".to_string(),
                     application_uri: format!("urn:srv-{h_name}"),
-                    endpoints: vec![opcda_egui::bff::model::UaEndpointInfo {
+                    endpoints: vec![opclook::bff::model::UaEndpointInfo {
                         url: format!("opc.tcp://{h_name}:{p}").parse().unwrap(),
-                        security_policy: opcda_egui::bff::model::AdvertisedPolicy::from_wire(
-                            "None",
-                        ),
-                        security_mode: opcda_egui::bff::model::AdvertisedMode::from_wire("None"),
+                        security_policy: opclook::bff::model::AdvertisedPolicy::from_wire("None"),
+                        security_mode: opclook::bff::model::AdvertisedMode::from_wire("None"),
                     }],
                 }],
             },
@@ -3347,7 +3328,7 @@ fn tab_strip_many_tabs_scroll_without_breaking_table() {
 /// port field is EMPTY by default (the port internally defaults to 4840).
 #[test]
 fn connect_dialog_port_field_visibility_per_tab() {
-    use opcda_egui::bff::model::Protocol;
+    use opclook::bff::model::Protocol;
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
@@ -3377,13 +3358,13 @@ fn connect_dialog_port_field_visibility_per_tab() {
 /// Selecting a DA server from the list enables connect and fills state.
 #[test]
 fn connect_dialog_select_da_server_enables_connect() {
-    use opcda_egui::bff::model::Protocol;
-    use opcda_egui::bff::model::ServerEntry;
+    use opclook::bff::model::Protocol;
+    use opclook::bff::model::ServerEntry;
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
     app.dialogs.connect.da_pending = false;
-    app.dialogs.connect.da_servers.push(opcda_egui::app::DaHit {
+    app.dialogs.connect.da_servers.push(opclook::app::DaHit {
         server: ServerEntry {
             id: "Alpha.Server".to_string(),
             description: "Тестовый".to_string(),
@@ -3416,12 +3397,12 @@ fn connect_dialog_select_da_server_enables_connect() {
 /// Selecting a UA search result fills the URL field.
 #[test]
 fn connect_dialog_select_ua_result_fills_url() {
-    use opcda_egui::bff::model::UaEndpointInfo;
-    use opcda_egui::bff::model::UaServerInfo;
+    use opclook::bff::model::UaEndpointInfo;
+    use opclook::bff::model::UaServerInfo;
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
+    app.dialogs.connect.pane = opclook::app::ConnectPane::Ua;
     app.dialogs
         .connect
         .ua_search_results_mut_for_test()
@@ -3430,8 +3411,8 @@ fn connect_dialog_select_ua_result_fills_url() {
             application_uri: "urn:test".to_string(),
             endpoints: vec![UaEndpointInfo {
                 url: "opc.tcp://127.0.0.1:4840".parse().unwrap(),
-                security_policy: opcda_egui::bff::model::AdvertisedPolicy::from_wire("None"),
-                security_mode: opcda_egui::bff::model::AdvertisedMode::from_wire("None"),
+                security_policy: opclook::bff::model::AdvertisedPolicy::from_wire("None"),
+                security_mode: opclook::bff::model::AdvertisedMode::from_wire("None"),
             }],
         });
     let mut h = harness(app);
@@ -3463,7 +3444,7 @@ fn rejected_ua_connect_keeps_popup_open_with_error() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
+    app.dialogs.connect.pane = opclook::app::ConnectPane::Ua;
     app.dialogs.connect.ua_url = "opc.tcp://192.0.2.77:4840".to_string();
     let mut h = harness(app);
     h.run_steps(4);
@@ -3485,7 +3466,7 @@ fn rejected_ua_connect_keeps_popup_open_with_error() {
 #[test]
 fn columns_dialog_down_moves_row_and_persists() {
     with_settings_lock(|| {
-        use opcda_egui::columns::ColumnId;
+        use opclook::columns::ColumnId;
         let ctx = egui::Context::default();
         let mut app = App::new_test(&ctx);
         seed_table(&mut app, &[("a", "SigA", 1)]);
@@ -3533,7 +3514,7 @@ fn columns_dialog_down_moves_row_and_persists() {
 #[test]
 fn language_menu_switches_ui_language() {
     with_settings_lock(|| {
-        use opcda_egui::i18n::Lang;
+        use opclook::i18n::Lang;
 
         let ctx = egui::Context::default();
         let mut app = App::new_test(&ctx);
@@ -3567,26 +3548,26 @@ fn language_menu_switches_ui_language() {
 #[test]
 fn language_switch_persists_in_settings() {
     with_settings_lock(|| {
-        use opcda_egui::i18n::Lang;
+        use opclook::i18n::Lang;
 
         let ctx = egui::Context::default();
         let mut app = App::new_test(&ctx);
         // A brand-new app has no persisted language: it inherits the Russian
         // default.
-        assert_eq!(app.lang(), opcda_egui::i18n::Lang::Ru);
+        assert_eq!(app.lang(), opclook::i18n::Lang::Ru);
 
         // Persisting Russian must survive a restart (the persisted value wins
         // over the Russian default — here it equals it).
         app.set_lang(Lang::Ru);
         assert_eq!(app.lang(), Lang::Ru);
-        let reloaded = opcda_egui::settings::Settings::load().settings;
+        let reloaded = opclook::settings::Settings::load().settings;
         assert_eq!(reloaded.lang(), Lang::Ru);
 
         // And switching to Chinese persists through Settings::save() to
         // settings.json; a persisted non-default language is never overridden.
         app.set_lang(Lang::Zh);
         assert_eq!(app.lang(), Lang::Zh);
-        let reloaded2 = opcda_egui::settings::Settings::load().settings;
+        let reloaded2 = opclook::settings::Settings::load().settings;
         assert_eq!(reloaded2.lang(), Lang::Zh);
     });
 }
@@ -3594,7 +3575,7 @@ fn language_switch_persists_in_settings() {
 #[test]
 fn language_switch_keeps_rows_and_selection() {
     with_settings_lock(|| {
-        use opcda_egui::i18n::Lang;
+        use opclook::i18n::Lang;
 
         let ctx = egui::Context::default();
         let mut app = App::new_test(&ctx);
@@ -3663,7 +3644,7 @@ fn seed_branch_with_items(app: &mut App) -> (u64, u64, u64) {
 /// for `node_id` (request-id correlation).
 fn feed_job_browse(
     app: &mut App,
-    session: opcda_egui::bff::model::SessionId,
+    session: opclook::bff::model::SessionId,
     node_id: &str,
     children: Vec<BrowseNode>,
 ) {
@@ -3855,7 +3836,7 @@ fn add_dropped_tree_cross_session_warns_and_skips() {
 
     assert_eq!(app.rows().len(), 0, "cross-session drop must be skipped");
     let warned = app.journal.entries().iter().any(|e| {
-        e.render(opcda_egui::i18n::Lang::Ru)
+        e.render(opclook::i18n::Lang::Ru)
             .contains("активного сервера")
     });
     assert!(warned, "cross-session drop must journal a warning");
@@ -3878,7 +3859,7 @@ fn kittest_drag_not_feasible_in_harness() {
 
 // ---- Session tabs / persistent containers (Task: tabs architecture) ----
 
-use opcda_egui::app::ConfirmAction;
+use opclook::app::ConfirmAction;
 
 /// Simulate a double-click on a server row in the connect dialog (tests drive
 /// the same app-level path the double-click handler calls).
@@ -4214,7 +4195,7 @@ fn disconnect_keeps_container_and_does_not_arm_reconnect() {
     app.on_event_for_test_at(
         sid(1),
         EventKind::Disconnected {
-            reason: opcda_egui::bff::model::BackendMsg::raw("отключено"),
+            reason: opclook::bff::model::BackendMsg::raw("отключено"),
         },
     );
     assert_eq!(
@@ -4651,7 +4632,7 @@ fn a7_toolbar_connect_reconnects_a_disconnected_active_session() {
 fn fresh_app_defaults_to_russian() {
     let ctx = egui::Context::default();
     let app = App::new_test(&ctx);
-    assert_eq!(app.lang(), opcda_egui::i18n::Lang::Ru);
+    assert_eq!(app.lang(), opclook::i18n::Lang::Ru);
 }
 
 /// `on_exit` must actually wait for the backend teardown: after it returns the
@@ -4674,13 +4655,13 @@ fn on_exit_shuts_down_the_gateway() {
         let error = app
             .gateway_for_test()
             .send(Command {
-                request_id: opcda_egui::bff::model::RequestId::new(1),
+                request_id: opclook::bff::model::RequestId::new(1),
                 owner: sid(1).into(),
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::Test,
             })
             .unwrap_err();
-        assert_eq!(error, opcda_egui::bff::SendError::GatewayClosed);
+        assert_eq!(error, opclook::bff::SendError::GatewayClosed);
     });
 }
 
@@ -4690,11 +4671,11 @@ fn u9_start_attempt(
     app: &mut App,
     url: &str,
 ) -> (
-    opcda_egui::bff::model::SessionId,
-    opcda_egui::bff::model::RequestId,
+    opclook::bff::model::SessionId,
+    opclook::bff::model::RequestId,
 ) {
     app.open_connect_dialog();
-    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
+    app.dialogs.connect.pane = opclook::app::ConnectPane::Ua;
     app.dialogs.connect.ua_url = url.to_string();
     assert!(app.connect_from_dialog(EndpointSpec::ua(url)));
     let session = app.active_session.expect("session created by the attempt");
@@ -4720,7 +4701,7 @@ fn u9_dialog_stays_open_until_connected_then_closes() {
             request,
             EventKind::Connected {
                 endpoint: EndpointSpec::ua("opc.tcp://127.0.0.1:1"),
-                info: opcda_egui::bff::model::BackendMsg::raw("ok"),
+                info: opclook::bff::model::BackendMsg::raw("ok"),
             },
         );
         assert!(!app.dialogs.connect.open, "Connected closes the dialog");
@@ -4739,8 +4720,8 @@ fn u9_connect_error_stays_in_the_dialog_and_stops_the_retry_loop() {
             session,
             request,
             EventKind::Error {
-                operation: opcda_egui::bff::model::Operation::Connect,
-                message: opcda_egui::bff::model::BackendMsg::raw("certificate rejected"),
+                operation: opclook::bff::model::Operation::Connect,
+                message: opclook::bff::model::BackendMsg::raw("certificate rejected"),
             },
         );
         assert!(
@@ -4778,7 +4759,7 @@ fn u9_cancel_aborts_the_wait_and_ignores_the_late_reply() {
             request,
             EventKind::Connected {
                 endpoint: EndpointSpec::ua("opc.tcp://127.0.0.1:1"),
-                info: opcda_egui::bff::model::BackendMsg::raw("late"),
+                info: opclook::bff::model::BackendMsg::raw("late"),
             },
         );
         assert_eq!(app.sessions[0].state, SessionState::Disconnected);
@@ -4799,7 +4780,7 @@ fn u9_other_session_connecting_does_not_close_the_dialog() {
             sid(7),
             EventKind::Connected {
                 endpoint: EndpointSpec::ua("opc.tcp://127.0.0.1:2"),
-                info: opcda_egui::bff::model::BackendMsg::raw("background"),
+                info: opclook::bff::model::BackendMsg::raw("background"),
             },
         );
         assert!(
@@ -4833,7 +4814,7 @@ fn journal_text(app: &App) -> String {
     app.journal
         .entries()
         .iter()
-        .map(|e| e.render(opcda_egui::i18n::Lang::Ru))
+        .map(|e| e.render(opclook::i18n::Lang::Ru))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -4841,7 +4822,7 @@ fn journal_text(app: &App) -> String {
 #[test]
 fn a2_damaged_settings_file_is_backed_up_and_reported_in_the_journal() {
     with_settings_lock(|| {
-        let dir = opcda_egui::settings::app_dir();
+        let dir = opclook::settings::app_dir();
         std::fs::create_dir_all(&dir).expect("settings dir");
         std::fs::write(dir.join("settings.json"), "{ broken").expect("write damaged file");
         let loaded = Settings::load();
@@ -4866,7 +4847,7 @@ fn a2_damaged_settings_file_is_backed_up_and_reported_in_the_journal() {
 #[test]
 fn a2_failed_settings_save_is_reported_in_the_journal() {
     with_settings_lock(|| {
-        let dir = opcda_egui::settings::app_dir();
+        let dir = opclook::settings::app_dir();
         // A directory in place of settings.json makes the final rename fail.
         std::fs::create_dir_all(dir.join("settings.json")).expect("squatting dir");
         let ctx = egui::Context::default();
@@ -4890,19 +4871,19 @@ fn a3_failed_connectivity_test_marks_rows_stale_like_disconnected() {
     assert!(
         app.rows()
             .iter()
-            .all(|r| r.quality.kind() == opcda_egui::bff::model::QualityKind::Good)
+            .all(|r| r.quality.kind() == opclook::bff::model::QualityKind::Good)
     );
     app.on_event_for_test_at(
         sid(1),
         EventKind::Error {
-            operation: opcda_egui::bff::model::Operation::Test,
-            message: opcda_egui::bff::model::BackendMsg::raw("link down"),
+            operation: opclook::bff::model::Operation::Test,
+            message: opclook::bff::model::BackendMsg::raw("link down"),
         },
     );
     assert_eq!(app.sessions[0].state, SessionState::Disconnected);
-    let stale = opcda_egui::i18n::tr(opcda_egui::i18n::Lang::Ru, opcda_egui::i18n::Tr::StaleData);
+    let stale = opclook::i18n::tr(opclook::i18n::Lang::Ru, opclook::i18n::Tr::StaleData);
     for row in app.rows() {
-        assert_eq!(row.quality.kind(), opcda_egui::bff::model::QualityKind::Bad);
+        assert_eq!(row.quality.kind(), opclook::bff::model::QualityKind::Bad);
         assert_eq!(row.quality.text(), stale);
     }
 }
@@ -4932,14 +4913,14 @@ fn da_preparation_failure_is_rendered_by_real_update_frames() {
     });
 }
 
-fn sid(raw: u64) -> opcda_egui::bff::model::SessionId {
-    opcda_egui::bff::model::SessionId::new(raw).unwrap()
+fn sid(raw: u64) -> opclook::bff::model::SessionId {
+    opclook::bff::model::SessionId::new(raw).unwrap()
 }
 
 #[test]
 fn scan_terminal_outcomes_keep_partial_results_and_progress() {
-    use opcda_egui::app::UaSearch;
-    use opcda_egui::bff::model::{BackendMsg, ScanEnd};
+    use opclook::app::UaSearch;
+    use opclook::bff::model::{BackendMsg, ScanEnd};
     for end in [
         ScanEnd::Cancelled,
         ScanEnd::Failed(BackendMsg::raw("scan failed")),
@@ -4976,7 +4957,7 @@ fn scan_terminal_outcomes_keep_partial_results_and_progress() {
 
 #[test]
 fn large_subnet_confirmation_ui_starts_only_after_yes_and_can_stop() {
-    use opcda_egui::app::{ConnectPane, UaSearch};
+    use opclook::app::{ConnectPane, UaSearch};
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
@@ -5026,7 +5007,7 @@ fn large_subnet_confirmation_ui_starts_only_after_yes_and_can_stop() {
 
 #[test]
 fn csv_import_cancel_retains_partial_rows_and_close_then_complete() {
-    use opcda_egui::app::CsvImportState;
+    use opclook::app::CsvImportState;
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
@@ -5034,7 +5015,7 @@ fn csv_import_cancel_retains_partial_rows_and_close_then_complete() {
     for i in 0..100_000 {
         csv.push_str(&format!("Srv.Test;Tag{i};Name{i}\n"));
     }
-    opcda_egui::ui::start_csv_import(&mut app, csv);
+    opclook::ui::start_csv_import(&mut app, csv);
     let mut h = harness(app);
     h.run_steps(1);
     h.get_by_label("Отмена").click();
@@ -5051,7 +5032,7 @@ fn csv_import_cancel_retains_partial_rows_and_close_then_complete() {
     assert!(h.state().csv_import.is_none());
     assert_eq!(h.state().rows().len(), retained);
 
-    opcda_egui::ui::start_csv_import(
+    opclook::ui::start_csv_import(
         h.state_mut(),
         "server;item_id;name\nSrv.Test;Final;Final\n".into(),
     );
@@ -5066,7 +5047,7 @@ fn csv_import_cancel_retains_partial_rows_and_close_then_complete() {
 
 #[test]
 fn da_results_with_same_progid_select_their_own_host() {
-    use opcda_egui::bff::model::ServerEntry;
+    use opclook::bff::model::ServerEntry;
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
@@ -5103,8 +5084,8 @@ fn da_results_with_same_progid_select_their_own_host() {
 
 #[test]
 fn double_click_da_result_connects_to_its_host() {
-    use opcda_egui::app::DaHit;
-    use opcda_egui::bff::model::ServerEntry;
+    use opclook::app::DaHit;
+    use opclook::bff::model::ServerEntry;
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
@@ -5122,7 +5103,7 @@ fn double_click_da_result_connects_to_its_host() {
         .with_step_dt(0.016)
         .with_accessibility_check(false)
         .allow_missing_glyphs()
-        .build_ui_state(|ui, app| opcda_egui::ui::draw(app, ui), app);
+        .build_ui_state(|ui, app| opclook::ui::draw(app, ui), app);
     h.run_steps(2);
     h.get_by_label("Vendor.OPC — Factory @ plant-b").click();
     h.run_steps(1);
@@ -5170,17 +5151,17 @@ fn browse_filter_control_is_ua_only_and_changes_ua_filter() {
     h.run_steps(3);
     assert_eq!(
         h.state().sessions[1].ua().unwrap().ua_browse_filter,
-        opcda_egui::bff::model::NodeClassFilter::Variables
+        opclook::bff::model::NodeClassFilter::Variables
     );
 }
 
 #[test]
 fn ua_result_tree_rebuilds_after_same_length_replacement() {
-    use opcda_egui::bff::model::{AdvertisedMode, AdvertisedPolicy, UaEndpointInfo, UaServerInfo};
+    use opclook::bff::model::{AdvertisedMode, AdvertisedPolicy, UaEndpointInfo, UaServerInfo};
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
-    app.dialogs.connect.pane = opcda_egui::app::ConnectPane::Ua;
+    app.dialogs.connect.pane = opclook::app::ConnectPane::Ua;
     let server = |url: &str, policy: &str, mode: &str| UaServerInfo {
         application_name: "Server".into(),
         application_uri: "urn:test".into(),
@@ -5216,8 +5197,8 @@ fn ua_result_tree_rebuilds_after_same_length_replacement() {
 
 #[test]
 fn p2_open_connect_menu_button_and_keyboard_are_equivalent() {
-    use opcda_egui::app::{DaHit, actions::UiAction};
-    use opcda_egui::bff::model::ServerEntry;
+    use opclook::app::{DaHit, actions::UiAction};
+    use opclook::bff::model::ServerEntry;
     let mut outcomes = Vec::new();
     for source in 0..6 {
         let ctx = egui::Context::default();
@@ -5266,8 +5247,8 @@ fn p2_open_connect_menu_button_and_keyboard_are_equivalent() {
 
 #[test]
 fn p2_availability_is_pure_and_execution_rechecks_modal_state() {
-    use opcda_egui::app::actions::UiAction;
-    use opcda_egui::i18n::Tr;
+    use opclook::app::actions::UiAction;
+    use opclook::i18n::Tr;
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.record_dispatches_for_test();
@@ -5375,7 +5356,7 @@ fn p2_write_confirmation_cancel_and_connection_change_do_not_write() {
             h.state_mut().on_event_for_test_at(
                 sid(1),
                 EventKind::Disconnected {
-                    reason: opcda_egui::bff::model::BackendMsg::raw("test disconnect"),
+                    reason: opclook::bff::model::BackendMsg::raw("test disconnect"),
                 },
             );
             h.run_steps(5);
@@ -5392,13 +5373,13 @@ fn p2_write_confirmation_cancel_and_connection_change_do_not_write() {
                 request,
                 EventKind::Connected {
                     endpoint: EndpointSpec::da("", "Srv.Test"),
-                    info: opcda_egui::bff::model::BackendMsg::raw("reconnected"),
+                    info: opclook::bff::model::BackendMsg::raw("reconnected"),
                 },
             );
             assert_eq!(h.state().sessions[0].state, SessionState::Connected);
-            let message = opcda_egui::i18n::tr(
-                opcda_egui::i18n::Lang::Ru,
-                opcda_egui::i18n::Tr::ActionWriteConnectionChanged,
+            let message = opclook::i18n::tr(
+                opclook::i18n::Lang::Ru,
+                opclook::i18n::Tr::ActionWriteConnectionChanged,
             );
             assert!(journal_text(h.state()).contains(message));
             h.state_mut().confirm_yes();
@@ -5430,9 +5411,9 @@ fn p2_write_pending_confirmation_does_not_survive_reconnect() {
     assert!(app.dialogs.confirm.is_some());
     app.reconnect_session(sid(1));
     assert!(app.dialogs.confirm.is_none());
-    assert!(journal_text(&app).contains(opcda_egui::i18n::tr(
-        opcda_egui::i18n::Lang::Ru,
-        opcda_egui::i18n::Tr::ActionWriteConnectionChanged
+    assert!(journal_text(&app).contains(opclook::i18n::tr(
+        opclook::i18n::Lang::Ru,
+        opclook::i18n::Tr::ActionWriteConnectionChanged
     )));
     let request = app
         .dispatched_for_test()
@@ -5451,7 +5432,7 @@ fn p2_write_pending_confirmation_does_not_survive_reconnect() {
         request,
         EventKind::Connected {
             endpoint,
-            info: opcda_egui::bff::model::BackendMsg::raw("reconnected"),
+            info: opclook::bff::model::BackendMsg::raw("reconnected"),
         },
     );
     assert_eq!(app.sessions[0].state, SessionState::Connected);
@@ -5477,15 +5458,15 @@ fn p2_gui_rejected_write_diagnostic_does_not_expose_value() {
     app.on_event_for_test_at(
         sid(1),
         EventKind::Disconnected {
-            reason: opcda_egui::bff::model::BackendMsg::raw("test disconnect"),
+            reason: opclook::bff::model::BackendMsg::raw("test disconnect"),
         },
     );
     app.apply_write();
     assert_eq!(
         app.status,
-        opcda_egui::i18n::tr(
-            opcda_egui::i18n::Lang::Ru,
-            opcda_egui::i18n::Tr::ActionSessionNotConnected
+        opclook::i18n::tr(
+            opclook::i18n::Lang::Ru,
+            opclook::i18n::Tr::ActionSessionNotConnected
         )
     );
     assert!(
@@ -5509,7 +5490,7 @@ fn p2_disconnected_write_is_disabled_before_confirmation() {
     app.on_event_for_test_at(
         sid(1),
         EventKind::Disconnected {
-            reason: opcda_egui::bff::model::BackendMsg::raw("disconnected"),
+            reason: opclook::bff::model::BackendMsg::raw("disconnected"),
         },
     );
     let mut h = harness(app);
@@ -5547,7 +5528,7 @@ fn p2_session_diagnostic_redacts_known_credentials() {
     app.on_event_for_test_at(
         sid(1),
         EventKind::Log {
-            message: opcda_egui::bff::model::BackendMsg::raw(
+            message: opclook::bff::model::BackendMsg::raw(
                 "p2-username p2-password-secret server failure",
             ),
         },
@@ -5703,7 +5684,7 @@ fn p2_click_write_shows_oversized_batch_error_without_dispatch() {
     app.select_only(0);
     app.open_write_dialog(Vec::new());
     // Exercise the batch guard without rendering a megabyte in the text field.
-    let per_request = std::mem::size_of::<opcda_egui::bff::model::WriteRequest>() + 1;
+    let per_request = std::mem::size_of::<opclook::bff::model::WriteRequest>() + 1;
     let count = 16 * 1024 * 1024 / per_request + 1;
     app.dialogs.write.keys = vec![keys[0]; count];
     app.dialogs.write.text = "1".into();
@@ -5735,7 +5716,7 @@ fn p2_oversized_input_precedes_session_availability_in_apply_write() {
     app.on_event_for_test_at(
         sid(1),
         EventKind::Disconnected {
-            reason: opcda_egui::bff::model::BackendMsg::raw("test disconnect"),
+            reason: opclook::bff::model::BackendMsg::raw("test disconnect"),
         },
     );
     app.dialogs.write.text = "x".repeat(1024 * 1024 + 1);
@@ -5874,7 +5855,7 @@ fn p3_macos_mod_n_rejects_extra_control() {
         .allow_missing_glyphs()
         .with_os(egui::os::OperatingSystem::Mac)
         .build_ui_state(
-            |ui, app: &mut App| opcda_egui::ui::draw(app, ui),
+            |ui, app: &mut App| opclook::ui::draw(app, ui),
             App::new_test(&egui::Context::default()),
         );
     h.run_steps(3);
@@ -6222,7 +6203,7 @@ fn p3_desktop_copy_event_copies_selected_table_rows() {
     h.run_steps(1);
     assert_eq!(
         h.state().status,
-        opcda_egui::i18n::tr(opcda_egui::i18n::Lang::Ru, opcda_egui::i18n::Tr::Copied)
+        opclook::i18n::tr(opclook::i18n::Lang::Ru, opclook::i18n::Tr::Copied)
     );
 }
 
@@ -6296,7 +6277,7 @@ fn p3_enter_on_add_cancel_does_not_submit() {
 #[test]
 fn p3_ime_space_on_column_reset_does_not_change_settings() {
     with_settings_lock(|| {
-        use opcda_egui::columns::ColumnId;
+        use opclook::columns::ColumnId;
         let mut app = App::new_test(&egui::Context::default());
         app.settings
             .view
@@ -6510,7 +6491,7 @@ fn p3_enter_on_options_save_applies_draft() {
 
 #[test]
 fn p3_followup_empty_state_displays_current_bindings_in_three_languages() {
-    use opcda_egui::i18n::Lang;
+    use opclook::i18n::Lang;
     for lang in [Lang::Ru, Lang::En, Lang::Zh] {
         for width in [480.0, 1200.0] {
             let mut app = App::new_test(&egui::Context::default());
@@ -6521,7 +6502,7 @@ fn p3_followup_empty_state_displays_current_bindings_in_three_languages() {
                 .with_max_steps(60)
                 .with_accessibility_check(false)
                 .allow_missing_glyphs()
-                .build_ui_state(|ui, app| opcda_egui::ui::draw(app, ui), app);
+                .build_ui_state(|ui, app| opclook::ui::draw(app, ui), app);
             h.run_steps(3);
             assert!(h.query_all_by_label_contains("Ctrl+N").next().is_some());
             assert!(h.query_all_by_label_contains("F6").next().is_some());
@@ -6554,7 +6535,7 @@ fn p3_followup_add_menu_does_not_claim_tree_enter_equivalence() {
 
 #[test]
 fn p4_palette_search_is_read_only_and_displays_context_reason_in_three_languages() {
-    use opcda_egui::i18n::{Lang, Tr, tr};
+    use opclook::i18n::{Lang, Tr, tr};
     for lang in [Lang::Ru, Lang::En, Lang::Zh] {
         let mut app = App::new_test(&egui::Context::default());
         app.settings.set_lang(lang);
@@ -6566,7 +6547,7 @@ fn p4_palette_search_is_read_only_and_displays_context_reason_in_three_languages
             .with_max_steps(60)
             .with_accessibility_check(false)
             .allow_missing_glyphs()
-            .build_ui_state(|ui, app| opcda_egui::ui::draw(app, ui), app);
+            .build_ui_state(|ui, app| opclook::ui::draw(app, ui), app);
         h.run_steps(3);
         assert!(h.query_by_label_contains("ui.connect.open").is_some());
         assert!(h.query_by_label_contains("2001").is_some());
@@ -6637,7 +6618,7 @@ fn p4_unavailable_other_modal_cannot_be_bypassed_by_palette() {
 
 #[test]
 fn p4_localized_name_and_semantic_id_search() {
-    use opcda_egui::i18n::{Lang, Tr, tr};
+    use opclook::i18n::{Lang, Tr, tr};
     for lang in [Lang::Ru, Lang::En, Lang::Zh] {
         let mut app = App::new_test(&egui::Context::default());
         app.settings.set_lang(lang);
@@ -6649,7 +6630,7 @@ fn p4_localized_name_and_semantic_id_search() {
             .with_max_steps(60)
             .with_accessibility_check(false)
             .allow_missing_glyphs()
-            .build_ui_state(|ui, app| opcda_egui::ui::draw(app, ui), app);
+            .build_ui_state(|ui, app| opclook::ui::draw(app, ui), app);
         h.run_steps(3);
         assert!(h.query_by_label_contains("session.browse").is_some());
         assert!(h.query_by_label_contains("session.write").is_none());
@@ -6799,7 +6780,7 @@ fn p4_palette_enter_never_confirms_background_write() {
 
 #[test]
 fn p4_message_preempts_palette_escape_without_accepting_same_event() {
-    use opcda_egui::app::MessageDialog;
+    use opclook::app::MessageDialog;
     let mut app = App::new_test(&egui::Context::default());
     app.dialogs.palette.open = true;
     app.dialogs.palette.focus_pending = true;
@@ -6821,7 +6802,7 @@ fn p4_message_preempts_palette_escape_without_accepting_same_event() {
 
 #[test]
 fn p4_interrupted_ime_without_end_stays_fail_closed_until_focus_loss() {
-    use opcda_egui::app::MessageDialog;
+    use opclook::app::MessageDialog;
     let mut app = App::new_test(&egui::Context::default());
     app.dialogs.palette.open = true;
     app.dialogs.palette.focus_pending = true;
@@ -6850,7 +6831,7 @@ fn p4_interrupted_ime_without_end_stays_fail_closed_until_focus_loss() {
 
 #[test]
 fn p4_message_button_ignores_ime_keyboard_and_allows_pointer() {
-    use opcda_egui::app::MessageDialog;
+    use opclook::app::MessageDialog;
     let mut app = App::new_test(&egui::Context::default());
     app.dialogs.palette.open = true;
     app.dialogs.palette.focus_pending = true;
@@ -6878,7 +6859,7 @@ fn p4_message_button_ignores_ime_keyboard_and_allows_pointer() {
 
 #[test]
 fn keyboard_regions_edit_focused_tag_and_confirm_selected_choice() {
-    use opcda_egui::i18n::Lang;
+    use opclook::i18n::Lang;
     for lang in [Lang::Ru, Lang::En, Lang::Zh] {
         for accept in [false, true] {
             let ctx = egui::Context::default();
@@ -6892,7 +6873,7 @@ fn keyboard_regions_edit_focused_tag_and_confirm_selected_choice() {
                 .with_max_steps(60)
                 .with_accessibility_check(false)
                 .allow_missing_glyphs()
-                .build_ui_state(|ui, app| opcda_egui::ui::draw(app, ui), app);
+                .build_ui_state(|ui, app| opclook::ui::draw(app, ui), app);
             h.run_steps(3);
             h.key_press(Key::Tab);
             h.run_steps(2);
@@ -7182,7 +7163,7 @@ fn keyboard_write_and_confirmation_block_background_delete_click() {
 
 #[test]
 fn keyboard_message_preempts_write_and_confirm_without_leaking_keys() {
-    use opcda_egui::app::MessageDialog;
+    use opclook::app::MessageDialog;
     for confirm in [false, true] {
         let mut app = App::new_test(&egui::Context::default());
         app.record_dispatches_for_test();
@@ -7234,7 +7215,7 @@ fn keyboard_message_preempts_write_and_confirm_without_leaking_keys() {
 
 #[test]
 fn keyboard_new_message_ignores_prior_region_escape() {
-    use opcda_egui::app::MessageDialog;
+    use opclook::app::MessageDialog;
     let mut app = App::new_test(&egui::Context::default());
     app.record_dispatches_for_test();
     seed_writable_table(&mut app, &[("a", "SigA", 42)]);
@@ -7292,7 +7273,7 @@ fn keyboard_other_dialog_regions_block_background_delete_pointer() {
         match region {
             "connect" => h.state_mut().open_connect_dialog(),
             "options" => h.state_mut().open_options_dialog(),
-            _ => opcda_egui::ui::start_csv_import(
+            _ => opclook::ui::start_csv_import(
                 h.state_mut(),
                 "server;item_id;name\nSrv.Test;a;SigA\n".into(),
             ),
@@ -7306,14 +7287,14 @@ fn keyboard_other_dialog_regions_block_background_delete_pointer() {
 
 #[test]
 fn keyboard_message_pauses_import_and_it_resumes_after_dismissal() {
-    use opcda_egui::app::MessageDialog;
+    use opclook::app::MessageDialog;
     let mut app = App::new_test(&egui::Context::default());
     app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
     let mut csv = String::from("server;item_id;name\n");
     for i in 0..20_000 {
         csv.push_str(&format!("Srv.Test;Tag{i};Name{i}\n"));
     }
-    opcda_egui::ui::start_csv_import(&mut app, csv);
+    opclook::ui::start_csv_import(&mut app, csv);
     let mut h = harness(app);
     h.run_steps(4);
     let before = h.state().csv_import.as_ref().unwrap().processed;
@@ -7542,7 +7523,7 @@ fn keyboard_theme_popup_never_saves_or_closes_open_options() {
 #[test]
 fn keyboard_theme_popup_with_options_accepts_choice_without_leaking_keys() {
     let mut app = App::new_test(&egui::Context::default());
-    app.settings.view.options.theme = opcda_egui::settings::Theme::Dark;
+    app.settings.view.options.theme = opclook::settings::Theme::Dark;
     app.open_options_dialog();
     app.dialogs.options.draft.update_interval_secs = 17;
     let mut h = harness(app);
@@ -7560,11 +7541,11 @@ fn keyboard_theme_popup_with_options_accepts_choice_without_leaking_keys() {
     h.run_steps(4);
     assert_eq!(
         h.state().settings.view.options.theme,
-        opcda_egui::settings::Theme::Light
+        opclook::settings::Theme::Light
     );
     assert_eq!(
         h.state().dialogs.options.draft.theme,
-        opcda_egui::settings::Theme::Light
+        opclook::settings::Theme::Light
     );
     assert!(h.state().dialogs.options.open);
     assert_ne!(h.state().settings.view.options.update_interval_secs, 17);
@@ -7605,7 +7586,7 @@ fn keyboard_theme_popup_ime_escape_does_not_close_popup_or_options() {
 #[test]
 fn keyboard_theme_popup_ignores_modified_and_repeated_enter_but_allows_click() {
     let mut app = App::new_test(&egui::Context::default());
-    app.settings.view.options.theme = opcda_egui::settings::Theme::Dark;
+    app.settings.view.options.theme = opclook::settings::Theme::Dark;
     app.open_options_dialog();
     let mut h = harness(app);
     h.run_steps(4);
@@ -7623,7 +7604,7 @@ fn keyboard_theme_popup_ignores_modified_and_repeated_enter_but_allows_click() {
     h.run_steps(2);
     assert_eq!(
         h.state().settings.view.options.theme,
-        opcda_egui::settings::Theme::Dark
+        opclook::settings::Theme::Dark
     );
     // Hold an explicitly rejected modified Enter before the OS repeats it.
     h.input_mut().events.push(egui::Event::Key {
@@ -7644,7 +7625,7 @@ fn keyboard_theme_popup_ignores_modified_and_repeated_enter_but_allows_click() {
     h.run_steps(2);
     assert_eq!(
         h.state().settings.view.options.theme,
-        opcda_egui::settings::Theme::Dark
+        opclook::settings::Theme::Dark
     );
     assert!(h.state().dialogs.options.open);
     h.get_all_by_label("Светлая")
@@ -7654,11 +7635,11 @@ fn keyboard_theme_popup_ignores_modified_and_repeated_enter_but_allows_click() {
     h.run_steps(4);
     assert_eq!(
         h.state().settings.view.options.theme,
-        opcda_egui::settings::Theme::Light
+        opclook::settings::Theme::Light
     );
     assert_eq!(
         h.state().dialogs.options.draft.theme,
-        opcda_egui::settings::Theme::Light
+        opclook::settings::Theme::Light
     );
 }
 
@@ -7879,7 +7860,7 @@ fn keyboard_double_click_edits_one_tag_after_multiple_selection() {
         .with_max_steps(60)
         .with_accessibility_check(false)
         .allow_missing_glyphs()
-        .build_ui_state(|ui, app| opcda_egui::ui::draw(app, ui), app);
+        .build_ui_state(|ui, app| opclook::ui::draw(app, ui), app);
     h.run_steps(3);
     h.state_mut().select_only(0);
     h.state_mut().select_extend_to(1);

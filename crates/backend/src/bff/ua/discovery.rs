@@ -817,9 +817,9 @@ pub(super) fn build_discovery_client() -> Result<opcua::client::Client, BackendM
     let pki = pki_dir();
     super::session::build_client(
         ClientBuilder::new()
-            .application_name("OPC DA/UA Test Client")
-            .application_uri("urn:opcda-egui")
-            .product_uri("urn:opcda-egui")
+            .application_name("OPCLook")
+            .application_uri("urn:opclook")
+            .product_uri("urn:opclook")
             .create_sample_keypair(true)
             .trust_server_certs(true)
             .pki_dir(pki)

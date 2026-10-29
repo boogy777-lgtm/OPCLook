@@ -7,9 +7,9 @@
 //! This binary contains one test on purpose: it sets `APPDATA` to a sentinel
 //! directory before any other thread exists.
 
-use opcda_egui::app::App;
-use opcda_egui::i18n::Lang;
-use opcda_egui::settings::{Settings, settings_path};
+use opclook::app::App;
+use opclook::i18n::Lang;
+use opclook::settings::{Settings, settings_path};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -25,14 +25,14 @@ fn entries(dir: &PathBuf) -> Vec<String> {
 
 #[test]
 fn headless_tests_use_private_settings_and_pki() {
-    let sentinel = std::env::temp_dir().join(format!("opcda-egui-sentinel-{}", std::process::id()));
+    let sentinel = std::env::temp_dir().join(format!("opclook-sentinel-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&sentinel);
     std::fs::create_dir_all(&sentinel).expect("sentinel dir");
     // Safe: no other thread of this process exists yet and none is started
     // before this call returns (this binary has a single test).
     unsafe { std::env::set_var("APPDATA", &sentinel) };
     let cwd_pki = std::env::current_dir()
-        .map(|d| d.join("opcda-egui").join("pki"))
+        .map(|d| d.join("opclook").join("pki"))
         .unwrap_or_default();
     let cwd_pki_existed = cwd_pki.exists();
 
@@ -44,7 +44,7 @@ fn headless_tests_use_private_settings_and_pki() {
     app.settings.save().unwrap();
     app.open_connect_dialog();
     app.search_ua_all();
-    let pki = opcda_egui::bff::ua::pki_dir_public();
+    let pki = opclook::bff::ua::pki_dir_public();
     assert!(pki.starts_with(std::env::temp_dir()), "{pki:?}");
     assert!(!pki.starts_with(&sentinel), "{pki:?}");
     let settings = settings_path();
@@ -62,11 +62,7 @@ fn headless_tests_use_private_settings_and_pki() {
         Vec::<String>::new(),
         "APPDATA untouched"
     );
-    assert_eq!(
-        cwd_pki.exists(),
-        cwd_pki_existed,
-        "no opcda-egui/pki in cwd"
-    );
+    assert_eq!(cwd_pki.exists(), cwd_pki_existed, "no opclook/pki in cwd");
 
     // Part 2: parallel tests saving different languages never see each other's
     // file (a shared directory would let the last writer win).

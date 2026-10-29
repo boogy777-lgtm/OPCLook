@@ -48,7 +48,7 @@ Desktop.ini
 .DS_Store
 
 # PKI store created by UI tests in the working directory
-/opcda-egui/
+/opclook/
 # CI helper logs
 /test-output.txt*
 /gate-output.txt*

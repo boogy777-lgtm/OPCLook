@@ -3,7 +3,7 @@
 //! LocalizedText), display formatting (ByteString hex + array truncation), and
 //! numeric coercion. These are hermetic and never need a server.
 
-use opcda_egui::bff::model::Value;
+use opclook::bff::model::Value;
 
 #[test]
 fn node_id_value_formats_as_string() {

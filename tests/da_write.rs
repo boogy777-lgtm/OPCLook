@@ -1,4 +1,4 @@
-use opcda_egui::bff::model::{
+use opclook::bff::model::{
     Command, CommandKind, EndpointSpec, Event, EventKind, ItemSpec, Protocol, Value, WriteRequest,
 };
 use opclook_backend::bff::Gateway;
@@ -90,9 +90,9 @@ fn da_write_roundtrip() {
         match wait_for(
             &gateway,
             Command {
-                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                owner: opcda_egui::bff::model::Owner::Session(
-                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                request_id: opclook::bff::model::RequestId::new(next_id()),
+                owner: opclook::bff::model::Owner::Session(
+                    opclook::bff::model::SessionId::new(session).unwrap(),
                 ),
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::Connect {
@@ -118,14 +118,14 @@ fn da_write_roundtrip() {
         let browse = wait_for(
             &gateway,
             Command {
-                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                owner: opcda_egui::bff::model::Owner::Session(
-                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                request_id: opclook::bff::model::RequestId::new(next_id()),
+                owner: opclook::bff::model::Owner::Session(
+                    opclook::bff::model::SessionId::new(session).unwrap(),
                 ),
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::Browse {
                     node_id: String::new(),
-                    filter: opcda_egui::bff::model::NodeClassFilter::All,
+                    filter: opclook::bff::model::NodeClassFilter::All,
                     view_id: None,
                 },
             },
@@ -142,7 +142,7 @@ fn da_write_roundtrip() {
         };
         let leaf = children
             .iter()
-            .find(|n| n.kind == opcda_egui::bff::model::NodeKind::Item);
+            .find(|n| n.kind == opclook::bff::model::NodeKind::Item);
         let Some(leaf) = leaf else {
             println!("SKIP: DA browse returned no leaf items; tree={children:?}");
             return;
@@ -153,14 +153,14 @@ fn da_write_roundtrip() {
         let add = wait_for(
             &gateway,
             Command {
-                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                owner: opcda_egui::bff::model::Owner::Session(
-                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                request_id: opclook::bff::model::RequestId::new(next_id()),
+                owner: opclook::bff::model::Owner::Session(
+                    opclook::bff::model::SessionId::new(session).unwrap(),
                 ),
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::AddItems {
                     items: vec![ItemSpec {
-                        key: opcda_egui::bff::model::ItemKey::new(1).unwrap(),
+                        key: opclook::bff::model::ItemKey::new(1).unwrap(),
                         item_id: item_id.clone(),
                     }],
                 },
@@ -191,13 +191,13 @@ fn da_write_roundtrip() {
         let read = wait_for(
             &gateway,
             Command {
-                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                owner: opcda_egui::bff::model::Owner::Session(
-                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                request_id: opclook::bff::model::RequestId::new(next_id()),
+                owner: opclook::bff::model::Owner::Session(
+                    opclook::bff::model::SessionId::new(session).unwrap(),
                 ),
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::Read {
-                    keys: vec![opcda_egui::bff::model::ItemKey::new(1).unwrap()],
+                    keys: vec![opclook::bff::model::ItemKey::new(1).unwrap()],
                 },
             },
             Duration::from_secs(30),
@@ -221,14 +221,14 @@ fn da_write_roundtrip() {
         let write_ok = wait_for(
             &gateway,
             Command {
-                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                owner: opcda_egui::bff::model::Owner::Session(
-                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                request_id: opclook::bff::model::RequestId::new(next_id()),
+                owner: opclook::bff::model::Owner::Session(
+                    opclook::bff::model::SessionId::new(session).unwrap(),
                 ),
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::Write {
                     request: WriteRequest {
-                        key: opcda_egui::bff::model::ItemKey::new(1).unwrap(),
+                        key: opclook::bff::model::ItemKey::new(1).unwrap(),
                         value: original.value.clone(),
                         type_hint: None,
                     },
@@ -250,9 +250,9 @@ fn da_write_roundtrip() {
     let _ = wait_for(
         &gateway,
         Command {
-            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            owner: opcda_egui::bff::model::Owner::Session(
-                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            request_id: opclook::bff::model::RequestId::new(next_id()),
+            owner: opclook::bff::model::Owner::Session(
+                opclook::bff::model::SessionId::new(session).unwrap(),
             ),
             protocol: Protocol::OpcDa,
             kind: CommandKind::Disconnect,

@@ -1,6 +1,6 @@
 use egui::Key;
 use egui_kittest::{Harness, kittest::Queryable};
-use opcda_egui::{
+use opclook::{
     app::{App, BottomTab},
     i18n::Lang,
 };
@@ -13,7 +13,7 @@ fn harness(width: f32) -> Harness<'static, App> {
         .with_max_steps(60)
         .with_accessibility_check(false)
         .allow_missing_glyphs()
-        .build_ui_state(|ui, app| opcda_egui::ui::draw(app, ui), app)
+        .build_ui_state(|ui, app| opclook::ui::draw(app, ui), app)
 }
 
 #[test]

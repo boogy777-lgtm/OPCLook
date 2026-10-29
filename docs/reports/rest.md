@@ -71,7 +71,7 @@
   один тест (`rejected_ua_connect_keeps_popup_open_with_error`) сохранял настройки без блокировки,
   четыре (`a7_toolbar_connect_reconnects…`, `connect_dialog_reopen_keeps_merged_subnet_scan_results`,
   `connect_dialog_ua_empty_host_without_adapter_searches_loopback_only`,
-  `ua_subnet_scan_commands_are_not_pending_requests`) создавали `opcda-egui/pki`. Блокированные тесты
+  `ua_subnet_scan_commands_are_not_pending_requests`) создавали `opclook/pki`. Блокированные тесты
   переключали процессный `APPDATA` через `set_var`, и «чужой» `save()` попадал в каталог другого
   теста: тест, читающий настройки после своего `save()`, мог прочитать файл, перезаписанный чужим
   `save()` (последний писавший побеждает) — это объясняет «упало, повтор зелёный», но на Linux не
@@ -88,7 +88,7 @@
   `with_settings_lock`), без процессной блокировки и `set_var`. Приложение не ставит его, `app_dir()`
   читает `%APPDATA%` как раньше.
 - `bff::ua::use_private_pki_dir`: PKI-хранилище процесса тестов — временный каталог (`App::new_test`);
-  приложение не вызывает. В рабочей папке больше не появляется `opcda-egui/` (проверено после гейта).
+  приложение не вызывает. В рабочей папке больше не появляется `opclook/` (проверено после гейта).
 - `session::build_client`: создание клиента — под замком. Это касается и приложения (комбинированный
   поиск запускает несколько клиентов сразу).
 - Регрессионные тесты: `tests/test_isolation.rs` (sentinel-`APPDATA` остаётся пустым, `pki` в cwd не
@@ -113,7 +113,7 @@
 
 - Windows-код A9 не компилировался (см. выше).
 - `use_private_pki_dir` вызывается из `App::new_test`; если на Windows UI-тест будет ожидать клиентский
-  сертификат в `%APPDATA%\opcda-egui\pki` — его там уже нет (в тестах такого ожидания не найдено).
+  сертификат в `%APPDATA%\opclook\pki` — его там уже нет (в тестах такого ожидания не найдено).
 - `build_client` — глобальный замок: первый клиент на чистом хранилище генерирует RSA-ключ (секунды в debug),
   остальные ждут (раньше генерировали параллельно и впустую).
 - Не менялось: клиент обнаружения создаётся с `trust_server_certs(true)` — найденные при поиске

@@ -10,7 +10,7 @@
 //! graceful-close semantics (Session::disconnect -> CloseSession +
 //! CloseSecureChannel, then wait for the session event loop) are what close the
 //! sockets, so the observable socket count is the regression signal.
-use opcda_egui::bff::model::{
+use opclook::bff::model::{
     Command, CommandKind, EndpointSpec, Event, EventKind, ItemSpec, Protocol,
 };
 use opclook_backend::bff::Gateway;
@@ -61,9 +61,9 @@ fn connect(gateway: &Gateway, session: u64) -> Event {
     wait_for(
         gateway,
         Command {
-            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            owner: opcda_egui::bff::model::Owner::Session(
-                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            request_id: opclook::bff::model::RequestId::new(next_id()),
+            owner: opclook::bff::model::Owner::Session(
+                opclook::bff::model::SessionId::new(session).unwrap(),
             ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Connect {
@@ -80,9 +80,9 @@ fn disconnect(gateway: &Gateway, session: u64) -> Event {
     wait_for(
         gateway,
         Command {
-            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            owner: opcda_egui::bff::model::Owner::Session(
-                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            request_id: opclook::bff::model::RequestId::new(next_id()),
+            owner: opclook::bff::model::Owner::Session(
+                opclook::bff::model::SessionId::new(session).unwrap(),
             ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Disconnect,
@@ -110,14 +110,14 @@ fn run_cycle(gateway: &Gateway, session: u64, cycle: u32) {
     let browse = wait_for(
         gateway,
         Command {
-            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            owner: opcda_egui::bff::model::Owner::Session(
-                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            request_id: opclook::bff::model::RequestId::new(next_id()),
+            owner: opclook::bff::model::Owner::Session(
+                opclook::bff::model::SessionId::new(session).unwrap(),
             ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Browse {
                 node_id: "i=85".to_string(),
-                filter: opcda_egui::bff::model::NodeClassFilter::All,
+                filter: opclook::bff::model::NodeClassFilter::All,
                 view_id: None,
             },
         },
@@ -136,14 +136,14 @@ fn run_cycle(gateway: &Gateway, session: u64, cycle: u32) {
     }
 
     // Keys unique per cycle so event matching never crosses runs.
-    let k1 = opcda_egui::bff::model::ItemKey::new((cycle * 2 + 1) as u32).unwrap();
-    let k2 = opcda_egui::bff::model::ItemKey::new((cycle * 2 + 2) as u32).unwrap();
+    let k1 = opclook::bff::model::ItemKey::new((cycle * 2 + 1) as u32).unwrap();
+    let k2 = opclook::bff::model::ItemKey::new((cycle * 2 + 2) as u32).unwrap();
     let add = wait_for(
         gateway,
         Command {
-            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            owner: opcda_egui::bff::model::Owner::Session(
-                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            request_id: opclook::bff::model::RequestId::new(next_id()),
+            owner: opclook::bff::model::Owner::Session(
+                opclook::bff::model::SessionId::new(session).unwrap(),
             ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::AddItems {
@@ -180,9 +180,9 @@ fn run_cycle(gateway: &Gateway, session: u64, cycle: u32) {
     let read = wait_for(
         gateway,
         Command {
-            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            owner: opcda_egui::bff::model::Owner::Session(
-                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            request_id: opclook::bff::model::RequestId::new(next_id()),
+            owner: opclook::bff::model::Owner::Session(
+                opclook::bff::model::SessionId::new(session).unwrap(),
             ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Read { keys: vec![k1, k2] },
@@ -219,9 +219,9 @@ fn run_search(gateway: &Gateway, session: u64, index: u32) {
     let found = wait_for(
         gateway,
         Command {
-            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            owner: opcda_egui::bff::model::Owner::Session(
-                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            request_id: opclook::bff::model::RequestId::new(next_id()),
+            owner: opclook::bff::model::Owner::Session(
+                opclook::bff::model::SessionId::new(session).unwrap(),
             ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::SearchUaServers {

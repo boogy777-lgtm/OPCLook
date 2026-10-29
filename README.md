@@ -18,16 +18,15 @@
 <p align="center"><sub>Главное окно: серверы, таблица сигналов и журнал сетевого выбора.</sub></p>
 
 > Проект в разработке. Репозиторий называется **OPCLook**, Cargo-пакет и
-> основные исполняемые файлы — `opcda-egui` и `opclook-cli`. Архитектура и ограничения описаны ниже и в
+> основные исполняемые файлы — `opclook` и `opclook-cli`. Архитектура и ограничения описаны ниже и в
 > [`docs/`](docs/).
 
-OPCLook — нативный клиент OPC для Windows, переписанный с EleSy OPC Test Client
-2.1.0.139 (Delphi, 2012, 32-bit, OPC DA 2.0) и расширенный поддержкой OPC UA
-через протокол-нейтральный BFF (backend-for-frontend).
+OPCLook — нативный клиент OPC для Windows: OPC DA 2.0 (COM/DCOM) и OPC UA,
+построенный вокруг протокол-нейтрального BFF (backend-for-frontend).
 
 Приложение не является web-приложением или Electron: внешний рантайм не нужен.
-Приложения — `opcda-egui.exe` и headless `opclook-cli.exe`; для DA route steering рядом поставляется
-`opcda-nethelper.exe`, который запускается по UAC только при необходимости.
+Приложения — `opclook.exe` и headless `opclook-cli.exe`; для DA route steering рядом поставляется
+`opclook-nethelper.exe`, который запускается по UAC только при необходимости.
 
 ## Содержание
 
@@ -59,7 +58,7 @@ OPCLook — нативный клиент OPC для Windows, переписан
 | Сохранение | Настройки, недавние серверы, порядок/видимость столбцов, текст скрипта |
 | Сеть | Явный выбор адаптера (без Auto/fallback), привязка UA-трафика, LDS/mDNS, N+1 сканер |
 | Сессии UA | Не более 100 одновременных UA-сессий; DA не считаются |
-| DA route steering | Временный host-маршрут через `opcda-nethelper` (UAC), refcount и cleanup |
+| DA route steering | Временный host-маршрут через `opclook-nethelper` (UAC), refcount и cleanup |
 
 Сигналы перетаскиваются из дерева на любую свободную область таблицы. В «Настройке столбцов» порядок меняется перетаскиванием строки за ручку на другую строку или промежуток; изменения сохраняются в настройках.
 
@@ -104,11 +103,11 @@ flowchart TD
 
 ```sh
 cargo build --release --target i686-pc-windows-msvc
-cargo build --release -p opcda-nethelper --target i686-pc-windows-msvc
+cargo build --release -p opclook-nethelper --target i686-pc-windows-msvc
 ```
 
-Бинари: `target\i686-pc-windows-msvc\release\opcda-egui.exe`,
-`opclook-cli.exe` и `opcda-nethelper.exe` (helper рядом с приложением).
+Бинари: `target\i686-pc-windows-msvc\release\opclook.exe`,
+`opclook-cli.exe` и `opclook-nethelper.exe` (helper рядом с приложением).
 
 Упаковка двух клиентов и helper (32-битные exe):
 
@@ -116,14 +115,14 @@ cargo build --release -p opcda-nethelper --target i686-pc-windows-msvc
 powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 ```
 
-Скрипт проверяет PE machine `0x014C`, копирует `opcda-egui.exe`,
-`opclook-cli.exe`, `opcda-nethelper.exe`, manifest helper, README, LICENSE и `docs/images` в
+Скрипт проверяет PE machine `0x014C`, копирует `opclook.exe`,
+`opclook-cli.exe`, `opclook-nethelper.exe`, manifest helper, README, LICENSE и `docs/images` в
 `target\i686-pc-windows-msvc\release\package\`.
 
 Запуск:
 
 ```sh
-target\i686-pc-windows-msvc\release\opcda-egui.exe
+target\i686-pc-windows-msvc\release\opclook.exe
 ```
 
 Требуется 32-битный тулчейн `i686-pc-windows-msvc` (MSVC) и Rust 1.99 или новее (edition 2024). Проект закрепляет Rust 1.99.1
@@ -163,14 +162,12 @@ cargo run -p opclook-cli --target x86_64-unknown-linux-gnu -- --ua opc.tcp://127
 | [Ответственность модулей](docs/audit-responsibility.md) | Кто за что отвечает и план разбиения god-object-файлов |
 | [UI/UX аудит](docs/audit-ui-ux.md) | Вкладки OPC UA и «Сетевые настройки», найденные дефекты и решения |
 | [Doctrine 3.1](docs/audit-doctrine-3.1.md) | Принципы аудита и критерии качества |
-| [Reverse engineering](docs/reverse-engineering.md) | Разбор оригинального OPC Test Client и перенос функциональности |
-| [UI parity](docs/ui-parity.md) | Сопоставление с оригинальным интерфейсом |
 | [Test matrix](docs/test-matrix.md) | Матрица тестов, живые проверки и известные пробелы |
 
 ## Настройки
 
-Настройки хранятся в `%APPDATA%\opcda-egui\settings.json`. Клиентские
-сертификаты OPC UA создаются автоматически в `%APPDATA%\opcda-egui\pki`.
+Настройки хранятся в `%APPDATA%\opclook\settings.json`. Клиентские
+сертификаты OPC UA создаются автоматически в `%APPDATA%\opclook\pki`.
 
 Сохраняются опции, порядок и видимость столбцов, текст скрипта, последние
 DA-хост/сервер, последний UA-URL, до 12 недавних серверов и кэш сетевых
@@ -230,10 +227,8 @@ Linux-команды требуют установленную цель `x86_64-
 
 - **Интерпретатор скриптов не реализован.** В релизе работает только
   редактор и сохранение/загрузка файлов `.stx`; интерпретация не выполняется.
-- **Запись качества в OPC DA не реализована.** Стандартный OPC DA не имеет
-  записи качества; оригинал использовал проприетарный `EleSy.OPCIntercom`,
-  который не распространяется. В перезаписи эта возможность намеренно
-  опущена (см. [`docs/reverse-engineering.md`](docs/reverse-engineering.md)).
+- **Запись качества в OPC DA не реализована.** Стандартный OPC DA не
+  предусматривает запись качества, поэтому возможность осознанно опущена.
 - **Запись (write) — в разработке:** диалог с выбором типа и преобразованием
   значений есть, но полное покрытие типов и сценариев ещё не завершено.
 - **Живая проверка DA route helper не выполнена:** в текущей среде нет
@@ -243,8 +238,7 @@ Linux-команды требуют установленную цель `x86_64-
   существующем маршруте через выбранный адаптер; иначе — явная ошибка.
 - **OPC UA:** текущая интеграция ориентирована на anonymous / username; не
   заявляйте поддержку X509 и подписанных политик без отдельной проверки.
-- **Пиксельное визуальное соответствие оригиналу не гарантировано** — цель
-  функциональная, а не воспроизведение оформления.
+- **Дизайн интерфейса — собственный:** приоритет — функциональность.
 
 ## Структура проекта
 
@@ -277,5 +271,3 @@ Copyright (c) 2026 OPCLook contributors.
 - **chrono** — даты/время.
 - **rfd** — системные диалоги выбора файлов.
 
-Оригинальный продукт «OPC Test Client» 2.1.0.139 принадлежит EleSy company и
-используется только как источник функциональных требований.

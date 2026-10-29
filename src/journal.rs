@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn save_writes_expected_line_structure() {
-        let dir = std::env::temp_dir().join("opcda-egui-journal-structure");
+        let dir = std::env::temp_dir().join("opclook-journal-structure");
         let path = dir.join("j.log");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn load_populates_entries_and_caps() {
-        let dir = std::env::temp_dir().join("opcda-egui-journal-load");
+        let dir = std::env::temp_dir().join("opclook-journal-load");
         let path = dir.join("in.log");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -365,7 +365,7 @@ mod tests {
 
     #[test]
     fn load_over_capacity_trims_to_max() {
-        let dir = std::env::temp_dir().join("opcda-egui-journal-cap");
+        let dir = std::env::temp_dir().join("opclook-journal-cap");
         let path = dir.join("big.log");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -389,7 +389,7 @@ mod tests {
 
     #[test]
     fn save_then_load_roundtrip_preserves_text() {
-        let dir = std::env::temp_dir().join("opcda-egui-journal-roundtrip");
+        let dir = std::env::temp_dir().join("opclook-journal-roundtrip");
         let path = dir.join("rt.log");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();

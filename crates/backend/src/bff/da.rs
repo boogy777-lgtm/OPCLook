@@ -532,7 +532,7 @@ fn create_group(
     let mut group_handle: u32 = 0;
     let mut revised: u32 = 0;
     let mut group_unknown: Option<IUnknown> = None;
-    let group_name = wide("opcda-egui");
+    let group_name = wide("OPCLook");
     // SAFETY: the server is live and all input and output pointers are valid.
     unsafe {
         server

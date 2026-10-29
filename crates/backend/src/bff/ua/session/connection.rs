@@ -141,9 +141,9 @@ pub(in crate::bff::ua) async fn connect(
     let pki = pki_dir();
     purge_stale(&pki);
     let mut builder = ClientBuilder::new()
-        .application_name("OPC DA/UA Test Client")
-        .application_uri("urn:opcda-egui")
-        .product_uri("urn:opcda-egui")
+        .application_name("OPCLook")
+        .application_uri("urn:opclook")
+        .product_uri("urn:opclook")
         .create_sample_keypair(true)
         // The library's own "trust unknown certificates" switch would store the
         // server certificate in `trusted` FOREVER. "Trust" in the connect dialog
@@ -376,7 +376,7 @@ pub(in crate::bff::ua) fn build_client(
 
 /// Process-wide redirect of the PKI store used by headless tests of the
 /// application, so that they share neither the real store nor the working
-/// directory's `opcda-egui/pki`. The application never sets it.
+/// directory's `opclook/pki`. The application never sets it.
 static PKI_DIR_OVERRIDE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
 /// Redirect this process's PKI store to a private temporary directory (once;
@@ -384,8 +384,7 @@ static PKI_DIR_OVERRIDE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new
 pub fn use_private_pki_dir() -> PathBuf {
     PKI_DIR_OVERRIDE
         .get_or_init(|| {
-            let dir =
-                std::env::temp_dir().join(format!("opcda-egui-test-pki-{}", std::process::id()));
+            let dir = std::env::temp_dir().join(format!("opclook-test-pki-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             dir
         })
@@ -393,7 +392,7 @@ pub fn use_private_pki_dir() -> PathBuf {
 }
 
 /// Public accessor for the PKI store path (the connect dialog / About dialog
-/// display it). Path: `%APPDATA%\opcda-egui\pki`.
+/// display it). Path: `%APPDATA%\opclook\pki`.
 pub fn pki_dir_public() -> PathBuf {
     // Live tests run many clients in one process: they share one scratch PKI
     // store instead of the user's real one.
@@ -412,7 +411,7 @@ pub fn pki_dir_public() -> PathBuf {
     std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("opcda-egui")
+        .join("opclook")
         .join("pki")
 }
 
@@ -478,8 +477,7 @@ mod build_client_tests {
         if observing {
             log::set_max_level(log::LevelFilter::Error);
         }
-        let dir =
-            std::env::temp_dir().join(format!("opcda-egui-build-client-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("opclook-build-client-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let threads = 8;
         let barrier = Arc::new(Barrier::new(threads));
@@ -490,9 +488,9 @@ mod build_client_tests {
                 std::thread::spawn(move || {
                     barrier.wait();
                     let builder = ClientBuilder::new()
-                        .application_name("OPC DA/UA Test Client")
-                        .application_uri("urn:opcda-egui")
-                        .product_uri("urn:opcda-egui")
+                        .application_name("OPCLook")
+                        .application_uri("urn:opclook")
+                        .product_uri("urn:opclook")
                         .create_sample_keypair(true)
                         .pki_dir(dir.clone());
                     build_client(builder)

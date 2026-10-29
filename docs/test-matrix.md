@@ -62,11 +62,11 @@
 
 | Функция | Статус | Тест / файл |
 |---|---|---|
-| Значения по умолчанию (EleSy 2.1) | ✅ | `options_defaults_match_elesy`, `settings_defaults_field_values` — `src/settings.rs` |
-| update_interval = 1 c | ✅ | `options_defaults_match_elesy` — `src/settings.rs` |
-| operation_timeout = 60 c | ✅ | `options_defaults_match_elesy` — `src/settings.rs` |
-| test_interval = 60 c | ✅ | `options_defaults_match_elesy` — `src/settings.rs` |
-| Флаги show_log / show_script | ✅ | `options_defaults_match_elesy` — `src/settings.rs` |
+| Значения по умолчанию | ✅ | `options_defaults_match_the_spec`, `settings_defaults_field_values` — `src/settings.rs` |
+| update_interval = 1 c | ✅ | `options_defaults_match_the_spec` — `src/settings.rs` |
+| operation_timeout = 60 c | ✅ | `options_defaults_match_the_spec` — `src/settings.rs` |
+| test_interval = 60 c | ✅ | `options_defaults_match_the_spec` — `src/settings.rs` |
+| Флаги show_log / show_script | ✅ | `options_defaults_match_the_spec` — `src/settings.rs` |
 | Serde roundtrip JSON (все поля) | ✅ | `serde_roundtrip_json_preserves_all_fields`, `settings_defaults_field_values` — `src/settings.rs` |
 | Пароль не попадает в JSON (`#[serde(skip)]`) | ✅ | `password_is_skipped_in_json` — `src/settings.rs` |
 | Fallback при отсутствии файла | ✅ | `load_missing_file_falls_back_to_defaults` — `src/settings.rs` |
@@ -81,9 +81,9 @@
 | Функция | Статус | Тест / файл |
 |---|---|---|
 | Порядок колонок (ровно 9, без дубликатов) | ✅ | `column_order_is_exact` — `src/columns.rs` |
-| Заголовки колонок («Полное имя», «Записываемый тип», «Тип», «Значение», «Качество», «Время изменения», «OРС сервер», «Описание») — канонич. заголовки CSV (Delphi) через `csv_title()` | ✅ | `column_titles_match_elesy_constants` — `src/columns.rs` |
-| Пустой заголовок колонки «Состояние» | ✅ | `column_titles_match_elesy_constants` — `src/columns.rs` |
-| Подсказки (hint) колонок (Delphi-канонич. `csv_hint()`) | ✅ | `column_hints_are_present` — `src/columns.rs` |
+| Заголовки колонок («Полное имя», «Записываемый тип», «Тип», «Значение», «Качество», «Время изменения», «OРС сервер», «Описание») — канонич. заголовки CSV через `csv_title()` | ✅ | `column_titles_match_canonical_constants` — `src/columns.rs` |
+| Пустой заголовок колонки «Состояние» | ✅ | `column_titles_match_canonical_constants` — `src/columns.rs` |
+| Подсказки (hint) колонок (канонич. `csv_hint()`) | ✅ | `column_hints_are_present` — `src/columns.rs` |
 | Ширины колонок > 0 | ✅ | `column_widths_are_positive` — `src/columns.rs` |
 | Набор по умолчанию видим (все) | ✅ | `columnset_default_shows_every_column` — `src/columns.rs` |
 | Скрытие/показ (`set_visible`) | ✅ | `set_visible_hides_and_reshows` — `src/columns.rs` |
@@ -231,7 +231,7 @@
 | Отключение (меню «Отключиться») сохраняет контейнер/строки и НЕ вооружает автопереподключение | ✅ | `disconnect_keeps_container_and_does_not_arm_reconnect` — `tests/ui_interactions.rs` |
 | Полное имя/значение в буфер обмена | ⏳ | копирование реализовано в `src/ui.rs` (`copy_text` + статус), прямое покрытие — отсутствует |
 | Диалог информации о сервере (About + «Подключённые серверы») | ⏳ | блок в `about_dialog`; vendor/version недоступны из BFF |
-| Подтверждение отключения («Отключиться от сервера "X"?») | ⏳ | `request_disconnect` + `ConfirmDialog`; тест не добавлен (см. ui-parity.md) |
+| Подтверждение отключения («Отключиться от сервера "X"?») | ⏳ | `request_disconnect` + `ConfirmDialog`; тест не добавлен |
 | Состояние «дерево не загружено» | ⏳ | текст в `navigation` при пустом дереве |
 | Интеграционные тесты UA | ✅ (запуск вручную) | `tests/ua_smoke.rs`, `tests/ua_write.rs`, запуск `cargo test --test ua_smoke -- --ignored`, `cargo test --test ua_write -- --ignored --nocapture` |
 | Грациозное закрытие UA (жизненный цикл): 5× connect/browse/add/read/disconnect + 3× поиск, нет `ESTABLISHED`-сокетов после | ✅ (live `--ignored`) | `ua_lifecycle_two_dozen_connections_close_cleanly` — `tests/ua_lifecycle.rs`; реализация грациозного `disconnect()`/close на таймауте подключения в `src/bff/ua.rs` |
@@ -256,9 +256,9 @@
 | Новые ключи i18n: `AddServer`, `RemoveServerTooltip`, `ReconnectTooltip`, `ReconnectCount`, `NewConnection`, `TableEmptyInner`, `AddChildrenProgress`, `AddChildrenCapHit`, `FolChildrenNone` (ru/en/zh) | ✅ | `every_key_is_nonempty_in_all_languages` — `src/i18n.rs` |
 | Локализация журнала: запись хранит ключ+аргументы (`l10n`), `render(lang)` пересобирает текст, `save_localized(path, lang)` для экспорта | ✅ | Дизайн: `src/journal.rs`; юнит покрытие строк сохранения `save_writes_expected_line_structure`, `save_then_load_roundtrip_preserves_text` — `src/journal.rs` |
 | Экспорт журнала вызывается через `save_localized` с текущим языком (`save_journal`) | ✅ | Реализация в `src/ui.rs`; ручная проверка |
-| CSV-экспорт/импорт сохраняют исходный русский формат (заголовок `server;item_id;name;value;quality;time` и значения строк без перевода) — совместимость с оригиналом Delphi | ✅ (зафиксировано) | `csv_save_load_roundtrip_preserves_rows` — `tests/ui_interactions.rs`; формат не локализуется (см. примечание ниже) |
+| CSV-экспорт/импорт сохраняют исходный русский формат (заголовок `server;item_id;name;value;quality;time` и значения строк без перевода) — стабильный формат файла | ✅ (зафиксировано) | `csv_save_load_roundtrip_preserves_rows` — `tests/ui_interactions.rs`; формат не локализуется (см. примечание ниже) |
 
-Примечание о CSV: экспорт/импорт не локализуются — заголовок (`server;item_id;name;value;quality;time`) и разделители остаются как в Delphi-оригинале; канонические русские заголовки колонок доступны как `columns::ColumnId::csv_title()`/`csv_hint()` (не локализуются, для совместимости с Delphi). Локализуются только журнальные сообщения о результате операций с файлами. «нет данных»/«ожидание значения» — серверные маркеры-данные строк таблицы и по-прежнему локализуются через i18n (`NoData`/`WaitingValue`), но замена маркера определяется по sentinel-коду `Quality::CODE_PLACEHOLDER_*`, а не по тексту.
+Примечание о CSV: экспорт/импорт не локализуются — заголовок (`server;item_id;name;value;quality;time`) и разделители остаются каноническими; канонические русские заголовки колонок доступны как `columns::ColumnId::csv_title()`/`csv_hint()` (не локализуются, для совместимости формата). Локализуются только журнальные сообщения о результате операций с файлами. «нет данных»/«ожидание значения» — серверные маркеры-данные строк таблицы и по-прежнему локализуются через i18n (`NoData`/`WaitingValue`), но замена маркера определяется по sentinel-коду `Quality::CODE_PLACEHOLDER_*`, а не по тексту.
 
 ## Итог запусков
 
@@ -280,7 +280,7 @@
 | `cargo test --test ua_subscription -- --ignored --nocapture` | 2 passed (pure push CurrentTime + write-push; reconnect re-subscription) |
 | `cargo test --test ua_lifecycle -- --ignored --nocapture` | 1 passed (5× cycle connect/browse/add/read/disconnect + 3× one-shot search) |
 | `cargo test --test ua_large -- --ignored --nocapture` | 1 passed (Browse cap 100 + continuation; 120-item AddItems; 120-key Read in one command; +5 cycles) |
-| `cargo build --bin opcda-egui` | чистая сборка, без новых warning |
+| `cargo build --bin opclook` | чистая сборка, без новых warning |
 
 ### Количество тестов по модулям (новые)
 
@@ -375,9 +375,9 @@
 - **Причина** серверных ошибок `OpcUa_SecureListener_EndSendResponse: SecureChannel N has no transport connection!` + `Error 0x80310000 while sending message`: клиент разрывал TCP/secure-канал, пока сервер ещё отправлял ответы. В `src/bff/ua.rs` было два `abort()` — на `CommandKind::Disconnect` (мгновенно прерывало event-loop воркера прямо посреди запросов, CloseSession/CloseChannel не доходили до сервера) и на таймауте подключения (аборт во время установки канала). Поиск/дискавери уже были грациозными: методы async-opcua `find_servers`, `get_server_endpoints_from_url`, `find_servers_on_network` внутри создают временный канал, добросовестно закрывают его (`close_channel().await` = CloseSecureChannel) и дренируют event-loop до `TransportPollResult::Closed` перед возвратом, поэтому дроп одноразового `Client` не держит открытых соединений.
 - **Исправление** (только `src/bff/ua.rs`): добавлен бюджет `GRACEFUL_CLOSE_TIMEOUT = 5 c`. `Disconnect` теперь: 1) `teardown_subscription` (удаление подписки), 2) `session.session.disconnect().await` в таймауте — шлёт CloseSession и CloseSecureChannel и ждёт состояния Disconnected, 3) ожидает `JoinHandle` event-loop в том же таймауте (он завершается сам после грациозного закрытия), 4) `abort()` — только если грациозное закрытие/ожидание не уложились. Путь таймаута подключения теперь тоже делает грациозный `disconnect()` + ожидание event-loop (без `abort()` первым делом).
 - **Live-проверка** `tests/ua_lifecycle.rs` (1 тест, `--ignored`): 5× цикл `connect → browse i=85 → AddItems(2259, 2258) → Read → disconnect` с обязательным `Disconnected` каждый цикл + 3× одноразовый поиск `SearchUaServers` (`FindServers` + `GetEndpoints`), всё за один общий воркер; без зависаний. Read проверяет, что батчинг не теряет и не переставляет ключи. После завершения тестового процесса на 4840 нет `ESTABLISHED`-соединений.
-- **Наблюдения по сокетам** (CODESYS `CODESYSControlService.exe`, PID на 4840): до фикса запущенный `opcda-egui.exe` держал `ESTABLISHED` на 4840 (признак бага). После фикса, после всех live-тестов, на 4840 остаются только `LISTENING` (сервер) и `TIME_WAIT` от локально закрытых каналов (норма после FIN/ACK, самоликвидируются ~2 мин) — действующих `ESTABLISHED`-соединений нет.
+- **Наблюдения по сокетам** (CODESYS `CODESYSControlService.exe`, PID на 4840): до фикса запущенный `opclook.exe` держал `ESTABLISHED` на 4840 (признак бага). После фикса, после всех live-тестов, на 4840 остаются только `LISTENING` (сервер) и `TIME_WAIT` от локально закрытых каналов (норма после FIN/ACK, самоликвидируются ~2 мин) — действующих `ESTABLISHED`-соединений нет.
 - **Лог CODESYS**: файловый лог OPC UA-стека с `CmpOPCUAStack`/`SecureListener`/`0x80310000` не обнаружился в `C:\ProgramData\CODESYS`, `C:\Program Files\CODESYS*`, `%LOCALAPPDATA%\CODESYS` (там только device.xml/lib-docs/IDE-временные файлы); runtime контроллера пишет журнал через консоль CODESYS/Event-журнал Windows, недоступные для сравнения строк до/после. Поэтому Δ по `0x80310000` замерить не удалось — опираемся на грациозную семантику закрытия + контроль сокетов.
-- **Результат live-тестов**: `ua_lifecycle` 1 ✅, `ua_large` 1 ✅, `ua_smoke` 2 ✅, `ua_write` 1 ✅, `ua_search` 2 ✅, `ua_types` 5 ✅, `ua_security` 4 ✅, `ua_subscription` 2 ✅, `ua_refresh_speed` 1 ✅; `cargo build --bin opcda-egui` чисто. `cargo test --lib` 148 ✅, `cargo test --test ui_interactions` 84 ✅.
+- **Результат live-тестов**: `ua_lifecycle` 1 ✅, `ua_large` 1 ✅, `ua_smoke` 2 ✅, `ua_write` 1 ✅, `ua_search` 2 ✅, `ua_types` 5 ✅, `ua_security` 4 ✅, `ua_subscription` 2 ✅, `ua_refresh_speed` 1 ✅; `cargo build --bin opclook` чисто. `cargo test --lib` 148 ✅, `cargo test --test ui_interactions` 84 ✅.
 
 ## Ограничение размера запросов OPC UA и таймауты (chunk budget)
 
@@ -395,15 +395,15 @@
 - Скан дерева: 46 Browse-команд / 46 веток за ~0.95 с; 482 уникальные переменные; максимум узлов, возвращённых одной командой Browse (со всеми страницами) = 149; крупнейшая ветка `Objects/DeviceSet/CODESYS Control Win V3 x64/Resources/Application/Programs/MAIN_PRG` — 114 прямых items; continuation подтверждён (114 > cap 100).
 - `AddItems` 120 items одной командой — ~20 мс; `Read` 120 ключей ОДНОЙ командой (внутри 2 вызова по 100 + 20) — ~21 мс, 120/120 значений, 120 Good, порядок ключей сохранён, приблизительный payload ~13.8 КБ.
 - 5 циклов connect → browse i=85 → AddItems 120 → Read 120 → disconnect: каждый Read ~20 мс, 120/120 Good; после процесса на 4840 только `LISTENING` (PID сервера), `TIME_WAIT` от закрытых клиентских сокетов и НИ ОДНОГО `ESTABLISHED` клиента.
-- Live-набор после изменения: `ua_smoke` 2 ✅, `ua_write` 1 ✅, `ua_types` 5 ✅, `ua_search` 2 ✅, `ua_security` 4 ✅, `ua_subscription` 2 ✅, `ua_refresh_speed` 1 ✅, `ua_lifecycle` 1 ✅, `ua_large` 1 ✅; `cargo test --lib` 148 ✅; `cargo test --test ui_interactions` 84 ✅; `cargo build --bin opcda-egui` без warning.
+- Live-набор после изменения: `ua_smoke` 2 ✅, `ua_write` 1 ✅, `ua_types` 5 ✅, `ua_search` 2 ✅, `ua_security` 4 ✅, `ua_subscription` 2 ✅, `ua_refresh_speed` 1 ✅, `ua_lifecycle` 1 ✅, `ua_large` 1 ✅; `cargo test --lib` 148 ✅; `cargo test --test ui_interactions` 84 ✅; `cargo build --bin opclook` без warning.
 
 ## Устранение хардкода (константы, i18n, op-коды)
 
 - **`src/constants.rs`** — единый источник именованных констант (таймауты UA, reconnect cap/дилей, диапазоны опций, размеры UI, длины усечения, browse-капы). Экспортирован из `lib.rs`. Используется в `app.rs`/`ui.rs`/`settings.rs`/`bff/ua.rs`/`bff/da.rs`.
-- **Кламп интервала обновления приведён к 1..=60** (было 1..=3600 в `apply_options` при слайдере 1..=60) — поведение согласовано со спецификацией TrackBar и `ui-parity.md`. Реализовано через чистый `clamp_options()` (без сайд-эффекта `settings.save()`), покрыто `clamp_options_enforces_interval_and_timeout_ranges`.
+- **Кламп интервала обновления приведён к 1..=60** (было 1..=3600 в `apply_options` при слайдере 1..=60) — поведение согласовано со спецификацией TrackBar. Реализовано через чистый `clamp_options()` (без сайд-эффекта `settings.save()`), покрыто `clamp_options_enforces_interval_and_timeout_ranges`.
 - **`last_ua_url` по умолчанию пустой** (без пресета), соответствуя требованию продукта; обновлены тесты настроек и `Remember`.
 - **Качество**: вместо сравнения `row.quality.text == "нет данных"` используются sentinel-коды `Quality::CODE_PLACEHOLDER_NO_DATA/WAITING` + `is_placeholder_no_data()`. Текст маркеров берётся из i18n (`NoData`/`WaitingValue`), отображение не изменилось.
 - **Операции**: `bff::model::op` содержит ASCII-константы (`CONNECT`, `BROWSE`, `READ`, `WRITE`, `TEST`, `SEARCH_SERVERS`, `SEARCH_NETWORK`, `DISCOVER`, `BROWSE_VIEWS`, `RESOLVE_PATH`, `UA_RUNTIME`, …). Эмиттеры ошибок в `ua.rs`/`da.rs` и сопоставление в `app.rs` (`operation == op::SEARCH_SERVERS` и т.п.) используют их; `operation_label` мапит их на локализованные `Tr`. Cyrillic-строки `"поиск серверов"/"поиск в сети"` заменены на ASCII `"search_servers"/"search_network"`.
 - **Строки UI → i18n**: эндонимы языков — `Lang::endonym()`; суффикс секунд — `Tr::SecondsShortSuffix`; «…на {host}» — `Tr::ServerHostSuffix`; «Поиск OPC UA серверов в сети…» — `Tr::SearchingUaNetwork`; заголовок ConfirmDialog, если не задан — `Tr::ConfirmTitle`. Остались только не-Cyrillic символы (● × ↑ ↓ ∞ …) и псевдонимы bool-данных («да»/«нет»/«是»/«否») — они вынесены в whitelist.
 - **Защита от рецидива**: `tests/no_hardcoded_ui_strings.rs` читает `src/ui.rs`/`src/app.rs`, снимает комментарии и `#[cfg(test)]`-блоки (brace-matched, с учётом строк), находит Cyrillic в строковых литералах и падает, если найдено что-то вне whitelist. 2 теста ✅.
-- **CSV-заголовки**: легаси `ColumnId::title()/hint()` переименованы в `csv_title()/csv_hint()` с комментарием о каноническом Delphi-формате; отображение использует `title_tr()/hint_tr()`. CSV-импорт/экспорт не менялся (`csv_save_load_roundtrip_preserves_rows` зелёный).
+- **CSV-заголовки**: легаси `ColumnId::title()/hint()` переименованы в `csv_title()/csv_hint()` с комментарием о каноническом CSV-формате; отображение использует `title_tr()/hint_tr()`. CSV-импорт/экспорт не менялся (`csv_save_load_roundtrip_preserves_rows` зелёный).

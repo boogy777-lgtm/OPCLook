@@ -100,7 +100,7 @@ mod tests {
     }
 
     #[test]
-    fn option_ranges_match_the_elesy_spec() {
+    fn option_ranges_match_the_documented_spec() {
         assert_eq!(
             (UPDATE_INTERVAL_MIN_SECS, UPDATE_INTERVAL_MAX_SECS),
             (1, 60)

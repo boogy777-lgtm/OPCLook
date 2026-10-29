@@ -16,11 +16,11 @@
 //!
 //! After the process exits there must be no ESTABLISHED client connection to
 //! port 4840 (`netstat -ano | findstr 4840`).
-use opcda_egui::bff::model::{
+use opclook::bff::model::{
     BrowseNode, Command, CommandKind, DataValue, EndpointSpec, Event, EventKind, ItemSpec,
     NodeKind, Protocol, QualityKind,
 };
-use opcda_egui::constants::{BROWSE_MAX_REFERENCES_PER_NODE, READ_MAX_ITEMS_PER_CALL};
+use opclook::constants::{BROWSE_MAX_REFERENCES_PER_NODE, READ_MAX_ITEMS_PER_CALL};
 use opclook_backend::bff::Gateway;
 use std::collections::{HashSet, VecDeque};
 use std::time::{Duration, Instant};
@@ -69,9 +69,9 @@ fn connect(gateway: &Gateway, session: u64) -> Event {
     wait_for(
         gateway,
         Command {
-            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            owner: opcda_egui::bff::model::Owner::Session(
-                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            request_id: opclook::bff::model::RequestId::new(next_id()),
+            owner: opclook::bff::model::Owner::Session(
+                opclook::bff::model::SessionId::new(session).unwrap(),
             ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Connect {
@@ -88,9 +88,9 @@ fn disconnect(gateway: &Gateway, session: u64) {
     let event = wait_for(
         gateway,
         Command {
-            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            owner: opcda_egui::bff::model::Owner::Session(
-                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            request_id: opclook::bff::model::RequestId::new(next_id()),
+            owner: opclook::bff::model::Owner::Session(
+                opclook::bff::model::SessionId::new(session).unwrap(),
             ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Disconnect,
@@ -115,14 +115,14 @@ fn browse(gateway: &Gateway, session: u64, node_id: &str) -> Vec<BrowseNode> {
     let event = wait_for(
         gateway,
         Command {
-            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            owner: opcda_egui::bff::model::Owner::Session(
-                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            request_id: opclook::bff::model::RequestId::new(next_id()),
+            owner: opclook::bff::model::Owner::Session(
+                opclook::bff::model::SessionId::new(session).unwrap(),
             ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Browse {
                 node_id: node_id.to_string(),
-                filter: opcda_egui::bff::model::NodeClassFilter::All,
+                filter: opclook::bff::model::NodeClassFilter::All,
                 view_id: None,
             },
         },
@@ -226,9 +226,9 @@ fn add_items(gateway: &Gateway, session: u64, items: &[ItemSpec]) {
     let event = wait_for(
         gateway,
         Command {
-            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            owner: opcda_egui::bff::model::Owner::Session(
-                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            request_id: opclook::bff::model::RequestId::new(next_id()),
+            owner: opclook::bff::model::Owner::Session(
+                opclook::bff::model::SessionId::new(session).unwrap(),
             ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::AddItems {
@@ -258,15 +258,15 @@ fn add_items(gateway: &Gateway, session: u64, items: &[ItemSpec]) {
 fn read_all(
     gateway: &Gateway,
     session: u64,
-    keys: &[opcda_egui::bff::model::ItemKey],
-) -> (Vec<(opcda_egui::bff::model::ItemKey, DataValue)>, Duration) {
+    keys: &[opclook::bff::model::ItemKey],
+) -> (Vec<(opclook::bff::model::ItemKey, DataValue)>, Duration) {
     let started = Instant::now();
     let event = wait_for(
         gateway,
         Command {
-            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            owner: opcda_egui::bff::model::Owner::Session(
-                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            request_id: opclook::bff::model::RequestId::new(next_id()),
+            owner: opclook::bff::model::Owner::Session(
+                opclook::bff::model::SessionId::new(session).unwrap(),
             ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Read {
@@ -287,7 +287,7 @@ fn read_all(
 
 /// Sum of the debug-formatted values is a stable lower-bound proxy for the
 /// response payload (the client model is what the UI receives).
-fn approx_payload_bytes(values: &[(opcda_egui::bff::model::ItemKey, DataValue)]) -> usize {
+fn approx_payload_bytes(values: &[(opclook::bff::model::ItemKey, DataValue)]) -> usize {
     values
         .iter()
         .map(|(_, dv)| format!("{:?}", dv.value).len())
@@ -367,7 +367,7 @@ fn ua_large_browse_read_and_cycles() {
         .iter()
         .enumerate()
         .map(|(index, node_id)| ItemSpec {
-            key: opcda_egui::bff::model::ItemKey::new((index + 1) as u32).unwrap(),
+            key: opclook::bff::model::ItemKey::new((index + 1) as u32).unwrap(),
             item_id: node_id.clone(),
         })
         .collect();

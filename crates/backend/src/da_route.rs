@@ -1,4 +1,4 @@
-//! DA route steering through the privileged `opcda-nethelper`.
+//! DA route steering through the privileged `opclook-nethelper`.
 //!
 //! OPC DA/DCOM has no API to pin a COM connection to an adapter, so a temporary
 //! host route (`/32` or `/128`) through the selected interface is used instead.
@@ -798,12 +798,12 @@ fn helper_exe() -> Result<PathBuf, DaRouteError> {
     let candidate = exe
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))
-        .join("opcda-nethelper.exe");
+        .join("opclook-nethelper.exe");
     if candidate.is_file() {
         Ok(candidate)
     } else {
         Err(DaRouteError::HelperUnavailable(format!(
-            "opcda-nethelper.exe not found next to {}",
+            "opclook-nethelper.exe not found next to {}",
             exe.display()
         )))
     }
@@ -811,11 +811,11 @@ fn helper_exe() -> Result<PathBuf, DaRouteError> {
 
 fn spawn_helper() -> Result<HelperLaunch, DaRouteError> {
     let exe = helper_exe()?;
-    let pipe = format!("opcda-nethelper-{}", random_hex(random_bytes()?));
+    let pipe = format!("opclook-nethelper-{}", random_hex(random_bytes()?));
     let args = format!("--pipe {} --parent {}", pipe, std::process::id());
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::Builder::new()
-        .name("opcda-nethelper-launch".to_string())
+        .name("opclook-nethelper-launch".to_string())
         .spawn(move || {
             let result = launch_elevated(&exe, &args);
             let _ = tx.send(result);

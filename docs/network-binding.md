@@ -161,11 +161,11 @@ resolve DA host
 `(IP, adapter GUID)`. Удаление маршрута выполняется только после последней
 ссылки.
 
-### Helper `opcda-nethelper`
+### Helper `opclook-nethelper`
 
 Отдельный workspace-crate `nethelper/`:
 
-- exe `opcda-nethelper.exe`, 32-битная сборка вместе с приложением;
+- exe `opclook-nethelper.exe`, 32-битная сборка вместе с приложением;
 - манифест `requireAdministrator`;
 - зависимости: `windows`, `serde`, `serde_json`;
 - запуск по требованию через UAC (`ShellExecuteExW("runas")`), не служба;
@@ -182,7 +182,7 @@ resolve DA host
   target — только unicast host, prefix строго `/32` или `/128`, next hop —
   unspecified/gateway того же семейства;
 - отклоняет default/multicast/broadcast/loopback цели;
-- пишет audit log в `%APPDATA%\opcda-egui\nethelper-audit.log`;
+- пишет audit log в `%APPDATA%\opclook\nethelper-audit.log`;
 - при закрытии pipe удаляет созданные маршруты; при падении helper маршруты
   истекают по lifetime.
 
@@ -209,8 +209,8 @@ helper приложение синхронно ждёт до `DA_HELPER_START_TI
 ## 5. Сборка и упаковка
 
 ```sh
-cargo build --release --bin opcda-egui --target i686-pc-windows-msvc
-cargo build --release --bin opcda-nethelper --target i686-pc-windows-msvc
+cargo build --release --bin opclook --target i686-pc-windows-msvc
+cargo build --release --bin opclook-nethelper --target i686-pc-windows-msvc
 ```
 
 Упаковка обоих exe:
@@ -220,10 +220,10 @@ powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1
 ```
 
 Результат: `target\i686-pc-windows-msvc\release\package\` с
-`opcda-egui.exe`, `opcda-nethelper.exe`, `README.md` и manifest helper.
+`opclook.exe`, `opclook-nethelper.exe`, `README.md` и manifest helper.
 
-`opcda-nethelper.exe` должен лежать рядом с `opcda-egui.exe` (или путь можно
-задать переменной `OPCDA_NETHELPER_EXE`).
+`opclook-nethelper.exe` должен лежать рядом с `opclook.exe` (или путь можно
+задать переменной `OPCLOOK_HELPER_EXE`).
 
 ## 6. Ручная проверка DA (требует стенда)
 

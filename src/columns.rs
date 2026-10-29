@@ -27,12 +27,12 @@ impl ColumnId {
         Self::Description,
     ];
 
-    /// Canonical Delphi-compatible Russian column title.
+    /// Canonical Russian column title of the CSV format.
     ///
-    /// Kept for parity with the EleSy original (the exact byte streams used by
-    /// the legacy CSV export/import format). The UI must NOT use this directly
-    /// — use `title_tr()` for the localized header. `csv_hint()` is the
-    /// matching tooltip (also Delphi canonical, not localized).
+    /// These are the exact byte streams used by the CSV export/import format.
+    /// The UI must NOT use this directly — use `title_tr()` for the localized
+    /// header. `csv_hint()` is the matching tooltip (also part of the CSV
+    /// format, not localized).
     pub fn csv_title(self) -> &'static str {
         match self {
             Self::Status => "",
@@ -197,7 +197,7 @@ mod tests {
         "Значение",
         "Качество",
         "Время изменения",
-        "OРС сервер", // Cyrillic Р, as in the original EleSy constant.
+        "OРС сервер", // Cyrillic Р, as in the canonical CSV header.
         "Описание",
     ];
 
@@ -239,7 +239,7 @@ mod tests {
     }
 
     #[test]
-    fn column_titles_match_elesy_constants() {
+    fn column_titles_match_canonical_constants() {
         for (i, id) in ColumnId::ALL.iter().enumerate() {
             assert_eq!(id.csv_title(), TITLES[i], "title for {id:?}");
         }

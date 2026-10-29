@@ -5,8 +5,8 @@
 //! `cargo test --release --test perf_rows -- --ignored --nocapture`
 //! and compare before/after a change. Only public APIs are used, so the same
 //! file runs unchanged against older revisions.
-use opcda_egui::app::App;
-use opcda_egui::bff::model::{
+use opclook::app::App;
+use opclook::bff::model::{
     BrowseNode, DataValue, EndpointSpec, EventKind, NodeKind, Quality, QualityKind, Value,
 };
 use std::time::Instant;
@@ -106,6 +106,6 @@ fn app_with_branch() -> (egui::Context, App) {
     (ctx, app)
 }
 
-fn sid(raw: u64) -> opcda_egui::bff::model::SessionId {
-    opcda_egui::bff::model::SessionId::new(raw).unwrap()
+fn sid(raw: u64) -> opclook::bff::model::SessionId {
+    opclook::bff::model::SessionId::new(raw).unwrap()
 }

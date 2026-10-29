@@ -6,7 +6,7 @@
 N/100`, union endpoints сканером по `ApplicationUri`. Не реализованы
 (вне текущего объёма network-binding): вложенный список сервер/endpoint,
 немедленный merge `UaScanFound` в UI и удаление буферов.
-**Проект:** `opcda-egui`
+**Проект:** `opclook`
 
 ## 1. Термины
 

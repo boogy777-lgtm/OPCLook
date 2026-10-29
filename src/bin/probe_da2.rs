@@ -1,5 +1,5 @@
 mod probe_support;
-use opcda_egui::bff::model::{
+use opclook::bff::model::{
     Command, CommandKind, DataValue, EndpointSpec, Event, EventKind, ItemKey, ItemSpec, NodeKind,
     Protocol, ServerEntry,
 };
@@ -8,12 +8,12 @@ use std::time::{Duration, Instant};
 
 fn main() -> Result<(), String> {
     let probe = Probe::new();
-    let mut request = opcda_egui::bff::model::RequestId::FIRST;
-    let session = opcda_egui::bff::model::SessionId::new(7).ok_or("invalid session")?;
+    let mut request = opclook::bff::model::RequestId::FIRST;
+    let session = opclook::bff::model::SessionId::new(7).ok_or("invalid session")?;
 
     probe.send(Command {
         request_id: Some(request),
-        owner: opcda_egui::bff::model::Owner::Discovery,
+        owner: opclook::bff::model::Owner::Discovery,
         protocol: Protocol::OpcDa,
         kind: CommandKind::Discover {
             host: String::new(),
@@ -70,7 +70,7 @@ fn main() -> Result<(), String> {
         protocol: Protocol::OpcDa,
         kind: CommandKind::Browse {
             node_id: String::new(),
-            filter: opcda_egui::bff::model::NodeClassFilter::All,
+            filter: opclook::bff::model::NodeClassFilter::All,
             view_id: None,
         },
     })?;
@@ -111,7 +111,7 @@ fn main() -> Result<(), String> {
                 protocol: Protocol::OpcDa,
                 kind: CommandKind::Browse {
                     node_id: branch.clone(),
-                    filter: opcda_egui::bff::model::NodeClassFilter::All,
+                    filter: opclook::bff::model::NodeClassFilter::All,
                     view_id: None,
                 },
             })?;
@@ -148,7 +148,7 @@ fn main() -> Result<(), String> {
         protocol: Protocol::OpcDa,
         kind: CommandKind::AddItems {
             items: vec![ItemSpec {
-                key: opcda_egui::bff::model::ItemKey::FIRST,
+                key: opclook::bff::model::ItemKey::FIRST,
                 item_id: item_id.clone(),
             }],
         },
@@ -206,8 +206,8 @@ fn main() -> Result<(), String> {
 
 fn disconnect(
     probe: &Probe,
-    session: opcda_egui::bff::model::SessionId,
-    request: opcda_egui::bff::model::RequestId,
+    session: opclook::bff::model::SessionId,
+    request: opclook::bff::model::RequestId,
 ) -> Result<(), String> {
     probe.send(Command {
         request_id: Some(request),

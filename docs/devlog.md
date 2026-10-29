@@ -37,7 +37,7 @@ Implemented bounded and cached table/tree rendering, lazy visible-row formatting
   (2) `vt_name` вынесена в `bff/vt.rs`, чтобы UI не зависел от COM-модуля;
   (3) `net.rs`, `bff/net.rs`, `bff/mdns.rs`, `da_route.rs` уже имели
   `cfg(windows)`/`cfg(not(windows))`, менялись только атрибуты `allow(dead_code)`.
-- Побочный эффект тестов: ui-тесты создают каталог `opcda-egui/pki` в рабочей
+- Побочный эффект тестов: ui-тесты создают каталог `opclook/pki` в рабочей
   папке (не в `.gitignore`) — не коммитить.
 - Не проверено: сборка под `i686-pc-windows-msvc` (нет тулчейна), CI.
 

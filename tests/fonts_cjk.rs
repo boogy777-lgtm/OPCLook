@@ -28,7 +28,7 @@ fn default_egui_fonts_cannot_draw_chinese() {
 #[test]
 fn install_fonts_adds_a_cjk_fallback_when_the_host_has_one() {
     let ctx = egui::Context::default();
-    let Some(path) = opcda_egui::app::install_fonts(&ctx) else {
+    let Some(path) = opclook::app::install_fonts(&ctx) else {
         // Honest skip: this host has none of the candidate CJK fonts (the
         // Windows ones are msyh.ttc / simsun.ttc; Linux hosts use Noto CJK or
         // WenQuanYi, or OPCLOOK_CJK_FONT).

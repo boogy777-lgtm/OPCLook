@@ -1,13 +1,13 @@
 mod probe_support;
-use opcda_egui::bff::model::{Command, CommandKind, Protocol};
+use opclook::bff::model::{Command, CommandKind, Protocol};
 use probe_support::Probe;
 use std::time::{Duration, Instant};
 
 fn main() -> Result<(), String> {
     let probe = Probe::new();
     probe.send(Command {
-        request_id: Some(opcda_egui::bff::model::RequestId::FIRST),
-        owner: opcda_egui::bff::model::Owner::Discovery,
+        request_id: Some(opclook::bff::model::RequestId::FIRST),
+        owner: opclook::bff::model::Owner::Discovery,
         protocol: Protocol::OpcDa,
         kind: CommandKind::Discover {
             host: String::new(),
@@ -19,8 +19,8 @@ fn main() -> Result<(), String> {
         if let Some(event) = probe.try_recv() {
             println!("{event:?}");
             match event.kind {
-                opcda_egui::bff::model::EventKind::Servers { .. }
-                | opcda_egui::bff::model::EventKind::Error { .. } => break,
+                opclook::bff::model::EventKind::Servers { .. }
+                | opclook::bff::model::EventKind::Error { .. } => break,
                 _ => {}
             }
         }

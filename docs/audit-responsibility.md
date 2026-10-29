@@ -8,7 +8,7 @@
 > **Обновление 2026-10-26 (network-binding):** монолитные `src/app.rs`,
 > `src/ui.rs`, `src/bff/ua.rs` уже разбиты на `src/app/`, `src/ui/`,
 > `src/bff/ua/`. Добавлены `src/da_route.rs` (DA route steering) и
-> workspace-crate `nethelper/` (`opcda-nethelper.exe`). Метрики и ссылки на
+> workspace-crate `nethelper/` (`opclook-nethelper.exe`). Метрики и ссылки на
 > строки ниже — исторический снимок до разбиения.
 
 ## 1. Вердикт

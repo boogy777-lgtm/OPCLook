@@ -476,9 +476,7 @@ translation_keys! {
     AboutTitle,
     TestOpcClient,
     RustEgui2026,
-    RewrittenFrom,
     OriginalProto,
-    ReverseInfo,
     SupportedLabel,
     AboutDaLine,
     AboutUaLine,
@@ -522,7 +520,6 @@ translation_keys! {
 
     // ---- App / journal messages ----
     AppStarted,
-    OriginNote,
     Ready,
     ConnectingTo,
     DisconnectingFrom,
@@ -1197,14 +1194,10 @@ fn ru(key: Tr) -> &'static str {
 
         // ---- About dialog ----
         AboutTitle => "О программе",
-        TestOpcClient => "Тестовый OPC клиент",
+        TestOpcClient => "OPCLook",
         RustEgui2026 => "Rust + egui, 2026",
-        RewrittenFrom => "Переписан с EleSy OPC Test Client 2.1.0.139 (Delphi, 2012).",
         OriginalProto => {
-            "Оригинал: OPC DA 2.0, COM-интерфейсы IOPCServer / IOPCItemMgt / IOPCSyncIO / IOPCBrowseServerAddressSpace."
-        }
-        ReverseInfo => {
-            "Версия для реверс-инжиниринга восстановлена из PE-ресурсов и дизассемблера."
+            "OPC DA 2.0: COM-интерфейсы IOPCServer / IOPCItemMgt / IOPCSyncIO / IOPCBrowseServerAddressSpace."
         }
         SupportedLabel => "Поддерживается:",
         AboutDaLine => "• OPC DA 2.0 через COM (локально и по DCOM);",
@@ -1214,7 +1207,7 @@ fn ru(key: Tr) -> &'static str {
         AboutTreeLine => {
             "• дерево адресного пространства, таблица сигналов, чтение/запись, журнал;"
         }
-        AboutSettingsLine => "• сохранение настроек в %APPDATA%\\opcda-egui\\settings.json.",
+        AboutSettingsLine => "• сохранение настроек в %APPDATA%\\opclook\\settings.json.",
         ConnectedServers => "Подключённые серверы:",
         NoConnectedServers => "Нет подключённых серверов.",
         VendorNotAvail => {
@@ -1224,9 +1217,7 @@ fn ru(key: Tr) -> &'static str {
         LimitScriptLine => {
             "• интерпретатор скриптов не реализован (редактор и файлы .stx сохранены);"
         }
-        LimitQualityLine => {
-            "• запись качества в OPC DA стандартом не предусмотрена (в оригинале — проприетарный EleSy.OPCIntercom);"
-        }
+        LimitQualityLine => "• запись качества в OPC DA стандартом не предусмотрена;",
         LimitDcomLine => "• DCOM/OPC UA security настраивается средствами ОС/сервера.",
 
         // ---- Message/confirm ----
@@ -1264,8 +1255,7 @@ fn ru(key: Tr) -> &'static str {
         ImportProgress => "Обработано строк: {0} из {1}",
 
         // ---- App/journal ----
-        AppStarted => "OPC DA/UA Test Client (Rust + egui) запущен",
-        OriginNote => "Оригинал: EleSy OPC Test Client 2.1.0.139 (OPC DA 2.0)",
+        AppStarted => "OPCLook запущен",
         Ready => "Готово",
         ConnectingTo => "Подключение к {0} ({1})...",
         DisconnectingFrom => "Отключение от {0}",
@@ -1843,20 +1833,16 @@ fn en(key: Tr) -> &'static str {
 
         // ---- About dialog ----
         AboutTitle => "About",
-        TestOpcClient => "Test OPC client",
+        TestOpcClient => "OPCLook",
         RustEgui2026 => "Rust + egui, 2026",
-        RewrittenFrom => "Rewritten from EleSy OPC Test Client 2.1.0.139 (Delphi, 2012).",
         OriginalProto => {
-            "Original: OPC DA 2.0, COM interfaces IOPCServer / IOPCItemMgt / IOPCSyncIO / IOPCBrowseServerAddressSpace."
-        }
-        ReverseInfo => {
-            "The reverse-engineering version was recovered from PE resources and the disassembler."
+            "OPC DA 2.0: COM interfaces IOPCServer / IOPCItemMgt / IOPCSyncIO / IOPCBrowseServerAddressSpace."
         }
         SupportedLabel => "Supported:",
         AboutDaLine => "• OPC DA 2.0 via COM (local and over DCOM);",
         AboutUaLine => "• OPC UA via async-opcua 0.19 (SecurityPolicy None, anonymous / username);",
         AboutTreeLine => "• address space tree, signal table, read/write, journal;",
-        AboutSettingsLine => "• settings saved to %APPDATA%\\opcda-egui\\settings.json.",
+        AboutSettingsLine => "• settings saved to %APPDATA%\\opclook\\settings.json.",
         ConnectedServers => "Connected servers:",
         NoConnectedServers => "No connected servers.",
         VendorNotAvail => {
@@ -1866,9 +1852,7 @@ fn en(key: Tr) -> &'static str {
         LimitScriptLine => {
             "• the script interpreter is not implemented (editor and .stx files are kept);"
         }
-        LimitQualityLine => {
-            "• quality writes are not part of the OPC DA standard (proprietary EleSy.OPCIntercom in the original);"
-        }
+        LimitQualityLine => "• quality writes are not part of the OPC DA standard;",
         LimitDcomLine => "• DCOM/OPC UA security is configured via the OS/server.",
 
         // ---- Message/confirm ----
@@ -1904,8 +1888,7 @@ fn en(key: Tr) -> &'static str {
         ImportProgress => "Rows processed: {0} of {1}",
 
         // ---- App/journal ----
-        AppStarted => "OPC DA/UA Test Client (Rust + egui) started",
-        OriginNote => "Original: EleSy OPC Test Client 2.1.0.139 (OPC DA 2.0)",
+        AppStarted => "OPCLook started",
         Ready => "Ready",
         ConnectingTo => "Connecting to {0} ({1})...",
         DisconnectingFrom => "Disconnecting from {0}",
@@ -2465,18 +2448,16 @@ fn zh(key: Tr) -> &'static str {
 
         // ---- About dialog ----
         AboutTitle => "关于",
-        TestOpcClient => "测试 OPC 客户端",
+        TestOpcClient => "OPCLook",
         RustEgui2026 => "Rust + egui, 2026",
-        RewrittenFrom => "从 EleSy OPC Test Client 2.1.0.139 (Delphi, 2012) 重写。",
         OriginalProto => {
-            "原始版本: OPC DA 2.0，COM 接口 IOPCServer / IOPCItemMgt / IOPCSyncIO / IOPCBrowseServerAddressSpace。"
+            "OPC DA 2.0，COM 接口 IOPCServer / IOPCItemMgt / IOPCSyncIO / IOPCBrowseServerAddressSpace。"
         }
-        ReverseInfo => "逆向工程版本从 PE 资源和反汇编中恢复。",
         SupportedLabel => "支持:",
         AboutDaLine => "• OPC DA 2.0 通过 COM (本地及 DCOM);",
         AboutUaLine => "• OPC UA 通过 async-opcua 0.19 (SecurityPolicy None，匿名 / 用户名);",
         AboutTreeLine => "• 地址空间树、信号表、读写、日志;",
-        AboutSettingsLine => "• 设置保存到 %APPDATA%\\opcda-egui\\settings.json。",
+        AboutSettingsLine => "• 设置保存到 %APPDATA%\\opclook\\settings.json。",
         ConnectedServers => "已连接的服务器:",
         NoConnectedServers => "无已连接的服务器。",
         VendorNotAvail => {
@@ -2484,7 +2465,7 @@ fn zh(key: Tr) -> &'static str {
         }
         LimitationsLabel => "本版本的局限:",
         LimitScriptLine => "• 脚本解释器未实现 (保留编辑器及 .stx 文件);",
-        LimitQualityLine => "• OPC DA 标准不提供质量写入 (原版为专有的 EleSy.OPCIntercom);",
+        LimitQualityLine => "• OPC DA 标准不提供质量写入;",
         LimitDcomLine => "• DCOM/OPC UA 安全由操作系统/服务器配置。",
 
         // ---- Message/confirm ----
@@ -2516,8 +2497,7 @@ fn zh(key: Tr) -> &'static str {
         ImportProgress => "已处理行: {0} / {1}",
 
         // ---- App/journal ----
-        AppStarted => "OPC DA/UA 测试客户端 (Rust + egui) 已启动",
-        OriginNote => "原始版本: EleSy OPC Test Client 2.1.0.139 (OPC DA 2.0)",
+        AppStarted => "OPCLook 已启动",
         Ready => "就绪",
         ConnectingTo => "正在连接到 {0} ({1})...",
         DisconnectingFrom => "正在断开与 {0} 的连接",

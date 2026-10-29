@@ -79,7 +79,7 @@ impl Audit {
         let path = std::env::var_os("APPDATA")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(std::env::temp_dir)
-            .join("opcda-egui")
+            .join("opclook")
             .join("nethelper-audit.log");
         let _ = std::fs::create_dir_all(path.parent().unwrap_or_else(|| std::path::Path::new(".")));
         Self { path }

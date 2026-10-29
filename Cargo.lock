@@ -2807,7 +2807,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
-name = "opcda-egui"
+name = "opclook"
 version = "0.1.0"
 dependencies = [
  "async-opcua",
@@ -2817,7 +2817,7 @@ dependencies = [
  "egui_extras",
  "egui_kittest",
  "log",
- "opcda-egui",
+ "opclook",
  "opclook-backend",
  "opclook-contract",
  "opclook-engine",
@@ -2829,16 +2829,6 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "winres",
-]
-
-[[package]]
-name = "opcda-nethelper"
-version = "0.1.0"
-dependencies = [
- "opclook-contract",
- "serde",
- "serde_json",
- "windows 0.61.3",
 ]
 
 [[package]]
@@ -2896,6 +2886,16 @@ dependencies = [
  "opclook-contract",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "opclook-nethelper"
+version = "0.1.0"
+dependencies = [
+ "opclook-contract",
+ "serde",
+ "serde_json",
+ "windows 0.61.3",
 ]
 
 [[package]]

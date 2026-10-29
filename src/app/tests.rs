@@ -1325,7 +1325,7 @@ fn a1_cjk_candidates_cover_windows_fonts_and_honor_the_override() {
 fn a1_build_fonts_appends_the_cjk_face_as_a_fallback_only() {
     use super::present::{FontFile, build_fonts};
     // A readable file stands in for the font (the bytes are not parsed here).
-    let dir = std::env::temp_dir().join(format!("opcda-egui-fonts-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("opclook-fonts-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let fake = dir.join("fake.ttc");
     std::fs::write(&fake, b"not a real font").expect("write fake font");

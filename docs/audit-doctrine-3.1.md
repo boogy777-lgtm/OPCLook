@@ -1,4 +1,4 @@
-# Doctrine v3.1 READ-ONLY Audit — opcda-egui first-party Rust
+# Doctrine v3.1 READ-ONLY Audit — opclook first-party Rust
 
 Scope: `src/app.rs`, `src/ui.rs`, `src/bff/{model,mod,da,ua,da_variant}.rs`, `src/settings.rs`,
 `src/columns.rs`, `src/journal.rs`, `src/i18n.rs`, `src/constants.rs`, `src/lib.rs`, `src/main.rs`,
@@ -12,7 +12,7 @@ Non-goal: GoF patterns and rewrites. All remediation below is minimal, doctrine-
 
 ## 1. Verdict Summary
 
-The codebase is unusually disciplined for a re-implementation of a legacy Delphi app. Classes are
+The codebase is unusually disciplined for a project of this scope. Classes are
 largely defined by *membership via exhaustive enums / matches* rather than by name-checking, and
 each mechanism family carries explicit checked invariants (unit tests, integration tests, or a
 self-checking dictionary). The two strongest exemplars are the **operation-code module** (`op`) with an
@@ -428,7 +428,7 @@ Verification for this pass: `cargo test --lib` 148 passed;
 `cargo test --test ui_interactions` 84 passed; all non-ignored integration
 tests green; live UA smoke/write/search/types/security/subscription/
 refresh_speed/lifecycle/large all green;
-`cargo build --bin opcda-egui` clean without warnings.
+`cargo build --bin opclook` clean without warnings.
 
 ## 7. Remediation pass — typed UA security (2026-10-26)
 
@@ -459,7 +459,7 @@ Fixed (3.5, was Patch):
 
 Verification: `cargo test --lib` 162 passed; `cargo test --test ui_interactions`
 87 passed; all non-ignored integration tests passed; live `ua_*` +
-`security_live` passed against 127.0.0.1:4840; `cargo build --bin opcda-egui`
+`security_live` passed against 127.0.0.1:4840; `cargo build --bin opclook`
 clean without warnings.
 
 Remaining audit backlog (not part of this pass):

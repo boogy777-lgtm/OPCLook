@@ -530,7 +530,7 @@ mod dnd_proof {
         );
         // 9 columns at ~1248 px total exceed the ~760 px central panel, so the
         // content is wider than the viewport (clipped; egui_extras has no
-        // native horizontal scrollbar, documented in ui-parity.md).
+        // native horizontal scrollbar).
         let header_min_x = inner.min.x;
         let offset_y_before = offset_before.y;
 

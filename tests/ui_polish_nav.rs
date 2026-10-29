@@ -5,14 +5,14 @@ use egui_kittest::{
     Harness,
     kittest::{NodeT, Queryable},
 };
-use opcda_egui::app::{App, SessionState};
-use opcda_egui::bff::model::{
+use opclook::app::{App, SessionState};
+use opclook::bff::model::{
     BrowseNode, EndpointSpec, NodeKind, UaSecurityMode, UaSecurityPolicy, Value,
 };
 
 fn harness(app: App) -> Harness<'static, App> {
     let mut app = app;
-    app.settings.set_lang(opcda_egui::i18n::Lang::Ru);
+    app.settings.set_lang(opclook::i18n::Lang::Ru);
     Harness::builder()
         .with_size([1200.0, 900.0])
         .with_max_steps(60)
@@ -20,7 +20,7 @@ fn harness(app: App) -> Harness<'static, App> {
         .allow_missing_glyphs()
         .build_ui_state(
             |ui, app| {
-                opcda_egui::ui::draw(app, ui);
+                opclook::ui::draw(app, ui);
             },
             app,
         )
@@ -466,6 +466,6 @@ fn ui10_no_sessions_offers_connect_like_ctrl_n() {
     assert!(h.state().dialogs.connect.open, "Ctrl+N opens the dialog");
 }
 
-fn sid(raw: u64) -> opcda_egui::bff::model::SessionId {
-    opcda_egui::bff::model::SessionId::new(raw).unwrap()
+fn sid(raw: u64) -> opclook::bff::model::SessionId {
+    opclook::bff::model::SessionId::new(raw).unwrap()
 }

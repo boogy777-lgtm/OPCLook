@@ -103,7 +103,7 @@
 
 ## Что запомнить (для памяти основной сессии)
 
-- `cargo` в этом репозитории всегда с `--target x86_64-unknown-linux-gnu -p opcda-egui` (в `.cargo/config.toml` зашит i686-pc-windows-msvc).
+- `cargo` в этом репозитории всегда с `--target x86_64-unknown-linux-gnu -p opclook` (в `.cargo/config.toml` зашит i686-pc-windows-msvc).
 - При нехватке диска: `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=line-tables-only CARGO_PROFILE_TEST_DEBUG=line-tables-only`.
 - Для замера A4 релиз-профиль переопределяется через `CARGO_PROFILE_RELEASE_LTO=off`, `..._OPT_LEVEL=3`, `..._PANIC=unwind` (в проекте `opt-level=z`, LTO, `panic=abort`).
 - Headless-скриншоты: отдельный стенд вне репозитория (`/home/claude/appshots`, зависимость по path на воркtree, `egui_kittest` с `wgpu`+`snapshot`, `WGPU_BACKEND=gl`).

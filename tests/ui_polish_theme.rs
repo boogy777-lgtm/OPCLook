@@ -4,8 +4,8 @@ use egui_kittest::{
     Harness,
     kittest::{NodeT, Queryable},
 };
-use opcda_egui::app::{App, BottomTab};
-use opcda_egui::i18n::{Lang, Tr, tr};
+use opclook::app::{App, BottomTab};
+use opclook::i18n::{Lang, Tr, tr};
 
 fn harness(mut app: App) -> Harness<'static, App> {
     app.settings.set_lang(Lang::Ru);
@@ -14,7 +14,7 @@ fn harness(mut app: App) -> Harness<'static, App> {
         .with_max_steps(60)
         .with_accessibility_check(false)
         .allow_missing_glyphs()
-        .build_ui_state(|ui, app| opcda_egui::ui::draw(app, ui), app)
+        .build_ui_state(|ui, app| opclook::ui::draw(app, ui), app)
 }
 
 fn fresh_app() -> App {
@@ -67,7 +67,7 @@ fn ui7_script_tab_hint_says_not_implemented_in_every_language() {
 
 #[test]
 fn ui7_bottom_panel_default_is_compact_and_flags_keep_their_logic() {
-    assert!(opcda_egui::constants::BOTTOM_PANEL_DEFAULT_HEIGHT <= 180.0);
+    assert!(opclook::constants::BOTTOM_PANEL_DEFAULT_HEIGHT <= 180.0);
     // Journal-only: no tab bar, script toolbar absent.
     let mut app = fresh_app();
     app.settings.view.options.show_script = false;
@@ -115,8 +115,8 @@ fn ui8_text_scale_spacing_and_row_height_are_applied_to_both_themes() {
         assert_eq!(style.spacing.button_padding, egui::vec2(8.0, 4.0));
         assert_eq!(style.spacing.window_margin, egui::Margin::same(12));
     }
-    assert_eq!(opcda_egui::constants::TABLE_ROW_HEIGHT, 24.0);
-    assert_eq!(opcda_egui::constants::TABLE_HEADER_HEIGHT, 22.0);
+    assert_eq!(opclook::constants::TABLE_ROW_HEIGHT, 24.0);
+    assert_eq!(opclook::constants::TABLE_HEADER_HEIGHT, 22.0);
 }
 
 #[test]
@@ -138,7 +138,7 @@ fn ui8_table_stripes_stay_close_to_the_panel_fill() {
 // UI9: light / dark / system theme
 // ---------------------------------------------------------------------------
 
-use opcda_egui::settings::{Options, Settings, Theme};
+use opclook::settings::{Options, Settings, Theme};
 
 fn dark_mode(h: &Harness<'_, App>) -> bool {
     h.ctx.global_style().visuals.dark_mode
@@ -168,7 +168,7 @@ fn ui9_theme_setting_roundtrips_through_the_settings_file() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create dir");
     {
-        let _redirect = opcda_egui::settings::thread_dir::redirect(&dir);
+        let _redirect = opclook::settings::thread_dir::redirect(&dir);
         for theme in [Theme::Light, Theme::Dark, Theme::System] {
             let mut s = Settings::default();
             s.view.options.theme = theme;
@@ -256,7 +256,7 @@ fn ui9_options_dialog_keeps_save_reachable_in_a_short_window() {
         .with_max_steps(60)
         .with_accessibility_check(false)
         .allow_missing_glyphs()
-        .build_ui_state(|ui, app| opcda_egui::ui::draw(app, ui), app);
+        .build_ui_state(|ui, app| opclook::ui::draw(app, ui), app);
     h.run_steps(5);
     let save = h.get_by_label(tr(Lang::Ru, Tr::Save)).rect();
     assert!(
@@ -270,7 +270,7 @@ fn p1_header_theme_choices_apply_and_persist_without_clobbering_draft() {
     let dir = std::env::temp_dir().join(format!("opclook-p1-header-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create dir");
-    let _redirect = opcda_egui::settings::thread_dir::redirect(&dir);
+    let _redirect = opclook::settings::thread_dir::redirect(&dir);
     let mut h = harness(fresh_app());
     h.state_mut().dialogs.options.draft.update_interval_secs = 17;
     for (choice, theme) in [
@@ -306,7 +306,7 @@ fn p1_theme_control_is_reachable_in_a_narrow_window_in_each_language() {
             .with_size([480.0, 520.0])
             .with_accessibility_check(false)
             .allow_missing_glyphs()
-            .build_ui_state(|ui, app| opcda_egui::ui::draw(app, ui), app);
+            .build_ui_state(|ui, app| opclook::ui::draw(app, ui), app);
         h.run_steps(4);
         let rect = h.get_by_label(tr(lang, Tr::ThemeTitle)).rect();
         assert!(
@@ -358,8 +358,8 @@ fn p1_header_save_failure_is_reported_in_journal() {
     let dir = std::env::temp_dir().join(format!("opclook-p1-save-error-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create dir");
-    let _redirect = opcda_egui::settings::thread_dir::redirect(&dir);
-    std::fs::create_dir_all(opcda_egui::settings::settings_path()).expect("block settings file");
+    let _redirect = opclook::settings::thread_dir::redirect(&dir);
+    std::fs::create_dir_all(opclook::settings::settings_path()).expect("block settings file");
     let mut h = harness(fresh_app());
     h.run_steps(4);
     h.get_by_label(tr(Lang::Ru, Tr::ThemeTitle)).click();
@@ -369,7 +369,7 @@ fn p1_header_save_failure_is_reported_in_journal() {
     assert_eq!(h.state().settings.view.options.theme, Theme::Light);
     assert!(h.state().journal.entries().iter().any(|entry| matches!(
         entry.message,
-        opcda_egui::journal::JournalMessage::Localized {
+        opclook::journal::JournalMessage::Localized {
             key: Tr::SettingsSaveFailed,
             ..
         }
@@ -382,7 +382,7 @@ fn p1_header_change_keeps_an_open_options_draft_consistent() {
     let dir = std::env::temp_dir().join(format!("opclook-p1-draft-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create dir");
-    let _redirect = opcda_egui::settings::thread_dir::redirect(&dir);
+    let _redirect = opclook::settings::thread_dir::redirect(&dir);
     let mut app = app_with_theme(Theme::Dark);
     app.open_options_dialog();
     app.dialogs.options.draft.update_interval_secs = 17;

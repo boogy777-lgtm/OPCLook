@@ -28,9 +28,7 @@ pub(super) fn about_dialog(app: &mut App, ui: &mut egui::Ui) {
             ui.heading(tr(lang, Tr::TestOpcClient));
             ui.label(tr(lang, Tr::RustEgui2026));
             ui.separator();
-            ui.label(tr(lang, Tr::RewrittenFrom));
             ui.label(tr(lang, Tr::OriginalProto));
-            ui.label(tr(lang, Tr::ReverseInfo));
             ui.separator();
             ui.label(tr(lang, Tr::SupportedLabel));
             ui.label(tr(lang, Tr::AboutDaLine));

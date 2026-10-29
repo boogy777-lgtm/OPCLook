@@ -3,7 +3,7 @@
 **Статус:** этапы 1–8 реализованы в коде (2026-10-26). Живая проверка DA на втором
 хосте и ручная проверка helper под UAC остаются заблокированными средой (нет
 Kepware/второго DA-хоста).  
-**Проект:** `opcda-egui`  
+**Проект:** `opclook`  
 **Область:** OPC UA discovery, сканирование подсети, привязка UA-трафика к адаптеру, DA route steering.
 
 > **Актуальная семантика выбора адаптера:** `docs/plan-ua-search-network.md`
@@ -23,7 +23,7 @@ Kepware/второго DA-хоста).
 | 4. LDS/mDNS | ✅ | привязанный `FindServersOnNetwork`, системный DNS-SD с `InterfaceIndex`; LDS не обязателен |
 | 5. Сканер N+1 | ✅ | loopback первым, FIFO/32, прогресс/отмена/CIDR, потоковые события, union endpoints по `ApplicationUri` |
 | 6. Лимит 100 UA-сессий | ✅ | `MAX_UA_SESSIONS` в `open_tab_for_endpoint`; счётчик `UA-сессии: N/100`; реконнект не блокируется |
-| 7. DA helper | ⚠️ | `nethelper/opcda-nethelper` + `DaRouteManager`, IPC/UAC/ACL/refcount/конфликты готовы; live DA и ручной UAC-тест требуют стенда |
+| 7. DA helper | ⚠️ | `nethelper/opclook-nethelper` + `DaRouteManager`, IPC/UAC/ACL/refcount/конфликты готовы; live DA и ручной UAC-тест требуют стенда |
 | 8. Тесты, документация, release | ✅/⚠️ | unit/UI/regression зелёные; `docs/network-binding.md`; упаковка обоих exe; live DA не выполнен по среде |
 
 ## 1. Цель
@@ -256,7 +256,7 @@ DNS:
    - ведёт refcount по `(IP, adapter GUID)`;
    - освобождает маршруты.
 
-2. **`opcda-nethelper`**
+2. **`opclook-nethelper`**
    - отдельный crate `nethelper/` в workspace;
    - минимальные зависимости: `windows`, `serde`, `serde_json`;
    - манифест `requireAdministrator`;
@@ -465,10 +465,10 @@ resolve DA host
 
 - `docs/network-binding.md` — правила, привязка, DA-ограничения, UAC, конфликты.
 - `docs/network-binding-plan.md` — этот план.
-- Обновить `README.md`, `docs/test-matrix.md`, `docs/ui-parity.md`, аудиты.
+- Обновить `README.md`, `docs/test-matrix.md`, аудиты.
 - Release включает:
-  - `opcda-egui.exe`;
-  - `opcda-nethelper.exe`;
+  - `opclook.exe`;
+  - `opclook-nethelper.exe`;
   - манифест helper;
   - 32-битную сборку.
 

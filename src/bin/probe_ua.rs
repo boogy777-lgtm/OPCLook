@@ -1,5 +1,5 @@
 mod probe_support;
-use opcda_egui::bff::model::{
+use opclook::bff::model::{
     Command, CommandKind, EndpointSpec, EventKind, ItemKey, ItemSpec, Protocol, WriteRequest,
 };
 use probe_support::Probe;
@@ -9,10 +9,10 @@ fn main() -> Result<(), String> {
     let url = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "opc.tcp://milo.digitalpetri.com:62541/milo".to_string());
-    let session = opcda_egui::bff::model::SessionId::FIRST;
+    let session = opclook::bff::model::SessionId::FIRST;
     let probe = Probe::new();
     probe.send(Command {
-        request_id: Some(opcda_egui::bff::model::RequestId::FIRST),
+        request_id: Some(opclook::bff::model::RequestId::FIRST),
         owner: session.into(),
         protocol: Protocol::OpcUa,
         kind: CommandKind::Connect {
@@ -20,7 +20,7 @@ fn main() -> Result<(), String> {
         },
     })?;
 
-    let mut request = opcda_egui::bff::model::RequestId::FIRST
+    let mut request = opclook::bff::model::RequestId::FIRST
         .successor()
         .ok_or("request identifiers exhausted")?;
     let mut connected = false;
@@ -38,7 +38,7 @@ fn main() -> Result<(), String> {
                         protocol: Protocol::OpcUa,
                         kind: CommandKind::Browse {
                             node_id: String::new(),
-                            filter: opcda_egui::bff::model::NodeClassFilter::All,
+                            filter: opclook::bff::model::NodeClassFilter::All,
                             view_id: None,
                         },
                     })?;
@@ -49,7 +49,7 @@ fn main() -> Result<(), String> {
                         protocol: Protocol::OpcUa,
                         kind: CommandKind::AddItems {
                             items: vec![ItemSpec {
-                                key: opcda_egui::bff::model::ItemKey::FIRST,
+                                key: opclook::bff::model::ItemKey::FIRST,
                                 item_id: "i=2259".to_string(),
                             }],
                         },
@@ -84,8 +84,8 @@ fn main() -> Result<(), String> {
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Write {
                     request: WriteRequest {
-                        key: opcda_egui::bff::model::ItemKey::FIRST,
-                        value: opcda_egui::bff::model::Value::I64(0),
+                        key: opclook::bff::model::ItemKey::FIRST,
+                        value: opclook::bff::model::Value::I64(0),
                         type_hint: None,
                     },
                 },

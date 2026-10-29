@@ -5,8 +5,8 @@
 //! that a Write to a monitored node produces a pushed change.
 //!
 //! Run: `cargo test --test ua_subscription -- --ignored --nocapture`
-use opcda_egui::bff::model::ItemKey;
-use opcda_egui::bff::model::{
+use opclook::bff::model::ItemKey;
+use opclook::bff::model::{
     BrowseNode, Command, CommandKind, EndpointSpec, EventKind, ItemSpec, NodeKind, Protocol, Value,
 };
 use opclook_backend::bff::Gateway;
@@ -40,8 +40,8 @@ fn wait_for(
     while Instant::now() < deadline {
         while let Some(event) = gateway.try_recv() {
             if event.owner
-                != opcda_egui::bff::model::Owner::Session(
-                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                != opclook::bff::model::Owner::Session(
+                    opclook::bff::model::SessionId::new(session).unwrap(),
                 )
             {
                 continue;
@@ -58,9 +58,9 @@ fn wait_for(
 fn connect(gateway: &Gateway, session: u64) {
     gateway
         .send(Command {
-            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            owner: opcda_egui::bff::model::Owner::Session(
-                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            request_id: opclook::bff::model::RequestId::new(next_id()),
+            owner: opclook::bff::model::Owner::Session(
+                opclook::bff::model::SessionId::new(session).unwrap(),
             ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Connect {
@@ -81,9 +81,9 @@ fn connect(gateway: &Gateway, session: u64) {
 fn send(gateway: &Gateway, session: u64, kind: CommandKind) {
     gateway
         .send(Command {
-            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            owner: opcda_egui::bff::model::Owner::Session(
-                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            request_id: opclook::bff::model::RequestId::new(next_id()),
+            owner: opclook::bff::model::Owner::Session(
+                opclook::bff::model::SessionId::new(session).unwrap(),
             ),
             protocol: Protocol::OpcUa,
             kind,
@@ -112,7 +112,7 @@ fn add_batch(
     first_key: u32,
 ) -> Vec<(
     ItemKey,
-    Result<opcda_egui::bff::model::ItemInfo, opcda_egui::bff::model::BackendMsg>,
+    Result<opclook::bff::model::ItemInfo, opclook::bff::model::BackendMsg>,
 )> {
     let specs: Vec<ItemSpec> = ids
         .iter()
@@ -139,7 +139,7 @@ fn browse_children(gateway: &Gateway, session: u64, node_id: &str) -> Vec<Browse
         session,
         CommandKind::Browse {
             node_id: node_id.to_string(),
-            filter: opcda_egui::bff::model::NodeClassFilter::All,
+            filter: opclook::bff::model::NodeClassFilter::All,
             view_id: None,
         },
     );
@@ -227,13 +227,13 @@ fn find_sticky_writable(gateway: &Gateway, session: u64) -> Option<(ItemKey, Str
             // Not sticky -> the PLC reverted it; restore and keep looking.
             gateway
                 .send(Command {
-                    request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                    owner: opcda_egui::bff::model::Owner::Session(
-                        opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                    request_id: opclook::bff::model::RequestId::new(next_id()),
+                    owner: opclook::bff::model::Owner::Session(
+                        opclook::bff::model::SessionId::new(session).unwrap(),
                     ),
                     protocol: Protocol::OpcUa,
                     kind: CommandKind::Write {
-                        request: opcda_egui::bff::model::WriteRequest {
+                        request: opclook::bff::model::WriteRequest {
                             key,
                             value: original.clone(),
                             type_hint: None,
@@ -254,7 +254,7 @@ fn push_value(
     session: u64,
     key: ItemKey,
     timeout: Duration,
-) -> opcda_egui::bff::model::DataValue {
+) -> opclook::bff::model::DataValue {
     let kind = wait_for(gateway, session, timeout, |kind| match kind {
         EventKind::Values { values } => values.iter().any(|(k, _)| *k == key),
         _ => false,
@@ -276,8 +276,8 @@ fn push_value(
 fn drain_stale_pushes(gateway: &Gateway, session: u64) {
     while let Some(event) = gateway.try_recv() {
         if event.owner
-            != opcda_egui::bff::model::Owner::Session(
-                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            != opclook::bff::model::Owner::Session(
+                opclook::bff::model::SessionId::new(session).unwrap(),
             )
         {
             continue;
@@ -338,7 +338,7 @@ fn write(gateway: &Gateway, session: u64, key: ItemKey, value: Value) {
         gateway,
         session,
         CommandKind::Write {
-            request: opcda_egui::bff::model::WriteRequest {
+            request: opclook::bff::model::WriteRequest {
                 key,
                 value,
                 type_hint: None,
@@ -395,7 +395,7 @@ fn ua_subscription_pushes_values_without_reads_and_writes() {
             v1.timestamp.is_some(),
             "push should carry a server timestamp"
         );
-        assert_eq!(v1.quality.kind, opcda_egui::bff::model::QualityKind::Good);
+        assert_eq!(v1.quality.kind, opclook::bff::model::QualityKind::Good);
 
         let Some((write_key, _)) = write_key else {
             println!("PUSH_OK pure push confirmed (CurrentTime); no write check run");

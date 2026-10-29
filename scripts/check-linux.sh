@@ -20,10 +20,10 @@ echo "==> cargo fmt --all -- --check"
 cargo fmt --all -- --check
 
 echo "==> cargo check --all-targets ($TARGET)"
-cargo check --all-targets --target "$TARGET" -p opcda-egui -p opclook-cli -p opclook-engine -p opclook-backend -p opclook-contract -p opclook-locale
+cargo check --all-targets --target "$TARGET" -p opclook -p opclook-cli -p opclook-engine -p opclook-backend -p opclook-contract -p opclook-locale
 
 echo "==> build GUI and standalone CLI"
-cargo build --target "$TARGET" -p opcda-egui -p opclook-cli
+cargo build --target "$TARGET" -p opclook -p opclook-cli
 cargo build --target "$TARGET" -p opclook-cli
 python3 scripts/check-cli-boundary.py "$TARGET"
 
@@ -31,9 +31,9 @@ echo "==> shared crate and CLI tests ($TARGET)"
 cargo test --target "$TARGET" -p opclook-engine -p opclook-backend -p opclook-contract -p opclook-locale -p opclook-cli
 
 echo "==> GUI library tests ($TARGET)"
-cargo test --target "$TARGET" -p opcda-egui --lib
+cargo test --target "$TARGET" -p opclook --lib
 
 echo "==> GUI integration tests ($TARGET)"
-cargo test --target "$TARGET" -p opcda-egui --test '*'
+cargo test --target "$TARGET" -p opclook --test '*'
 
 echo "==> OK: Linux-проверка зелёная"

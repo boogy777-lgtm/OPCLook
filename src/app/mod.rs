@@ -239,7 +239,6 @@ impl App {
             app.report_settings_notice(notice);
         }
         app.journal.info_l(Tr::AppStarted, &[]);
-        app.journal.info_l(Tr::OriginNote, &[]);
         app.cjk_font = match cjk {
             Some(path) => {
                 app.journal.info_l(Tr::CjkFontLoaded, &[&path]);
@@ -273,7 +272,6 @@ impl App {
         opclook_engine::testing::use_private_pki_dir();
         let mut app = Self::new_inner(settings);
         app.journal.info_l(Tr::AppStarted, &[]);
-        app.journal.info_l(Tr::OriginNote, &[]);
         app
     }
 

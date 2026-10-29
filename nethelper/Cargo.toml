@@ -1,9 +1,9 @@
 [package]
-name = "opcda-nethelper"
+name = "opclook-nethelper"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.99"
-description = "Privileged temporary host-route helper for opcda-egui"
+description = "Privileged temporary host-route helper for opclook"
 license = "MIT"
 repository = "https://github.com/boogy777-lgtm/OPCLook"
 

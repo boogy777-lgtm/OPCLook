@@ -15,7 +15,7 @@
 - База (до): 534 passed / 0 failed / 24 ignored.
 - После: 551 passed / 0 failed / 24 ignored (+17: 14 в `tests/ui_polish_theme.rs`, 3 unit в `src/ui/colors.rs`).
 - Первый прогон UI9 один раз упал на `bff::da_router::tests::panicking_session_is_reported_and_commands_do_not_vanish` (таймаут 500 мс при перегруженном CPU трёх параллельных сборок; `src/bff` не менялся); повтор зелёный.
-- Существующие тесты правились: `src/settings.rs::options_defaults_match_elesy` (`show_log` теперь `true`; дефолт темы System). `tests/ui_interactions.rs` не менялся.
+- Существующие тесты правились: `src/settings.rs::options_defaults_match_the_spec` (`show_log` теперь `true`; дефолт темы System). `tests/ui_interactions.rs` не менялся.
 
 ## Снимки (стенд `/home/claude/shots-theme`, не в репозитории)
 

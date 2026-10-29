@@ -1,8 +1,8 @@
 //! Reproducible CPU frame baseline: see docs/reports/refactor-frame-baseline.md.
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use opcda_egui::app::App;
-use opcda_egui::bff::model::{
+use opclook::app::App;
+use opclook::bff::model::{
     DataValue, EndpointSpec, EventKind, Quality, QualityKind, SessionId, Value, VarType,
 };
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
@@ -54,7 +54,7 @@ fn scene(changed: usize, journal: bool) {
         .with_size([1600.0, 900.0])
         .with_accessibility_check(false)
         .with_context_setup(|ctx| {
-            opcda_egui::app::install_fonts(ctx);
+            opclook::app::install_fonts(ctx);
         })
         .build_ui_state(|ui, app: &mut App| app.update(ui), fixture(journal));
     h.run_steps(20);

@@ -1,4 +1,4 @@
-use opcda_egui::bff::model::{
+use opclook::bff::model::{
     Command, CommandKind, EndpointSpec, Event, EventKind, ItemSpec, Protocol, QualityKind, Value,
 };
 use opclook_backend::bff::Gateway;
@@ -44,9 +44,9 @@ fn connect(gateway: &Gateway, session: u64) -> Event {
     wait_for(
         gateway,
         Command {
-            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            owner: opcda_egui::bff::model::Owner::Session(
-                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            request_id: opclook::bff::model::RequestId::new(next_id()),
+            owner: opclook::bff::model::Owner::Session(
+                opclook::bff::model::SessionId::new(session).unwrap(),
             ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Connect {
@@ -63,9 +63,9 @@ fn disconnect(gateway: &Gateway, session: u64) {
     let _ = wait_for(
         gateway,
         Command {
-            request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-            owner: opcda_egui::bff::model::Owner::Session(
-                opcda_egui::bff::model::SessionId::new(session).unwrap(),
+            request_id: opclook::bff::model::RequestId::new(next_id()),
+            owner: opclook::bff::model::Owner::Session(
+                opclook::bff::model::SessionId::new(session).unwrap(),
             ),
             protocol: Protocol::OpcUa,
             kind: CommandKind::Disconnect,
@@ -99,14 +99,14 @@ fn server_browse_add_and_read() {
         let browse = wait_for(
             gateway,
             Command {
-                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                owner: opcda_egui::bff::model::Owner::Session(
-                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                request_id: opclook::bff::model::RequestId::new(next_id()),
+                owner: opclook::bff::model::Owner::Session(
+                    opclook::bff::model::SessionId::new(session).unwrap(),
                 ),
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Browse {
                     node_id: "i=85".to_string(),
-                    filter: opcda_egui::bff::model::NodeClassFilter::All,
+                    filter: opclook::bff::model::NodeClassFilter::All,
                     view_id: None,
                 },
             },
@@ -126,19 +126,19 @@ fn server_browse_add_and_read() {
         let add = wait_for(
             gateway,
             Command {
-                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                owner: opcda_egui::bff::model::Owner::Session(
-                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                request_id: opclook::bff::model::RequestId::new(next_id()),
+                owner: opclook::bff::model::Owner::Session(
+                    opclook::bff::model::SessionId::new(session).unwrap(),
                 ),
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::AddItems {
                     items: vec![
                         ItemSpec {
-                            key: opcda_egui::bff::model::ItemKey::new(1).unwrap(),
+                            key: opclook::bff::model::ItemKey::new(1).unwrap(),
                             item_id: "i=2259".to_string(),
                         },
                         ItemSpec {
-                            key: opcda_egui::bff::model::ItemKey::new(2).unwrap(),
+                            key: opclook::bff::model::ItemKey::new(2).unwrap(),
                             item_id: "i=2258".to_string(),
                         },
                     ],
@@ -159,15 +159,15 @@ fn server_browse_add_and_read() {
         let read = wait_for(
             gateway,
             Command {
-                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                owner: opcda_egui::bff::model::Owner::Session(
-                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                request_id: opclook::bff::model::RequestId::new(next_id()),
+                owner: opclook::bff::model::Owner::Session(
+                    opclook::bff::model::SessionId::new(session).unwrap(),
                 ),
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Read {
                     keys: vec![
-                        opcda_egui::bff::model::ItemKey::new(1).unwrap(),
-                        opcda_egui::bff::model::ItemKey::new(2).unwrap(),
+                        opclook::bff::model::ItemKey::new(1).unwrap(),
+                        opclook::bff::model::ItemKey::new(2).unwrap(),
                     ],
                 },
             },
@@ -196,12 +196,12 @@ fn server_browse_add_and_read() {
 
         let state = &values
             .iter()
-            .find(|(k, _)| *k == opcda_egui::bff::model::ItemKey::new(1).unwrap())
+            .find(|(k, _)| *k == opclook::bff::model::ItemKey::new(1).unwrap())
             .expect("missing key 1")
             .1;
         let current_time = &values
             .iter()
-            .find(|(k, _)| *k == opcda_egui::bff::model::ItemKey::new(2).unwrap())
+            .find(|(k, _)| *k == opclook::bff::model::ItemKey::new(2).unwrap())
             .expect("missing key 2")
             .1;
         assert!(
@@ -224,14 +224,14 @@ fn server_invalid_node_read_does_not_panic() {
         let add = wait_for(
             gateway,
             Command {
-                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                owner: opcda_egui::bff::model::Owner::Session(
-                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                request_id: opclook::bff::model::RequestId::new(next_id()),
+                owner: opclook::bff::model::Owner::Session(
+                    opclook::bff::model::SessionId::new(session).unwrap(),
                 ),
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::AddItems {
                     items: vec![ItemSpec {
-                        key: opcda_egui::bff::model::ItemKey::new(1).unwrap(),
+                        key: opclook::bff::model::ItemKey::new(1).unwrap(),
                         item_id: "ns=999;s=does-not-exist".to_string(),
                     }],
                 },
@@ -248,13 +248,13 @@ fn server_invalid_node_read_does_not_panic() {
         let read = wait_for(
             gateway,
             Command {
-                request_id: opcda_egui::bff::model::RequestId::new(next_id()),
-                owner: opcda_egui::bff::model::Owner::Session(
-                    opcda_egui::bff::model::SessionId::new(session).unwrap(),
+                request_id: opclook::bff::model::RequestId::new(next_id()),
+                owner: opclook::bff::model::Owner::Session(
+                    opclook::bff::model::SessionId::new(session).unwrap(),
                 ),
                 protocol: Protocol::OpcUa,
                 kind: CommandKind::Read {
-                    keys: vec![opcda_egui::bff::model::ItemKey::new(1).unwrap()],
+                    keys: vec![opclook::bff::model::ItemKey::new(1).unwrap()],
                 },
             },
             Duration::from_secs(20),

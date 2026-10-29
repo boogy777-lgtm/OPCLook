@@ -1,15 +1,15 @@
 [package]
-name = "opcda-egui"
+name = "opclook"
 version = "0.1.0"
 edition = "2024"
 autobins = false
 rust-version = "1.99"
-description = "Native Rust/egui rewrite of EleSy OPC Test Client 2.1 (OPC DA 2.0)"
+description = "Native OPC DA 2.0 / OPC UA client for Windows"
 license = "MIT"
 repository = "https://github.com/boogy777-lgtm/OPCLook"
 
 [[bin]]
-name = "opcda-egui"
+name = "opclook"
 path = "src/main.rs"
 
 [[bin]]
@@ -68,7 +68,7 @@ winres = "0.1"
 
 [dev-dependencies]
 opclook-backend = { path = "crates/backend" }
-opcda-egui = { path = ".", features = ["test-support"] }
+opclook = { path = ".", features = ["test-support"] }
 egui_kittest = "0.37"
 stats_alloc = "0.1.10"
 # In-process OPC UA server for the live backend tests (src/bff/ua/live_tests.rs).

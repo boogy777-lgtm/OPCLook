@@ -1,9 +1,9 @@
 #![cfg(feature = "ui-snapshots")]
 //! Manual visual QA; run ignored test with a headless wgpu renderer.
 use egui_kittest::{Harness, kittest::Queryable};
-use opcda_egui::app::{App, ConfirmAction, ConnectPane, DaHit, UaIdentity};
-use opcda_egui::bff::model::{EndpointSpec, Protocol, ServerEntry, SessionId, Value};
-use opcda_egui::i18n::Lang;
+use opclook::app::{App, ConfirmAction, ConnectPane, DaHit, UaIdentity};
+use opclook::bff::model::{EndpointSpec, Protocol, ServerEntry, SessionId, Value};
+use opclook::i18n::Lang;
 
 fn base(lang: Lang) -> App {
     let mut app = App::new_test(&egui::Context::default());
@@ -27,7 +27,7 @@ fn save(name: &str, app: App) {
         .with_accessibility_check(false)
         .with_render_cursor(false)
         .with_context_setup(|ctx| {
-            assert!(opcda_egui::app::install_fonts(ctx).is_some());
+            assert!(opclook::app::install_fonts(ctx).is_some());
         })
         .build_ui_state(|ui, app: &mut App| app.update(ui), app);
     h.run_steps(8);
@@ -66,9 +66,9 @@ fn rendered_app_scenes() {
     da.dialogs.connect.pane = ConnectPane::Da;
     da.dialogs.connect.da_pending = false;
     da.dialogs.connect.da_auto_pending = 0;
-    da.dialogs.connect.error = Some(opcda_egui::i18n::da_route_error(
+    da.dialogs.connect.error = Some(opclook::i18n::da_route_error(
         Lang::Ru,
-        &opcda_egui::da_route::DaRouteError::HelperUnavailable("IPC timeout".into()),
+        &opclook::da_route::DaRouteError::HelperUnavailable("IPC timeout".into()),
     ));
     save("da-helper-error-ru", da);
 
@@ -99,8 +99,8 @@ fn rendered_app_scenes() {
 #[test]
 #[ignore = "manual visual QA requiring a headless wgpu renderer"]
 fn p1_theme_scenes() {
-    use opcda_egui::i18n::{Tr, tr};
-    use opcda_egui::settings::Theme;
+    use opclook::i18n::{Tr, tr};
+    use opclook::settings::Theme;
     let session = SessionId::new(1).unwrap();
     std::fs::create_dir_all("docs/screenshots/p1").unwrap();
     for (language, lang) in [("ru", Lang::Ru), ("en", Lang::En), ("zh", Lang::Zh)] {
@@ -123,7 +123,7 @@ fn p1_theme_scenes() {
                 .with_accessibility_check(false)
                 .with_render_cursor(false)
                 .with_context_setup(|ctx| {
-                    assert!(opcda_egui::app::install_fonts(ctx).is_some());
+                    assert!(opclook::app::install_fonts(ctx).is_some());
                 })
                 .build_ui_state(|ui, app: &mut App| app.update(ui), app);
             h.input_mut().system_theme = Some(egui::Theme::Light);
@@ -147,13 +147,13 @@ fn p1_theme_scenes() {
 #[test]
 #[ignore = "manual visual QA requiring a headless wgpu renderer"]
 fn p1_narrow_scene() {
-    use opcda_egui::i18n::{Tr, tr};
+    use opclook::i18n::{Tr, tr};
     let mut h = Harness::builder()
         .with_size([480.0, 520.0])
         .with_accessibility_check(false)
         .with_render_cursor(false)
         .with_context_setup(|ctx| {
-            assert!(opcda_egui::app::install_fonts(ctx).is_some());
+            assert!(opclook::app::install_fonts(ctx).is_some());
         })
         .build_ui_state(|ui, app: &mut App| app.update(ui), base(Lang::Ru));
     h.run_steps(8);
@@ -174,15 +174,12 @@ fn p1_focus_scene() {
         .with_accessibility_check(false)
         .with_render_cursor(false)
         .with_context_setup(|ctx| {
-            assert!(opcda_egui::app::install_fonts(ctx).is_some());
+            assert!(opclook::app::install_fonts(ctx).is_some());
         })
         .build_ui_state(|ui, app: &mut App| app.update(ui), base(Lang::En));
     h.run_steps(8);
-    h.get_by_label(opcda_egui::i18n::tr(
-        Lang::En,
-        opcda_egui::i18n::Tr::ThemeTitle,
-    ))
-    .click();
+    h.get_by_label(opclook::i18n::tr(Lang::En, opclook::i18n::Tr::ThemeTitle))
+        .click();
     h.run_steps(3);
     h.key_press(egui::Key::ArrowDown);
     h.run_steps(4);
@@ -210,7 +207,7 @@ fn p3_followup_shortcut_menu_ru() {
         .with_accessibility_check(false)
         .with_render_cursor(false)
         .with_context_setup(|ctx| {
-            assert!(opcda_egui::app::install_fonts(ctx).is_some());
+            assert!(opclook::app::install_fonts(ctx).is_some());
         })
         .build_ui_state(|ui, app: &mut App| app.update(ui), base(Lang::Ru));
     h.run_steps(5);
@@ -272,7 +269,7 @@ fn keyboard_unselected_focus_ru() {
         .with_accessibility_check(false)
         .with_render_cursor(false)
         .with_context_setup(|ctx| {
-            assert!(opcda_egui::app::install_fonts(ctx).is_some());
+            assert!(opclook::app::install_fonts(ctx).is_some());
         })
         .build_ui_state(|ui, app: &mut App| app.update(ui), app);
     h.run_steps(4);

@@ -49,7 +49,7 @@ pub(super) fn save_journal(app: &mut App) {
     let lang = app.lang();
     if let Some(path) = rfd::FileDialog::new()
         .add_filter("log", &["log", "txt"])
-        .set_file_name("OPCtools.log")
+        .set_file_name("opclook.log")
         .save_file()
     {
         match app.journal.save_localized(&path, lang) {

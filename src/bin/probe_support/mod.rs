@@ -1,5 +1,5 @@
 //! Shared engine adapter for the optional command-line diagnostic probes.
-use opcda_egui::bff::model::{Command, Event};
+use opclook::bff::model::{Command, Event};
 use opclook_engine::Engine;
 use std::cell::RefCell;
 
