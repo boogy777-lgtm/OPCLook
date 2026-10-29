@@ -46,10 +46,11 @@ pub(super) fn confirm_dialog(app: &mut App, ui: &mut egui::Ui, was_open: bool) {
                 no = true;
             }
         });
-    if yes {
-        app.confirm_yes();
-    }
+    // Enter can activate the focused No button and the default Yes together.
+    // Cancellation wins even if both were raised in the same frame.
     if no {
         app.confirm_no();
+    } else if yes {
+        app.confirm_yes();
     }
 }

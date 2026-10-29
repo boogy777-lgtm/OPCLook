@@ -583,6 +583,7 @@ translation_keys! {
     NotUnsigned,
     NotNumber,
     NotBool,
+    WriteInputTooLarge,
     NotDatetime,
     ValueNotServer,
     PortInvalid,
@@ -1320,6 +1321,9 @@ fn ru(key: Tr) -> &'static str {
         NotUnsigned => "\"{0}\" не является целым числом без знака",
         NotNumber => "\"{0}\" не является числом",
         NotBool => "\"{0}\" не является логическим значением",
+        WriteInputTooLarge => {
+            "Значение превышает 1 МиБ или расчётный размер пакета превышает 16 МиБ"
+        }
         NotDatetime => "не удалось разобрать дату/время \"{0}\"",
         ValueNotServer => "не указан сервер",
         PortInvalid => "укажите корректный порт",
@@ -1946,6 +1950,7 @@ fn en(key: Tr) -> &'static str {
         NotUnsigned => "\"{0}\" is not an unsigned integer",
         NotNumber => "\"{0}\" is not a number",
         NotBool => "\"{0}\" is not a boolean value",
+        WriteInputTooLarge => "The value exceeds 1 MiB or the estimated write batch exceeds 16 MiB",
         NotDatetime => "failed to parse date/time \"{0}\"",
         ValueNotServer => "no server specified",
         PortInvalid => "specify a valid port",
@@ -2546,6 +2551,7 @@ fn zh(key: Tr) -> &'static str {
         NotUnsigned => "\"{0}\" 不是无符号整数",
         NotNumber => "\"{0}\" 不是数字",
         NotBool => "\"{0}\" 不是布尔值",
+        WriteInputTooLarge => "值超过 1 MiB 或写入批次的估计大小超过 16 MiB",
         NotDatetime => "无法解析日期/时间 \"{0}\"",
         ValueNotServer => "未指定服务器",
         PortInvalid => "请指定有效端口",

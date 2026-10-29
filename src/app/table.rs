@@ -5,6 +5,18 @@ use crate::bff::model::{
 use crate::i18n::{Tr, fmt, tr};
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Utc};
 
+// Bound the copies constructed by the manual write dialog before parsing.
+const MAX_WRITE_TEXT_BYTES: usize = 1024 * 1024;
+const MAX_WRITE_BATCH_BYTES: usize = 16 * 1024 * 1024;
+
+fn write_input_fits(text_bytes: usize, request_count: usize) -> bool {
+    text_bytes <= MAX_WRITE_TEXT_BYTES
+        && text_bytes
+            .checked_add(std::mem::size_of::<WriteRequest>())
+            .and_then(|per_request| per_request.checked_mul(request_count))
+            .is_some_and(|total| total <= MAX_WRITE_BATCH_BYTES)
+}
+
 impl App {
     pub fn add_items(&mut self, session: SessionId, items: Vec<(String, String)>) -> bool {
         let Some(view) = self.session(session) else {
@@ -203,6 +215,14 @@ impl App {
     }
 
     pub fn apply_write(&mut self) {
+        if self.dialogs.write.keys.is_empty() {
+            return;
+        }
+        if !write_input_fits(self.dialogs.write.text.len(), self.dialogs.write.keys.len()) {
+            self.dialogs.write.error = Some(tr(self.lang(), Tr::WriteInputTooLarge).to_string());
+            self.dialogs.write.focus_pending = true;
+            return;
+        }
         let keys = self.dialogs.write.keys.clone();
         if keys.is_empty() {
             return;
@@ -611,4 +631,20 @@ fn parse_datetime(text: &str, lang: Lang) -> Result<DateTime<Utc>, String> {
         }
     }
     Err(fmt(lang, Tr::NotDatetime, &[&text]))
+}
+
+#[cfg(test)]
+mod write_input_limit_tests {
+    use super::*;
+
+    #[test]
+    fn limits_are_in_bytes_and_batch_arithmetic_is_checked() {
+        assert!(write_input_fits(MAX_WRITE_TEXT_BYTES, 1));
+        assert!(!write_input_fits(MAX_WRITE_TEXT_BYTES + 1, 1));
+        let per_request = MAX_WRITE_TEXT_BYTES + std::mem::size_of::<WriteRequest>();
+        let max_count = MAX_WRITE_BATCH_BYTES / per_request;
+        assert!(write_input_fits(MAX_WRITE_TEXT_BYTES, max_count));
+        assert!(!write_input_fits(MAX_WRITE_TEXT_BYTES, max_count + 1));
+        assert!(!write_input_fits(1, usize::MAX));
+    }
 }

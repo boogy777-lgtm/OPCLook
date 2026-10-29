@@ -5597,3 +5597,149 @@ fn p2_space_repeat_on_confirmation_button_does_not_write() {
         1
     );
 }
+
+#[test]
+fn p2_enter_on_no_cancels_write_without_dispatch() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.record_dispatches_for_test();
+    app.settings.view.options.confirm_write = true;
+    seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+    app.select_only(0);
+    app.open_write_dialog(Vec::new());
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.get_by_label("Записать").click();
+    h.run_steps(3);
+    assert!(h.state().dialogs.confirm.is_some());
+    h.get_by_label("Нет").focus();
+    h.run_steps(1);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().dialogs.confirm.is_none());
+    assert!(
+        !h.state()
+            .dispatched_for_test()
+            .iter()
+            .any(|command| matches!(command.kind, CommandKind::Write { .. }))
+    );
+}
+
+#[test]
+fn p2_enter_on_no_cancels_disconnect_and_remove() {
+    for remove in [false, true] {
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        app.record_dispatches_for_test();
+        seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+        let action = if remove {
+            ConfirmAction::RemoveSession(sid(1))
+        } else {
+            ConfirmAction::Disconnect(sid(1))
+        };
+        app.request_confirm("Confirm".into(), "Proceed?".into(), action);
+        let mut h = harness(app);
+        h.run_steps(3);
+        h.get_by_label("Нет").focus();
+        h.run_steps(1);
+        h.key_press(Key::Enter);
+        h.run_steps(3);
+        assert!(h.state().dialogs.confirm.is_none());
+        assert_eq!(h.state().sessions.len(), 1);
+        assert_eq!(h.state().rows().len(), 1);
+        assert!(
+            !h.state()
+                .dispatched_for_test()
+                .iter()
+                .any(|command| matches!(command.kind, CommandKind::Disconnect))
+        );
+    }
+}
+
+#[test]
+fn p2_oversized_write_input_is_visible_and_never_dispatched() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    set_ru(&mut app);
+    app.record_dispatches_for_test();
+    app.settings.view.options.confirm_write = false;
+    seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+    app.select_only(0);
+    app.open_write_dialog(Vec::new());
+    app.dialogs.write.text = "я".repeat(524_289);
+    app.apply_write();
+    assert!(app.dialogs.write.open);
+    assert!(
+        app.dialogs
+            .write
+            .error
+            .as_deref()
+            .is_some_and(|text| text.contains("1 МиБ"))
+    );
+    assert!(
+        !app.dispatched_for_test()
+            .iter()
+            .any(|command| matches!(command.kind, CommandKind::Write { .. }))
+    );
+}
+
+#[test]
+fn p2_click_write_shows_oversized_batch_error_without_dispatch() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.record_dispatches_for_test();
+    app.settings.view.options.confirm_write = false;
+    let keys = seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+    app.select_only(0);
+    app.open_write_dialog(Vec::new());
+    // Exercise the batch guard without rendering a megabyte in the text field.
+    let per_request = std::mem::size_of::<opcda_egui::bff::model::WriteRequest>() + 1;
+    let count = 16 * 1024 * 1024 / per_request + 1;
+    app.dialogs.write.keys = vec![keys[0]; count];
+    app.dialogs.write.text = "1".into();
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.get_by_label("Записать").click();
+    h.run_steps(2);
+    assert!(
+        h.query_by_label_contains("расчётный размер пакета")
+            .is_some()
+    );
+    assert!(
+        !h.state()
+            .dispatched_for_test()
+            .iter()
+            .any(|command| matches!(command.kind, CommandKind::Write { .. }))
+    );
+}
+
+#[test]
+fn p2_oversized_input_precedes_session_availability_in_apply_write() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    set_ru(&mut app);
+    app.record_dispatches_for_test();
+    seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+    app.select_only(0);
+    app.open_write_dialog(Vec::new());
+    app.on_event_for_test_at(
+        sid(1),
+        EventKind::Disconnected {
+            reason: opcda_egui::bff::model::BackendMsg::raw("test disconnect"),
+        },
+    );
+    app.dialogs.write.text = "x".repeat(1024 * 1024 + 1);
+    app.apply_write();
+    assert!(
+        app.dialogs
+            .write
+            .error
+            .as_deref()
+            .is_some_and(|text| text.contains("1 МиБ"))
+    );
+    assert!(
+        !app.dispatched_for_test()
+            .iter()
+            .any(|command| matches!(command.kind, CommandKind::Write { .. }))
+    );
+}
