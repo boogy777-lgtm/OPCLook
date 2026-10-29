@@ -144,6 +144,13 @@ translation_keys! {
     ConnectEllipsis,
     ActionWriteConnectionChanged,
     DiagnosticRedacted,
+    PaletteTitle,
+    PaletteExecute,
+    PaletteSearch,
+    PaletteNoResults,
+    PaletteNeedsContext,
+    PaletteBrowse,
+    PaletteWrite,
     ActionModalOpen,
     ActionSessionMissing,
     ActionSessionNotConnected,
@@ -161,6 +168,7 @@ translation_keys! {
     AddByName,
     RemoveSelected,
     ChangeValue,
+    ChangeSelectedValues,
     SelectAll,
     ClearSelection,
     ColumnsEllipsis,
@@ -425,6 +433,7 @@ translation_keys! {
     // ---- Write dialog ----
     ChangeSignalValue,
     SignalLabel,
+    WriteTargetCount,
     CurrentValue,
     ServerTypeLabel,
     ReadOnly,
@@ -583,6 +592,7 @@ translation_keys! {
     NotUnsigned,
     NotNumber,
     NotBool,
+    WriteInputTooLarge,
     NotDatetime,
     ValueNotServer,
     PortInvalid,
@@ -880,6 +890,13 @@ fn ru(key: Tr) -> &'static str {
             "Запись отменена: соединение изменилось. Проверьте значение и подтвердите запись заново."
         }
         DiagnosticRedacted => "[скрыто]",
+        PaletteTitle => "Палитра команд",
+        PaletteExecute => "Выполнить",
+        PaletteSearch => "Поиск команды",
+        PaletteNoResults => "Команды не найдены",
+        PaletteNeedsContext => "Требуются параметры и контекст",
+        PaletteBrowse => "Обзор ветки",
+        PaletteWrite => "Запись значения",
         ActionModalOpen => "Сначала закройте открытый диалог",
         ActionSessionMissing => "Сессия не найдена",
         ActionSessionNotConnected => "Сессия не подключена",
@@ -897,6 +914,7 @@ fn ru(key: Tr) -> &'static str {
         AddByName => "Добавить по имени...",
         RemoveSelected => "Удалить выбранные",
         ChangeValue => "Изменить значение...",
+        ChangeSelectedValues => "Изменить выбранные значения...",
         SelectAll => "Выделить все",
         ClearSelection => "Снять выделение",
         ColumnsEllipsis => "Столбцы...",
@@ -913,14 +931,14 @@ fn ru(key: Tr) -> &'static str {
 
         // ---- Tooltips ----
         HintConnectUa => "Подключение к OPC DA/UA серверу",
-        HintRefreshF5 => "F5 — обновить ветку",
+        HintRefreshF5 => "{0} — обновить ветку",
         HintLoadCsv => "Загрузить сигналы из CSV-файла",
         HintSaveCsv => "Сохранить сигналы в CSV-файл",
         HintEnterTree => "Enter в дереве",
         HintAddChildren => "Добавить все сигналы ветки",
-        HintDelSelected => "Del — удалить выбранные",
-        HintEnterF2 => "Enter / F2 — изменить значение",
-        HintCtrlA => "Ctrl+A — выделить все",
+        HintDelSelected => "{0} — удалить выбранные",
+        HintEnterF2 => "{0} — изменить значение",
+        HintCtrlA => "{0} — выделить все",
         HintEditColumns => "Настроить состав и порядок столбцов",
 
         // ---- Status bar ----
@@ -933,10 +951,10 @@ fn ru(key: Tr) -> &'static str {
         WrittenSummary => "Записано: {0} из {1}",
         UpdatedAt => "Обновлено {0}",
         RowsHint => {
-            "Таблица: ↑↓ Shift+PgUp/PgDn Home/End Ctrl+A Ctrl+C Del Enter F5 · Tab — дерево · Ctrl+Tab — сервер"
+            "Таблица: ↑↓ Shift+PgUp/PgDn Home/End {0} {1} {3} {4} {5} · {6} — дерево · {2} — сервер"
         }
-        TreeHint => "Дерево: ↑↓ ← → Space Enter F5 · Tab — таблица · Ctrl+Tab — сервер",
-        KeyboardIdleHint => "Tab — таблица / дерево · Ctrl+N — подключиться",
+        TreeHint => "Дерево: ↑↓ ← → Space {1} {2} · {3} — таблица · {0} — сервер",
+        KeyboardIdleHint => "{1} — таблица / дерево · {0} — подключиться",
 
         // ---- Bottom panels ----
         ScriptTab => "Скрипт",
@@ -987,9 +1005,9 @@ fn ru(key: Tr) -> &'static str {
         TableEmptyInner => "Нет сигналов — добавьте из дерева, через ПКМ или перетащите сюда",
         TableValueExpand => "Развернуть значение",
         TableValueCollapse => "Свернуть значение",
-        TableEmptyKeys => "Ctrl+N — подключиться к серверу · Tab / F6 — дерево и таблица",
+        TableEmptyKeys => "{0} — подключиться к серверу · {1} — дерево и таблица",
         TableEmptyDragHint => "Перетащите теги из дерева или нажмите Enter на узле",
-        TableEmptyConnect => "Подключиться (Ctrl+N)",
+        TableEmptyConnect => "Подключиться ({0})",
         EscHint => "Нажмите Esc, чтобы снять выделение. ПКМ по строке — меню.",
         PkmMoveColumn => "ПКМ — переместить столбец",
         MoveLeft => "Влево",
@@ -1137,6 +1155,7 @@ fn ru(key: Tr) -> &'static str {
         // ---- Write dialog ----
         ChangeSignalValue => "Изменить значение сигнала",
         SignalLabel => "Сигнал: {0}",
+        WriteTargetCount => "Количество выбранных сигналов: {0}",
         CurrentValue => "Текущее значение: {0}",
         ServerTypeLabel => "Тип сервера: {0}",
         ReadOnly => "Сигнал только для чтения (запись недоступна)",
@@ -1320,6 +1339,9 @@ fn ru(key: Tr) -> &'static str {
         NotUnsigned => "\"{0}\" не является целым числом без знака",
         NotNumber => "\"{0}\" не является числом",
         NotBool => "\"{0}\" не является логическим значением",
+        WriteInputTooLarge => {
+            "Значение превышает 1 МиБ или расчётный размер пакета превышает 16 МиБ"
+        }
         NotDatetime => "не удалось разобрать дату/время \"{0}\"",
         ValueNotServer => "не указан сервер",
         PortInvalid => "укажите корректный порт",
@@ -1345,7 +1367,7 @@ fn ru(key: Tr) -> &'static str {
         RemoveFromListConfirmTitle => "Удаление сессии",
         RemoveFromListConfirmText => "Удалить сессию \"{0}\" и все её сигналы из списка?",
         EmptyTabsHint => "Двойной щелчок по серверу в диалоге подключения открывает вкладку",
-        RefreshF5Button => "Обновить (F5)",
+        RefreshF5Button => "Обновить ({0})",
         AddNodeTooltip => "Добавить выбранный сигнал в таблицу",
         AddByNameTooltip => "Добавить сигнал по имени (Item ID / NodeId)",
         TreeExpandLabel => "Развернуть",
@@ -1516,6 +1538,13 @@ fn en(key: Tr) -> &'static str {
             "Write cancelled because the connection changed. Check the value and confirm again."
         }
         DiagnosticRedacted => "[redacted]",
+        PaletteTitle => "Command palette",
+        PaletteExecute => "Run",
+        PaletteSearch => "Search commands",
+        PaletteNoResults => "No commands found",
+        PaletteNeedsContext => "Parameters and context are required",
+        PaletteBrowse => "Browse branch",
+        PaletteWrite => "Write value",
         ActionModalOpen => "Close the open dialog first",
         ActionSessionMissing => "Session not found",
         ActionSessionNotConnected => "Session is not connected",
@@ -1533,6 +1562,7 @@ fn en(key: Tr) -> &'static str {
         AddByName => "Add by name...",
         RemoveSelected => "Remove selected",
         ChangeValue => "Change value...",
+        ChangeSelectedValues => "Change selected values...",
         SelectAll => "Select all",
         ClearSelection => "Clear selection",
         ColumnsEllipsis => "Columns...",
@@ -1549,14 +1579,14 @@ fn en(key: Tr) -> &'static str {
 
         // ---- Tooltips ----
         HintConnectUa => "Connect to an OPC DA/UA server",
-        HintRefreshF5 => "F5 — refresh branch",
+        HintRefreshF5 => "{0} — refresh branch",
         HintLoadCsv => "Load signals from a CSV file",
         HintSaveCsv => "Save signals to a CSV file",
         HintEnterTree => "Enter in the tree",
         HintAddChildren => "Add all signals of the branch",
-        HintDelSelected => "Del — remove selected",
-        HintEnterF2 => "Enter / F2 — change value",
-        HintCtrlA => "Ctrl+A — select all",
+        HintDelSelected => "{0} — remove selected",
+        HintEnterF2 => "{0} — change value",
+        HintCtrlA => "{0} — select all",
         HintEditColumns => "Configure columns and their order",
 
         // ---- Status bar ----
@@ -1569,10 +1599,10 @@ fn en(key: Tr) -> &'static str {
         WrittenSummary => "Written: {0} of {1}",
         UpdatedAt => "Updated {0}",
         RowsHint => {
-            "Table: ↑↓ Shift+PgUp/PgDn Home/End Ctrl+A Ctrl+C Del Enter F5 · Tab — tree · Ctrl+Tab — server"
+            "Table: ↑↓ Shift+PgUp/PgDn Home/End {0} {1} {3} {4} {5} · {6} — tree · {2} — server"
         }
-        TreeHint => "Tree: ↑↓ ← → Space Enter F5 · Tab — table · Ctrl+Tab — server",
-        KeyboardIdleHint => "Tab — table / tree · Ctrl+N — connect",
+        TreeHint => "Tree: ↑↓ ← → Space {1} {2} · {3} — table · {0} — server",
+        KeyboardIdleHint => "{1} — table / tree · {0} — connect",
 
         // ---- Bottom panels ----
         ScriptTab => "Script",
@@ -1623,9 +1653,9 @@ fn en(key: Tr) -> &'static str {
         TableEmptyInner => "No signals — add from the tree, via right-click or drag them here",
         TableValueExpand => "Expand value",
         TableValueCollapse => "Collapse value",
-        TableEmptyKeys => "Ctrl+N — connect to a server · Tab / F6 — tree and table",
+        TableEmptyKeys => "{0} — connect to a server · {1} — tree and table",
         TableEmptyDragHint => "Drag tags from the tree or press Enter on a node",
-        TableEmptyConnect => "Connect (Ctrl+N)",
+        TableEmptyConnect => "Connect ({0})",
         EscHint => "Press Esc to clear the selection. Right-click a row for the menu.",
         PkmMoveColumn => "Right-click to move the column",
         MoveLeft => "Left",
@@ -1773,6 +1803,7 @@ fn en(key: Tr) -> &'static str {
         // ---- Write dialog ----
         ChangeSignalValue => "Change signal value",
         SignalLabel => "Signal: {0}",
+        WriteTargetCount => "Number of selected signals: {0}",
         CurrentValue => "Current value: {0}",
         ServerTypeLabel => "Server type: {0}",
         ReadOnly => "Signal is read-only (writing is unavailable)",
@@ -1946,6 +1977,7 @@ fn en(key: Tr) -> &'static str {
         NotUnsigned => "\"{0}\" is not an unsigned integer",
         NotNumber => "\"{0}\" is not a number",
         NotBool => "\"{0}\" is not a boolean value",
+        WriteInputTooLarge => "The value exceeds 1 MiB or the estimated write batch exceeds 16 MiB",
         NotDatetime => "failed to parse date/time \"{0}\"",
         ValueNotServer => "no server specified",
         PortInvalid => "specify a valid port",
@@ -1969,7 +2001,7 @@ fn en(key: Tr) -> &'static str {
         RemoveFromListConfirmTitle => "Remove session",
         RemoveFromListConfirmText => "Remove session \"{0}\" and all its signals from the list?",
         EmptyTabsHint => "Double-click a server in the connect dialog to open a tab",
-        RefreshF5Button => "Refresh (F5)",
+        RefreshF5Button => "Refresh ({0})",
         AddNodeTooltip => "Add the selected signal to the table",
         AddByNameTooltip => "Add a signal by name (item id / NodeId)",
         TreeExpandLabel => "Expand",
@@ -2136,6 +2168,13 @@ fn zh(key: Tr) -> &'static str {
         ConnectEllipsis => "连接...",
         ActionWriteConnectionChanged => "连接已更改，写入已取消。请检查值并重新确认。",
         DiagnosticRedacted => "[已隐藏]",
+        PaletteTitle => "命令面板",
+        PaletteExecute => "执行",
+        PaletteSearch => "搜索命令",
+        PaletteNoResults => "未找到命令",
+        PaletteNeedsContext => "需要参数和上下文",
+        PaletteBrowse => "浏览分支",
+        PaletteWrite => "写入值",
         ActionModalOpen => "请先关闭打开的对话框",
         ActionSessionMissing => "找不到会话",
         ActionSessionNotConnected => "会话未连接",
@@ -2153,6 +2192,7 @@ fn zh(key: Tr) -> &'static str {
         AddByName => "按名称添加...",
         RemoveSelected => "删除所选",
         ChangeValue => "更改值...",
+        ChangeSelectedValues => "更改所选值...",
         SelectAll => "全选",
         ClearSelection => "清除选择",
         ColumnsEllipsis => "列...",
@@ -2169,14 +2209,14 @@ fn zh(key: Tr) -> &'static str {
 
         // ---- Tooltips ----
         HintConnectUa => "连接到 OPC DA/UA 服务器",
-        HintRefreshF5 => "F5 — 刷新分支",
+        HintRefreshF5 => "{0} — 刷新分支",
         HintLoadCsv => "从 CSV 文件加载信号",
         HintSaveCsv => "将信号保存到 CSV 文件",
         HintEnterTree => "在树中按 Enter",
         HintAddChildren => "添加该分支的所有信号",
-        HintDelSelected => "Delete — 删除所选",
-        HintEnterF2 => "Enter / F2 — 更改值",
-        HintCtrlA => "Ctrl+A — 全选",
+        HintDelSelected => "{0} — 删除所选",
+        HintEnterF2 => "{0} — 更改值",
+        HintCtrlA => "{0} — 全选",
         HintEditColumns => "配置列及其顺序",
 
         // ---- Status bar ----
@@ -2189,10 +2229,10 @@ fn zh(key: Tr) -> &'static str {
         WrittenSummary => "已写入: {0} / {1}",
         UpdatedAt => "更新于 {0}",
         RowsHint => {
-            "表格: ↑↓ Shift+PgUp/PgDn Home/End Ctrl+A Ctrl+C Delete Enter F5 · Tab — 树 · Ctrl+Tab — 服务器"
+            "表格: ↑↓ Shift+PgUp/PgDn Home/End {0} {1} {3} {4} {5} · {6} — 树 · {2} — 服务器"
         }
-        TreeHint => "树: ↑↓ ← → 空格 Enter F5 · Tab — 表格 · Ctrl+Tab — 服务器",
-        KeyboardIdleHint => "Tab — 表格 / 树 · Ctrl+N — 连接",
+        TreeHint => "树: ↑↓ ← → 空格 {1} {2} · {3} — 表格 · {0} — 服务器",
+        KeyboardIdleHint => "{1} — 表格 / 树 · {0} — 连接",
 
         // ---- Bottom panels ----
         ScriptTab => "脚本",
@@ -2241,9 +2281,9 @@ fn zh(key: Tr) -> &'static str {
         TableEmptyInner => "无信号 — 请从树中添加、右键添加或拖放到此处",
         TableValueExpand => "展开值",
         TableValueCollapse => "折叠值",
-        TableEmptyKeys => "Ctrl+N — 连接服务器 · Tab / F6 — 切换树和表格",
+        TableEmptyKeys => "{0} — 连接服务器 · {1} — 切换树和表格",
         TableEmptyDragHint => "从树中拖动标签，或在节点上按 Enter",
-        TableEmptyConnect => "连接 (Ctrl+N)",
+        TableEmptyConnect => "连接 ({0})",
         EscHint => "按 Esc 清除选择。右键单击行可打开菜单。",
         PkmMoveColumn => "右键单击以移动列",
         MoveLeft => "左移",
@@ -2385,6 +2425,7 @@ fn zh(key: Tr) -> &'static str {
         // ---- Write dialog ----
         ChangeSignalValue => "更改信号值",
         SignalLabel => "信号: {0}",
+        WriteTargetCount => "所选信号数: {0}",
         CurrentValue => "当前值: {0}",
         ServerTypeLabel => "服务器类型: {0}",
         ReadOnly => "信号为只读 (无法写入)",
@@ -2546,6 +2587,7 @@ fn zh(key: Tr) -> &'static str {
         NotUnsigned => "\"{0}\" 不是无符号整数",
         NotNumber => "\"{0}\" 不是数字",
         NotBool => "\"{0}\" 不是布尔值",
+        WriteInputTooLarge => "值超过 1 MiB 或写入批次的估计大小超过 16 MiB",
         NotDatetime => "无法解析日期/时间 \"{0}\"",
         ValueNotServer => "未指定服务器",
         PortInvalid => "请指定有效端口",
@@ -2569,7 +2611,7 @@ fn zh(key: Tr) -> &'static str {
         RemoveFromListConfirmTitle => "删除会话",
         RemoveFromListConfirmText => "从列表中删除会话 \"{0}\" 及其所有信号？",
         EmptyTabsHint => "在连接对话框中双击服务器可打开选项卡",
-        RefreshF5Button => "刷新 (F5)",
+        RefreshF5Button => "刷新 ({0})",
         AddNodeTooltip => "将所选信号添加到表格",
         AddByNameTooltip => "按名称添加信号 (Item ID / NodeId)",
         TreeExpandLabel => "展开",

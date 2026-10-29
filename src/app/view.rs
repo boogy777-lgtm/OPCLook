@@ -52,6 +52,7 @@ impl App {
             return;
         }
         self.table_view_session = self.active_session;
+        self.table_additive_base = None;
         let shown: HashSet<ItemKey> = self
             .rows
             .iter()
@@ -104,7 +105,9 @@ impl App {
         match selected {
             Some(index) => {
                 self.table_focus = Some(index);
+                self.table_focus_key = self.row_key(index);
                 self.table_anchor = Some(index);
+                self.table_anchor_key = self.row_key(index);
             }
             None => self.select_only(0),
         }

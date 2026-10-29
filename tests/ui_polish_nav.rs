@@ -411,6 +411,11 @@ fn ui10_empty_tree_offers_refresh_and_does_what_f5_does() {
 
     let mut h = harness(connected_with_empty_tree());
     h.run_steps(4);
+    // F5 belongs to Servers; Tab visits Header, Tags, then Servers.
+    for _ in 0..3 {
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+    }
     h.key_press(egui::Key::F5);
     h.run_steps(3);
     // Same effect (and same code path) as the button.

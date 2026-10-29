@@ -288,9 +288,19 @@ pub struct ConfirmRequest {
     pub title: String,
     pub text: String,
     pub action: ConfirmAction,
+    pub focus_pending: bool,
+}
+
+#[derive(Default)]
+pub struct PaletteDialog {
+    pub open: bool,
+    pub query: String,
+    pub selected: Option<opclook_contract::actions::ActionId>,
+    pub focus_pending: bool,
 }
 
 pub struct Dialogs {
+    pub palette: PaletteDialog,
     pub connect: ConnectDialog,
     pub add_signal: AddSignalDialog,
     pub write: WriteDialog,
@@ -304,6 +314,7 @@ pub struct Dialogs {
 impl Default for Dialogs {
     fn default() -> Self {
         Self {
+            palette: PaletteDialog::default(),
             connect: ConnectDialog::default(),
             add_signal: AddSignalDialog::default(),
             write: WriteDialog::default(),
@@ -331,6 +342,10 @@ impl Dialogs {
     /// Whether any modal window is currently open. While a dialog is shown it
     /// owns focus (and hence the keyboard) for the application.
     pub fn any_open(&self) -> bool {
+        self.palette.open || self.any_open_except_palette()
+    }
+
+    pub fn any_open_except_palette(&self) -> bool {
         self.connect.open
             || self.add_signal.open
             || self.write.open

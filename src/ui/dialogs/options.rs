@@ -7,6 +7,15 @@ use crate::constants::{
 };
 use crate::i18n::{Tr, tr};
 use crate::settings::Theme;
+use crate::ui::ImeSafeClick;
+
+fn ime_safe_checkbox(ui: &mut egui::Ui, value: &mut bool, label: &str) {
+    let previous = *value;
+    let response = ui.checkbox(value, label);
+    if crate::ui::ime_blocks_keys(ui.ctx()) && response.changed() && !response.ime_safe_clicked() {
+        *value = previous;
+    }
+}
 
 pub(super) fn options_dialog(app: &mut App, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
@@ -25,8 +34,8 @@ pub(super) fn options_dialog(app: &mut App, ui: &mut egui::Ui) {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(&ctx, |ui| {
                 dialog_spacing(ui);
-                let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                let esc = !crate::ui::ime_blocks_keys(ui.ctx())
+                    && ui.input(|i| i.key_pressed(egui::Key::Escape));
                 let opening_frame = app.dialogs.options.focus_pending;
                 // The settings scroll when the window is short; the buttons
                 // below stay visible.
@@ -51,7 +60,11 @@ pub(super) fn options_dialog(app: &mut App, ui: &mut egui::Ui) {
                         ui.label(egui::RichText::new(tr(lang, Tr::RecommendedOneSec)).weak());
                         ui.separator();
                         ui.heading(tr(lang, Tr::AutoReconnectTitle));
-                        ui.checkbox(&mut draft.auto_reconnect, tr(lang, Tr::AutoReconnectCheck));
+                        ime_safe_checkbox(
+                            ui,
+                            &mut draft.auto_reconnect,
+                            tr(lang, Tr::AutoReconnectCheck),
+                        );
                         ui.label(
                             egui::RichText::new(tr(lang, Tr::AutoReconnectWarn)).color(yellow()),
                         );
@@ -68,8 +81,16 @@ pub(super) fn options_dialog(app: &mut App, ui: &mut egui::Ui) {
                             }
                         });
                         ui.label(egui::RichText::new(tr(lang, Tr::ThemeHint)).weak());
-                        ui.checkbox(&mut draft.show_colors, tr(lang, Tr::ShowColorsCheck));
-                        ui.checkbox(&mut draft.confirm_write, tr(lang, Tr::ConfirmWriteCheck));
+                        ime_safe_checkbox(
+                            ui,
+                            &mut draft.show_colors,
+                            tr(lang, Tr::ShowColorsCheck),
+                        );
+                        ime_safe_checkbox(
+                            ui,
+                            &mut draft.confirm_write,
+                            tr(lang, Tr::ConfirmWriteCheck),
+                        );
                         ui.separator();
                         ui.heading(tr(lang, Tr::AdvancedTitle));
                         ui.add(
@@ -91,7 +112,8 @@ pub(super) fn options_dialog(app: &mut App, ui: &mut egui::Ui) {
                         );
                         ui.label(tr(lang, Tr::DeadbandLabel));
                         ui.label(egui::RichText::new(tr(lang, Tr::DeadbandHint)).weak());
-                        ui.checkbox(
+                        ime_safe_checkbox(
+                            ui,
                             &mut draft.diagnostic_trace,
                             tr(lang, Tr::DiagnosticTraceCheck),
                         );
@@ -99,26 +121,23 @@ pub(super) fn options_dialog(app: &mut App, ui: &mut egui::Ui) {
                     });
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if ui.button(tr(lang, Tr::Save)).clicked() {
+                    if ui.button(tr(lang, Tr::Save)).ime_safe_clicked() {
                         apply = true;
                     }
-                    if ui.button(tr(lang, Tr::Cancel)).clicked() {
+                    if ui.button(tr(lang, Tr::Cancel)).ime_safe_clicked() {
                         close = true;
                     }
                 });
-                if enter && !opening_frame {
-                    apply = true;
-                } else if esc && !opening_frame {
+                if esc && !opening_frame {
                     close = true;
                 }
             });
     }
-    if apply {
+    if close {
+        app.dialogs.options.open = false;
+    } else if apply {
         app.apply_options();
         app.dialogs.options.open = false;
         app.persist_settings();
-    }
-    if close {
-        app.dialogs.options.open = false;
     }
 }

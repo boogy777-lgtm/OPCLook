@@ -5,9 +5,98 @@ use crate::bff::model::SubscriptionState;
 use crate::constants::{RECONNECT_MAX_ATTEMPTS, STATUS_BAR_HEIGHT, TRUNCATE_STATUS_NAME};
 use crate::i18n::{Lang, Tr, fmt, tr};
 
+#[derive(Clone, Default)]
+struct FooterFocus {
+    frame: u64,
+    ids: Vec<egui::Id>,
+}
+
+fn footer_focus_id() -> egui::Id {
+    egui::Id::unique("opclook_footer_focus")
+}
+
+/// Register the real rendered widgets, so navigation cannot leave this region.
+pub(super) fn register_footer_widget(response: &egui::Response) {
+    response.ctx.data_mut(|data| {
+        let mut state = data
+            .get_temp::<FooterFocus>(footer_focus_id())
+            .unwrap_or_default();
+        if !state.ids.contains(&response.id) {
+            state.ids.push(response.id);
+        }
+        data.insert_temp(footer_focus_id(), state);
+    });
+}
+
+fn begin_footer_frame(ctx: &egui::Context, app: &App) {
+    let frame = ctx.cumulative_frame_nr();
+    let mut state = ctx.data(|data| {
+        data.get_temp::<FooterFocus>(footer_focus_id())
+            .unwrap_or_default()
+    });
+    if state.frame == frame {
+        return;
+    }
+    let focused = ctx.memory(|memory| memory.focused());
+    if super::regions::current(ctx) == Some(super::regions::Region::Footer)
+        && !app.dialogs.any_open()
+        && app.csv_import.is_none()
+        && !super::ime_blocks_keys(ctx)
+        && !ctx.text_edit_focused()
+    {
+        let previous = [egui::Key::ArrowLeft, egui::Key::ArrowUp]
+            .into_iter()
+            .any(|key| ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, key)));
+        let next = [egui::Key::ArrowRight, egui::Key::ArrowDown]
+            .into_iter()
+            .any(|key| ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, key)));
+        if previous || next {
+            ctx.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
+            let target = focused
+                .and_then(|id| state.ids.iter().position(|item| *item == id))
+                .and_then(|index| {
+                    if previous {
+                        index.checked_sub(1)
+                    } else {
+                        Some((index + 1).min(state.ids.len().saturating_sub(1)))
+                    }
+                })
+                .and_then(|index| state.ids.get(index))
+                .copied()
+                .or(focused.filter(|id| state.ids.contains(id)));
+            if let Some(id) = target {
+                ctx.memory_mut(|memory| memory.request_focus(id));
+            }
+            // A move and Enter in one input batch cannot activate an old focus.
+            ctx.input_mut(|input| {
+                input.events.retain(|event| {
+                    !matches!(
+                        event,
+                        egui::Event::Key {
+                            key: egui::Key::Enter | egui::Key::Space,
+                            pressed: true,
+                            ..
+                        }
+                    )
+                })
+            });
+        }
+    }
+    state.frame = frame;
+    state.ids.clear();
+    ctx.data_mut(|data| data.insert_temp(footer_focus_id(), state));
+}
+
 pub(super) fn status_bar(app: &mut App, ui: &mut egui::Ui) {
+    begin_footer_frame(ui.ctx(), app);
     let lang = app.lang();
-    egui::Panel::bottom("status_bar")
+    let mut focus_entry =
+        if !app.settings.view.options.show_script && !app.settings.view.options.show_log {
+            super::regions::take_entry(ui.ctx(), super::regions::Region::Footer)
+        } else {
+            false
+        };
+    let panel = egui::Panel::bottom("status_bar")
         .exact_size(STATUS_BAR_HEIGHT)
         .show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -29,11 +118,15 @@ pub(super) fn status_bar(app: &mut App, ui: &mut egui::Ui) {
                         egui::RichText::new(format!("{truncated}: {text}")).color(color),
                     )
                     .frame(false);
-                    if ui
+                    let indicator = ui
                         .add(indicator)
-                        .on_hover_text(session.endpoint().display_name())
-                        .clicked()
-                    {
+                        .on_hover_text(session.endpoint().display_name());
+                    register_footer_widget(&indicator);
+                    if focus_entry {
+                        indicator.request_focus();
+                        focus_entry = false;
+                    }
+                    if indicator.clicked() {
                         app.status_popup = !app.status_popup;
                         ui.ctx().request_repaint();
                     }
@@ -43,15 +136,87 @@ pub(super) fn status_bar(app: &mut App, ui: &mut egui::Ui) {
                     }
                 } else {
                     ui.colored_label(red(), "●");
-                    ui.label(tr(lang, Tr::NoActiveServer));
+                    let label = ui.add(
+                        egui::Label::new(tr(lang, Tr::NoActiveServer))
+                            .sense(egui::Sense::focusable_noninteractive()),
+                    );
+                    register_footer_widget(&label);
+                    if focus_entry {
+                        label.request_focus();
+                        focus_entry = false;
+                    }
                 }
                 ui.separator();
                 let hint = if app.tree_focused {
-                    Some(tr(lang, Tr::TreeHint))
+                    Some(fmt(
+                        lang,
+                        Tr::TreeHint,
+                        &[
+                            &super::shortcuts::binding_text(
+                                ui.ctx(),
+                                super::keymap::KeyAction::NextSession,
+                            ),
+                            &super::shortcuts::binding_text(
+                                ui.ctx(),
+                                super::keymap::KeyAction::TreeEnter,
+                            ),
+                            &super::shortcuts::binding_text(
+                                ui.ctx(),
+                                super::keymap::KeyAction::Refresh,
+                            ),
+                            &super::shortcuts::binding_text(
+                                ui.ctx(),
+                                super::keymap::KeyAction::SwitchPane,
+                            ),
+                        ],
+                    ))
                 } else if app.table_focus.is_some() {
-                    Some(tr(lang, Tr::RowsHint))
+                    Some(fmt(
+                        lang,
+                        Tr::RowsHint,
+                        &[
+                            &super::shortcuts::binding_text(
+                                ui.ctx(),
+                                super::keymap::KeyAction::SelectAll,
+                            ),
+                            &super::shortcuts::binding_text(
+                                ui.ctx(),
+                                super::keymap::KeyAction::Copy,
+                            ),
+                            &super::shortcuts::binding_text(
+                                ui.ctx(),
+                                super::keymap::KeyAction::NextSession,
+                            ),
+                            &super::shortcuts::binding_text(
+                                ui.ctx(),
+                                super::keymap::KeyAction::Delete,
+                            ),
+                            &super::shortcuts::binding_texts(
+                                ui.ctx(),
+                                super::keymap::KeyAction::TableWrite,
+                            ),
+                            &super::shortcuts::binding_text(
+                                ui.ctx(),
+                                super::keymap::KeyAction::Refresh,
+                            ),
+                            &super::shortcuts::binding_text(
+                                ui.ctx(),
+                                super::keymap::KeyAction::SwitchPane,
+                            ),
+                        ],
+                    ))
                 } else {
-                    Some(tr(lang, Tr::KeyboardIdleHint))
+                    Some(fmt(
+                        lang,
+                        Tr::KeyboardIdleHint,
+                        &[
+                            &super::shortcuts::connect_shortcut_text(ui.ctx()),
+                            &super::shortcuts::binding_text(
+                                ui.ctx(),
+                                super::keymap::KeyAction::SwitchPane,
+                            ),
+                        ],
+                    ))
                 };
                 let counts = egui::Label::new(fmt(
                     lang,
@@ -88,6 +253,18 @@ pub(super) fn status_bar(app: &mut App, ui: &mut egui::Ui) {
                 });
             });
         });
+    if !app.dialogs.any_open()
+        && app.csv_import.is_none()
+        && ui.input(|input| {
+            input.pointer.any_pressed()
+                && input
+                    .pointer
+                    .interact_pos()
+                    .is_some_and(|pos| panel.response.rect.contains(pos))
+        })
+    {
+        super::regions::pointer_enter(ui.ctx(), super::regions::Region::Footer);
+    }
 }
 /// Non-blocking popup with details about the active server (opened from the
 /// status-bar indicator).

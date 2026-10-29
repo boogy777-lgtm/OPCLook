@@ -1,12 +1,15 @@
 mod actions;
 mod colors;
+mod components;
 mod csv;
 mod dialogs;
 mod files;
+mod keymap;
 mod menu;
 mod navigation;
 mod paint;
 mod panels;
+mod regions;
 mod servers;
 mod shortcuts;
 mod status;
@@ -33,15 +36,159 @@ pub use test_hooks::{
 pub fn draw(app: &mut crate::app::App, ui: &mut egui::Ui) {
     style::sync_style(ui.ctx(), app.settings.view.options.theme);
     colors::set_dark(ui.visuals().dark_mode);
+    update_ime_state(ui.ctx());
+    // A modal must receive keyboard input before background dialogs.
+    // Afterwards, remove keyboard events so their global handlers cannot act
+    // on the same key, even if a system dialog arrived while it was open.
+    let palette_was_open = app.dialogs.palette.open;
+    if palette_was_open {
+        // Surface newly arrived dialogs instead of hiding them behind the palette.
+        if app.dialogs.any_open_except_palette() || app.csv_import.is_some() {
+            app.dialogs.palette.open = false;
+        } else {
+            dialogs::palette(app, ui);
+        }
+        ui.ctx().input_mut(|input| {
+            input.events.retain(|event| {
+                !matches!(
+                    event,
+                    egui::Event::Key { .. }
+                        | egui::Event::Text(_)
+                        | egui::Event::Ime(_)
+                        | egui::Event::Copy
+                        | egui::Event::Cut
+                        | egui::Event::Paste(_)
+                )
+            })
+        });
+    }
+    let modal_active = app.dialogs.any_open() || app.csv_import.is_some();
+    let modal_previous_id = egui::Id::unique("opclook_modal_background_guard");
+    let modal_was_active = ui
+        .ctx()
+        .data(|data| data.get_temp::<bool>(modal_previous_id).unwrap_or(false));
+    if modal_active && !modal_was_active {
+        egui::Popup::close_all(ui.ctx());
+    } else if !modal_active && modal_was_active {
+        // Do not leave focus on a widget that disappeared with a dialog.
+        if let Some(id) = ui.ctx().memory(|memory| memory.focused()) {
+            ui.ctx().memory_mut(|memory| memory.surrender_focus(id));
+        }
+        if let Some(region @ (regions::Region::Header | regions::Region::Footer)) =
+            regions::current(ui.ctx())
+        {
+            regions::activate(ui.ctx(), region);
+        }
+    }
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(modal_previous_id, modal_active));
+    let options_theme_popup = menu::options_theme_only(app) && menu::theme_popup_open(ui.ctx());
+    let pointer_press = ui.input(|input| {
+        input
+            .events
+            .iter()
+            .any(|event| matches!(event, egui::Event::PointerButton { pressed: true, .. }))
+    });
+    if menu::options_theme_only(app) && (ime_blocks_keys(ui.ctx()) || pointer_press) {
+        // A candidate key or an event combined with a pointer press must not
+        // activate a newly-opened popup.
+        ui.ctx().input_mut(|input| {
+            input
+                .events
+                .retain(|event| !matches!(event, egui::Event::Key { .. }))
+        });
+    }
     shortcuts::keyboard_prepass(app, ui);
-    menu::menu(app, ui);
-    status::status_bar(app, ui);
-    panels::bottom_panels(app, ui);
-    navigation::navigation(app, ui);
-    table::table_panel(app, ui);
-    shortcuts::handle_shortcuts(app, ui);
-    status::status_popup(app, ui);
+    ui.scope(|ui| {
+        if modal_active && !menu::options_theme_only(app) {
+            ui.disable();
+        }
+        menu::menu(app, ui);
+    });
+    if options_theme_popup || (menu::options_theme_only(app) && menu::theme_popup_open(ui.ctx())) {
+        // Popup handles the event first; the underlying Options must not see
+        // that same key even if the popup closed during its handling.
+        ui.ctx().input_mut(|input| {
+            input.events.retain(|event| {
+                !matches!(
+                    event,
+                    egui::Event::Key { .. }
+                        | egui::Event::Text(_)
+                        | egui::Event::Ime(_)
+                        | egui::Event::Copy
+                        | egui::Event::Cut
+                        | egui::Event::Paste(_)
+                )
+            })
+        });
+    }
+    ui.scope(|ui| {
+        // Every dialog owns pointer interaction as well as keyboard input.
+        // The normal panels remain visible but cannot activate behind it.
+        if app.dialogs.any_open() || app.csv_import.is_some() {
+            ui.disable();
+        }
+        status::status_bar(app, ui);
+        panels::bottom_panels(app, ui);
+        navigation::navigation(app, ui);
+        table::table_panel(app, ui);
+        shortcuts::handle_shortcuts(app, ui);
+        status::status_popup(app, ui);
+    });
     dialogs::dialogs(app, ui);
+    if !palette_was_open {
+        dialogs::palette(app, ui);
+    }
+}
+
+// Keep the entire frame protected when composition ends with Enter.
+fn update_ime_state(ctx: &egui::Context) {
+    let id = egui::Id::unique("opclook-ime-state");
+    let frame = ctx.cumulative_frame_nr();
+    let (previous_frame, mut active, _) = ctx.data(|d| {
+        d.get_temp::<(u64, bool, bool)>(id)
+            .unwrap_or((u64::MAX, false, false))
+    });
+    if previous_frame == frame {
+        return;
+    }
+    let mut blocked = active;
+    ctx.input(|input| {
+        for event in &input.events {
+            match event {
+                egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => {
+                    active = !text.is_empty();
+                    blocked = true;
+                }
+                egui::Event::Ime(egui::ImeEvent::Commit(_)) => {
+                    active = false;
+                    blocked = true;
+                }
+                egui::Event::WindowFocused(false) => active = false,
+                _ => {}
+            }
+        }
+    });
+    ctx.data_mut(|d| d.insert_temp(id, (frame, active, blocked)));
+}
+
+fn ime_blocks_keys(ctx: &egui::Context) -> bool {
+    ctx.data(|d| {
+        d.get_temp::<(u64, bool, bool)>(egui::Id::unique("opclook-ime-state"))
+            .is_some_and(|(_, _, blocked)| blocked)
+    })
+}
+
+// Keyboard-generated button clicks must not commit IME candidates. Pointer
+// clicks remain deliberate even when a composition is active.
+trait ImeSafeClick {
+    fn ime_safe_clicked(&self) -> bool;
+}
+impl ImeSafeClick for egui::Response {
+    fn ime_safe_clicked(&self) -> bool {
+        self.clicked_by(egui::PointerButton::Primary)
+            || (self.clicked() && !ime_blocks_keys(&self.ctx))
+    }
 }
 
 /// Truncates a long label to `max` characters, appending a Unicode ellipsis.
@@ -56,6 +203,9 @@ pub(super) fn truncate_text(text: &str, max: usize) -> String {
 
 /// True only for an initial press, never for an OS key-repeat event.
 fn key_pressed_once(ctx: &egui::Context, key: egui::Key) -> bool {
+    if ime_blocks_keys(ctx) {
+        return false;
+    }
     ctx.input(|input| {
         input.events.iter().any(|event| {
             matches!(event,

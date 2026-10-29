@@ -19,8 +19,25 @@ impl UiAction {
 impl App {
     /// A translation key rather than rendered text keeps this independent of UI.
     pub fn ui_action_unavailable(&self, action: UiAction) -> Option<Tr> {
+        self.ui_action_unavailable_with_palette(action, false)
+    }
+
+    pub fn ui_action_unavailable_in_palette(&self, action: UiAction) -> Option<Tr> {
+        self.ui_action_unavailable_with_palette(action, true)
+    }
+
+    fn ui_action_unavailable_with_palette(
+        &self,
+        action: UiAction,
+        palette_open: bool,
+    ) -> Option<Tr> {
+        let modal = if palette_open {
+            self.dialogs.any_open_except_palette()
+        } else {
+            self.dialogs.any_open()
+        };
         match action {
-            UiAction::OpenConnectDialog if self.dialogs.any_open() => Some(Tr::ActionModalOpen),
+            UiAction::OpenConnectDialog if modal => Some(Tr::ActionModalOpen),
             UiAction::OpenConnectDialog if self.csv_import.is_some() => {
                 Some(Tr::ActionImportInProgress)
             }

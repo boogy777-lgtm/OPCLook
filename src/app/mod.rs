@@ -72,7 +72,12 @@ pub struct App {
     pub script_text: String,
     pub status: String,
     pub table_focus: Option<usize>,
+    /// Identity associated with the focused visible row; prevents a changed
+    /// row order from silently retargeting a keyboard write.
+    pub(crate) table_focus_key: Option<ItemKey>,
     pub table_anchor: Option<usize>,
+    pub(crate) table_anchor_key: Option<ItemKey>,
+    pub(crate) table_additive_base: Option<HashSet<ItemKey>>,
     pub tree_focus: Option<(SessionId, u64)>,
     /// Whether the tag tree owns keyboard focus for navigation. Cleared when a
     /// text field or a modal dialog captures the keyboard.
@@ -218,6 +223,7 @@ impl App {
     }
 
     fn rows_changed(&mut self) {
+        self.table_additive_base = None;
         self.rows_revision = self.rows_revision.wrapping_add(1);
         self.detail_revision = self.detail_revision.wrapping_add(1);
         self.row_index.invalidate();
@@ -320,7 +326,10 @@ impl App {
             script_text,
             status: tr(lang, Tr::Ready).to_string(),
             table_focus: None,
+            table_focus_key: None,
             table_anchor: None,
+            table_anchor_key: None,
+            table_additive_base: None,
             tree_focus: None,
             tree_focused: false,
             table_view_session: None,
