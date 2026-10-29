@@ -733,6 +733,57 @@ mod dnd_proof {
         assert!(app.settings.view.column_order.is_some());
     }
 
+    /// Dragging the separator between header cells must change the column
+    /// width (egui_extras resize handle).
+    #[test]
+    fn column_separator_drag_resizes_the_column() {
+        use crate::columns::ColumnId;
+        let _guard = test_lock();
+        let (ctx, mut app) = setup();
+        app.seed_row(
+            crate::bff::model::SessionId::new(1).unwrap(),
+            "ns=1;s=a",
+            "Sig",
+            crate::bff::model::Value::I64(1),
+        );
+        for _ in 0..2 {
+            frame(&ctx, &mut app, base_input());
+        }
+        let before = header_cell_for_test(ColumnId::FullName).expect("header");
+        // The separator is the narrow strip at the cell's right edge.
+        let start = Pos2::new(before.right() + 1.0, before.center().y);
+        let mut press = base_input();
+        press.events = vec![
+            Event::PointerMoved(start),
+            Event::PointerButton {
+                pos: start,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            },
+        ];
+        frame(&ctx, &mut app, press);
+        let moved = Pos2::new(start.x + 60.0, start.y);
+        frame(&ctx, &mut app, base_input_with_move(moved));
+        frame(&ctx, &mut app, base_input_with_move(moved));
+        let mut release = base_input();
+        release.events = vec![Event::PointerButton {
+            pos: moved,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        }];
+        frame(&ctx, &mut app, release);
+        frame(&ctx, &mut app, base_input());
+        let after = header_cell_for_test(ColumnId::FullName).expect("header");
+        assert!(
+            after.width() > before.width() + 30.0,
+            "column must be resizable: {} -> {}",
+            before.width(),
+            after.width()
+        );
+    }
+
     /// Releasing the grip on the middle of a dialog row must work too:
     /// a user should not have to hit the 14px insertion gap exactly.
     #[test]

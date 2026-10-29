@@ -494,6 +494,58 @@ fn add_children_disconnect_cancels_job() {
     assert!(app.add_children.is_none());
 }
 
+/// OPC UA Part 4 requires the initial value notification for a new monitored
+/// item, but some stacks report only on change and a slow first publish can
+/// delay the snapshot. With an active push subscription the periodic Read is
+/// suppressed, so the app must read the confirmed keys once after AddItems or
+/// the row stays empty until the value changes.
+#[test]
+fn add_items_reply_reads_confirmed_keys_once() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    let session = crate::bff::model::SessionId::new(1).unwrap();
+    app.seed_session(session, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.record_dispatches_for_test();
+    assert!(app.add_items(
+        session,
+        vec![
+            ("ns=2;s=Ok".to_string(), "Ok".to_string()),
+            ("ns=2;s=Bad".to_string(), "Bad".to_string()),
+        ],
+    ));
+    let keys: Vec<ItemKey> = app.rows.iter().map(|row| row.key).collect();
+    assert_eq!(keys.len(), 2);
+    app.on_event_for_test_at(
+        session,
+        EventKind::AddItems {
+            results: vec![
+                (
+                    keys[0],
+                    Ok(crate::bff::model::ItemInfo {
+                        data_type: None,
+                        type_id: None,
+                        writable: false,
+                    }),
+                ),
+                (keys[1], Err(BackendMsg::NoConnection)),
+            ],
+        },
+    );
+    let reads: Vec<Vec<ItemKey>> = app
+        .dispatched_for_test()
+        .into_iter()
+        .filter_map(|command| match command.kind {
+            CommandKind::Read { keys } => Some(keys),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reads,
+        vec![vec![keys[0]]],
+        "only the confirmed key is read once after AddItems"
+    );
+}
+
 #[test]
 fn starting_new_job_replaces_previous_for_same_session() {
     let ctx = egui::Context::default();

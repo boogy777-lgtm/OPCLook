@@ -164,6 +164,7 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                             let mut table = TableBuilder::new(ui)
                                 .id_salt("signal_table")
                                 .striped(true)
+                                .resizable(true)
                                 .sense(egui::Sense::click())
                                 // Rows are full-width, so the internal area must never shrink
                                 // horizontally (content defines the width the outer horizontal

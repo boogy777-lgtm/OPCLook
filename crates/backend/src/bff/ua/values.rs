@@ -100,7 +100,13 @@ pub(super) fn ua_data_value_typed(dv: &UaDataValue, types: Option<&DataTypeTree>
     DataValue {
         value,
         quality,
-        timestamp: dv.source_timestamp.map(|dt| dt.as_chrono()),
+        // The source timestamp is the change time. Some servers leave it
+        // null and only set the server timestamp; showing that is better than
+        // an empty «change time» column.
+        timestamp: dv
+            .source_timestamp
+            .or(dv.server_timestamp)
+            .map(|dt| dt.as_chrono()),
         reason: None,
     }
 }
@@ -617,4 +623,46 @@ pub(super) fn parse_node(text: &str) -> Option<NodeId> {
         return Some(NodeId::from(ObjectId::RootFolder));
     }
     text.parse::<NodeId>().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn map(
+        source: Option<opcua::types::DateTime>,
+        server: Option<opcua::types::DateTime>,
+    ) -> DataValue {
+        let dv = UaDataValue {
+            value: Some(Variant::from(1i64)),
+            status: None,
+            source_timestamp: source,
+            source_picoseconds: None,
+            server_timestamp: server,
+            server_picoseconds: None,
+        };
+        ua_data_value_typed(&dv, None)
+    }
+
+    /// A server may leave the source timestamp null and set only the server
+    /// timestamp; the change-time column must still be filled.
+    #[test]
+    fn server_timestamp_fills_missing_source_timestamp() {
+        let now = opcua::types::DateTime::from(chrono::Utc::now());
+        let mapped = map(None, Some(now));
+        assert!(mapped.timestamp.is_some());
+    }
+
+    #[test]
+    fn source_timestamp_wins_over_server_timestamp() {
+        let source = opcua::types::DateTime::from(chrono::Utc::now());
+        let server =
+            opcua::types::DateTime::from(chrono::Utc::now() + chrono::TimeDelta::seconds(5));
+        let mapped = map(Some(source), Some(server));
+        assert_eq!(
+            mapped.timestamp,
+            Some(source.as_chrono()),
+            "the source (change) timestamp is preferred"
+        );
+    }
 }
