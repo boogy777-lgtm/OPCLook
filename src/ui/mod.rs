@@ -35,6 +35,31 @@ pub fn draw(app: &mut crate::app::App, ui: &mut egui::Ui) {
     style::sync_style(ui.ctx(), app.settings.view.options.theme);
     colors::set_dark(ui.visuals().dark_mode);
     update_ime_state(ui.ctx());
+    // A modal must receive keyboard input before background dialogs.
+    // Afterwards, remove keyboard events so their global handlers cannot act
+    // on the same key, even if a system dialog arrived while it was open.
+    let palette_was_open = app.dialogs.palette.open;
+    if palette_was_open {
+        // Surface newly arrived dialogs instead of hiding them behind the palette.
+        if app.dialogs.any_open_except_palette() || app.csv_import.is_some() {
+            app.dialogs.palette.open = false;
+        } else {
+            dialogs::palette(app, ui);
+        }
+        ui.ctx().input_mut(|input| {
+            input.events.retain(|event| {
+                !matches!(
+                    event,
+                    egui::Event::Key { .. }
+                        | egui::Event::Text(_)
+                        | egui::Event::Ime(_)
+                        | egui::Event::Copy
+                        | egui::Event::Cut
+                        | egui::Event::Paste(_)
+                )
+            })
+        });
+    }
     shortcuts::keyboard_prepass(app, ui);
     menu::menu(app, ui);
     status::status_bar(app, ui);
@@ -44,6 +69,9 @@ pub fn draw(app: &mut crate::app::App, ui: &mut egui::Ui) {
     shortcuts::handle_shortcuts(app, ui);
     status::status_popup(app, ui);
     dialogs::dialogs(app, ui);
+    if !palette_was_open {
+        dialogs::palette(app, ui);
+    }
 }
 
 // Keep the entire frame protected when composition ends with Enter.

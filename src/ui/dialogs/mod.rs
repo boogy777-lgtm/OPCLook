@@ -7,6 +7,7 @@ mod csv_import;
 mod message;
 mod network;
 mod options;
+mod palette;
 mod ua_tree;
 mod write;
 
@@ -40,4 +41,8 @@ pub(super) fn dialogs(app: &mut App, ui: &mut egui::Ui) {
 /// Consistent item spacing/padding for dialogs (UI polish pass).
 pub(super) fn dialog_spacing(ui: &mut egui::Ui) {
     ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
+}
+
+pub(super) fn palette(app: &mut App, ui: &mut egui::Ui) {
+    palette::palette_dialog(app, ui);
 }

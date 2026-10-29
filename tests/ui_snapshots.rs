@@ -221,3 +221,12 @@ fn p3_followup_shortcut_menu_ru() {
         .save("docs/screenshots/p3-shortcut-menu-followup-ru.png")
         .unwrap();
 }
+
+#[test]
+#[ignore = "manual visual QA requiring a headless wgpu renderer"]
+fn p4_palette_ru() {
+    let mut app = base(Lang::Ru);
+    app.dialogs.palette.open = true;
+    app.dialogs.palette.focus_pending = true;
+    save("p4-palette-ru", app);
+}

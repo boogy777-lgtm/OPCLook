@@ -6541,3 +6541,327 @@ fn p3_followup_add_menu_does_not_claim_tree_enter_equivalence() {
             .is_some()
     );
 }
+
+#[test]
+fn p4_palette_search_is_read_only_and_displays_context_reason_in_three_languages() {
+    use opcda_egui::i18n::{Lang, Tr, tr};
+    for lang in [Lang::Ru, Lang::En, Lang::Zh] {
+        let mut app = App::new_test(&egui::Context::default());
+        app.settings.set_lang(lang);
+        app.record_dispatches_for_test();
+        app.dialogs.palette.open = true;
+        app.dialogs.palette.focus_pending = true;
+        let mut h = Harness::builder()
+            .with_size([1200.0, 900.0])
+            .with_max_steps(60)
+            .with_accessibility_check(false)
+            .allow_missing_glyphs()
+            .build_ui_state(|ui, app| opcda_egui::ui::draw(app, ui), app);
+        h.run_steps(3);
+        assert!(h.query_by_label_contains("ui.connect.open").is_some());
+        assert!(h.query_by_label_contains("2001").is_some());
+        assert!(
+            h.query_all_by_label(tr(lang, Tr::PaletteNeedsContext))
+                .next()
+                .is_some()
+        );
+        h.state_mut().dialogs.palette.query = "2002".into();
+        h.run_steps(2);
+        assert!(h.query_by_label_contains("session.write").is_some());
+        assert!(h.query_by_label_contains("ui.connect.open").is_none());
+        h.key_press(Key::Enter);
+        h.run_steps(2);
+        assert!(h.state().dialogs.palette.open);
+        assert!(h.state().dispatched_for_test().is_empty());
+        h.state_mut().dialogs.palette.query = "no_such_action".into();
+        h.run_steps(2);
+        assert!(h.query_by_label(tr(lang, Tr::PaletteNoResults)).is_some());
+    }
+}
+
+#[test]
+fn p4_enter_dispatches_catalog_ui_action_once_and_respects_modal() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.dialogs.palette.open = true;
+    app.dialogs.palette.focus_pending = true;
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(!h.state().dialogs.palette.open);
+    assert!(h.state().dialogs.connect.open);
+}
+
+#[test]
+fn p4_ime_and_repeated_enter_do_not_execute() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.dialogs.palette.open = true;
+    app.dialogs.palette.focus_pending = true;
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit {
+        text: "a".into(),
+        active_range_chars: None,
+    }));
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    assert!(h.state().dialogs.palette.open);
+    assert!(!h.state().dialogs.connect.open);
+}
+
+#[test]
+fn p4_unavailable_other_modal_cannot_be_bypassed_by_palette() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.dialogs.palette.open = true;
+    app.dialogs.palette.focus_pending = true;
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.state_mut().dialogs.options.open = true;
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    assert!(!h.state().dialogs.connect.open);
+    assert!(!h.state().dialogs.palette.open);
+    assert!(h.state().dialogs.options.open);
+}
+
+#[test]
+fn p4_localized_name_and_semantic_id_search() {
+    use opcda_egui::i18n::{Lang, Tr, tr};
+    for lang in [Lang::Ru, Lang::En, Lang::Zh] {
+        let mut app = App::new_test(&egui::Context::default());
+        app.settings.set_lang(lang);
+        app.dialogs.palette.open = true;
+        app.dialogs.palette.focus_pending = true;
+        app.dialogs.palette.query = tr(lang, Tr::PaletteBrowse).into();
+        let mut h = Harness::builder()
+            .with_size([1200.0, 900.0])
+            .with_max_steps(60)
+            .with_accessibility_check(false)
+            .allow_missing_glyphs()
+            .build_ui_state(|ui, app| opcda_egui::ui::draw(app, ui), app);
+        h.run_steps(3);
+        assert!(h.query_by_label_contains("session.browse").is_some());
+        assert!(h.query_by_label_contains("session.write").is_none());
+        h.state_mut().dialogs.palette.query = "ui.connect.open".into();
+        h.run_steps(2);
+        assert!(h.query_by_label_contains("1001").is_some());
+        assert!(h.query_by_label_contains("2001").is_none());
+    }
+}
+
+#[test]
+fn p4_open_from_menu_and_block_background_pointer() {
+    let app = App::new_test(&egui::Context::default());
+    let mut h = harness(app);
+    h.run_steps(3);
+    let menu_pos = h.get_by_label("OPC клиент").rect().center();
+    h.get_by_label("OPC клиент").click();
+    h.run_steps(2);
+    h.get_by_label("Палитра команд").click();
+    h.run_steps(3);
+    assert!(h.state().dialogs.palette.open);
+    pointer_click(&h, menu_pos, PointerButton::Primary);
+    h.run_steps(3);
+    assert!(h.state().dialogs.palette.open);
+    assert!(h.query_by_label("Выход").is_none());
+}
+
+#[test]
+fn p4_selection_and_key_repeats_do_not_execute_disabled() {
+    use opclook_contract::actions::ActionId;
+    let mut app = App::new_test(&egui::Context::default());
+    app.dialogs.palette.open = true;
+    app.dialogs.palette.focus_pending = true;
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.key_press(Key::ArrowDown);
+    h.run_steps(1);
+    assert_eq!(h.state().dialogs.palette.selected, Some(ActionId::Browse));
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    assert!(h.state().dialogs.palette.open);
+    assert!(!h.state().dialogs.connect.open);
+    h.key_press(Key::ArrowUp);
+    h.run_steps(1);
+    h.event(egui::Event::Key {
+        key: Key::Enter,
+        physical_key: None,
+        pressed: true,
+        repeat: true,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(2);
+    assert!(h.state().dialogs.palette.open);
+    assert!(!h.state().dialogs.connect.open);
+}
+
+#[test]
+fn p4_modified_enter_on_run_and_enter_on_cancel_do_not_execute() {
+    for modifiers in [Modifiers::SHIFT, Modifiers::CTRL] {
+        let mut app = App::new_test(&egui::Context::default());
+        app.dialogs.palette.open = true;
+        app.dialogs.palette.focus_pending = true;
+        let mut h = harness(app);
+        h.run_steps(3);
+        h.get_by_label("Выполнить").focus();
+        h.run_steps(1);
+        h.key_press_modifiers(modifiers, Key::Enter);
+        h.run_steps(2);
+        assert!(h.state().dialogs.palette.open);
+        assert!(!h.state().dialogs.connect.open);
+    }
+    let mut app = App::new_test(&egui::Context::default());
+    app.dialogs.palette.open = true;
+    app.dialogs.palette.focus_pending = true;
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.get_by_label("Отмена").focus();
+    h.run_steps(1);
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    assert!(!h.state().dialogs.palette.open);
+    assert!(!h.state().dialogs.connect.open);
+}
+
+#[test]
+fn p4_modal_blocks_background_delete_pointer() {
+    let mut app = App::new_test(&egui::Context::default());
+    seed_table(&mut app, &[("a", "SigA", 42)]);
+    app.select_only(0);
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.get_by_label("Сигналы").click();
+    h.run_steps(2);
+    let delete_pos = h.get_by_label("Удалить выбранные").rect().center();
+    h.state_mut().dialogs.palette.open = true;
+    h.state_mut().dialogs.palette.focus_pending = true;
+    h.run_steps(3);
+    pointer_click(&h, delete_pos, PointerButton::Primary);
+    h.run_steps(2);
+    assert_eq!(h.state().rows().len(), 1);
+    assert!(h.state().dialogs.palette.open);
+}
+
+#[test]
+fn p4_typing_search_filters_results_and_enter_cannot_execute_disabled() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.record_dispatches_for_test();
+    app.dialogs.palette.open = true;
+    app.dialogs.palette.focus_pending = true;
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.event(egui::Event::Text("2002".into()));
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("session.write").is_some());
+    assert!(h.query_by_label_contains("ui.connect.open").is_none());
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    assert!(h.state().dialogs.palette.open);
+    assert!(h.state().dispatched_for_test().is_empty());
+}
+
+#[test]
+fn p4_palette_enter_never_confirms_background_write() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.record_dispatches_for_test();
+    app.settings.view.options.confirm_write = true;
+    seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+    app.select_only(0);
+    app.dialogs.palette.open = true;
+    app.dialogs.palette.focus_pending = true;
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.state_mut().open_write_dialog(Vec::new());
+    h.state_mut().apply_write();
+    assert!(h.state().dialogs.confirm.is_some());
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().dialogs.confirm.is_some());
+    assert!(!h.state().dialogs.palette.open);
+    assert!(
+        !h.state()
+            .dispatched_for_test()
+            .iter()
+            .any(|c| matches!(c.kind, CommandKind::Write { .. }))
+    );
+}
+
+#[test]
+fn p4_message_preempts_palette_escape_without_accepting_same_event() {
+    use opcda_egui::app::MessageDialog;
+    let mut app = App::new_test(&egui::Context::default());
+    app.dialogs.palette.open = true;
+    app.dialogs.palette.focus_pending = true;
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.state_mut().dialogs.message = Some(MessageDialog {
+        title: "Alarm".into(),
+        text: "Important".into(),
+        details: String::new(),
+    });
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().dialogs.message.is_some());
+    assert!(!h.state().dialogs.palette.open);
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().dialogs.message.is_none());
+}
+
+#[test]
+fn p4_interrupted_ime_without_end_stays_fail_closed_until_focus_loss() {
+    use opcda_egui::app::MessageDialog;
+    let mut app = App::new_test(&egui::Context::default());
+    app.dialogs.palette.open = true;
+    app.dialogs.palette.focus_pending = true;
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit {
+        text: "a".into(),
+        active_range_chars: None,
+    }));
+    h.state_mut().dialogs.message = Some(MessageDialog {
+        title: "Alarm".into(),
+        text: "Important".into(),
+        details: String::new(),
+    });
+    h.run_steps(2);
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().dialogs.message.is_some());
+    assert!(!h.state().dialogs.palette.open);
+    h.event(egui::Event::WindowFocused(false));
+    h.run_steps(2);
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().dialogs.message.is_none());
+}
+
+#[test]
+fn p4_message_button_ignores_ime_keyboard_and_allows_pointer() {
+    use opcda_egui::app::MessageDialog;
+    let mut app = App::new_test(&egui::Context::default());
+    app.dialogs.palette.open = true;
+    app.dialogs.palette.focus_pending = true;
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit {
+        text: "a".into(),
+        active_range_chars: None,
+    }));
+    h.state_mut().dialogs.message = Some(MessageDialog {
+        title: "Alarm".into(),
+        text: "Important".into(),
+        details: String::new(),
+    });
+    h.run_steps(3);
+    h.get_by_label("Закрыть").focus();
+    h.run_steps(1);
+    h.key_press(Key::Space);
+    h.run_steps(2);
+    assert!(h.state().dialogs.message.is_some());
+    h.get_by_label("Закрыть").click();
+    h.run_steps(2);
+    assert!(h.state().dialogs.message.is_none());
+}

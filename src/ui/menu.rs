@@ -18,6 +18,19 @@ pub(super) fn menu(app: &mut App, ui: &mut egui::Ui) {
                 theme_menu(app, ui, lang);
             }
             ui.menu_button(tr(lang, Tr::MenuClient), |ui| {
+                if ui
+                    .add_enabled(
+                        !app.dialogs.any_open() && app.csv_import.is_none(),
+                        egui::Button::new(tr(lang, Tr::PaletteTitle)),
+                    )
+                    .clicked()
+                {
+                    app.dialogs.palette.open = true;
+                    app.dialogs.palette.query.clear();
+                    app.dialogs.palette.selected = None;
+                    app.dialogs.palette.focus_pending = true;
+                    ui.close();
+                }
                 if super::actions::action_button(
                     app,
                     ui,
