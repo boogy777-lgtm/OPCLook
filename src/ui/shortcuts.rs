@@ -29,6 +29,16 @@ pub(super) fn binding_text(ctx: &egui::Context, action: super::keymap::KeyAction
         .unwrap_or_default()
 }
 
+/// All declared bindings in display order, using the same registry as dispatch.
+pub(super) fn binding_texts(ctx: &egui::Context, action: super::keymap::KeyAction) -> String {
+    super::keymap::bindings(action)
+        .map(|binding| {
+            ctx.format_shortcut(&egui::KeyboardShortcut::new(binding.modifiers, binding.key))
+        })
+        .collect::<Vec<_>>()
+        .join(" / ")
+}
+
 pub(super) fn connect_shortcut_text(ctx: &egui::Context) -> String {
     action_shortcut(crate::app::actions::UiAction::OpenConnectDialog.id())
         .map(|shortcut| ctx.format_shortcut(&shortcut))
@@ -294,5 +304,56 @@ pub(super) fn tree_enter(app: &mut App, session: SessionId, id: u64) {
     } else {
         app.add_items(session, vec![(node_id, name)]);
         app.journal.info_l(Tr::SignalAdded, &[]);
+    }
+}
+
+#[cfg(test)]
+mod display_tests {
+    use super::*;
+    use crate::i18n::{Lang, Tr, fmt};
+    use crate::ui::keymap::KeyAction;
+
+    #[test]
+    fn local_bindings_feed_localized_shortcut_hints() {
+        let ctx = egui::Context::default();
+        ctx.set_os(egui::os::OperatingSystem::Windows);
+        let refresh = binding_text(&ctx, KeyAction::Refresh);
+        let write = binding_texts(&ctx, KeyAction::TableWrite);
+        let switch = binding_texts(&ctx, KeyAction::SwitchPane);
+        assert_eq!(refresh, "F5");
+        assert_eq!(write, "Enter / F2");
+        assert!(switch.contains("Tab"));
+        assert!(switch.contains("F6"));
+        for lang in [Lang::Ru, Lang::En, Lang::Zh] {
+            for text in [
+                fmt(lang, Tr::HintRefreshF5, &[&refresh]),
+                fmt(lang, Tr::HintEnterF2, &[&write]),
+                fmt(
+                    lang,
+                    Tr::HintDelSelected,
+                    &[&binding_text(&ctx, KeyAction::Delete)],
+                ),
+                fmt(lang, Tr::RefreshF5Button, &[&refresh]),
+                fmt(
+                    lang,
+                    Tr::TableEmptyKeys,
+                    &[&connect_shortcut_text(&ctx), &switch],
+                ),
+                fmt(lang, Tr::TreeHint, &[&switch, &write, &refresh, &switch]),
+                fmt(
+                    lang,
+                    Tr::RowsHint,
+                    &[&switch, &switch, &switch, &write, &write, &refresh, &switch],
+                ),
+                fmt(
+                    lang,
+                    Tr::KeyboardIdleHint,
+                    &[&connect_shortcut_text(&ctx), &switch],
+                ),
+            ] {
+                assert!(!text.contains('{') && !text.contains('}'));
+                assert!(!text.contains('?'));
+            }
+        }
     }
 }

@@ -6497,3 +6497,47 @@ fn p3_enter_on_options_save_applies_draft() {
         assert_eq!(h.state().settings.view.options.auto_reconnect, target);
     });
 }
+
+#[test]
+fn p3_followup_empty_state_displays_current_bindings_in_three_languages() {
+    use opcda_egui::i18n::Lang;
+    for lang in [Lang::Ru, Lang::En, Lang::Zh] {
+        for width in [480.0, 1200.0] {
+            let mut app = App::new_test(&egui::Context::default());
+            app.settings.set_lang(lang);
+            let mut h = Harness::builder()
+                .with_os(egui::os::OperatingSystem::Windows)
+                .with_size([width, 900.0])
+                .with_max_steps(60)
+                .with_accessibility_check(false)
+                .allow_missing_glyphs()
+                .build_ui_state(|ui, app| opcda_egui::ui::draw(app, ui), app);
+            h.run_steps(3);
+            assert!(h.query_all_by_label_contains("Ctrl+N").next().is_some());
+            assert!(h.query_all_by_label_contains("F6").next().is_some());
+            assert!(h.query_all_by_label_contains("{1}").next().is_none());
+        }
+    }
+}
+
+#[test]
+fn p3_followup_add_menu_does_not_claim_tree_enter_equivalence() {
+    let mut h = harness(App::new_test(&egui::Context::default()));
+    h.run_steps(3);
+    h.get_by_label("Сигналы").click();
+    h.run_steps(2);
+    h.get_by_label("Добавить выбранный").hover();
+    h.run_steps(40);
+    assert!(
+        h.query_all_by_label_contains("Enter в дереве")
+            .next()
+            .is_none()
+    );
+    h.get_by_label("Добавить дочерние сигналы").hover();
+    h.run_steps(40);
+    assert!(
+        h.query_all_by_label_contains("Добавить все сигналы ветки")
+            .next()
+            .is_some()
+    );
+}

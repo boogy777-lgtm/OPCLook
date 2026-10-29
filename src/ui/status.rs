@@ -50,10 +50,24 @@ pub(super) fn status_bar(app: &mut App, ui: &mut egui::Ui) {
                     Some(fmt(
                         lang,
                         Tr::TreeHint,
-                        &[&super::shortcuts::binding_text(
-                            ui.ctx(),
-                            super::keymap::KeyAction::NextSession,
-                        )],
+                        &[
+                            &super::shortcuts::binding_text(
+                                ui.ctx(),
+                                super::keymap::KeyAction::NextSession,
+                            ),
+                            &super::shortcuts::binding_text(
+                                ui.ctx(),
+                                super::keymap::KeyAction::TreeEnter,
+                            ),
+                            &super::shortcuts::binding_text(
+                                ui.ctx(),
+                                super::keymap::KeyAction::Refresh,
+                            ),
+                            &super::shortcuts::binding_text(
+                                ui.ctx(),
+                                super::keymap::KeyAction::SwitchPane,
+                            ),
+                        ],
                     ))
                 } else if app.table_focus.is_some() {
                     Some(fmt(
@@ -72,13 +86,35 @@ pub(super) fn status_bar(app: &mut App, ui: &mut egui::Ui) {
                                 ui.ctx(),
                                 super::keymap::KeyAction::NextSession,
                             ),
+                            &super::shortcuts::binding_text(
+                                ui.ctx(),
+                                super::keymap::KeyAction::Delete,
+                            ),
+                            &super::shortcuts::binding_texts(
+                                ui.ctx(),
+                                super::keymap::KeyAction::TableWrite,
+                            ),
+                            &super::shortcuts::binding_text(
+                                ui.ctx(),
+                                super::keymap::KeyAction::Refresh,
+                            ),
+                            &super::shortcuts::binding_text(
+                                ui.ctx(),
+                                super::keymap::KeyAction::SwitchPane,
+                            ),
                         ],
                     ))
                 } else {
                     Some(fmt(
                         lang,
                         Tr::KeyboardIdleHint,
-                        &[&super::shortcuts::connect_shortcut_text(ui.ctx())],
+                        &[
+                            &super::shortcuts::connect_shortcut_text(ui.ctx()),
+                            &super::shortcuts::binding_text(
+                                ui.ctx(),
+                                super::keymap::KeyAction::SwitchPane,
+                            ),
+                        ],
                     ))
                 };
                 let counts = egui::Label::new(fmt(

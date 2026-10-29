@@ -87,7 +87,14 @@ pub(super) fn menu(app: &mut App, ui: &mut egui::Ui) {
                 ui.separator();
                 if ui
                     .button(tr(lang, Tr::RefreshBranch))
-                    .on_hover_text(tr(lang, Tr::HintRefreshF5))
+                    .on_hover_text(crate::i18n::fmt(
+                        lang,
+                        Tr::HintRefreshF5,
+                        &[&super::shortcuts::binding_text(
+                            ui.ctx(),
+                            super::keymap::KeyAction::Refresh,
+                        )],
+                    ))
                     .clicked()
                 {
                     refresh_selected(app);
@@ -112,11 +119,9 @@ pub(super) fn menu(app: &mut App, ui: &mut egui::Ui) {
             });
 
             ui.menu_button(tr(lang, Tr::MenuSignals), |ui| {
-                if ui
-                    .button(tr(lang, Tr::AddSelected))
-                    .on_hover_text(tr(lang, Tr::HintEnterTree))
-                    .clicked()
-                {
+                // Tree Enter is context-dependent and can open Write; it is
+                // not an equivalent shortcut for the Add Selected menu action.
+                if ui.button(tr(lang, Tr::AddSelected)).clicked() {
                     app.add_selected_tree();
                     ui.close();
                 }
@@ -135,7 +140,14 @@ pub(super) fn menu(app: &mut App, ui: &mut egui::Ui) {
                 ui.separator();
                 if ui
                     .button(tr(lang, Tr::RemoveSelected))
-                    .on_hover_text(tr(lang, Tr::HintDelSelected))
+                    .on_hover_text(crate::i18n::fmt(
+                        lang,
+                        Tr::HintDelSelected,
+                        &[&super::shortcuts::binding_text(
+                            ui.ctx(),
+                            super::keymap::KeyAction::Delete,
+                        )],
+                    ))
                     .clicked()
                 {
                     app.remove_selected_rows();
@@ -143,7 +155,14 @@ pub(super) fn menu(app: &mut App, ui: &mut egui::Ui) {
                 }
                 if ui
                     .button(tr(lang, Tr::ChangeValue))
-                    .on_hover_text(tr(lang, Tr::HintEnterF2))
+                    .on_hover_text(crate::i18n::fmt(
+                        lang,
+                        Tr::HintEnterF2,
+                        &[&super::shortcuts::binding_texts(
+                            ui.ctx(),
+                            super::keymap::KeyAction::TableWrite,
+                        )],
+                    ))
                     .clicked()
                 {
                     app.open_write_dialog(Vec::new());

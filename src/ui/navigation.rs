@@ -309,7 +309,14 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                     ICON_TOOLBAR,
                     connected && !root_loading,
                     tr(lang, Tr::Refresh),
-                    tr(lang, Tr::HintRefreshF5),
+                    &fmt(
+                        lang,
+                        Tr::HintRefreshF5,
+                        &[&super::shortcuts::binding_text(
+                            ui.ctx(),
+                            super::keymap::KeyAction::Refresh,
+                        )],
+                    ),
                     paint_refresh_icon,
                 ) {
                     refresh_selected(app);
@@ -417,7 +424,14 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                         if empty_state(
                             ui,
                             tr(lang, Tr::TreeNotLoaded),
-                            tr(lang, Tr::RefreshF5Button),
+                            &fmt(
+                                lang,
+                                Tr::RefreshF5Button,
+                                &[&super::shortcuts::binding_text(
+                                    ui.ctx(),
+                                    super::keymap::KeyAction::Refresh,
+                                )],
+                            ),
                         ) || f5
                         {
                             refresh_root = true;

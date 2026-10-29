@@ -43,7 +43,13 @@ pub(super) fn empty_table_prompt(
                     egui::RichText::new(crate::i18n::fmt(
                         lang,
                         second,
-                        &[&crate::ui::shortcuts::connect_shortcut_text(ui.ctx())],
+                        &[
+                            &crate::ui::shortcuts::connect_shortcut_text(ui.ctx()),
+                            &crate::ui::shortcuts::binding_texts(
+                                ui.ctx(),
+                                crate::ui::keymap::KeyAction::SwitchPane,
+                            ),
+                        ],
                     ))
                     .weak(),
                 )

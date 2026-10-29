@@ -12,6 +12,8 @@ pub(super) enum Scope {
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum KeyAction {
+    #[cfg(test)]
+    CatalogAction,
     PreviousSession,
     NextSession,
     SwitchPane,
@@ -328,14 +330,39 @@ mod tests {
         overlaps_modifiers && !global_page_priority && !global_tab_priority
     }
     #[test]
-    fn catalog_global_shortcut_has_no_context_conflict() {
-        let global = super::super::shortcuts::action_shortcut(
-            opclook_contract::actions::ActionId::OpenConnectDialog,
-        )
-        .expect("catalog binding");
-        for binding in DEFAULTS {
-            assert!(binding.key != global.logical_key);
+    fn every_catalog_shortcut_has_no_context_conflict() {
+        use opclook_contract::actions::CATALOG;
+        for spec in CATALOG {
+            if let Some(shortcut) = super::super::shortcuts::action_shortcut(spec.id) {
+                let global = b(
+                    KeyAction::CatalogAction,
+                    Scope::Global,
+                    shortcut.logical_key,
+                    shortcut.modifiers,
+                );
+                for binding in DEFAULTS {
+                    assert!(
+                        !conflict(&global, binding),
+                        "{} conflicts with {binding:?}",
+                        spec.semantic_id
+                    );
+                }
+            }
         }
+        // Verify that the cross-catalog check detects actual overlapping keys.
+        let catalog = b(
+            KeyAction::CatalogAction,
+            Scope::Global,
+            Key::A,
+            Modifiers::COMMAND,
+        );
+        let select = b(
+            KeyAction::SelectAll,
+            Scope::Table,
+            Key::A,
+            Modifiers::COMMAND,
+        );
+        assert!(conflict(&catalog, &select));
     }
     #[test]
     fn defaults_have_no_conflicts_in_overlapping_scopes() {

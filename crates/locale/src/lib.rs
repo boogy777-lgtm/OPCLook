@@ -914,13 +914,13 @@ fn ru(key: Tr) -> &'static str {
 
         // ---- Tooltips ----
         HintConnectUa => "Подключение к OPC DA/UA серверу",
-        HintRefreshF5 => "F5 — обновить ветку",
+        HintRefreshF5 => "{0} — обновить ветку",
         HintLoadCsv => "Загрузить сигналы из CSV-файла",
         HintSaveCsv => "Сохранить сигналы в CSV-файл",
         HintEnterTree => "Enter в дереве",
         HintAddChildren => "Добавить все сигналы ветки",
-        HintDelSelected => "Del — удалить выбранные",
-        HintEnterF2 => "Enter / F2 — изменить значение",
+        HintDelSelected => "{0} — удалить выбранные",
+        HintEnterF2 => "{0} — изменить значение",
         HintCtrlA => "{0} — выделить все",
         HintEditColumns => "Настроить состав и порядок столбцов",
 
@@ -934,10 +934,10 @@ fn ru(key: Tr) -> &'static str {
         WrittenSummary => "Записано: {0} из {1}",
         UpdatedAt => "Обновлено {0}",
         RowsHint => {
-            "Таблица: ↑↓ Shift+PgUp/PgDn Home/End {0} {1} Del Enter F5 · Tab — дерево · {2} — сервер"
+            "Таблица: ↑↓ Shift+PgUp/PgDn Home/End {0} {1} {3} {4} {5} · {6} — дерево · {2} — сервер"
         }
-        TreeHint => "Дерево: ↑↓ ← → Space Enter F5 · Tab — таблица · {0} — сервер",
-        KeyboardIdleHint => "Tab — таблица / дерево · {0} — подключиться",
+        TreeHint => "Дерево: ↑↓ ← → Space {1} {2} · {3} — таблица · {0} — сервер",
+        KeyboardIdleHint => "{1} — таблица / дерево · {0} — подключиться",
 
         // ---- Bottom panels ----
         ScriptTab => "Скрипт",
@@ -988,7 +988,7 @@ fn ru(key: Tr) -> &'static str {
         TableEmptyInner => "Нет сигналов — добавьте из дерева, через ПКМ или перетащите сюда",
         TableValueExpand => "Развернуть значение",
         TableValueCollapse => "Свернуть значение",
-        TableEmptyKeys => "{0} — подключиться к серверу · Tab / F6 — дерево и таблица",
+        TableEmptyKeys => "{0} — подключиться к серверу · {1} — дерево и таблица",
         TableEmptyDragHint => "Перетащите теги из дерева или нажмите Enter на узле",
         TableEmptyConnect => "Подключиться ({0})",
         EscHint => "Нажмите Esc, чтобы снять выделение. ПКМ по строке — меню.",
@@ -1349,7 +1349,7 @@ fn ru(key: Tr) -> &'static str {
         RemoveFromListConfirmTitle => "Удаление сессии",
         RemoveFromListConfirmText => "Удалить сессию \"{0}\" и все её сигналы из списка?",
         EmptyTabsHint => "Двойной щелчок по серверу в диалоге подключения открывает вкладку",
-        RefreshF5Button => "Обновить (F5)",
+        RefreshF5Button => "Обновить ({0})",
         AddNodeTooltip => "Добавить выбранный сигнал в таблицу",
         AddByNameTooltip => "Добавить сигнал по имени (Item ID / NodeId)",
         TreeExpandLabel => "Развернуть",
@@ -1553,13 +1553,13 @@ fn en(key: Tr) -> &'static str {
 
         // ---- Tooltips ----
         HintConnectUa => "Connect to an OPC DA/UA server",
-        HintRefreshF5 => "F5 — refresh branch",
+        HintRefreshF5 => "{0} — refresh branch",
         HintLoadCsv => "Load signals from a CSV file",
         HintSaveCsv => "Save signals to a CSV file",
         HintEnterTree => "Enter in the tree",
         HintAddChildren => "Add all signals of the branch",
-        HintDelSelected => "Del — remove selected",
-        HintEnterF2 => "Enter / F2 — change value",
+        HintDelSelected => "{0} — remove selected",
+        HintEnterF2 => "{0} — change value",
         HintCtrlA => "{0} — select all",
         HintEditColumns => "Configure columns and their order",
 
@@ -1573,10 +1573,10 @@ fn en(key: Tr) -> &'static str {
         WrittenSummary => "Written: {0} of {1}",
         UpdatedAt => "Updated {0}",
         RowsHint => {
-            "Table: ↑↓ Shift+PgUp/PgDn Home/End {0} {1} Del Enter F5 · Tab — tree · {2} — server"
+            "Table: ↑↓ Shift+PgUp/PgDn Home/End {0} {1} {3} {4} {5} · {6} — tree · {2} — server"
         }
-        TreeHint => "Tree: ↑↓ ← → Space Enter F5 · Tab — table · {0} — server",
-        KeyboardIdleHint => "Tab — table / tree · {0} — connect",
+        TreeHint => "Tree: ↑↓ ← → Space {1} {2} · {3} — table · {0} — server",
+        KeyboardIdleHint => "{1} — table / tree · {0} — connect",
 
         // ---- Bottom panels ----
         ScriptTab => "Script",
@@ -1627,7 +1627,7 @@ fn en(key: Tr) -> &'static str {
         TableEmptyInner => "No signals — add from the tree, via right-click or drag them here",
         TableValueExpand => "Expand value",
         TableValueCollapse => "Collapse value",
-        TableEmptyKeys => "{0} — connect to a server · Tab / F6 — tree and table",
+        TableEmptyKeys => "{0} — connect to a server · {1} — tree and table",
         TableEmptyDragHint => "Drag tags from the tree or press Enter on a node",
         TableEmptyConnect => "Connect ({0})",
         EscHint => "Press Esc to clear the selection. Right-click a row for the menu.",
@@ -1974,7 +1974,7 @@ fn en(key: Tr) -> &'static str {
         RemoveFromListConfirmTitle => "Remove session",
         RemoveFromListConfirmText => "Remove session \"{0}\" and all its signals from the list?",
         EmptyTabsHint => "Double-click a server in the connect dialog to open a tab",
-        RefreshF5Button => "Refresh (F5)",
+        RefreshF5Button => "Refresh ({0})",
         AddNodeTooltip => "Add the selected signal to the table",
         AddByNameTooltip => "Add a signal by name (item id / NodeId)",
         TreeExpandLabel => "Expand",
@@ -2174,13 +2174,13 @@ fn zh(key: Tr) -> &'static str {
 
         // ---- Tooltips ----
         HintConnectUa => "连接到 OPC DA/UA 服务器",
-        HintRefreshF5 => "F5 — 刷新分支",
+        HintRefreshF5 => "{0} — 刷新分支",
         HintLoadCsv => "从 CSV 文件加载信号",
         HintSaveCsv => "将信号保存到 CSV 文件",
         HintEnterTree => "在树中按 Enter",
         HintAddChildren => "添加该分支的所有信号",
-        HintDelSelected => "Delete — 删除所选",
-        HintEnterF2 => "Enter / F2 — 更改值",
+        HintDelSelected => "{0} — 删除所选",
+        HintEnterF2 => "{0} — 更改值",
         HintCtrlA => "{0} — 全选",
         HintEditColumns => "配置列及其顺序",
 
@@ -2194,10 +2194,10 @@ fn zh(key: Tr) -> &'static str {
         WrittenSummary => "已写入: {0} / {1}",
         UpdatedAt => "更新于 {0}",
         RowsHint => {
-            "表格: ↑↓ Shift+PgUp/PgDn Home/End {0} {1} Delete Enter F5 · Tab — 树 · {2} — 服务器"
+            "表格: ↑↓ Shift+PgUp/PgDn Home/End {0} {1} {3} {4} {5} · {6} — 树 · {2} — 服务器"
         }
-        TreeHint => "树: ↑↓ ← → 空格 Enter F5 · Tab — 表格 · {0} — 服务器",
-        KeyboardIdleHint => "Tab — 表格 / 树 · {0} — 连接",
+        TreeHint => "树: ↑↓ ← → 空格 {1} {2} · {3} — 表格 · {0} — 服务器",
+        KeyboardIdleHint => "{1} — 表格 / 树 · {0} — 连接",
 
         // ---- Bottom panels ----
         ScriptTab => "脚本",
@@ -2246,7 +2246,7 @@ fn zh(key: Tr) -> &'static str {
         TableEmptyInner => "无信号 — 请从树中添加、右键添加或拖放到此处",
         TableValueExpand => "展开值",
         TableValueCollapse => "折叠值",
-        TableEmptyKeys => "{0} — 连接服务器 · Tab / F6 — 切换树和表格",
+        TableEmptyKeys => "{0} — 连接服务器 · {1} — 切换树和表格",
         TableEmptyDragHint => "从树中拖动标签，或在节点上按 Enter",
         TableEmptyConnect => "连接 ({0})",
         EscHint => "按 Esc 清除选择。右键单击行可打开菜单。",
@@ -2575,7 +2575,7 @@ fn zh(key: Tr) -> &'static str {
         RemoveFromListConfirmTitle => "删除会话",
         RemoveFromListConfirmText => "从列表中删除会话 \"{0}\" 及其所有信号？",
         EmptyTabsHint => "在连接对话框中双击服务器可打开选项卡",
-        RefreshF5Button => "刷新 (F5)",
+        RefreshF5Button => "刷新 ({0})",
         AddNodeTooltip => "将所选信号添加到表格",
         AddByNameTooltip => "按名称添加信号 (Item ID / NodeId)",
         TreeExpandLabel => "展开",
