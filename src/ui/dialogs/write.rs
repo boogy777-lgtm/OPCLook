@@ -141,16 +141,12 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
                 }
                 ui.separator();
                 ui.horizontal(|ui| {
-                    let response = ui.add_enabled(
-                        writable && unavailable.is_none() && !confirm_open,
+                    let response = crate::ui::components::button_with_reason(
+                        ui,
                         egui::Button::new(tr(lang, Tr::Write)),
+                        writable && unavailable.is_none() && !confirm_open,
+                        unavailable.map(|reason| tr(lang, reason)),
                     );
-                    let response = if let Some(reason) = unavailable {
-                        let text = tr(lang, reason);
-                        response.on_hover_text(text).on_disabled_hover_text(text)
-                    } else {
-                        response
-                    };
                     if (response.clicked_by(egui::PointerButton::Primary)
                         || (response.ime_safe_clicked() && !crate::ui::ime_blocks_keys(ui.ctx()) && !modified_enter))
                         && !crate::ui::key_repeat(ui.ctx(), egui::Key::Enter)

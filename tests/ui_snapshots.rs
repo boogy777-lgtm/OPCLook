@@ -230,3 +230,12 @@ fn p4_palette_ru() {
     app.dialogs.palette.focus_pending = true;
     save("p4-palette-ru", app);
 }
+
+#[test]
+#[ignore = "manual visual QA requiring a headless wgpu renderer"]
+fn p5_button_states_ru() {
+    save("p5-button-enabled-ru", base(Lang::Ru));
+    let mut disabled = base(Lang::Ru);
+    disabled.dialogs.about.open = true;
+    save("p5-button-disabled-ru", disabled);
+}

@@ -52,11 +52,6 @@ pub(super) fn action_button(
     button: egui::Button<'_>,
 ) -> egui::Response {
     let reason = app.ui_action_unavailable(action);
-    let response = ui.add_enabled(reason.is_none(), button);
-    if let Some(reason) = reason {
-        let text = crate::i18n::tr(app.lang(), reason);
-        response.on_hover_text(text).on_disabled_hover_text(text)
-    } else {
-        response
-    }
+    let reason_text = reason.map(|reason| crate::i18n::tr(app.lang(), reason));
+    super::components::button_with_reason(ui, button, reason.is_none(), reason_text)
 }

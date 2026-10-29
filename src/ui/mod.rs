@@ -1,5 +1,6 @@
 mod actions;
 mod colors;
+mod components;
 mod csv;
 mod dialogs;
 mod files;
