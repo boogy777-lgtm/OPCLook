@@ -25,6 +25,61 @@ use crate::constants::{
 };
 use crate::i18n::{Lang, Tr, fmt, tr};
 
+fn server_cursor_id() -> egui::Id {
+    egui::Id::unique("opclook_server_region_cursor")
+}
+
+pub(super) fn enter_keyboard_region(app: &mut App, ctx: &egui::Context) {
+    app.tree_focused = false;
+    app.table_focus = None;
+    let cursor = app
+        .active_session
+        .or_else(|| app.sessions.first().map(|session| session.id));
+    ctx.data_mut(|data| data.insert_temp(server_cursor_id(), cursor));
+    ctx.memory_mut(|memory| memory.request_focus(egui::Id::unique("opclook_servers_region")));
+    ctx.request_repaint();
+}
+
+fn server_cursor(ctx: &egui::Context) -> Option<SessionId> {
+    ctx.data(|data| {
+        data.get_temp::<Option<SessionId>>(server_cursor_id())
+            .flatten()
+    })
+}
+
+pub(super) fn handle_server_region_keys(app: &mut App, ui: &mut egui::Ui) {
+    let ctx = ui.ctx();
+    if crate::ui::ime_blocks_keys(ctx) || !ctx.input(|input| input.modifiers.is_none()) {
+        return;
+    }
+    let ids: Vec<_> = app.sessions.iter().map(|session| session.id).collect();
+    let cursor = server_cursor(ctx)
+        .and_then(|id| ids.iter().position(|value| *value == id))
+        .unwrap_or(0);
+    let down = ctx.input(|input| input.key_pressed(egui::Key::ArrowDown));
+    let up = ctx.input(|input| input.key_pressed(egui::Key::ArrowUp));
+    if !ids.is_empty() && (down || up) {
+        let next = if down {
+            (cursor + 1).min(ids.len() - 1)
+        } else {
+            cursor.saturating_sub(1)
+        };
+        ctx.data_mut(|data| data.insert_temp(server_cursor_id(), ids.get(next).copied()));
+        ctx.request_repaint();
+    } else if crate::ui::key_pressed_once(ctx, egui::Key::Enter) {
+        if let Some(id) = ids.get(cursor).copied() {
+            app.activate_container(id);
+        } else {
+            let _ = app.execute_ui_action(crate::app::actions::UiAction::OpenConnectDialog);
+        }
+    } else if crate::ui::key_pressed_once(ctx, egui::Key::ArrowRight)
+        && let Some(id) = ids.get(cursor).copied()
+    {
+        app.activate_container(id);
+        app.focus_tree();
+    }
+}
+
 pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
     let lang = app.lang();
     // Opaque frame so the left panel paints its full allocated rect (no
@@ -35,6 +90,33 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
         .default_size(LEFT_PANEL_DEFAULT_WIDTH)
         .frame(side_frame)
         .show(ui, |ui| {
+            let region = super::regions::Region::Servers;
+            let entry = super::regions::take_entry(ui.ctx(), region);
+            let region_response = ui.interact(
+                ui.max_rect(),
+                egui::Id::unique("opclook_servers_region"),
+                egui::Sense::focusable_noninteractive(),
+            );
+            if super::regions::current(ui.ctx()) == Some(region) {
+                region_response.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::Label, true, tr(lang, Tr::Servers))
+                });
+            }
+            if entry {
+                region_response.request_focus();
+            }
+            if !app.dialogs.any_open()
+                && app.csv_import.is_none()
+                && ui.input(|input| {
+                    input.pointer.primary_pressed()
+                        && input
+                            .pointer
+                            .interact_pos()
+                            .is_some_and(|pos| region_response.rect.contains(pos))
+                })
+            {
+                super::regions::pointer_enter(ui.ctx(), region);
+            }
             // Toolbar: connect / disconnect / reconnect with correct enabled
             let active_state = app
                 .active_session
@@ -155,6 +237,17 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                         egui::vec2(row_width, SERVER_ROW_HEIGHT),
                     );
                     paint_row_band(ui, row_rect, selected, true);
+                    if super::regions::current(ui.ctx()) == Some(super::regions::Region::Servers)
+                        && !app.tree_focused
+                        && server_cursor(ui.ctx()) == Some(*id)
+                    {
+                        ui.painter().rect_stroke(
+                            row_rect.shrink(1.0),
+                            2.0,
+                            ui.visuals().selection.stroke,
+                            egui::StrokeKind::Inside,
+                        );
+                    }
                     let awaitable = ui
                         .allocate_ui_with_layout(
                             egui::vec2(row_width, SERVER_ROW_HEIGHT),
@@ -266,6 +359,10 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
 
             if let Some(id) = activate {
                 app.activate_container(id);
+                app.tree_focused = false;
+                ui.ctx()
+                    .data_mut(|data| data.insert_temp(server_cursor_id(), Some(id)));
+                super::regions::pointer_enter(ui.ctx(), super::regions::Region::Servers);
             }
             if let Some(id) = reconnect {
                 app.resume_reconnect(id);
@@ -415,7 +512,9 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                         // taken here instead, unless the table, a text field or a
                         // dialog owns the keyboard (the table has its own F5).
                         let f5 = super::keymap::key(super::keymap::KeyAction::Refresh)
-                            .is_some_and(|key| ui.input(|i| i.key_pressed(key)))
+                            .is_some_and(|key| super::key_pressed_once(ui.ctx(), key))
+                            && super::regions::current(ui.ctx())
+                                == Some(super::regions::Region::Servers)
                             && app.table_focus.is_none()
                             && !app.dialogs.any_open()
                             && app.csv_import.is_none()

@@ -13,8 +13,9 @@ pub(super) fn bottom_panels(app: &mut App, ui: &mut egui::Ui) {
     if !show_script && !show_log {
         return;
     }
+    let mut focus_entry = super::regions::take_entry(ui.ctx(), super::regions::Region::Footer);
     let lang = app.lang();
-    egui::Panel::bottom("bottom_workspace")
+    let panel = egui::Panel::bottom("bottom_workspace")
         .resizable(true)
         .default_size(BOTTOM_PANEL_DEFAULT_HEIGHT)
         .size_range(BOTTOM_PANEL_MIN_HEIGHT..=BOTTOM_PANEL_MAX_HEIGHT)
@@ -28,9 +29,15 @@ pub(super) fn bottom_panels(app: &mut App, ui: &mut egui::Ui) {
                     let journal_tab = ui
                         .selectable_label(selected == BottomTab::Journal, tr(lang, Tr::JournalTab))
                         .on_hover_text(tr(lang, Tr::HintJournalTab));
+                    super::status::register_footer_widget(&journal_tab);
+                    if focus_entry {
+                        journal_tab.request_focus();
+                        focus_entry = false;
+                    }
                     let script_tab = ui
                         .selectable_label(selected == BottomTab::Script, tr(lang, Tr::ScriptTab))
                         .on_hover_text(tr(lang, Tr::HintScriptTabNotImpl));
+                    super::status::register_footer_widget(&script_tab);
                     if journal_tab.clicked() {
                         selected = BottomTab::Journal;
                     }
@@ -52,10 +59,14 @@ pub(super) fn bottom_panels(app: &mut App, ui: &mut egui::Ui) {
                     ui.separator();
                     match selected {
                         BottomTab::Script => {
-                            if ui.button(tr(lang, Tr::SaveScriptLabel)).clicked() {
+                            let save = ui.button(tr(lang, Tr::SaveScriptLabel));
+                            super::status::register_footer_widget(&save);
+                            if save.clicked() {
                                 save_script_file(app);
                             }
-                            if ui.button(tr(lang, Tr::LoadScriptLabel)).clicked() {
+                            let load = ui.button(tr(lang, Tr::LoadScriptLabel));
+                            super::status::register_footer_widget(&load);
+                            if load.clicked() {
                                 load_script_file(app);
                             }
                         }
@@ -81,10 +92,14 @@ pub(super) fn bottom_panels(app: &mut App, ui: &mut egui::Ui) {
                 // Single enabled panel -> no tab bar, just the panel.
                 if show_script {
                     ui.horizontal(|ui| {
-                        if ui.button(tr(lang, Tr::SaveScriptLabel)).clicked() {
+                        let save = ui.button(tr(lang, Tr::SaveScriptLabel));
+                        super::status::register_footer_widget(&save);
+                        if save.clicked() {
                             save_script_file(app);
                         }
-                        if ui.button(tr(lang, Tr::LoadScriptLabel)).clicked() {
+                        let load = ui.button(tr(lang, Tr::LoadScriptLabel));
+                        super::status::register_footer_widget(&load);
+                        if load.clicked() {
                             load_script_file(app);
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -93,40 +108,79 @@ pub(super) fn bottom_panels(app: &mut App, ui: &mut egui::Ui) {
                         });
                     });
                     ui.separator();
-                    script_view(app, ui);
+                    script_view_with_focus(app, ui, &mut focus_entry);
                 } else {
-                    journal_view(app, ui);
+                    journal_view_with_focus(app, ui, &mut focus_entry);
                 }
             }
         });
+    if !app.dialogs.any_open()
+        && app.csv_import.is_none()
+        && ui.input(|input| {
+            input.pointer.any_pressed()
+                && input
+                    .pointer
+                    .interact_pos()
+                    .is_some_and(|pos| panel.response.rect.contains(pos))
+        })
+    {
+        super::regions::pointer_enter(ui.ctx(), super::regions::Region::Footer);
+    }
 }
 
 pub(super) fn script_view(app: &mut App, ui: &mut egui::Ui) {
+    script_view_with_focus(app, ui, &mut false);
+}
+
+fn script_view_with_focus(app: &mut App, ui: &mut egui::Ui, focus_entry: &mut bool) {
     egui::ScrollArea::vertical()
         .id_salt("script_scroll")
         .show(ui, |ui| {
-            ui.add(
+            let editor = ui.add(
                 egui::TextEdit::multiline(&mut app.script_text)
                     .code_editor()
                     .desired_width(f32::INFINITY)
                     .desired_rows(9),
             );
+            super::status::register_footer_widget(&editor);
+            if *focus_entry {
+                editor.request_focus();
+                *focus_entry = false;
+            }
         });
 }
 
 pub(super) fn journal_view(app: &mut App, ui: &mut egui::Ui) {
+    journal_view_with_focus(app, ui, &mut false);
+}
+
+fn journal_view_with_focus(app: &mut App, ui: &mut egui::Ui, focus_entry: &mut bool) {
     let lang = app.lang();
     ui.horizontal(|ui| {
-        if ui.small_button(tr(lang, Tr::Clear)).clicked() {
+        let clear = ui.small_button(tr(lang, Tr::Clear));
+        super::status::register_footer_widget(&clear);
+        if clear.clicked() {
             app.journal.clear();
         }
-        if ui.small_button(tr(lang, Tr::SaveJournal)).clicked() {
+        let save = ui.small_button(tr(lang, Tr::SaveJournal));
+        super::status::register_footer_widget(&save);
+        if save.clicked() {
             save_journal(app);
         }
-        if ui.small_button(tr(lang, Tr::LoadJournal)).clicked() {
+        let load = ui.small_button(tr(lang, Tr::LoadJournal));
+        super::status::register_footer_widget(&load);
+        if load.clicked() {
             load_journal(app);
         }
-        ui.label(fmt(lang, Tr::EntriesCount, &[&app.journal.entries().len()]));
+        let entries = ui.add(
+            egui::Label::new(fmt(lang, Tr::EntriesCount, &[&app.journal.entries().len()]))
+                .sense(egui::Sense::focusable_noninteractive()),
+        );
+        super::status::register_footer_widget(&entries);
+        if *focus_entry {
+            entries.request_focus();
+            *focus_entry = false;
+        }
     });
     egui::ScrollArea::vertical()
         .id_salt("journal_scroll")

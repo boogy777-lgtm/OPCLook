@@ -239,3 +239,53 @@ fn p5_button_states_ru() {
     disabled.dialogs.about.open = true;
     save("p5-button-disabled-ru", disabled);
 }
+
+#[test]
+#[ignore = "manual visual QA requiring a headless wgpu renderer"]
+fn keyboard_write_and_confirmation_ru() {
+    let session = SessionId::new(1).unwrap();
+    let mut app = base(Lang::Ru);
+    app.settings.view.options.confirm_write = true;
+    app.seed_session(session, EndpointSpec::da("", "Srv.Test"));
+    let key = app.seed_writable_row(session, "a", "Pump.Pressure", Value::I64(42));
+    app.open_write_dialog(vec![key]);
+    save("keyboard-write-ru", app);
+    let mut app = base(Lang::Ru);
+    app.settings.view.options.confirm_write = true;
+    app.seed_session(session, EndpointSpec::da("", "Srv.Test"));
+    let key = app.seed_writable_row(session, "a", "Pump.Pressure", Value::I64(42));
+    app.open_write_dialog(vec![key]);
+    app.apply_write();
+    save("keyboard-confirm-no-ru", app);
+}
+
+#[test]
+#[ignore = "manual visual QA requiring a headless wgpu renderer"]
+fn keyboard_unselected_focus_ru() {
+    let session = SessionId::new(1).unwrap();
+    let mut app = base(Lang::Ru);
+    app.seed_session(session, EndpointSpec::da("", "Srv.Test"));
+    app.seed_writable_row(session, "a", "Pump.Pressure", Value::I64(42));
+    app.seed_writable_row(session, "b", "Pump.Flow", Value::I64(15));
+    let mut h = Harness::builder()
+        .with_size([1200.0, 900.0])
+        .with_accessibility_check(false)
+        .with_render_cursor(false)
+        .with_context_setup(|ctx| {
+            assert!(opcda_egui::app::install_fonts(ctx).is_some());
+        })
+        .build_ui_state(|ui, app: &mut App| app.update(ui), app);
+    h.run_steps(4);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::CTRL, egui::Key::ArrowDown);
+    h.run_steps(3);
+    assert_eq!(h.state().table_focus, Some(1));
+    assert_eq!(h.state().selected_rows.len(), 1);
+    h.render()
+        .unwrap()
+        .save("docs/screenshots/keyboard-unselected-focus-ru.png")
+        .unwrap();
+}

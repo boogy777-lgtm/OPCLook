@@ -269,6 +269,7 @@ impl App {
                 title: tr(lang, Tr::ConfirmWriteTitle).to_string(),
                 text,
                 action: ConfirmAction::Write(request_list),
+                focus_pending: true,
             });
             return;
         }
@@ -376,7 +377,14 @@ impl App {
 
     /// Cancel a confirm-dialog (No). Keeps the write dialog open for edits.
     pub fn confirm_no(&mut self) {
-        self.dialogs.confirm = None;
+        let was_write = self
+            .dialogs
+            .confirm
+            .take()
+            .is_some_and(|request| matches!(request.action, ConfirmAction::Write(_)));
+        if was_write && self.dialogs.write.open {
+            self.dialogs.write.focus_pending = true;
+        }
     }
 
     /// Ask the user to confirm an action (opens the confirm dialog).
@@ -385,6 +393,7 @@ impl App {
             title,
             text,
             action,
+            focus_pending: true,
         });
     }
 }
@@ -412,11 +421,25 @@ impl App {
             return;
         };
         self.table_focus = Some(index);
+        self.table_additive_base = None;
+        self.table_focus_key = Some(key);
         self.table_anchor = Some(index);
+        self.table_anchor_key = Some(key);
         self.tree_focus = None;
         self.tree_focused = false;
         self.selected_rows.clear();
         self.selected_rows.insert(key);
+    }
+
+    /// Move the keyboard cursor without modifying selection or its anchor.
+    pub fn focus_row_only(&mut self, index: usize) {
+        let Some(key) = self.row_key(index) else {
+            return;
+        };
+        self.table_focus = Some(index);
+        self.table_focus_key = Some(key);
+        self.tree_focus = None;
+        self.tree_focused = false;
     }
 
     pub fn select_toggle(&mut self, index: usize) {
@@ -424,7 +447,10 @@ impl App {
             return;
         };
         self.table_focus = Some(index);
+        self.table_additive_base = None;
+        self.table_focus_key = Some(key);
         self.table_anchor = Some(index);
+        self.table_anchor_key = Some(key);
         self.tree_focus = None;
         self.tree_focused = false;
         if !self.selected_rows.remove(&key) {
@@ -435,13 +461,20 @@ impl App {
     /// Select the visible rows from the anchor to `index` (both in the
     /// visible list), never rows of another tab.
     pub fn select_extend_to(&mut self, index: usize) {
+        self.select_extend_to_with_mode(index, false);
+    }
+
+    pub fn select_extend_to_with_mode(&mut self, index: usize, additive: bool) {
         let visible = self.visible_row_positions();
         if visible.is_empty() {
             return;
         }
         let index = index.min(visible.len() - 1);
         let anchor = self.table_anchor.unwrap_or(index).min(visible.len() - 1);
+        self.table_anchor = Some(anchor);
+        self.table_anchor_key = self.row_key(anchor);
         self.table_focus = Some(index);
+        self.table_focus_key = self.row_key(index);
         self.tree_focus = None;
         self.tree_focused = false;
         let (lo, hi) = if anchor <= index {
@@ -449,7 +482,15 @@ impl App {
         } else {
             (index, anchor)
         };
-        self.selected_rows.clear();
+        if additive {
+            let base = self
+                .table_additive_base
+                .get_or_insert_with(|| self.selected_rows.clone());
+            self.selected_rows = base.clone();
+        } else {
+            self.table_additive_base = None;
+            self.selected_rows.clear();
+        }
         for position in visible.get(lo..=hi).unwrap_or_default() {
             if let Some(row) = self.rows.get(*position) {
                 self.selected_rows.insert(row.key);
@@ -460,6 +501,7 @@ impl App {
     /// Select every row the table shows. The table keeps the keyboard (its
     /// focus stays on a row), so Delete / Enter / Ctrl+C act right away.
     pub fn select_all_rows(&mut self) {
+        self.table_additive_base = None;
         let keys: HashSet<ItemKey> = self
             .rows
             .iter()
@@ -473,13 +515,18 @@ impl App {
         let count = keys.len();
         self.selected_rows = keys;
         self.table_focus = Some(self.table_focus.unwrap_or(0).min(count - 1));
-        self.table_anchor = None;
+        self.table_focus_key = self.table_focus.and_then(|index| self.row_key(index));
+        if self.table_anchor.is_none() {
+            self.table_anchor = self.table_focus;
+            self.table_anchor_key = self.table_focus_key;
+        }
         self.tree_focus = None;
         self.tree_focused = false;
     }
 
     pub fn clear_selection(&mut self) {
         self.selected_rows.clear();
+        self.table_additive_base = None;
     }
 
     pub fn copy_selected_rows(&self) -> Option<String> {

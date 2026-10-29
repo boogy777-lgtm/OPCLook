@@ -18,6 +18,15 @@ use crate::constants::{MIN_COLUMN_WIDTH, TABLE_HEADER_HEIGHT, TABLE_ROW_GAP, TAB
 use crate::i18n::{Tr, fmt, tr};
 use egui_extras::{Column, TableBuilder};
 
+fn table_scroll_request_id() -> egui::Id {
+    egui::Id::unique("opclook_keyboard_table_scroll")
+}
+
+pub(super) fn request_table_scroll(ctx: &egui::Context, visible_row: usize) {
+    ctx.data_mut(|data| data.insert_temp(table_scroll_request_id(), visible_row));
+    ctx.request_repaint();
+}
+
 pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
     let lang = app.lang();
     // Paint the whole central area opaquely with the panel background so the
@@ -26,6 +35,17 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
     let _panel = egui::CentralPanel::default()
         .frame(central_frame)
         .show(ui, |ui| {
+            let entry = super::regions::take_entry(ui.ctx(), super::regions::Region::Tags);
+            if app.table_focus.is_none()
+                && super::regions::current(ui.ctx()) == Some(super::regions::Region::Tags)
+            {
+                let response = ui.interact(ui.max_rect(), egui::Id::unique("empty_tags_region"), egui::Sense::focusable_noninteractive());
+                response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, tr(lang, Tr::MenuSignals)));
+                if entry { response.request_focus(); }
+                if response.has_focus() {
+                    ui.painter().rect_stroke(response.rect.shrink(1.0), 2.0, ui.visuals().selection.stroke, egui::StrokeKind::Inside);
+                }
+            }
             // Session tab strip lives at the top of the central tags panel, not in
             // a window-wide top panel. It belongs to the tags area, so it stays
             // reachable even when the left nav/tree is collapsed.
@@ -33,6 +53,28 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
             // A tab click above may have switched the session: drop the old
             // tab's selection before the table and the shortcuts use it (V1).
             app.sync_table_view();
+            if app.table_focus.is_some()
+                && let Some(key) = app.table_focus_key
+            {
+                let new_index = app.visible_row_positions().iter().position(|position| {
+                    app.rows().get(*position).is_some_and(|row| row.key == key)
+                });
+                if app.table_focus != new_index {
+                    app.table_focus = new_index;
+                    if let Some(index) = new_index {
+                        request_table_scroll(ui.ctx(), index);
+                    } else {
+                        app.table_focus_key = None;
+                    }
+                }
+            }
+            if app.table_anchor.is_some() && let Some(key) = app.table_anchor_key {
+                let new_index = app.visible_row_positions().iter().position(|position| {
+                    app.rows().get(*position).is_some_and(|row| row.key == key)
+                });
+                app.table_anchor = new_index;
+                if new_index.is_none() { app.table_anchor_key = None; }
+            }
             ui.separator();
             // Opaque drop-zone frame: the tags area owns the full central panel
             // background (no transparent defaults leaking a black band between
@@ -70,6 +112,13 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                     let visible = app.visible_row_positions();
                     // V3: expanded structures / arrays add field lines under their row.
                     let lines = app.table_lines(&visible);
+                    let scroll_row = ui.ctx().data_mut(|data| {
+                        let index = data.get_temp::<usize>(table_scroll_request_id());
+                        data.remove::<usize>(table_scroll_request_id());
+                        index.and_then(|index| lines.iter().position(|line| {
+                            matches!(line, TableLine::Row { index: row_index, .. } if *row_index == index)
+                        }))
+                    });
                     let selected_count = app.selected_rows.len();
                     let count_strip = ui.horizontal(|ui| {
                         ui.label(
@@ -128,6 +177,9 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                 // must never scroll the tags table.
                                 .drag_to_scroll(egui::scroll_area::DragScroll::Never)
                                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
+                            if let Some(row) = scroll_row {
+                                table = table.scroll_to_row(row, None);
+                            }
                             let table_columns = columns.clone();
                             for column in &table_columns {
                                 table = table.column(
@@ -404,6 +456,14 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                             let _ = column_index;
                                         }
                                         let response = row.response();
+                                        if super::regions::current(&table_ctx) == Some(super::regions::Region::Tags)
+                                            && app.table_focus == Some(index)
+                                        {
+                                            table_ctx.layer_painter(response.layer_id).rect_stroke(
+                                                response.rect.shrink(1.0), 1.0,
+                                                table_ctx.style_of(table_ctx.theme()).visuals.selection.stroke, egui::StrokeKind::Inside,
+                                            );
+                                        }
                                         let on_toggle = toggle_rect.is_some_and(|rect| {
                                             response
                                                 .interact_pointer_pos()
@@ -412,9 +472,14 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                         if response.clicked() && on_toggle {
                                             actions.push(TableAction::ToggleValue(key, Vec::new()));
                                         } else if response.clicked() {
-                                            let modifiers = table_ctx.input(|i| i.modifiers);
+                                            let modifiers = table_ctx.input(|input| {
+                                                input.events.iter().rev().find_map(|event| match event {
+                                                    egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, modifiers, .. } => Some(*modifiers),
+                                                    _ => None,
+                                                }).unwrap_or(input.modifiers)
+                                            });
                                             if modifiers.shift && app.table_anchor.is_some() {
-                                                actions.push(TableAction::SelectExtend(index));
+                                                actions.push(TableAction::SelectExtend(index, modifiers.ctrl || modifiers.command));
                                             } else if modifiers.ctrl || modifiers.command {
                                                 actions.push(TableAction::SelectToggle(index));
                                             } else {
@@ -492,6 +557,11 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
             set_tags_rect_for_test(dropped_zone.response.rect);
 
             let actions = dropped_zone.inner;
+            if !app.dialogs.any_open() && app.csv_import.is_none()
+                && ui.input(|input| input.pointer.primary_pressed() && input.pointer.interact_pos().is_some_and(|pos| dropped_zone.response.rect.contains(pos)))
+            {
+                super::regions::pointer_enter(ui.ctx(), super::regions::Region::Tags);
+            }
 
             // Visual feedback while a tag tree payload hovers over the table.
             let hovering = dropped_zone
@@ -523,16 +593,19 @@ fn apply_table_actions(app: &mut App, ui: &mut egui::Ui, actions: Vec<TableActio
         match action {
             TableAction::SelectSingle(index) => app.select_only(index),
             TableAction::SelectToggle(index) => app.select_toggle(index),
-            TableAction::SelectExtend(index) => app.select_extend_to(index),
+            TableAction::SelectExtend(index, additive) => {
+                app.select_extend_to_with_mode(index, additive);
+                // Each click is a separate additive gesture.
+                app.table_additive_base = None;
+            }
             TableAction::Write(key) => {
-                let keys = app.selected_rows_for_context(key);
-                app.open_write_dialog(keys);
+                app.open_write_dialog(vec![key]);
             }
             TableAction::Remove(key) => {
                 if app.selected_rows.contains(&key) {
                     app.remove_selected_rows();
                 } else {
-                    app.selected_rows.clear();
+                    app.clear_selection();
                     app.selected_rows.insert(key);
                     app.remove_selected_rows();
                 }
@@ -584,6 +657,20 @@ fn apply_table_actions(app: &mut App, ui: &mut egui::Ui, actions: Vec<TableActio
     }
 }
 
+fn move_table_cursor(app: &mut App, target: usize, shift: bool, control: bool) {
+    if shift {
+        if app.table_anchor.is_none() {
+            app.table_anchor = app.table_focus;
+            app.table_anchor_key = app.table_focus_key;
+        }
+        app.select_extend_to_with_mode(target, control);
+    } else if control {
+        app.focus_row_only(target);
+    } else {
+        app.select_only(target);
+    }
+}
+
 pub(super) fn handle_table_keys(app: &mut App, ui: &mut egui::Ui) {
     let len = app.visible_row_count();
     if len == 0 {
@@ -593,60 +680,58 @@ pub(super) fn handle_table_keys(app: &mut App, ui: &mut egui::Ui) {
     }
     let ctx = ui.ctx();
     let focus = app.table_focus.unwrap_or(0).min(len - 1);
-    let shift = ctx.input(|i| i.modifiers.shift);
-
-    if super::keymap::key(super::keymap::KeyAction::TableDown)
-        .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
+    let ambiguous_delete = ctx.input(|input| {
+        input.events.iter().any(|event| {
+            matches!(event,
+        egui::Event::Key { key, pressed: true, .. } if *key != egui::Key::Delete)
+        })
+    });
+    // Modifiers belong to each event, not to the final state of a frame:
+    // several key/modifier events may arrive together.
+    let navigation = ctx.input(|input| {
+        input.events.iter().find_map(|event| match event {
+            egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } if !modifiers.alt
+                && matches!(
+                    key,
+                    egui::Key::ArrowDown
+                        | egui::Key::ArrowUp
+                        | egui::Key::PageDown
+                        | egui::Key::PageUp
+                        | egui::Key::Home
+                        | egui::Key::End
+                ) =>
+            {
+                Some((*key, *modifiers))
+            }
+            _ => None,
+        })
+    });
+    if let Some((key, modifiers)) = navigation {
+        let target = match key {
+            egui::Key::ArrowDown => (focus + 1).min(len - 1),
+            egui::Key::ArrowUp => focus.saturating_sub(1),
+            egui::Key::PageDown => (focus + 10).min(len - 1),
+            egui::Key::PageUp => focus.saturating_sub(10),
+            egui::Key::Home => 0,
+            egui::Key::End => len - 1,
+            _ => focus,
+        };
+        move_table_cursor(
+            app,
+            target,
+            modifiers.shift,
+            modifiers.ctrl || modifiers.command,
+        );
+    }
+    if !ctx
+        .input(|input| input.modifiers.shift && (input.modifiers.ctrl || input.modifiers.command))
     {
-        let target = (focus + 1).min(len - 1);
-        if shift {
-            app.select_extend_to(target);
-        } else {
-            app.select_only(target);
-        }
-    } else if super::keymap::key(super::keymap::KeyAction::TableUp)
-        .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
-    {
-        let target = focus.saturating_sub(1);
-        if shift {
-            app.select_extend_to(target);
-        } else {
-            app.select_only(target);
-        }
-    } else if super::keymap::key(super::keymap::KeyAction::TablePageDown)
-        .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
-    {
-        let target = (focus + 10).min(len - 1);
-        if shift {
-            app.select_extend_to(target);
-        } else {
-            app.select_only(target);
-        }
-    } else if super::keymap::key(super::keymap::KeyAction::TablePageUp)
-        .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
-    {
-        let target = focus.saturating_sub(10);
-        if shift {
-            app.select_extend_to(target);
-        } else {
-            app.select_only(target);
-        }
-    } else if super::keymap::key(super::keymap::KeyAction::TableHome)
-        .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
-    {
-        if shift {
-            app.select_extend_to(0);
-        } else {
-            app.select_only(0);
-        }
-    } else if super::keymap::key(super::keymap::KeyAction::TableEnd)
-        .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
-    {
-        if shift {
-            app.select_extend_to(len - 1);
-        } else {
-            app.select_only(len - 1);
-        }
+        app.table_additive_base = None;
     }
 
     // V3: → opens the focused row's structure (again: every level), ← closes it.
@@ -669,19 +754,60 @@ pub(super) fn handle_table_keys(app: &mut App, ui: &mut egui::Ui) {
             app.status = tr(app.lang(), Tr::Copied).to_string();
         }
     }
-    if super::keymap::key(super::keymap::KeyAction::Delete)
-        .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
+    let toggle_focus = !crate::ui::ime_blocks_keys(ctx)
+        && ctx.input(|input| {
+            input.events.iter().any(|event| {
+                matches!(event,
+        egui::Event::Key { key: egui::Key::Space, pressed: true, repeat: false, modifiers, .. }
+            if modifiers.is_none() || modifiers.matches_exact(egui::Modifiers::CTRL)
+                || modifiers.matches_exact(egui::Modifiers::COMMAND))
+            })
+        });
+    if toggle_focus && navigation.is_none() && app.table_focus == Some(focus) {
+        app.select_toggle(focus);
+    }
+    if !ambiguous_delete
+        && super::keymap::key(super::keymap::KeyAction::Delete).is_some_and(|key| {
+            ctx.input(|input| {
+                input.events.iter().any(|event| {
+                    matches!(event,
+            egui::Event::Key { key: event_key, pressed: true, repeat: false, modifiers, .. }
+                if *event_key == key && modifiers.is_none())
+                })
+            })
+        })
     {
         app.remove_selected_rows();
     }
-    if super::keymap::bindings(super::keymap::KeyAction::TableWrite)
-        .any(|binding| crate::ui::key_pressed_once(ctx, binding.key))
+    if navigation.is_none()
+        && app.table_focus == Some(focus)
+        && super::keymap::bindings(super::keymap::KeyAction::TableWrite).any(|binding| {
+            !crate::ui::ime_blocks_keys(ctx)
+                && ctx.input(|input| {
+                    input.events.iter().any(|event| {
+                        matches!(event,
+                egui::Event::Key { key, pressed: true, repeat: false, modifiers, .. }
+                if *key == binding.key && modifiers.matches_exact(binding.modifiers))
+                    })
+                })
+        })
     {
-        app.open_write_dialog(Vec::new());
+        // Enter/F2 edit the focused tag only; bulk write remains an explicit
+        // selection action in the UI rather than an accidental keyboard batch.
+        if let Some(key) = app
+            .table_focus
+            .and_then(|index| app.row_key(index))
+            .filter(|key| Some(*key) == app.table_focus_key)
+        {
+            app.open_write_dialog(vec![key]);
+        }
     }
     if super::keymap::key(super::keymap::KeyAction::Refresh)
         .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
     {
         refresh_selected(app);
+    }
+    if let Some(index) = app.table_focus.filter(|index| *index != focus) {
+        request_table_scroll(ctx, index);
     }
 }

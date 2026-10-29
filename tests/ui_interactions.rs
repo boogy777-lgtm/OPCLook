@@ -2323,6 +2323,8 @@ fn enter_opens_confirmation_without_accepting_it() {
     h.run_steps(3);
     assert!(h.state().dialogs.confirm.is_some());
     assert_eq!(h.state().write_batch.pending, 0);
+    h.key_press(Key::ArrowLeft);
+    h.run_steps(2);
     h.key_press(Key::Enter);
     h.run_steps(3);
     assert!(!h.state().dialogs.confirm.is_some());
@@ -2437,7 +2439,7 @@ fn k3_ctrl_a_then_delete_after_the_tree_had_focus() {
     assert_eq!(h.state().rows().len(), 0);
 }
 
-/// K3: Tab moves the keyboard tree -> table -> tree.
+/// Tab walks Header -> Tags -> Servers; tree is a subfocus of Servers.
 #[test]
 fn k3_tab_moves_the_keyboard_between_tree_and_table() {
     let ctx = egui::Context::default();
@@ -2457,13 +2459,19 @@ fn k3_tab_moves_the_keyboard_between_tree_and_table() {
     let mut h = harness(app);
     h.run_steps(2);
 
-    // Nothing owns the keyboard at start: Tab gives it to the table.
+    // Nothing owns the keyboard at start: Tab gives it to the header.
+    h.key_press(Key::Tab);
+    h.run_steps(3);
+    assert_eq!(h.state().table_focus, None);
     h.key_press(Key::Tab);
     h.run_steps(3);
     assert_eq!(h.state().table_focus, Some(0));
     assert!(!h.state().tree_focused);
 
     h.key_press(Key::Tab);
+    h.run_steps(3);
+    assert!(!h.state().tree_focused);
+    h.key_press(Key::ArrowRight);
     h.run_steps(3);
     assert!(h.state().tree_focused);
     assert_eq!(h.state().tree_focus, Some((sid(1), node)));
@@ -2476,7 +2484,7 @@ fn k3_tab_moves_the_keyboard_between_tree_and_table() {
 
     h.key_press(Key::F6);
     h.run_steps(3);
-    assert!(h.state().tree_focused);
+    assert!(!h.state().tree_focused);
 }
 
 /// K3: Ctrl+Tab / Ctrl+PgUp switch the session tabs; Ctrl+N opens «Подключиться».
@@ -5333,6 +5341,8 @@ fn p2_write_enter_repeat_never_confirms_or_repeats_a_write() {
             assert_eq!(writes(h.state()), 0);
             h.event(event(false));
             h.run_steps(1);
+            h.key_press(Key::ArrowLeft);
+            h.run_steps(1);
             h.event(event(true));
             h.run_steps(1);
         }
@@ -5356,11 +5366,11 @@ fn p2_write_confirmation_cancel_and_connection_change_do_not_write() {
         app.select_only(0);
         app.open_write_dialog(Vec::new());
         let mut h = harness(app);
-        h.run_steps(3);
+        h.run_steps(5);
         h.get_by_label("Записать").click();
-        h.run_steps(3);
+        h.run_steps(5);
         assert!(h.state().dialogs.confirm.is_some());
-        assert!(!widget_enabled(&h, "Отмена"));
+        assert!(h.query_by_label("Отмена").is_none());
         if disconnect {
             h.state_mut().on_event_for_test_at(
                 sid(1),
@@ -5368,7 +5378,7 @@ fn p2_write_confirmation_cancel_and_connection_change_do_not_write() {
                     reason: opcda_egui::bff::model::BackendMsg::raw("test disconnect"),
                 },
             );
-            h.run_steps(2);
+            h.run_steps(5);
             assert!(h.state().dialogs.confirm.is_none());
             assert!(h.state().dialogs.write.error.is_some());
             h.state_mut().reconnect_session(sid(1));
@@ -5395,7 +5405,7 @@ fn p2_write_confirmation_cancel_and_connection_change_do_not_write() {
         } else {
             h.get_by_label("Нет").click();
         }
-        h.run_steps(3);
+        h.run_steps(5);
         assert!(
             !h.state()
                 .dispatched_for_test()
@@ -5558,7 +5568,7 @@ fn p2_space_repeat_on_confirmation_button_does_not_write() {
     app.select_only(0);
     app.open_write_dialog(Vec::new());
     let mut h = harness(app);
-    h.run_steps(3);
+    h.run_steps(5);
     h.get_by_label("Записать").focus();
     h.run_steps(1);
     let key = |pressed| egui::Event::Key {
@@ -5569,7 +5579,7 @@ fn p2_space_repeat_on_confirmation_button_does_not_write() {
         modifiers: Modifiers::NONE,
     };
     h.event(key(true));
-    h.run_steps(2);
+    h.run_steps(5);
     assert!(h.state().dialogs.confirm.is_some());
     h.get_by_label("Да").focus();
     h.run_steps(1);
@@ -5587,7 +5597,7 @@ fn p2_space_repeat_on_confirmation_button_does_not_write() {
     h.event(key(false));
     h.run_steps(1);
     h.event(key(true));
-    h.run_steps(2);
+    h.run_steps(5);
     assert_eq!(
         h.state()
             .dispatched_for_test()
@@ -5608,14 +5618,14 @@ fn p2_enter_on_no_cancels_write_without_dispatch() {
     app.select_only(0);
     app.open_write_dialog(Vec::new());
     let mut h = harness(app);
-    h.run_steps(3);
+    h.run_steps(5);
     h.get_by_label("Записать").click();
-    h.run_steps(3);
+    h.run_steps(5);
     assert!(h.state().dialogs.confirm.is_some());
     h.get_by_label("Нет").focus();
     h.run_steps(1);
     h.key_press(Key::Enter);
-    h.run_steps(3);
+    h.run_steps(5);
     assert!(h.state().dialogs.confirm.is_none());
     assert!(
         !h.state()
@@ -5825,10 +5835,10 @@ fn p3_ime_space_cannot_activate_focused_write_or_confirm_button() {
         app.select_only(0);
         app.open_write_dialog(Vec::new());
         let mut h = harness(app);
-        h.run_steps(3);
+        h.run_steps(5);
         if confirm_open {
             h.get_by_label("Записать").click();
-            h.run_steps(2);
+            h.run_steps(5);
             h.get_by_label("Да").focus();
         } else {
             h.get_by_label("Записать").focus();
@@ -6102,9 +6112,9 @@ fn p3_modified_enter_in_one_raw_input_does_not_confirm_write() {
         app.select_only(0);
         app.open_write_dialog(Vec::new());
         let mut h = harness(app);
-        h.run_steps(3);
+        h.run_steps(5);
         h.get_by_label("Записать").click();
-        h.run_steps(2);
+        h.run_steps(5);
         if focus_yes {
             h.get_by_label("Да").focus();
             h.run_steps(1);
@@ -6864,4 +6874,1175 @@ fn p4_message_button_ignores_ime_keyboard_and_allows_pointer() {
     h.get_by_label("Закрыть").click();
     h.run_steps(2);
     assert!(h.state().dialogs.message.is_none());
+}
+
+#[test]
+fn keyboard_regions_edit_focused_tag_and_confirm_selected_choice() {
+    use opcda_egui::i18n::Lang;
+    for lang in [Lang::Ru, Lang::En, Lang::Zh] {
+        for accept in [false, true] {
+            let ctx = egui::Context::default();
+            let mut app = App::new_test(&ctx);
+            app.settings.set_lang(lang);
+            app.settings.view.options.confirm_write = true;
+            app.record_dispatches_for_test();
+            let keys = seed_writable_table(&mut app, &[("a", "SigA", 42), ("b", "SigB", 15)]);
+            let mut h = Harness::builder()
+                .with_size([1200.0, 900.0])
+                .with_max_steps(60)
+                .with_accessibility_check(false)
+                .allow_missing_glyphs()
+                .build_ui_state(|ui, app| opcda_egui::ui::draw(app, ui), app);
+            h.run_steps(3);
+            h.key_press(Key::Tab);
+            h.run_steps(2);
+            h.key_press(Key::Tab);
+            h.run_steps(2);
+            assert_eq!(h.state().table_focus, Some(0));
+            h.key_press(Key::ArrowDown);
+            h.run_steps(2);
+            assert_eq!(h.state().table_focus, Some(1));
+            h.key_press(Key::Enter);
+            h.run_steps(3);
+            assert!(h.state().dialogs.write.open);
+            assert_eq!(h.state().dialogs.write.keys, vec![keys[1]]);
+            h.event(egui::Event::Text("77".into()));
+            h.run_steps(2);
+            assert_eq!(
+                h.state().dialogs.write.text,
+                "77",
+                "current value must be selected"
+            );
+            h.key_press(Key::Enter);
+            h.run_steps(3);
+            assert!(h.state().dialogs.confirm.is_some());
+            assert!(
+                !h.state()
+                    .dispatched_for_test()
+                    .iter()
+                    .any(|c| matches!(c.kind, CommandKind::Write { .. }))
+            );
+            if accept {
+                h.key_press(Key::ArrowLeft);
+                h.run_steps(2);
+            }
+            h.key_press(Key::Enter);
+            h.run_steps(3);
+            assert!(h.state().dialogs.confirm.is_none());
+            let writes: Vec<_> = h
+                .state()
+                .dispatched_for_test()
+                .iter()
+                .filter_map(|c| match &c.kind {
+                    CommandKind::Write { request } => Some(request.clone()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(writes.len(), usize::from(accept));
+            if let Some(write) = writes.first() {
+                assert_eq!(write.key, keys[1]);
+                assert_eq!(write.value, Value::I64(77));
+            }
+            assert_eq!(h.state().table_focus, Some(1));
+        }
+    }
+}
+
+#[test]
+fn keyboard_write_edits_focused_tag_only_in_multi_selection() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    let keys = seed_writable_table(&mut app, &[("a", "SigA", 42), ("b", "SigB", 15)]);
+    let mut h = harness(app);
+    h.run_steps(2);
+    h.state_mut().select_only(0);
+    h.state_mut().select_extend_to(1);
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().dialogs.write.keys, vec![keys[1]]);
+}
+
+#[test]
+fn keyboard_table_scrolls_to_focused_row_after_expanded_lines() {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
+    app.seed_row(sid(1), "root", "Expandable", pump_value());
+    for i in 0..80 {
+        app.seed_writable_row(
+            sid(1),
+            &format!("tag{i}"),
+            &format!("Signal{i:02}"),
+            Value::I64(i),
+        );
+    }
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.key_press(Key::Tab);
+    h.run_steps(2);
+    h.key_press(Key::Tab);
+    h.run_steps(2);
+    h.key_press(Key::ArrowRight);
+    h.run_steps(3);
+    assert!(h.query_by_label("Speed").is_some());
+    h.key_press(Key::End);
+    h.run_steps(4);
+    assert_eq!(h.state().table_focus, Some(80));
+    assert!(
+        h.query_by_label("Signal79").is_some(),
+        "focused row should be visible after navigation"
+    );
+    h.key_press(Key::Home);
+    h.run_steps(4);
+    assert_eq!(h.state().table_focus, Some(0));
+    assert!(h.query_by_label("Expandable").is_some());
+}
+
+#[test]
+fn keyboard_confirm_movement_or_pointer_with_enter_never_accepts_old_focus() {
+    for pointer in [false, true] {
+        let mut app = App::new_test(&egui::Context::default());
+        app.record_dispatches_for_test();
+        app.settings.view.options.confirm_write = true;
+        seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+        app.select_only(0);
+        app.open_write_dialog(Vec::new());
+        let mut h = harness(app);
+        h.run_steps(3);
+        h.key_press(Key::Enter);
+        h.run_steps(3);
+        assert!(h.state().dialogs.confirm.is_some());
+        h.key_press(Key::ArrowLeft);
+        h.run_steps(3);
+        if pointer {
+            let pos = h.get_by_label("Нет").rect().center();
+            h.input_mut().events.push(egui::Event::PointerMoved(pos));
+            h.input_mut().events.push(egui::Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            });
+        } else {
+            h.input_mut().events.push(egui::Event::Key {
+                key: Key::ArrowRight,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            });
+        }
+        h.input_mut().events.push(egui::Event::Key {
+            key: Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(2);
+        assert!(
+            !h.state()
+                .dispatched_for_test()
+                .iter()
+                .any(|c| matches!(c.kind, CommandKind::Write { .. }))
+        );
+        if !pointer {
+            assert!(h.state().dialogs.confirm.is_some());
+            h.event(egui::Event::Key {
+                key: Key::Enter,
+                physical_key: None,
+                pressed: false,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            });
+            h.run_steps(1);
+            h.key_press(Key::Enter);
+            h.run_steps(3);
+            assert!(h.state().dialogs.confirm.is_none());
+            assert!(
+                !h.state()
+                    .dispatched_for_test()
+                    .iter()
+                    .any(|c| matches!(c.kind, CommandKind::Write { .. }))
+            );
+        }
+    }
+}
+
+#[test]
+fn keyboard_never_retargets_write_when_rows_are_reordered_or_removed() {
+    for remove in [false, true] {
+        let mut app = App::new_test(&egui::Context::default());
+        app.record_dispatches_for_test();
+        let keys = seed_writable_table(&mut app, &[("a", "SigA", 42), ("b", "SigB", 15)]);
+        let mut h = harness(app);
+        h.run_steps(3);
+        h.key_press(Key::Tab);
+        h.run_steps(2);
+        h.key_press(Key::Tab);
+        h.run_steps(2);
+        assert_eq!(h.state().table_focus, Some(0));
+        assert!(h.state().selected_rows.contains(&keys[0]));
+        if remove {
+            h.state_mut().rows_mut_for_test().remove(0);
+        } else {
+            h.state_mut().rows_mut_for_test().swap(0, 1);
+        }
+        h.run_steps(2);
+        if remove {
+            assert_eq!(h.state().table_focus, None);
+        } else {
+            assert_eq!(h.state().table_focus, Some(1));
+            assert!(h.state().selected_rows.contains(&keys[0]));
+        }
+        h.key_press(Key::Enter);
+        h.run_steps(3);
+        if remove {
+            assert!(!h.state().dialogs.write.open);
+        } else {
+            assert!(h.state().dialogs.write.open);
+            assert_eq!(h.state().dialogs.write.keys, vec![keys[0]]);
+        }
+        assert!(
+            !h.state()
+                .dispatched_for_test()
+                .iter()
+                .any(|c| matches!(c.kind, CommandKind::Write { .. }))
+        );
+    }
+}
+
+#[test]
+fn keyboard_move_and_enter_same_frame_never_opens_a_different_tag() {
+    let mut app = App::new_test(&egui::Context::default());
+    seed_writable_table(&mut app, &[("a", "SigA", 42), ("b", "SigB", 15)]);
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.key_press(Key::Tab);
+    h.run_steps(2);
+    h.key_press(Key::Tab);
+    h.run_steps(2);
+    for key in [Key::ArrowDown, Key::Enter] {
+        h.input_mut().events.push(egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
+    }
+    h.run_steps(2);
+    assert_eq!(h.state().table_focus, Some(1));
+    assert!(!h.state().dialogs.write.open);
+}
+
+#[test]
+fn keyboard_modified_write_key_does_not_open_dialog() {
+    let mut app = App::new_test(&egui::Context::default());
+    seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.key_press(Key::Tab);
+    h.run_steps(2);
+    h.key_press(Key::Tab);
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::SHIFT, Key::Enter);
+    h.run_steps(2);
+    assert!(!h.state().dialogs.write.open);
+}
+
+#[test]
+fn keyboard_write_and_confirmation_block_background_delete_click() {
+    for confirm in [false, true] {
+        let mut app = App::new_test(&egui::Context::default());
+        app.settings.view.options.confirm_write = true;
+        seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+        let mut h = harness(app);
+        h.run_steps(3);
+        h.state_mut().select_only(0);
+        h.run_steps(2);
+        h.get_by_label("Сигналы").click();
+        h.run_steps(2);
+        let delete_pos = h.get_by_label("Удалить выбранные").rect().center();
+        h.state_mut().open_write_dialog(Vec::new());
+        if confirm {
+            h.state_mut().apply_write();
+        }
+        h.run_steps(3);
+        pointer_click(&h, delete_pos, PointerButton::Primary);
+        h.run_steps(3);
+        assert_eq!(h.state().rows().len(), 1);
+        assert!(h.state().dialogs.write.open);
+        if confirm {
+            assert!(h.state().dialogs.confirm.is_some());
+        }
+    }
+}
+
+#[test]
+fn keyboard_message_preempts_write_and_confirm_without_leaking_keys() {
+    use opcda_egui::app::MessageDialog;
+    for confirm in [false, true] {
+        let mut app = App::new_test(&egui::Context::default());
+        app.record_dispatches_for_test();
+        app.settings.view.options.confirm_write = true;
+        seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+        app.select_only(0);
+        app.open_write_dialog(Vec::new());
+        if confirm {
+            app.apply_write();
+        }
+        let mut h = harness(app);
+        h.run_steps(5);
+        h.state_mut().dialogs.message = Some(MessageDialog {
+            title: "Server notification".into(),
+            text: "Notice".into(),
+            details: String::new(),
+        });
+        h.run_steps(5);
+        assert!(h.query_by_label("Notice").is_some());
+        h.key_press(if confirm { Key::Escape } else { Key::Enter });
+        h.run_steps(5);
+        assert!(
+            !h.state()
+                .dispatched_for_test()
+                .iter()
+                .any(|c| matches!(c.kind, CommandKind::Write { .. }))
+        );
+        assert!(h.state().dialogs.write.open);
+        if confirm {
+            assert!(h.state().dialogs.message.is_none());
+            assert!(h.state().dialogs.confirm.is_some());
+            h.key_press(Key::Enter);
+            h.run_steps(5);
+            assert!(
+                h.state().dialogs.confirm.is_none(),
+                "resumed confirmation defaults to No"
+            );
+            assert!(
+                !h.state()
+                    .dispatched_for_test()
+                    .iter()
+                    .any(|c| matches!(c.kind, CommandKind::Write { .. }))
+            );
+        } else {
+            assert!(h.state().dialogs.message.is_some());
+        }
+    }
+}
+
+#[test]
+fn keyboard_new_message_ignores_prior_region_escape() {
+    use opcda_egui::app::MessageDialog;
+    let mut app = App::new_test(&egui::Context::default());
+    app.record_dispatches_for_test();
+    seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+    app.select_only(0);
+    app.open_write_dialog(Vec::new());
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.state_mut().dialogs.message = Some(MessageDialog {
+        title: "Notice".into(),
+        text: "Server warning".into(),
+        details: String::new(),
+    });
+    h.input_mut().events.push(egui::Event::Key {
+        key: Key::Escape,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(3);
+    assert!(h.state().dialogs.message.is_some());
+    assert!(h.state().dialogs.write.open);
+    h.event(egui::Event::Key {
+        key: Key::Escape,
+        physical_key: None,
+        pressed: false,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(1);
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialogs.message.is_none());
+    assert!(h.state().dialogs.write.open);
+    assert!(
+        !h.state()
+            .dispatched_for_test()
+            .iter()
+            .any(|c| matches!(c.kind, CommandKind::Write { .. }))
+    );
+}
+
+#[test]
+fn keyboard_other_dialog_regions_block_background_delete_pointer() {
+    for region in ["connect", "options", "import"] {
+        let mut app = App::new_test(&egui::Context::default());
+        seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+        let mut h = harness(app);
+        h.run_steps(3);
+        h.state_mut().select_only(0);
+        h.run_steps(2);
+        h.get_by_label("Сигналы").click();
+        h.run_steps(2);
+        let delete_pos = h.get_by_label("Удалить выбранные").rect().center();
+        match region {
+            "connect" => h.state_mut().open_connect_dialog(),
+            "options" => h.state_mut().open_options_dialog(),
+            _ => opcda_egui::ui::start_csv_import(
+                h.state_mut(),
+                "server;item_id;name\nSrv.Test;a;SigA\n".into(),
+            ),
+        }
+        h.run_steps(5);
+        pointer_click(&h, delete_pos, PointerButton::Primary);
+        h.run_steps(3);
+        assert_eq!(h.state().rows().len(), 1, "background click in {region}");
+    }
+}
+
+#[test]
+fn keyboard_message_pauses_import_and_it_resumes_after_dismissal() {
+    use opcda_egui::app::MessageDialog;
+    let mut app = App::new_test(&egui::Context::default());
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
+    let mut csv = String::from("server;item_id;name\n");
+    for i in 0..20_000 {
+        csv.push_str(&format!("Srv.Test;Tag{i};Name{i}\n"));
+    }
+    opcda_egui::ui::start_csv_import(&mut app, csv);
+    let mut h = harness(app);
+    h.run_steps(4);
+    let before = h.state().csv_import.as_ref().unwrap().processed;
+    assert!(before > 0 && before < 20_000);
+    h.state_mut().dialogs.message = Some(MessageDialog {
+        title: "Notice".into(),
+        text: "Server warning".into(),
+        details: String::new(),
+    });
+    h.run_steps(4);
+    assert_eq!(h.state().csv_import.as_ref().unwrap().processed, before);
+    h.key_press(Key::Escape);
+    h.run_steps(5);
+    assert!(h.state().dialogs.message.is_none());
+    assert!(h.state().csv_import.as_ref().unwrap().processed > before);
+}
+
+#[test]
+fn keyboard_server_region_arrows_select_and_enter_activates_server() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.seed_session(sid(1), EndpointSpec::da("", "First"));
+    app.seed_session(sid(2), EndpointSpec::da("", "Second"));
+    app.activate_container(sid(1));
+    let mut h = harness(app);
+    h.run_steps(3);
+    for _ in 0..3 {
+        h.key_press(Key::Tab);
+        h.run_steps(2);
+    }
+    assert_eq!(h.state().active_session, Some(sid(1)));
+    h.key_press(Key::ArrowDown);
+    h.run_steps(2);
+    assert_eq!(
+        h.state().active_session,
+        Some(sid(1)),
+        "moving the cursor must not activate server"
+    );
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().active_session, Some(sid(2)));
+}
+
+#[test]
+fn keyboard_all_regions_are_reachable_when_views_are_empty() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.settings.view.options.show_log = false;
+    app.settings.view.options.show_script = false;
+    let mut h = harness(app);
+    h.run_steps(3);
+    // Header -> empty tags -> empty servers -> status -> Header.
+    h.key_press(Key::Tab);
+    h.run_steps(2);
+    assert!(
+        h.get_by_label("Тема оформления")
+            .accesskit_node()
+            .is_focused()
+    );
+    h.key_press(Key::Tab);
+    h.run_steps(2);
+    assert!(
+        h.get_all_by_label("Сигналы")
+            .any(|node| node.accesskit_node().is_focused())
+    );
+    h.key_press(Key::Tab);
+    h.run_steps(2);
+    assert!(
+        h.get_all_by_label("Серверы")
+            .any(|node| node.accesskit_node().is_focused())
+    );
+    h.key_press(Key::Tab);
+    h.run_steps(2);
+    assert!(
+        h.get_all_by_label("нет активного сервера")
+            .any(|node| node.accesskit_node().is_focused())
+    );
+    h.key_press(Key::Tab);
+    h.run_steps(2);
+    assert!(
+        h.get_by_label("Тема оформления")
+            .accesskit_node()
+            .is_focused()
+    );
+    h.key_press_modifiers(Modifiers::SHIFT, Key::Tab);
+    h.run_steps(2);
+    assert!(
+        h.get_all_by_label("нет активного сервера")
+            .any(|node| node.accesskit_node().is_focused())
+    );
+}
+
+#[test]
+fn keyboard_tree_subfocus_returns_after_write_cancel() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
+    let id = app.seed_tree_item(
+        sid(1),
+        None,
+        0,
+        BrowseNode {
+            node_id: "a".into(),
+            name: "SigA".into(),
+            kind: NodeKind::Item,
+            has_children: false,
+        },
+    );
+    app.seed_writable_row(sid(1), "a", "SigA", Value::I64(7));
+    let mut h = harness(app);
+    h.run_steps(3);
+    for _ in 0..3 {
+        h.key_press(Key::Tab);
+        h.run_steps(2);
+    }
+    h.key_press(Key::ArrowRight);
+    h.run_steps(2);
+    assert_eq!(h.state().tree_focus, Some((sid(1), id)));
+    assert!(h.state().tree_focused);
+    h.key_press(Key::Enter);
+    h.run_steps(4);
+    assert!(h.state().dialogs.write.open);
+    h.key_press(Key::Escape);
+    h.run_steps(5);
+    assert!(!h.state().dialogs.write.open);
+    assert!(
+        h.state().tree_focused,
+        "tree subfocus restored after dialog"
+    );
+    h.key_press(Key::Enter);
+    h.run_steps(4);
+    assert!(h.state().dialogs.write.open);
+}
+
+#[test]
+fn keyboard_f5_empty_tree_only_browses_in_servers_region() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
+    app.record_dispatches_for_test();
+    let mut h = harness(app);
+    h.run_steps(4);
+    let count = |app: &App| {
+        app.dispatched_for_test()
+            .iter()
+            .filter(|c| matches!(c.kind, CommandKind::Browse { .. }))
+            .count()
+    };
+    h.key_press(Key::Tab);
+    h.run_steps(2); // header
+    h.key_press(Key::F5);
+    h.run_steps(2);
+    assert_eq!(count(h.state()), 0);
+    h.key_press(Key::Tab);
+    h.run_steps(2); // empty tags
+    h.key_press(Key::F5);
+    h.run_steps(2);
+    assert_eq!(count(h.state()), 0);
+    h.key_press(Key::Tab);
+    h.run_steps(2); // servers
+    h.key_press(Key::F5);
+    h.run_steps(3);
+    assert_eq!(count(h.state()), 1);
+}
+
+#[test]
+fn keyboard_server_click_resets_tree_subfocus_and_cursor() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.seed_session(sid(1), EndpointSpec::da("", "First"));
+    app.seed_session(sid(2), EndpointSpec::da("", "Second"));
+    app.activate_container(sid(1));
+    app.seed_tree_item(
+        sid(1),
+        None,
+        0,
+        BrowseNode {
+            node_id: "a".into(),
+            name: "Leaf".into(),
+            kind: NodeKind::Item,
+            has_children: false,
+        },
+    );
+    let mut h = harness(app);
+    h.run_steps(3);
+    for _ in 0..3 {
+        h.key_press(Key::Tab);
+        h.run_steps(2);
+    }
+    h.key_press(Key::ArrowRight);
+    h.run_steps(3);
+    assert!(h.state().tree_focused);
+    let row = h
+        .get_all_by_label("Second")
+        .find(|node| node.rect().center().x < 350.0)
+        .expect("server list row");
+    row.click();
+    h.run_steps(4);
+    assert_eq!(h.state().active_session, Some(sid(2)));
+    assert!(!h.state().tree_focused);
+    h.key_press(Key::ArrowUp);
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().active_session, Some(sid(1)));
+}
+
+#[test]
+fn keyboard_theme_popup_never_saves_or_closes_open_options() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.open_options_dialog();
+    app.dialogs.options.draft.update_interval_secs = 17;
+    let mut h = harness(app);
+    h.run_steps(4);
+    h.get_all_by_label("Тема оформления")
+        .min_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+        .unwrap()
+        .click();
+    h.run_steps(4);
+    assert!(h.query_all_by_label("Светлая").count() > 0);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().dialogs.options.open);
+    assert_eq!(h.state().dialogs.options.draft.update_interval_secs, 17);
+    assert_ne!(h.state().settings.view.options.update_interval_secs, 17);
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialogs.options.open, "Escape closes popup only");
+}
+
+#[test]
+fn keyboard_theme_popup_with_options_accepts_choice_without_leaking_keys() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.settings.view.options.theme = opcda_egui::settings::Theme::Dark;
+    app.open_options_dialog();
+    app.dialogs.options.draft.update_interval_secs = 17;
+    let mut h = harness(app);
+    h.run_steps(4);
+    h.get_all_by_label("Тема оформления")
+        .min_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+        .unwrap()
+        .click();
+    h.run_steps(4);
+    h.key_press(Key::ArrowDown);
+    h.run_steps(2);
+    h.key_press(Key::ArrowDown);
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(4);
+    assert_eq!(
+        h.state().settings.view.options.theme,
+        opcda_egui::settings::Theme::Light
+    );
+    assert_eq!(
+        h.state().dialogs.options.draft.theme,
+        opcda_egui::settings::Theme::Light
+    );
+    assert!(h.state().dialogs.options.open);
+    assert_ne!(h.state().settings.view.options.update_interval_secs, 17);
+}
+
+#[test]
+fn keyboard_theme_popup_ime_escape_does_not_close_popup_or_options() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.open_options_dialog();
+    let mut h = harness(app);
+    h.run_steps(4);
+    h.get_all_by_label("Тема оформления")
+        .min_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+        .unwrap()
+        .click();
+    h.run_steps(4);
+    h.input_mut().events.extend([
+        egui::Event::Ime(egui::ImeEvent::Preedit {
+            text: "a".into(),
+            active_range_chars: None,
+        }),
+        egui::Event::Key {
+            key: Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        },
+    ]);
+    h.run_steps(3);
+    assert!(h.state().dialogs.options.open);
+    assert!(
+        h.query_all_by_label("Светлая").count() >= 2,
+        "theme popup remains open during composition"
+    );
+}
+
+#[test]
+fn keyboard_theme_popup_ignores_modified_and_repeated_enter_but_allows_click() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.settings.view.options.theme = opcda_egui::settings::Theme::Dark;
+    app.open_options_dialog();
+    let mut h = harness(app);
+    h.run_steps(4);
+    h.get_all_by_label("Тема оформления")
+        .min_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+        .unwrap()
+        .click();
+    h.run_steps(4);
+    h.get_all_by_label("Светлая")
+        .min_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+        .unwrap()
+        .focus();
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::SHIFT, Key::Enter);
+    h.run_steps(2);
+    assert_eq!(
+        h.state().settings.view.options.theme,
+        opcda_egui::settings::Theme::Dark
+    );
+    // Hold an explicitly rejected modified Enter before the OS repeats it.
+    h.input_mut().events.push(egui::Event::Key {
+        key: Key::Enter,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::SHIFT,
+    });
+    h.run_steps(1);
+    h.input_mut().events.push(egui::Event::Key {
+        key: Key::Enter,
+        physical_key: None,
+        pressed: true,
+        repeat: true,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(2);
+    assert_eq!(
+        h.state().settings.view.options.theme,
+        opcda_egui::settings::Theme::Dark
+    );
+    assert!(h.state().dialogs.options.open);
+    h.get_all_by_label("Светлая")
+        .min_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+        .unwrap()
+        .click();
+    h.run_steps(4);
+    assert_eq!(
+        h.state().settings.view.options.theme,
+        opcda_egui::settings::Theme::Light
+    );
+    assert_eq!(
+        h.state().dialogs.options.draft.theme,
+        opcda_egui::settings::Theme::Light
+    );
+}
+
+#[test]
+fn keyboard_multiselection_cursor_anchor_and_space_are_independent() {
+    let mut app = App::new_test(&egui::Context::default());
+    let keys = seed_writable_table(
+        &mut app,
+        &[
+            ("a", "SigA", 1),
+            ("b", "SigB", 2),
+            ("c", "SigC", 3),
+            ("d", "SigD", 4),
+        ],
+    );
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.key_press(Key::Tab);
+    h.run_steps(2);
+    h.key_press(Key::Tab);
+    h.run_steps(2);
+    assert_eq!(h.state().selected_rows, [keys[0]].into_iter().collect());
+    h.key_press_modifiers(Modifiers::CTRL, Key::ArrowDown);
+    h.run_steps(2);
+    assert_eq!(h.state().table_focus, Some(1));
+    assert_eq!(h.state().selected_rows, [keys[0]].into_iter().collect());
+    h.key_press_modifiers(Modifiers::CTRL, Key::Space);
+    h.run_steps(2);
+    assert_eq!(
+        h.state().selected_rows,
+        [keys[0], keys[1]].into_iter().collect()
+    );
+    h.key_press_modifiers(Modifiers::CTRL, Key::ArrowDown);
+    h.run_steps(2);
+    assert_eq!(h.state().table_focus, Some(2));
+    assert_eq!(
+        h.state().selected_rows,
+        [keys[0], keys[1]].into_iter().collect()
+    );
+    h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowDown);
+    h.run_steps(2);
+    assert_eq!(
+        h.state().selected_rows,
+        [keys[1], keys[2], keys[3]].into_iter().collect()
+    );
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(2);
+    assert_eq!(h.state().selected_rows.len(), 4);
+    h.key_press(Key::Enter);
+    h.run_steps(4);
+    assert_eq!(
+        h.state().dialogs.write.keys,
+        vec![keys[3]],
+        "Enter must edit only focused tag"
+    );
+}
+
+#[test]
+fn keyboard_anchor_follows_identity_when_rows_reorder() {
+    let mut app = App::new_test(&egui::Context::default());
+    let keys = seed_writable_table(
+        &mut app,
+        &[("a", "SigA", 1), ("b", "SigB", 2), ("c", "SigC", 3)],
+    );
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.state_mut().select_only(0);
+    h.state_mut().focus_row_only(1);
+    h.run_steps(2);
+    h.state_mut().rows_mut_for_test().swap(0, 2);
+    h.run_steps(2);
+    assert_eq!(h.state().table_focus, Some(1));
+    assert_eq!(h.state().table_anchor, Some(2));
+    h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowUp);
+    h.run_steps(2);
+    assert_eq!(
+        h.state().selected_rows,
+        [keys[0], keys[1], keys[2]].into_iter().collect()
+    );
+}
+
+#[test]
+fn keyboard_tree_modified_enter_and_movement_enter_never_open_wrong_tag() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.record_dispatches_for_test();
+    app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
+    for (id, name) in [("a", "A"), ("b", "B")] {
+        app.seed_tree_item(
+            sid(1),
+            None,
+            0,
+            BrowseNode {
+                node_id: id.into(),
+                name: name.into(),
+                kind: NodeKind::Item,
+                has_children: false,
+            },
+        );
+        app.seed_writable_row(sid(1), id, name, Value::I64(1));
+    }
+    let mut h = harness(app);
+    h.run_steps(3);
+    for _ in 0..3 {
+        h.key_press(Key::Tab);
+        h.run_steps(2);
+    }
+    h.key_press(Key::ArrowRight);
+    h.run_steps(2);
+    assert!(h.state().tree_focused);
+    h.key_press_modifiers(Modifiers::CTRL, Key::Enter);
+    h.run_steps(2);
+    assert!(!h.state().dialogs.write.open);
+    for key in [Key::ArrowDown, Key::Enter] {
+        h.input_mut().events.push(egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
+    }
+    h.run_steps(3);
+    assert!(!h.state().dialogs.write.open);
+    assert!(
+        !h.state()
+            .dispatched_for_test()
+            .iter()
+            .any(|c| matches!(c.kind, CommandKind::Write { .. }))
+    );
+}
+
+#[test]
+fn keyboard_mouse_control_and_shift_extend_selected_rows() {
+    let mut app = App::new_test(&egui::Context::default());
+    let keys = seed_writable_table(
+        &mut app,
+        &[
+            ("a", "SigA", 1),
+            ("b", "SigB", 2),
+            ("c", "SigC", 3),
+            ("d", "SigD", 4),
+        ],
+    );
+    let mut h = harness(app);
+    h.run_steps(3);
+    pointer_click(&h, row_cell_pos(&h, "SigA"), PointerButton::Primary);
+    h.run_steps(3);
+    for (name, modifiers) in [("SigC", Modifiers::CTRL), ("SigD", Modifiers::SHIFT)] {
+        let pos = row_cell_pos(&h, name);
+        h.event(egui::Event::ModifiersChanged(modifiers));
+        h.event(egui::Event::PointerMoved(pos));
+        h.event(egui::Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed: true,
+            modifiers,
+        });
+        h.event(egui::Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers,
+        });
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(5);
+        if name == "SigC" {
+            assert_eq!(
+                h.state().selected_rows,
+                [keys[0], keys[2]].into_iter().collect()
+            );
+        }
+    }
+    assert_eq!(
+        h.state().selected_rows,
+        [keys[2], keys[3]].into_iter().collect()
+    );
+}
+
+#[test]
+fn keyboard_context_write_targets_single_tag_while_batch_menu_remains_explicit() {
+    let mut app = App::new_test(&egui::Context::default());
+    let keys = seed_writable_table(&mut app, &[("a", "SigA", 1), ("b", "SigB", 2)]);
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.state_mut().select_only(0);
+    h.state_mut().select_extend_to(1);
+    h.run_steps(2);
+    right_click_row(&h, "SigB");
+    click_menu_item(&mut h, "Изменить значение...");
+    h.run_steps(4);
+    assert_eq!(h.state().dialogs.write.keys, vec![keys[1]]);
+    h.key_press(Key::Escape);
+    h.run_steps(4);
+    assert!(!h.state().dialogs.write.open);
+    h.get_by_label("Сигналы").click();
+    h.run_steps(3);
+    h.get_by_label("Изменить выбранные значения...").click();
+    h.run_steps(4);
+    assert_eq!(
+        h.state().dialogs.write.keys.len(),
+        2,
+        "main menu explicitly acts on selection"
+    );
+    assert!(
+        h.query_by_label("Количество выбранных сигналов: 2")
+            .is_some()
+    );
+}
+
+#[test]
+fn keyboard_double_click_edits_one_tag_after_multiple_selection() {
+    let mut app = App::new_test(&egui::Context::default());
+    let keys = seed_writable_table(&mut app, &[("a", "SigA", 1), ("b", "SigB", 2)]);
+    set_ru(&mut app);
+    let mut h = Harness::builder()
+        .with_size([1200.0, 900.0])
+        .with_step_dt(1.0 / 60.0)
+        .with_max_steps(60)
+        .with_accessibility_check(false)
+        .allow_missing_glyphs()
+        .build_ui_state(|ui, app| opcda_egui::ui::draw(app, ui), app);
+    h.run_steps(3);
+    h.state_mut().select_only(0);
+    h.state_mut().select_extend_to(1);
+    h.run_steps(2);
+    let pos = row_cell_pos(&h, "SigB");
+    pointer_click(&h, pos, PointerButton::Primary);
+    h.run_steps(2);
+    pointer_click(&h, pos, PointerButton::Primary);
+    h.run_steps(4);
+    assert!(h.state().dialogs.write.open);
+    assert_eq!(h.state().dialogs.write.keys, vec![keys[1]]);
+}
+
+#[test]
+fn keyboard_control_shift_range_contracts_against_original_selection() {
+    let mut app = App::new_test(&egui::Context::default());
+    let keys = seed_writable_table(
+        &mut app,
+        &[
+            ("a", "SigA", 1),
+            ("b", "SigB", 2),
+            ("c", "SigC", 3),
+            ("d", "SigD", 4),
+            ("e", "SigE", 5),
+        ],
+    );
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.state_mut().select_only(0);
+    h.state_mut().select_toggle(2);
+    h.run_steps(2);
+    let mods = Modifiers::CTRL | Modifiers::SHIFT;
+    h.event(egui::Event::ModifiersChanged(mods));
+    h.run_steps(1);
+    for key in [Key::ArrowDown, Key::ArrowDown, Key::ArrowUp] {
+        h.event(egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: mods,
+        });
+        h.event(egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers: mods,
+        });
+        h.run_steps(2);
+    }
+    assert_eq!(
+        h.state().selected_rows,
+        [keys[0], keys[2], keys[3]].into_iter().collect()
+    );
+}
+
+#[test]
+fn keyboard_delete_with_selection_change_in_same_frame_never_removes_rows() {
+    let mut app = App::new_test(&egui::Context::default());
+    seed_writable_table(&mut app, &[("a", "SigA", 1), ("b", "SigB", 2)]);
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.state_mut().select_only(0);
+    h.run_steps(2);
+    h.input_mut().events.extend([
+        egui::Event::Key {
+            key: Key::Delete,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        },
+        egui::Event::Key {
+            key: Key::Space,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::CTRL,
+        },
+    ]);
+    h.run_steps(3);
+    assert_eq!(h.state().rows().len(), 2);
+}
+
+#[test]
+fn keyboard_select_all_menu_only_selects_active_session_rows() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.seed_session(sid(1), EndpointSpec::da("", "First"));
+    let first = app.seed_writable_row(sid(1), "a", "SigA", Value::I64(1));
+    app.seed_session(sid(2), EndpointSpec::da("", "Second"));
+    let second = app.seed_writable_row(sid(2), "b", "SigB", Value::I64(2));
+    app.activate_container(sid(1));
+    let mut h = harness(app);
+    h.run_steps(4);
+    h.get_by_label("Сигналы").click();
+    h.run_steps(3);
+    h.get_by_label("Выделить все").click();
+    h.run_steps(3);
+    assert_eq!(h.state().selected_rows, [first].into_iter().collect());
+    assert!(!h.state().selected_rows.contains(&second));
+}
+
+#[test]
+fn keyboard_clearing_selection_discards_additive_gesture_snapshot() {
+    let mut app = App::new_test(&egui::Context::default());
+    let keys = seed_writable_table(
+        &mut app,
+        &[
+            ("a", "A", 1),
+            ("b", "B", 2),
+            ("c", "C", 3),
+            ("d", "D", 4),
+            ("e", "E", 5),
+        ],
+    );
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.state_mut().select_only(0);
+    h.state_mut().select_toggle(2);
+    h.run_steps(2);
+    let mods = Modifiers::CTRL | Modifiers::SHIFT;
+    h.event(egui::Event::ModifiersChanged(mods));
+    h.run_steps(1);
+    h.event(egui::Event::Key {
+        key: Key::ArrowDown,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: mods,
+    });
+    h.event(egui::Event::Key {
+        key: Key::ArrowDown,
+        physical_key: None,
+        pressed: false,
+        repeat: false,
+        modifiers: mods,
+    });
+    h.run_steps(2);
+    assert!(h.state().selected_rows.contains(&keys[0]));
+    h.state_mut().clear_selection();
+    h.run_steps(1);
+    h.event(egui::Event::Key {
+        key: Key::ArrowDown,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: mods,
+    });
+    h.event(egui::Event::Key {
+        key: Key::ArrowDown,
+        physical_key: None,
+        pressed: false,
+        repeat: false,
+        modifiers: mods,
+    });
+    h.run_steps(2);
+    assert!(
+        !h.state().selected_rows.contains(&keys[0]),
+        "old snapshot must not restore cleared rows"
+    );
+    assert_eq!(
+        h.state().selected_rows,
+        [keys[2], keys[3], keys[4]].into_iter().collect()
+    );
 }

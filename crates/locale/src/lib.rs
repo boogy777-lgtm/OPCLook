@@ -168,6 +168,7 @@ translation_keys! {
     AddByName,
     RemoveSelected,
     ChangeValue,
+    ChangeSelectedValues,
     SelectAll,
     ClearSelection,
     ColumnsEllipsis,
@@ -432,6 +433,7 @@ translation_keys! {
     // ---- Write dialog ----
     ChangeSignalValue,
     SignalLabel,
+    WriteTargetCount,
     CurrentValue,
     ServerTypeLabel,
     ReadOnly,
@@ -912,6 +914,7 @@ fn ru(key: Tr) -> &'static str {
         AddByName => "Добавить по имени...",
         RemoveSelected => "Удалить выбранные",
         ChangeValue => "Изменить значение...",
+        ChangeSelectedValues => "Изменить выбранные значения...",
         SelectAll => "Выделить все",
         ClearSelection => "Снять выделение",
         ColumnsEllipsis => "Столбцы...",
@@ -1152,6 +1155,7 @@ fn ru(key: Tr) -> &'static str {
         // ---- Write dialog ----
         ChangeSignalValue => "Изменить значение сигнала",
         SignalLabel => "Сигнал: {0}",
+        WriteTargetCount => "Количество выбранных сигналов: {0}",
         CurrentValue => "Текущее значение: {0}",
         ServerTypeLabel => "Тип сервера: {0}",
         ReadOnly => "Сигнал только для чтения (запись недоступна)",
@@ -1558,6 +1562,7 @@ fn en(key: Tr) -> &'static str {
         AddByName => "Add by name...",
         RemoveSelected => "Remove selected",
         ChangeValue => "Change value...",
+        ChangeSelectedValues => "Change selected values...",
         SelectAll => "Select all",
         ClearSelection => "Clear selection",
         ColumnsEllipsis => "Columns...",
@@ -1798,6 +1803,7 @@ fn en(key: Tr) -> &'static str {
         // ---- Write dialog ----
         ChangeSignalValue => "Change signal value",
         SignalLabel => "Signal: {0}",
+        WriteTargetCount => "Number of selected signals: {0}",
         CurrentValue => "Current value: {0}",
         ServerTypeLabel => "Server type: {0}",
         ReadOnly => "Signal is read-only (writing is unavailable)",
@@ -2186,6 +2192,7 @@ fn zh(key: Tr) -> &'static str {
         AddByName => "按名称添加...",
         RemoveSelected => "删除所选",
         ChangeValue => "更改值...",
+        ChangeSelectedValues => "更改所选值...",
         SelectAll => "全选",
         ClearSelection => "清除选择",
         ColumnsEllipsis => "列...",
@@ -2418,6 +2425,7 @@ fn zh(key: Tr) -> &'static str {
         // ---- Write dialog ----
         ChangeSignalValue => "更改信号值",
         SignalLabel => "信号: {0}",
+        WriteTargetCount => "所选信号数: {0}",
         CurrentValue => "当前值: {0}",
         ServerTypeLabel => "服务器类型: {0}",
         ReadOnly => "信号为只读 (无法写入)",

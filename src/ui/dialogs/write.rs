@@ -48,12 +48,10 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
     let confirm_open = app.dialogs.confirm.is_some();
     {
         let dialog = &mut app.dialogs.write;
-        egui::Window::new(tr(lang, Tr::ChangeSignalValue))
-            .collapsible(false)
-            .resizable(false)
-            .default_width(440.0)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        egui::Modal::new(egui::Id::unique("write_dialog"))
             .show(&ctx, |ui| {
+                ui.set_width((ctx.content_rect().width() - 40.0).clamp(120.0, 440.0));
+                ui.heading(tr(lang, Tr::ChangeSignalValue));
                 dialog_spacing(ui);
                 let enter = crate::ui::key_pressed_once(ui.ctx(), egui::Key::Enter)
                     && ui.input(|input| input.events.iter().any(|event| matches!(event,
@@ -66,6 +64,9 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
                     && ui.input(|i| i.key_pressed(egui::Key::Escape));
                 let opening_frame = dialog.focus_pending;
                 ui.label(fmt(lang, Tr::SignalLabel, &[&name]));
+                if dialog.keys.len() > 1 {
+                    ui.label(fmt(lang, Tr::WriteTargetCount, &[&dialog.keys.len()]));
+                }
                 ui.label(fmt(lang, Tr::CurrentValue, &[&current]));
                 ui.label(fmt(lang, Tr::ServerTypeLabel, &[&protocol.to_string()]));
                 if !writable {
@@ -123,7 +124,7 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
                         || (value_out.response.response.lost_focus()
                             && ui.memory(|memory| memory.focused().is_none())))
                     && !ui.input(|input| input.events.iter().any(|event| matches!(event,
-                        egui::Event::PointerButton { pressed: true, .. }
+                        egui::Event::PointerButton { .. }
                     )))
                     && writable && unavailable.is_none() && !opening_frame && !confirm_open {
                     submit = true;

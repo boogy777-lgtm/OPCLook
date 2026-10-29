@@ -15,7 +15,7 @@ pub(super) enum TreeAction {
 pub(super) enum TableAction {
     SelectSingle(usize),
     SelectToggle(usize),
-    SelectExtend(usize),
+    SelectExtend(usize, bool),
     Write(ItemKey),
     Remove(ItemKey),
     CopyValue(ItemKey),

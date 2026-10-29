@@ -9,6 +9,7 @@ mod menu;
 mod navigation;
 mod paint;
 mod panels;
+mod regions;
 mod servers;
 mod shortcuts;
 mod status;
@@ -61,14 +62,79 @@ pub fn draw(app: &mut crate::app::App, ui: &mut egui::Ui) {
             })
         });
     }
+    let modal_active = app.dialogs.any_open() || app.csv_import.is_some();
+    let modal_previous_id = egui::Id::unique("opclook_modal_background_guard");
+    let modal_was_active = ui
+        .ctx()
+        .data(|data| data.get_temp::<bool>(modal_previous_id).unwrap_or(false));
+    if modal_active && !modal_was_active {
+        egui::Popup::close_all(ui.ctx());
+    } else if !modal_active && modal_was_active {
+        // Do not leave focus on a widget that disappeared with a dialog.
+        if let Some(id) = ui.ctx().memory(|memory| memory.focused()) {
+            ui.ctx().memory_mut(|memory| memory.surrender_focus(id));
+        }
+        if let Some(region @ (regions::Region::Header | regions::Region::Footer)) =
+            regions::current(ui.ctx())
+        {
+            regions::activate(ui.ctx(), region);
+        }
+    }
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(modal_previous_id, modal_active));
+    let options_theme_popup = menu::options_theme_only(app) && menu::theme_popup_open(ui.ctx());
+    let pointer_press = ui.input(|input| {
+        input
+            .events
+            .iter()
+            .any(|event| matches!(event, egui::Event::PointerButton { pressed: true, .. }))
+    });
+    if menu::options_theme_only(app) && (ime_blocks_keys(ui.ctx()) || pointer_press) {
+        // A candidate key or an event combined with a pointer press must not
+        // activate a newly-opened popup.
+        ui.ctx().input_mut(|input| {
+            input
+                .events
+                .retain(|event| !matches!(event, egui::Event::Key { .. }))
+        });
+    }
     shortcuts::keyboard_prepass(app, ui);
-    menu::menu(app, ui);
-    status::status_bar(app, ui);
-    panels::bottom_panels(app, ui);
-    navigation::navigation(app, ui);
-    table::table_panel(app, ui);
-    shortcuts::handle_shortcuts(app, ui);
-    status::status_popup(app, ui);
+    ui.scope(|ui| {
+        if modal_active && !menu::options_theme_only(app) {
+            ui.disable();
+        }
+        menu::menu(app, ui);
+    });
+    if options_theme_popup || (menu::options_theme_only(app) && menu::theme_popup_open(ui.ctx())) {
+        // Popup handles the event first; the underlying Options must not see
+        // that same key even if the popup closed during its handling.
+        ui.ctx().input_mut(|input| {
+            input.events.retain(|event| {
+                !matches!(
+                    event,
+                    egui::Event::Key { .. }
+                        | egui::Event::Text(_)
+                        | egui::Event::Ime(_)
+                        | egui::Event::Copy
+                        | egui::Event::Cut
+                        | egui::Event::Paste(_)
+                )
+            })
+        });
+    }
+    ui.scope(|ui| {
+        // Every dialog owns pointer interaction as well as keyboard input.
+        // The normal panels remain visible but cannot activate behind it.
+        if app.dialogs.any_open() || app.csv_import.is_some() {
+            ui.disable();
+        }
+        status::status_bar(app, ui);
+        panels::bottom_panels(app, ui);
+        navigation::navigation(app, ui);
+        table::table_panel(app, ui);
+        shortcuts::handle_shortcuts(app, ui);
+        status::status_popup(app, ui);
+    });
     dialogs::dialogs(app, ui);
     if !palette_was_open {
         dialogs::palette(app, ui);

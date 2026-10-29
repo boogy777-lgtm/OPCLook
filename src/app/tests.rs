@@ -2367,6 +2367,7 @@ fn old_disconnect_preserves_new_connection_write_confirmation() {
     app.dialogs.confirm = Some(ConfirmRequest {
         title: String::new(),
         text: String::new(),
+        focus_pending: true,
         action: ConfirmAction::Write(PendingWrites {
             session,
             protocol: Protocol::OpcUa,

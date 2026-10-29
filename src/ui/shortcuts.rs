@@ -55,7 +55,9 @@ pub(super) fn connect_shortcut_text(ctx: &egui::Context) -> String {
 /// A focused text field or an open dialog keeps every key.
 pub(super) fn keyboard_prepass(app: &mut App, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
-    if ctx.text_edit_focused()
+    let owner = super::regions::current(&ctx);
+    let editing_footer = ctx.text_edit_focused() && owner == Some(super::regions::Region::Footer);
+    if (ctx.text_edit_focused() && !editing_footer)
         || app.dialogs.any_open()
         || app.csv_import.is_some()
         || super::ime_blocks_keys(&ctx)
@@ -68,7 +70,7 @@ pub(super) fn keyboard_prepass(app: &mut App, ui: &mut egui::Ui) {
         input
             .events
             .iter()
-            .any(|event| matches!(event, egui::Event::PointerButton { pressed: true, .. }))
+            .any(|event| matches!(event, egui::Event::PointerButton { .. }))
     }) {
         return;
     }
@@ -79,57 +81,66 @@ pub(super) fn keyboard_prepass(app: &mut App, ui: &mut egui::Ui) {
 
     let shortcut = action_shortcut(crate::app::actions::UiAction::OpenConnectDialog.id());
     let is_mac = ctx.os().is_mac();
-    let hit = shortcut.is_some_and(|shortcut| {
-        ctx.input_mut(|input| {
-            let mut matched = false;
-            input.events.retain(|event| match event {
-                egui::Event::Key {
-                    key,
-                    pressed: true,
-                    repeat,
-                    modifiers,
-                    ..
-                } if *key == shortcut.logical_key
-                    && modifiers.matches_exact(shortcut.modifiers)
-                    && !(is_mac && modifiers.ctrl) =>
-                {
-                    matched |= !repeat;
-                    false
-                }
-                _ => true,
-            });
-            matched
-        })
-    });
+    let hit = !editing_footer
+        && shortcut.is_some_and(|shortcut| {
+            ctx.input_mut(|input| {
+                let mut matched = false;
+                input.events.retain(|event| match event {
+                    egui::Event::Key {
+                        key,
+                        pressed: true,
+                        repeat,
+                        modifiers,
+                        ..
+                    } if *key == shortcut.logical_key
+                        && modifiers.matches_exact(shortcut.modifiers)
+                        && !(is_mac && modifiers.ctrl) =>
+                    {
+                        matched |= !repeat;
+                        false
+                    }
+                    _ => true,
+                });
+                matched
+            })
+        });
     if hit {
         let _ = app.execute_ui_action(crate::app::actions::UiAction::OpenConnectDialog);
         return;
     }
     use super::keymap::KeyAction;
-    if take(KeyAction::PreviousSession) {
+    if !editing_footer && take(KeyAction::PreviousSession) {
         app.cycle_session(false);
         return;
     }
-    if take(KeyAction::NextSession) {
+    if !editing_footer && take(KeyAction::NextSession) {
         app.cycle_session(true);
         return;
     }
+    let reverse = ctx.input(|input| input.modifiers.shift);
     let pane_switch = take(KeyAction::SwitchPane);
     if pane_switch {
         // egui already read the Tab for its widget focus walk at the start of
         // the pass; cancel it so no button silently takes the keyboard.
         ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
-        let in_table = app.table_focus.is_some() && !app.tree_focused;
-        if in_table {
-            if !app.focus_tree() {
-                app.focus_table();
+        egui::Popup::close_all(&ctx);
+        if let Some(id) = ctx.memory(|memory| memory.focused()) {
+            ctx.memory_mut(|memory| memory.surrender_focus(id));
+        }
+        let region = super::regions::step(owner, reverse);
+        super::regions::activate(&ctx, region);
+        app.tree_focused = false;
+        app.table_focus = None;
+        match region {
+            super::regions::Region::Tags => {
+                if app.focus_table()
+                    && let Some(index) = app.table_focus
+                {
+                    super::table::request_table_scroll(&ctx, index);
+                }
             }
-        } else if app.tree_focused {
-            if !app.focus_table() {
-                app.focus_tree();
-            }
-        } else if !app.focus_table() {
-            app.focus_tree();
+            super::regions::Region::Servers => super::navigation::enter_keyboard_region(app, &ctx),
+            super::regions::Region::Header | super::regions::Region::Footer => {}
         }
     }
 }
@@ -139,36 +150,74 @@ pub(super) fn handle_shortcuts(app: &mut App, ui: &mut egui::Ui) {
     // tag tree must no longer own it. (`text_edit_focused` iff a text edit has
     // egui keyboard focus; plain button/checkbox focus is harmless and must
     // NOT drop the tree focus or arrow keys would stop working after a click.)
-    if ui.ctx().text_edit_focused() || super::ime_blocks_keys(ui.ctx()) || app.csv_import.is_some()
-    {
+    if app.dialogs.any_open() || app.csv_import.is_some() {
+        // Suspend region ownership while a dialog is active; preserve the
+        // underlying tree cursor so it resumes after the dialog closes.
+        return;
+    }
+    if ui.ctx().text_edit_focused() || super::ime_blocks_keys(ui.ctx()) {
         app.tree_focused = false;
         return;
     }
-    if app.dialogs.any_open() {
-        app.tree_focused = false;
+    if ui.input(|input| {
+        input
+            .events
+            .iter()
+            .any(|event| matches!(event, egui::Event::PointerButton { .. }))
+    }) {
+        // A pointer gesture may change the destination in this same frame.
         return;
     }
     // While the tree or the table owns the keyboard, no button may hold egui
     // focus: Enter/Space would press it and arrows would walk the widgets.
-    if app.tree_focused || app.table_focus.is_some() {
+    let owner = super::regions::current(ui.ctx()).or_else(|| {
+        if app.tree_focused {
+            Some(super::regions::Region::Servers)
+        } else if app.table_focus.is_some() {
+            Some(super::regions::Region::Tags)
+        } else {
+            None
+        }
+    });
+    if (owner == Some(super::regions::Region::Servers) && app.tree_focused)
+        || (owner == Some(super::regions::Region::Tags) && app.table_focus.is_some())
+    {
         let ctx = ui.ctx();
         if let Some(id) = ctx.memory(|m| m.focused()) {
             ctx.memory_mut(|m| m.surrender_focus(id));
         }
     }
-    if app.tree_focused {
-        handle_tree_keys(app, ui);
+    if owner == Some(super::regions::Region::Servers) {
+        if app.tree_focused {
+            handle_tree_keys(app, ui);
+        } else {
+            super::navigation::handle_server_region_keys(app, ui);
+        }
         return;
     }
-    if app.table_focus.is_some() {
+    if owner == Some(super::regions::Region::Tags) && app.table_focus.is_some() {
         handle_table_keys(app, ui);
         return;
     }
     // Selection can exist without a focused table row (e.g. right after Ctrl+A,
     // which clears table_focus). A Delete key must still act on that selection.
-    if !app.selected_rows.is_empty()
-        && super::keymap::key(super::keymap::KeyAction::Delete)
-            .is_some_and(|key| ui.ctx().input(|i| i.key_pressed(key)))
+    if owner == Some(super::regions::Region::Tags)
+        && !app.selected_rows.is_empty()
+        && !ui.input(|input| {
+            input.events.iter().any(|event| {
+                matches!(event,
+            egui::Event::Key { key, pressed: true, .. } if *key != egui::Key::Delete)
+            })
+        })
+        && super::keymap::key(super::keymap::KeyAction::Delete).is_some_and(|key| {
+            ui.input(|input| {
+                input.events.iter().any(|event| {
+                    matches!(event,
+                egui::Event::Key { key: event_key, pressed: true, repeat: false, modifiers, .. }
+                    if *event_key == key && modifiers.is_none())
+                })
+            })
+        })
     {
         app.remove_selected_rows();
     }
@@ -250,6 +299,8 @@ pub(super) fn handle_tree_keys(app: &mut App, ui: &mut egui::Ui) {
             toggle_tree_item(app, session, focus_id);
         } else if let Some(parent) = parent {
             app.set_tree_focus(session, parent);
+        } else {
+            super::navigation::enter_keyboard_region(app, ctx);
         }
     } else if super::keymap::key(super::keymap::KeyAction::TreeRight)
         .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
@@ -271,8 +322,33 @@ pub(super) fn handle_tree_keys(app: &mut App, ui: &mut egui::Ui) {
     {
         toggle_tree_item(app, session, focus_id);
     }
-    if super::keymap::key(super::keymap::KeyAction::TreeEnter)
-        .is_some_and(|key| crate::ui::key_pressed_once(ctx, key))
+    let moved = ctx.input(|input| {
+        input.events.iter().any(|event| {
+            matches!(
+                event,
+                egui::Event::Key {
+                    key: egui::Key::ArrowDown
+                        | egui::Key::ArrowUp
+                        | egui::Key::ArrowLeft
+                        | egui::Key::ArrowRight,
+                    pressed: true,
+                    ..
+                }
+            )
+        })
+    });
+    if !moved
+        && app.tree_focus == Some((session, focus_id))
+        && super::keymap::key(super::keymap::KeyAction::TreeEnter).is_some_and(|key| {
+            !crate::ui::ime_blocks_keys(ctx)
+                && ctx.input(|input| {
+                    input.events.iter().any(|event| {
+                        matches!(event,
+            egui::Event::Key { key: event_key, pressed: true, repeat: false, modifiers, .. }
+                if *event_key == key && modifiers.is_none())
+                    })
+                })
+        })
     {
         tree_enter(app, session, focus_id);
     }

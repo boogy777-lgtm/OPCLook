@@ -288,6 +288,7 @@ pub struct ConfirmRequest {
     pub title: String,
     pub text: String,
     pub action: ConfirmAction,
+    pub focus_pending: bool,
 }
 
 #[derive(Default)]
