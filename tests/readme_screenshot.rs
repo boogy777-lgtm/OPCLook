@@ -1,10 +1,10 @@
 #![cfg(feature = "ui-snapshots")]
 //! Reproducible README image: the app is rendered with synthetic fixture data.
 use egui_kittest::Harness;
-use opcda_egui::app::App;
-use opcda_egui::bff::model::{BrowseNode, EndpointSpec, NodeKind, SessionId, Value};
-use opcda_egui::i18n::Lang;
-use opcda_egui::settings::Theme;
+use opclook::app::App;
+use opclook::bff::model::{BrowseNode, EndpointSpec, NodeKind, SessionId, Value};
+use opclook::i18n::Lang;
+use opclook::settings::Theme;
 
 #[test]
 #[ignore = "manual visual QA requiring a headless wgpu renderer"]
@@ -61,7 +61,7 @@ fn render_readme_main_window() {
         .with_accessibility_check(false)
         .with_render_cursor(false)
         .with_context_setup(|ctx| {
-            assert!(opcda_egui::app::install_fonts(ctx).is_some());
+            assert!(opclook::app::install_fonts(ctx).is_some());
         })
         .build_ui_state(|ui, app: &mut App| app.update(ui), app);
     h.run_steps(8);
