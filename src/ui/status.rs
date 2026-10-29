@@ -47,11 +47,39 @@ pub(super) fn status_bar(app: &mut App, ui: &mut egui::Ui) {
                 }
                 ui.separator();
                 let hint = if app.tree_focused {
-                    Some(tr(lang, Tr::TreeHint))
+                    Some(fmt(
+                        lang,
+                        Tr::TreeHint,
+                        &[&super::shortcuts::binding_text(
+                            ui.ctx(),
+                            super::keymap::KeyAction::NextSession,
+                        )],
+                    ))
                 } else if app.table_focus.is_some() {
-                    Some(tr(lang, Tr::RowsHint))
+                    Some(fmt(
+                        lang,
+                        Tr::RowsHint,
+                        &[
+                            &super::shortcuts::binding_text(
+                                ui.ctx(),
+                                super::keymap::KeyAction::SelectAll,
+                            ),
+                            &super::shortcuts::binding_text(
+                                ui.ctx(),
+                                super::keymap::KeyAction::Copy,
+                            ),
+                            &super::shortcuts::binding_text(
+                                ui.ctx(),
+                                super::keymap::KeyAction::NextSession,
+                            ),
+                        ],
+                    ))
                 } else {
-                    Some(tr(lang, Tr::KeyboardIdleHint))
+                    Some(fmt(
+                        lang,
+                        Tr::KeyboardIdleHint,
+                        &[&super::shortcuts::connect_shortcut_text(ui.ctx())],
+                    ))
                 };
                 let counts = egui::Label::new(fmt(
                     lang,

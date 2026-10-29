@@ -1,6 +1,7 @@
 use super::super::colors::red;
 use crate::i18n::{Lang, Tr, tr};
 use crate::net::{AdapterInfo, AdapterSelection, selectable_adapters};
+use crate::ui::ImeSafeClick;
 
 pub(super) fn adapter_type_label(lang: Lang, adapter: &AdapterInfo) -> &'static str {
     if adapter.is_loopback {
@@ -86,7 +87,7 @@ pub(super) fn network_settings_view(
                 None => (AdapterSelection::None, None),
             });
         }
-        if ui.button(tr(lang, Tr::NetworkRefresh)).clicked() {
+        if ui.button(tr(lang, Tr::NetworkRefresh)).ime_safe_clicked() {
             *refresh = true;
         }
     });
@@ -129,7 +130,7 @@ pub(super) fn network_settings_view(
         ui.label(egui::RichText::new(tr(lang, Tr::NetworkApplyHint)).weak());
     } else if preferred_id.is_some() {
         ui.label(egui::RichText::new(tr(lang, Tr::NetworkStaleAdapter)).weak());
-        if ui.button(tr(lang, Tr::NetworkForget)).clicked() {
+        if ui.button(tr(lang, Tr::NetworkForget)).ime_safe_clicked() {
             *action = Some((AdapterSelection::None, None));
         }
         ui.label(egui::RichText::new(tr(lang, Tr::NetworkApplyHint)).weak());

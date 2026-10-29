@@ -3,6 +3,7 @@ use super::dialog_spacing;
 use crate::app::{App, write_type_choices};
 use crate::bff::model::Protocol;
 use crate::i18n::{Tr, fmt, tr};
+use crate::ui::ImeSafeClick;
 
 pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
@@ -54,8 +55,15 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(&ctx, |ui| {
                 dialog_spacing(ui);
-                let enter = crate::ui::key_pressed_once(ui.ctx(), egui::Key::Enter);
-                let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                let enter = crate::ui::key_pressed_once(ui.ctx(), egui::Key::Enter)
+                    && ui.input(|input| input.events.iter().any(|event| matches!(event,
+                        egui::Event::Key { key: egui::Key::Enter, pressed: true, repeat: false, modifiers, .. } if modifiers.is_none()
+                    )));
+                let modified_enter = ui.input(|input| input.events.iter().any(|event| matches!(event,
+                    egui::Event::Key { key: egui::Key::Enter, pressed: true, modifiers, .. } if !modifiers.is_none()
+                )));
+                let esc = !crate::ui::ime_blocks_keys(ui.ctx())
+                    && ui.input(|i| i.key_pressed(egui::Key::Escape));
                 let opening_frame = dialog.focus_pending;
                 ui.label(fmt(lang, Tr::SignalLabel, &[&name]));
                 ui.label(fmt(lang, Tr::CurrentValue, &[&current]));
@@ -82,7 +90,11 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
                         .selected_text(selected)
                         .show_ui(ui, |ui| {
                             for (index, choice) in choices.iter().enumerate() {
-                                ui.selectable_value(&mut dialog.type_index, index, choice.label);
+                                let previous = dialog.type_index;
+                                let response = ui.selectable_value(&mut dialog.type_index, index, choice.label);
+                                if crate::ui::ime_blocks_keys(ui.ctx()) && response.changed() && !response.ime_safe_clicked() {
+                                    dialog.type_index = previous;
+                                }
                             }
                         });
                 });
@@ -105,7 +117,15 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
                     state.store(ui.ctx(), id);
                     dialog.focus_pending = false;
                 }
-                if enter && writable && unavailable.is_none() && !opening_frame && !confirm_open {
+                // Enter belongs to the value field, not to a type selection or other control.
+                if enter && !modified_enter
+                    && (value_out.response.response.has_focus()
+                        || (value_out.response.response.lost_focus()
+                            && ui.memory(|memory| memory.focused().is_none())))
+                    && !ui.input(|input| input.events.iter().any(|event| matches!(event,
+                        egui::Event::PointerButton { pressed: true, .. }
+                    )))
+                    && writable && unavailable.is_none() && !opening_frame && !confirm_open {
                     submit = true;
                 } else if esc && !opening_frame && !confirm_open {
                     close = true;
@@ -131,7 +151,8 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
                     } else {
                         response
                     };
-                    if response.clicked()
+                    if (response.clicked_by(egui::PointerButton::Primary)
+                        || (response.ime_safe_clicked() && !crate::ui::ime_blocks_keys(ui.ctx()) && !modified_enter))
                         && !crate::ui::key_repeat(ui.ctx(), egui::Key::Enter)
                         && !crate::ui::key_repeat(ui.ctx(), egui::Key::Space)
                     {
@@ -139,17 +160,17 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
                     }
                     if ui
                         .add_enabled(!confirm_open, egui::Button::new(tr(lang, Tr::Cancel)))
-                        .clicked()
+                        .ime_safe_clicked()
                     {
                         close = true;
                     }
                 });
             });
     }
-    if submit {
-        app.apply_write();
-    }
+    // An Enter on Cancel can also trigger the dialog default. Cancellation wins.
     if close {
         app.dialogs.write.open = false;
+    } else if submit {
+        app.apply_write();
     }
 }

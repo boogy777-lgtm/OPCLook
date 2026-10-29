@@ -3,6 +3,7 @@ mod colors;
 mod csv;
 mod dialogs;
 mod files;
+mod keymap;
 mod menu;
 mod navigation;
 mod paint;
@@ -33,6 +34,7 @@ pub use test_hooks::{
 pub fn draw(app: &mut crate::app::App, ui: &mut egui::Ui) {
     style::sync_style(ui.ctx(), app.settings.view.options.theme);
     colors::set_dark(ui.visuals().dark_mode);
+    update_ime_state(ui.ctx());
     shortcuts::keyboard_prepass(app, ui);
     menu::menu(app, ui);
     status::status_bar(app, ui);
@@ -42,6 +44,56 @@ pub fn draw(app: &mut crate::app::App, ui: &mut egui::Ui) {
     shortcuts::handle_shortcuts(app, ui);
     status::status_popup(app, ui);
     dialogs::dialogs(app, ui);
+}
+
+// Keep the entire frame protected when composition ends with Enter.
+fn update_ime_state(ctx: &egui::Context) {
+    let id = egui::Id::unique("opclook-ime-state");
+    let frame = ctx.cumulative_frame_nr();
+    let (previous_frame, mut active, _) = ctx.data(|d| {
+        d.get_temp::<(u64, bool, bool)>(id)
+            .unwrap_or((u64::MAX, false, false))
+    });
+    if previous_frame == frame {
+        return;
+    }
+    let mut blocked = active;
+    ctx.input(|input| {
+        for event in &input.events {
+            match event {
+                egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => {
+                    active = !text.is_empty();
+                    blocked = true;
+                }
+                egui::Event::Ime(egui::ImeEvent::Commit(_)) => {
+                    active = false;
+                    blocked = true;
+                }
+                egui::Event::WindowFocused(false) => active = false,
+                _ => {}
+            }
+        }
+    });
+    ctx.data_mut(|d| d.insert_temp(id, (frame, active, blocked)));
+}
+
+fn ime_blocks_keys(ctx: &egui::Context) -> bool {
+    ctx.data(|d| {
+        d.get_temp::<(u64, bool, bool)>(egui::Id::unique("opclook-ime-state"))
+            .is_some_and(|(_, _, blocked)| blocked)
+    })
+}
+
+// Keyboard-generated button clicks must not commit IME candidates. Pointer
+// clicks remain deliberate even when a composition is active.
+trait ImeSafeClick {
+    fn ime_safe_clicked(&self) -> bool;
+}
+impl ImeSafeClick for egui::Response {
+    fn ime_safe_clicked(&self) -> bool {
+        self.clicked_by(egui::PointerButton::Primary)
+            || (self.clicked() && !ime_blocks_keys(&self.ctx))
+    }
 }
 
 /// Truncates a long label to `max` characters, appending a Unicode ellipsis.
@@ -56,6 +108,9 @@ pub(super) fn truncate_text(text: &str, max: usize) -> String {
 
 /// True only for an initial press, never for an OS key-repeat event.
 fn key_pressed_once(ctx: &egui::Context, key: egui::Key) -> bool {
+    if ime_blocks_keys(ctx) {
+        return false;
+    }
     ctx.input(|input| {
         input.events.iter().any(|event| {
             matches!(event,

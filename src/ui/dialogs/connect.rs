@@ -1,3 +1,4 @@
+use crate::ui::ImeSafeClick;
 mod results;
 mod security;
 
@@ -70,8 +71,10 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(&ctx, |ui| {
                 dialog_spacing(ui);
-                let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                let enter = !crate::ui::ime_blocks_keys(ui.ctx())
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let esc = !crate::ui::ime_blocks_keys(ui.ctx())
+                    && ui.input(|i| i.key_pressed(egui::Key::Escape));
                 let opening_frame = dialog.focus_pending;
                 let mut focus_in_search_field = false;
                 let mut focus_in_lds_field = false;
@@ -79,7 +82,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                 ui.horizontal(|ui| {
                     if ui
                         .selectable_label(dialog.pane == ConnectPane::Da, tr(lang, Tr::DaTab))
-                        .clicked()
+                        .ime_safe_clicked()
                     {
                         let scan_active = dialog.ua_search.subnet_active();
                         dialog.pane = ConnectPane::Da;
@@ -89,7 +92,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                     }
                     if ui
                         .selectable_label(dialog.pane == ConnectPane::Ua, tr(lang, Tr::UaTab))
-                        .clicked()
+                        .ime_safe_clicked()
                     {
                         let leaving_network = matches!(dialog.pane, ConnectPane::Network { .. });
                         let previous_protocol = dialog.pane.protocol();
@@ -107,7 +110,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                             matches!(dialog.pane, ConnectPane::Network { .. }),
                             tr(lang, Tr::NetworkTab),
                         )
-                        .clicked()
+                        .ime_safe_clicked()
                     {
                         dialog.pane = ConnectPane::Network {
                             previous: dialog.pane.protocol(),
@@ -138,7 +141,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                         close = true;
                     }
                     ui.separator();
-                    if ui.button(tr(lang, Tr::Close)).clicked() {
+                    if ui.button(tr(lang, Tr::Close)).ime_safe_clicked() {
                         close = true;
                     }
                 } else {
@@ -212,7 +215,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                     !dialog.da_pending,
                                     egui::Button::new(tr(lang, Tr::SearchLan)),
                                 )
-                                .clicked()
+                                .ime_safe_clicked()
                             {
                                 refresh = Some(dialog.da_host.clone());
                             }
@@ -248,7 +251,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                     !ua_busy,
                                     egui::Button::new(tr(lang, Tr::SearchLdsMdns)),
                                 )
-                                .clicked()
+                                .ime_safe_clicked()
                             {
                                 app_network_search = true;
                             }
@@ -261,7 +264,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                     !ua_busy,
                                     egui::Button::new(tr(lang, Tr::SearchUaSubnet)),
                                 )
-                                .clicked()
+                                .ime_safe_clicked()
                             {
                                 app_subnet_search = true;
                             }
@@ -285,7 +288,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                         ],
                                     ));
                                 }
-                                if ui.button(tr(lang, Tr::UaScanStop)).clicked() {
+                                if ui.button(tr(lang, Tr::UaScanStop)).ime_safe_clicked() {
                                     app_subnet_cancel = true;
                                 }
                             });
@@ -303,10 +306,10 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                         ],
                                     ),
                                 );
-                                if ui.button(tr(lang, Tr::Yes)).clicked() {
+                                if ui.button(tr(lang, Tr::Yes)).ime_safe_clicked() {
                                     app_subnet_confirm = true;
                                 }
-                                if ui.button(tr(lang, Tr::Cancel)).clicked() {
+                                if ui.button(tr(lang, Tr::Cancel)).ime_safe_clicked() {
                                     app_subnet_cancel = true;
                                 }
                             });
@@ -375,7 +378,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                     e.protocol == Protocol::OpcUa
                                 }
                             }) {
-                                if ui.button(endpoint.display_name()).clicked() {
+                                if ui.button(endpoint.display_name()).ime_safe_clicked() {
                                     match endpoint.protocol {
                                         Protocol::OpcDa => {
                                             dialog.da_host = endpoint.host.clone();
@@ -435,11 +438,11 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                 can_connect_dialog,
                                 egui::Button::new(tr(lang, Tr::Connect)),
                             )
-                            .clicked()
+                            .ime_safe_clicked()
                         {
                             connect = Some(dialog.pane.protocol());
                         }
-                        if ui.button(tr(lang, Tr::Cancel)).clicked() {
+                        if ui.button(tr(lang, Tr::Cancel)).ime_safe_clicked() {
                             close = true;
                         }
                     });

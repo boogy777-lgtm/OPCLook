@@ -6,6 +6,7 @@ use super::dialog_spacing;
 use crate::app::App;
 use crate::columns::ColumnId;
 use crate::i18n::{Tr, fmt, tr};
+use crate::ui::ImeSafeClick;
 
 pub(super) fn columns_dialog(app: &mut App, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
@@ -28,8 +29,10 @@ pub(super) fn columns_dialog(app: &mut App, ui: &mut egui::Ui) {
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(&ctx, |ui| {
             dialog_spacing(ui);
-            let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
-            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let esc = !crate::ui::ime_blocks_keys(ui.ctx())
+                && ui.input(|i| i.key_pressed(egui::Key::Escape));
+            let enter = !crate::ui::ime_blocks_keys(ui.ctx())
+                && ui.input(|i| i.key_pressed(egui::Key::Enter));
             ui.label(tr(lang, Tr::ColumnsHint));
             ui.label(egui::RichText::new(tr(lang, Tr::ColumnsReorderHint)).weak());
             const GAP: f32 = 14.0;
@@ -38,13 +41,16 @@ pub(super) fn columns_dialog(app: &mut App, ui: &mut egui::Ui) {
 
             // Keyboard fallback: Alt/Ctrl + ArrowUp/ArrowDown move the focused
             // (or first) column, mirroring the drag-and-drop reorder.
-            let move_focus = if ui.input(|i| {
-                (i.modifiers.alt || i.modifiers.ctrl) && i.key_pressed(egui::Key::ArrowUp)
-            }) {
+            let move_focus = if !crate::ui::ime_blocks_keys(ui.ctx())
+                && ui.input(|i| {
+                    (i.modifiers.alt || i.modifiers.ctrl) && i.key_pressed(egui::Key::ArrowUp)
+                }) {
                 Some(-1)
-            } else if ui.input(|i| {
-                (i.modifiers.alt || i.modifiers.ctrl) && i.key_pressed(egui::Key::ArrowDown)
-            }) {
+            } else if !crate::ui::ime_blocks_keys(ui.ctx())
+                && ui.input(|i| {
+                    (i.modifiers.alt || i.modifiers.ctrl) && i.key_pressed(egui::Key::ArrowDown)
+                })
+            {
                 Some(1)
             } else {
                 None
@@ -111,20 +117,20 @@ pub(super) fn columns_dialog(app: &mut App, ui: &mut egui::Ui) {
                     grip.dnd_set_drag_payload(column);
                     let mut visible = app.settings.view.columns.is_visible(column);
                     let cb = ui.checkbox(&mut visible, tr(lang, column.title_tr()));
-                    if cb.changed() {
+                    if cb.changed() && cb.ime_safe_clicked() {
                         app.settings.view.columns.set_visible(column, visible);
                         changed = true;
                     }
                     if cb.has_focus() || cb.clicked() || grip.hovered() {
                         focus_col = Some(column);
                     }
-                    if ui.small_button("↑").clicked() && idx > 0 {
+                    if ui.small_button("↑").ime_safe_clicked() && idx > 0 {
                         order.swap(idx, idx - 1);
                         changed = true;
                         moved = Some((column, idx - 1));
                         focus_col = Some(column);
                     }
-                    if ui.small_button("↓").clicked() && idx + 1 < order.len() {
+                    if ui.small_button("↓").ime_safe_clicked() && idx + 1 < order.len() {
                         order.swap(idx, idx + 1);
                         changed = true;
                         moved = Some((column, idx + 1));
@@ -203,13 +209,13 @@ pub(super) fn columns_dialog(app: &mut App, ui: &mut egui::Ui) {
             }
             ui.separator();
             ui.horizontal(|ui| {
-                if ui.button(tr(lang, Tr::Reset)).clicked() {
+                if ui.button(tr(lang, Tr::Reset)).ime_safe_clicked() {
                     order = ColumnId::ALL.to_vec();
                     app.settings.view.columns.reset();
                     app.settings.view.column_order = None;
                     changed = true;
                 }
-                if ui.button(tr(lang, Tr::Apply)).clicked() {
+                if ui.button(tr(lang, Tr::Apply)).ime_safe_clicked() {
                     close = true;
                 }
             });

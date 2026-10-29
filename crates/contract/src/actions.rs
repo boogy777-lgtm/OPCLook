@@ -12,22 +12,32 @@ pub struct ActionSpec {
     pub id: ActionId,
     pub semantic_id: &'static str,
     pub code: u32,
+    pub shortcut: Option<DefaultShortcut>,
+}
+
+/// Portable default binding. Mod means Command on macOS, Control elsewhere.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum DefaultShortcut {
+    ModN,
 }
 
 pub const OPEN_CONNECT_DIALOG: ActionSpec = ActionSpec {
     id: ActionId::OpenConnectDialog,
     semantic_id: "ui.connect.open",
     code: 1001,
+    shortcut: Some(DefaultShortcut::ModN),
 };
 pub const BROWSE: ActionSpec = ActionSpec {
     id: ActionId::Browse,
     semantic_id: "session.browse",
     code: 2001,
+    shortcut: None,
 };
 pub const WRITE: ActionSpec = ActionSpec {
     id: ActionId::Write,
     semantic_id: "session.write",
     code: 2002,
+    shortcut: None,
 };
 pub const CATALOG: &[ActionSpec] = &[OPEN_CONNECT_DIALOG, BROWSE, WRITE];
 
@@ -66,11 +76,15 @@ pub fn catalog_valid(catalog: &[ActionSpec], retired: &[u32]) -> bool {
     let mut ids = HashSet::new();
     let mut names = HashSet::new();
     let mut codes = HashSet::new();
+    let mut shortcuts = HashSet::new();
     catalog.iter().all(|spec| {
         ids.insert(spec.id)
             && names.insert(spec.semantic_id)
             && codes.insert(spec.code)
             && !retired.contains(&spec.code)
+            && spec
+                .shortcut
+                .is_none_or(|shortcut| shortcuts.insert(shortcut))
     })
 }
 
@@ -99,6 +113,11 @@ mod tests {
         assert_eq!(CATALOG, &[OPEN_CONNECT_DIALOG, BROWSE, WRITE]);
         assert!(catalog_valid(CATALOG, RETIRED_CODES));
         assert!(!catalog_valid(CATALOG, &[OPEN_CONNECT_DIALOG.code]));
+        let conflicting = ActionSpec {
+            shortcut: OPEN_CONNECT_DIALOG.shortcut,
+            ..BROWSE
+        };
+        assert!(!catalog_valid(&[OPEN_CONNECT_DIALOG, conflicting], &[]));
         assert!(!catalog_valid(
             &[OPEN_CONNECT_DIALOG, OPEN_CONNECT_DIALOG],
             &[]

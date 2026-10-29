@@ -921,7 +921,7 @@ fn ru(key: Tr) -> &'static str {
         HintAddChildren => "Добавить все сигналы ветки",
         HintDelSelected => "Del — удалить выбранные",
         HintEnterF2 => "Enter / F2 — изменить значение",
-        HintCtrlA => "Ctrl+A — выделить все",
+        HintCtrlA => "{0} — выделить все",
         HintEditColumns => "Настроить состав и порядок столбцов",
 
         // ---- Status bar ----
@@ -934,10 +934,10 @@ fn ru(key: Tr) -> &'static str {
         WrittenSummary => "Записано: {0} из {1}",
         UpdatedAt => "Обновлено {0}",
         RowsHint => {
-            "Таблица: ↑↓ Shift+PgUp/PgDn Home/End Ctrl+A Ctrl+C Del Enter F5 · Tab — дерево · Ctrl+Tab — сервер"
+            "Таблица: ↑↓ Shift+PgUp/PgDn Home/End {0} {1} Del Enter F5 · Tab — дерево · {2} — сервер"
         }
-        TreeHint => "Дерево: ↑↓ ← → Space Enter F5 · Tab — таблица · Ctrl+Tab — сервер",
-        KeyboardIdleHint => "Tab — таблица / дерево · Ctrl+N — подключиться",
+        TreeHint => "Дерево: ↑↓ ← → Space Enter F5 · Tab — таблица · {0} — сервер",
+        KeyboardIdleHint => "Tab — таблица / дерево · {0} — подключиться",
 
         // ---- Bottom panels ----
         ScriptTab => "Скрипт",
@@ -988,9 +988,9 @@ fn ru(key: Tr) -> &'static str {
         TableEmptyInner => "Нет сигналов — добавьте из дерева, через ПКМ или перетащите сюда",
         TableValueExpand => "Развернуть значение",
         TableValueCollapse => "Свернуть значение",
-        TableEmptyKeys => "Ctrl+N — подключиться к серверу · Tab / F6 — дерево и таблица",
+        TableEmptyKeys => "{0} — подключиться к серверу · Tab / F6 — дерево и таблица",
         TableEmptyDragHint => "Перетащите теги из дерева или нажмите Enter на узле",
-        TableEmptyConnect => "Подключиться (Ctrl+N)",
+        TableEmptyConnect => "Подключиться ({0})",
         EscHint => "Нажмите Esc, чтобы снять выделение. ПКМ по строке — меню.",
         PkmMoveColumn => "ПКМ — переместить столбец",
         MoveLeft => "Влево",
@@ -1560,7 +1560,7 @@ fn en(key: Tr) -> &'static str {
         HintAddChildren => "Add all signals of the branch",
         HintDelSelected => "Del — remove selected",
         HintEnterF2 => "Enter / F2 — change value",
-        HintCtrlA => "Ctrl+A — select all",
+        HintCtrlA => "{0} — select all",
         HintEditColumns => "Configure columns and their order",
 
         // ---- Status bar ----
@@ -1573,10 +1573,10 @@ fn en(key: Tr) -> &'static str {
         WrittenSummary => "Written: {0} of {1}",
         UpdatedAt => "Updated {0}",
         RowsHint => {
-            "Table: ↑↓ Shift+PgUp/PgDn Home/End Ctrl+A Ctrl+C Del Enter F5 · Tab — tree · Ctrl+Tab — server"
+            "Table: ↑↓ Shift+PgUp/PgDn Home/End {0} {1} Del Enter F5 · Tab — tree · {2} — server"
         }
-        TreeHint => "Tree: ↑↓ ← → Space Enter F5 · Tab — table · Ctrl+Tab — server",
-        KeyboardIdleHint => "Tab — table / tree · Ctrl+N — connect",
+        TreeHint => "Tree: ↑↓ ← → Space Enter F5 · Tab — table · {0} — server",
+        KeyboardIdleHint => "Tab — table / tree · {0} — connect",
 
         // ---- Bottom panels ----
         ScriptTab => "Script",
@@ -1627,9 +1627,9 @@ fn en(key: Tr) -> &'static str {
         TableEmptyInner => "No signals — add from the tree, via right-click or drag them here",
         TableValueExpand => "Expand value",
         TableValueCollapse => "Collapse value",
-        TableEmptyKeys => "Ctrl+N — connect to a server · Tab / F6 — tree and table",
+        TableEmptyKeys => "{0} — connect to a server · Tab / F6 — tree and table",
         TableEmptyDragHint => "Drag tags from the tree or press Enter on a node",
-        TableEmptyConnect => "Connect (Ctrl+N)",
+        TableEmptyConnect => "Connect ({0})",
         EscHint => "Press Esc to clear the selection. Right-click a row for the menu.",
         PkmMoveColumn => "Right-click to move the column",
         MoveLeft => "Left",
@@ -2181,7 +2181,7 @@ fn zh(key: Tr) -> &'static str {
         HintAddChildren => "添加该分支的所有信号",
         HintDelSelected => "Delete — 删除所选",
         HintEnterF2 => "Enter / F2 — 更改值",
-        HintCtrlA => "Ctrl+A — 全选",
+        HintCtrlA => "{0} — 全选",
         HintEditColumns => "配置列及其顺序",
 
         // ---- Status bar ----
@@ -2194,10 +2194,10 @@ fn zh(key: Tr) -> &'static str {
         WrittenSummary => "已写入: {0} / {1}",
         UpdatedAt => "更新于 {0}",
         RowsHint => {
-            "表格: ↑↓ Shift+PgUp/PgDn Home/End Ctrl+A Ctrl+C Delete Enter F5 · Tab — 树 · Ctrl+Tab — 服务器"
+            "表格: ↑↓ Shift+PgUp/PgDn Home/End {0} {1} Delete Enter F5 · Tab — 树 · {2} — 服务器"
         }
-        TreeHint => "树: ↑↓ ← → 空格 Enter F5 · Tab — 表格 · Ctrl+Tab — 服务器",
-        KeyboardIdleHint => "Tab — 表格 / 树 · Ctrl+N — 连接",
+        TreeHint => "树: ↑↓ ← → 空格 Enter F5 · Tab — 表格 · {0} — 服务器",
+        KeyboardIdleHint => "Tab — 表格 / 树 · {0} — 连接",
 
         // ---- Bottom panels ----
         ScriptTab => "脚本",
@@ -2246,9 +2246,9 @@ fn zh(key: Tr) -> &'static str {
         TableEmptyInner => "无信号 — 请从树中添加、右键添加或拖放到此处",
         TableValueExpand => "展开值",
         TableValueCollapse => "折叠值",
-        TableEmptyKeys => "Ctrl+N — 连接服务器 · Tab / F6 — 切换树和表格",
+        TableEmptyKeys => "{0} — 连接服务器 · Tab / F6 — 切换树和表格",
         TableEmptyDragHint => "从树中拖动标签，或在节点上按 Enter",
-        TableEmptyConnect => "连接 (Ctrl+N)",
+        TableEmptyConnect => "连接 ({0})",
         EscHint => "按 Esc 清除选择。右键单击行可打开菜单。",
         PkmMoveColumn => "右键单击以移动列",
         MoveLeft => "左移",

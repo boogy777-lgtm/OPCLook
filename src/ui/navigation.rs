@@ -407,9 +407,12 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                         // tree's own F5 handler never runs here; the key is
                         // taken here instead, unless the table, a text field or a
                         // dialog owns the keyboard (the table has its own F5).
-                        let f5 = ui.input(|i| i.key_pressed(egui::Key::F5))
+                        let f5 = super::keymap::key(super::keymap::KeyAction::Refresh)
+                            .is_some_and(|key| ui.input(|i| i.key_pressed(key)))
                             && app.table_focus.is_none()
                             && !app.dialogs.any_open()
+                            && app.csv_import.is_none()
+                            && !super::ime_blocks_keys(ui.ctx())
                             && !ui.ctx().text_edit_focused();
                         if empty_state(
                             ui,

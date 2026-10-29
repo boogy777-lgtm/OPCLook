@@ -39,7 +39,15 @@ pub(super) fn empty_table_prompt(
                 Tr::TableEmptyKeys
             };
             ui.add(
-                egui::Label::new(egui::RichText::new(tr(lang, second)).weak()).selectable(false),
+                egui::Label::new(
+                    egui::RichText::new(crate::i18n::fmt(
+                        lang,
+                        second,
+                        &[&crate::ui::shortcuts::connect_shortcut_text(ui.ctx())],
+                    ))
+                    .weak(),
+                )
+                .selectable(false),
             );
             if !has_session {
                 ui.add_space(12.0);
@@ -47,8 +55,12 @@ pub(super) fn empty_table_prompt(
                     app,
                     ui,
                     crate::app::actions::UiAction::OpenConnectDialog,
-                    egui::Button::new(tr(lang, Tr::TableEmptyConnect))
-                        .min_size(egui::vec2(180.0, 28.0)),
+                    egui::Button::new(crate::i18n::fmt(
+                        lang,
+                        Tr::TableEmptyConnect,
+                        &[&crate::ui::shortcuts::connect_shortcut_text(ui.ctx())],
+                    ))
+                    .min_size(egui::vec2(180.0, 28.0)),
                 );
                 // A pressed button must not keep egui's focus: Enter would press
                 // it again (the table owns Enter).

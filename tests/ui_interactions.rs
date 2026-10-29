@@ -2340,7 +2340,7 @@ fn modified_enter_cannot_accept_new_write_confirmation() {
     h.run_steps(2);
     h.key_press(Key::Enter);
     h.run_steps(3);
-    h.key_press_modifiers(Modifiers::SHIFT, Key::Enter);
+    h.key_press(Key::Enter);
     h.run_steps(3);
     assert!(h.state().dialogs.confirm.is_some());
     assert_eq!(h.state().write_batch.pending, 0);
@@ -5742,4 +5742,758 @@ fn p2_oversized_input_precedes_session_availability_in_apply_write() {
             .iter()
             .any(|command| matches!(command.kind, CommandKind::Write { .. }))
     );
+}
+
+#[test]
+fn p3_mod_binding_ignores_extra_shift_and_repeat() {
+    let app = App::new_test(&egui::Context::default());
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.event(egui::Event::Key {
+        key: Key::N,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::COMMAND | Modifiers::SHIFT,
+    });
+    h.run_steps(2);
+    assert!(!h.state().dialogs.connect.open);
+    h.event(egui::Event::Key {
+        key: Key::N,
+        physical_key: None,
+        pressed: true,
+        repeat: true,
+        modifiers: Modifiers::COMMAND,
+    });
+    h.run_steps(2);
+    assert!(!h.state().dialogs.connect.open);
+    h.event(egui::Event::Key {
+        key: Key::N,
+        physical_key: None,
+        pressed: false,
+        repeat: false,
+        modifiers: Modifiers::COMMAND,
+    });
+    h.run_steps(1);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::N);
+    h.run_steps(2);
+    assert!(h.state().dialogs.connect.open);
+}
+
+#[test]
+fn p3_ime_commit_enter_does_not_submit_write() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.record_dispatches_for_test();
+    app.settings.view.options.confirm_write = false;
+    seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+    app.select_only(0);
+    app.open_write_dialog(Vec::new());
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit {
+        text: "1".into(),
+        active_range_chars: None,
+    }));
+    h.run_steps(1);
+    h.input_mut().events.extend([
+        egui::Event::Ime(egui::ImeEvent::Commit("1".into())),
+        egui::Event::Key {
+            key: Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        },
+    ]);
+    h.run_steps(1);
+    assert!(h.state().dialogs.write.open);
+    assert!(
+        !h.state()
+            .dispatched_for_test()
+            .iter()
+            .any(|command| matches!(command.kind, CommandKind::Write { .. }))
+    );
+}
+
+#[test]
+fn p3_ime_space_cannot_activate_focused_write_or_confirm_button() {
+    for confirm_open in [false, true] {
+        let mut app = App::new_test(&egui::Context::default());
+        app.record_dispatches_for_test();
+        app.settings.view.options.confirm_write = true;
+        seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+        app.select_only(0);
+        app.open_write_dialog(Vec::new());
+        let mut h = harness(app);
+        h.run_steps(3);
+        if confirm_open {
+            h.get_by_label("Записать").click();
+            h.run_steps(2);
+            h.get_by_label("Да").focus();
+        } else {
+            h.get_by_label("Записать").focus();
+        }
+        h.run_steps(1);
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit {
+            text: "a".into(),
+            active_range_chars: None,
+        }));
+        h.event(egui::Event::Key {
+            key: Key::Space,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(1);
+        assert_eq!(h.state().dialogs.confirm.is_some(), confirm_open);
+        assert!(
+            !h.state()
+                .dispatched_for_test()
+                .iter()
+                .any(|c| matches!(c.kind, CommandKind::Write { .. }))
+        );
+    }
+}
+
+#[test]
+fn p3_macos_mod_n_rejects_extra_control() {
+    let mut h = Harness::builder()
+        .with_size([1200.0, 900.0])
+        .with_accessibility_check(false)
+        .allow_missing_glyphs()
+        .with_os(egui::os::OperatingSystem::Mac)
+        .build_ui_state(
+            |ui, app: &mut App| opcda_egui::ui::draw(app, ui),
+            App::new_test(&egui::Context::default()),
+        );
+    h.run_steps(3);
+    let mac = Modifiers {
+        command: true,
+        mac_cmd: true,
+        ..Modifiers::NONE
+    };
+    h.key_press_modifiers(Modifiers { ctrl: true, ..mac }, Key::N);
+    h.run_steps(2);
+    assert!(!h.state().dialogs.connect.open);
+    h.key_press_modifiers(mac, Key::N);
+    h.run_steps(2);
+    assert!(h.state().dialogs.connect.open);
+}
+
+#[test]
+fn p3_ime_still_allows_deliberate_pointer_write() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.record_dispatches_for_test();
+    app.settings.view.options.confirm_write = false;
+    seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+    app.select_only(0);
+    app.open_write_dialog(Vec::new());
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit {
+        text: "1".into(),
+        active_range_chars: None,
+    }));
+    h.run_steps(1);
+    h.get_by_label("Записать").click();
+    h.run_steps(2);
+    assert_eq!(
+        h.state()
+            .dispatched_for_test()
+            .iter()
+            .filter(|c| matches!(c.kind, CommandKind::Write { .. }))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn p3_ime_enter_and_space_do_not_submit_add_or_options() {
+    for options in [false, true] {
+        let mut app = App::new_test(&egui::Context::default());
+        app.record_dispatches_for_test();
+        if options {
+            app.open_options_dialog();
+        } else {
+            seed_table(&mut app, &[("a", "SigA", 42)]);
+            app.dialogs.add_signal.open = true;
+            app.dialogs.add_signal.session = Some(sid(1));
+            app.dialogs.add_signal.item_id = "another".into();
+        }
+        let mut h = harness(app);
+        h.run_steps(3);
+        if options {
+            h.get_by_label("Сохранить").focus();
+        } else {
+            h.query_all_by_label("Добавить")
+                .last()
+                .expect("add button")
+                .focus();
+        }
+        h.run_steps(1);
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit {
+            text: "a".into(),
+            active_range_chars: None,
+        }));
+        h.event(egui::Event::Key {
+            key: Key::Space,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(1);
+        assert!(if options {
+            h.state().dialogs.options.open
+        } else {
+            h.state().dialogs.add_signal.open
+        });
+        h.input_mut().events.extend([
+            egui::Event::Ime(egui::ImeEvent::Commit("a".into())),
+            egui::Event::Key {
+                key: Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            },
+        ]);
+        h.run_steps(1);
+        assert!(if options {
+            h.state().dialogs.options.open
+        } else {
+            h.state().dialogs.add_signal.open
+        });
+        assert!(
+            !h.state()
+                .dispatched_for_test()
+                .iter()
+                .any(|c| matches!(c.kind, CommandKind::AddItems { .. }))
+        );
+    }
+}
+
+#[test]
+fn p3_simultaneous_pointer_focus_and_mod_n_does_not_open_dialog() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.settings.view.options.show_script = true;
+    app.settings.view.options.show_log = false;
+    let mut h = harness(app);
+    h.run_steps(3);
+    let pos = egui::pos2(700.0, 845.0);
+    h.input_mut().events.extend([
+        egui::Event::PointerMoved(pos),
+        egui::Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        },
+        egui::Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        },
+        egui::Event::Key {
+            key: Key::N,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        },
+    ]);
+    h.run_steps(1);
+    assert!(!h.state().dialogs.connect.open);
+}
+
+#[test]
+fn p3_ime_held_enter_and_new_press_after_commit() {
+    for redraw in [false, true] {
+        let mut app = App::new_test(&egui::Context::default());
+        app.record_dispatches_for_test();
+        app.settings.view.options.confirm_write = false;
+        seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+        app.select_only(0);
+        app.open_write_dialog(Vec::new());
+        let mut h = harness(app);
+        h.run_steps(3);
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit {
+            text: "1".into(),
+            active_range_chars: None,
+        }));
+        h.run_steps(1);
+        h.event(egui::Event::Key {
+            key: Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(1);
+        h.event(egui::Event::Ime(egui::ImeEvent::Commit("1".into())));
+        h.run_steps(1);
+        h.event(egui::Event::Key {
+            key: Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(1);
+        assert!(h.state().dialogs.write.open);
+        assert!(
+            !h.state()
+                .dispatched_for_test()
+                .iter()
+                .any(|c| matches!(c.kind, CommandKind::Write { .. }))
+        );
+        h.event(egui::Event::Key {
+            key: Key::Enter,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(1);
+        if redraw {
+            h.run_steps(1);
+        }
+        // After composition, explicitly focus the action before a new Enter.
+        h.get_by_label("Записать").focus();
+        h.run_steps(1);
+        h.key_press(Key::Enter);
+        h.run_steps(1);
+        assert_eq!(
+            h.state()
+                .dispatched_for_test()
+                .iter()
+                .filter(|c| matches!(c.kind, CommandKind::Write { .. }))
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn p3_new_mod_n_after_ime_commit_is_not_lost() {
+    let mut h = harness(App::new_test(&egui::Context::default()));
+    h.run_steps(3);
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit {
+        text: "a".into(),
+        active_range_chars: None,
+    }));
+    h.run_steps(1);
+    h.event(egui::Event::Ime(egui::ImeEvent::Commit("a".into())));
+    h.run_steps(1);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::N);
+    h.run_steps(1);
+    assert!(h.state().dialogs.connect.open);
+}
+
+#[test]
+fn p3_modified_enter_in_one_raw_input_does_not_confirm_write() {
+    for focus_yes in [false, true] {
+        let mut app = App::new_test(&egui::Context::default());
+        app.record_dispatches_for_test();
+        app.settings.view.options.confirm_write = true;
+        seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+        app.select_only(0);
+        app.open_write_dialog(Vec::new());
+        let mut h = harness(app);
+        h.run_steps(3);
+        h.get_by_label("Записать").click();
+        h.run_steps(2);
+        if focus_yes {
+            h.get_by_label("Да").focus();
+            h.run_steps(1);
+        }
+        h.input_mut().events.extend([
+            egui::Event::ModifiersChanged(Modifiers::SHIFT),
+            egui::Event::Key {
+                key: Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::SHIFT,
+            },
+            egui::Event::Key {
+                key: Key::Enter,
+                physical_key: None,
+                pressed: false,
+                repeat: false,
+                modifiers: Modifiers::SHIFT,
+            },
+            egui::Event::ModifiersChanged(Modifiers::NONE),
+        ]);
+        h.run_steps(1);
+        assert!(h.state().dialogs.confirm.is_some());
+        assert!(
+            !h.state()
+                .dispatched_for_test()
+                .iter()
+                .any(|c| matches!(c.kind, CommandKind::Write { .. }))
+        );
+    }
+}
+
+#[test]
+fn p3_select_all_uses_modifiers_of_press_in_same_raw_input() {
+    for press_mod in [false, true] {
+        let mut app = App::new_test(&egui::Context::default());
+        seed_table(&mut app, &[("a", "A", 1), ("b", "B", 2)]);
+        let mut h = harness(app);
+        h.run_steps(3);
+        h.state_mut().select_only(0);
+        h.run_steps(1);
+        assert_eq!(h.state().table_focus, Some(0));
+        let at_press = if press_mod {
+            Modifiers::COMMAND
+        } else {
+            Modifiers::NONE
+        };
+        let after = if press_mod {
+            Modifiers::NONE
+        } else {
+            Modifiers::COMMAND
+        };
+        h.input_mut().events.extend([
+            egui::Event::ModifiersChanged(at_press),
+            egui::Event::Key {
+                key: Key::A,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: at_press,
+            },
+            egui::Event::Key {
+                key: Key::A,
+                physical_key: None,
+                pressed: false,
+                repeat: false,
+                modifiers: at_press,
+            },
+            egui::Event::ModifiersChanged(after),
+        ]);
+        h.run_steps(1);
+        assert_eq!(h.state().selected_rows.len(), if press_mod { 2 } else { 1 });
+    }
+}
+
+#[test]
+fn p3_global_mod_page_takes_priority_over_table_paging() {
+    let mut app = App::new_test(&egui::Context::default());
+    seed_table(&mut app, &[("a", "A", 1), ("b", "B", 2)]);
+    app.seed_session(sid(2), EndpointSpec::ua("opc.tcp://127.0.0.1:4841"));
+    app.activate_session(sid(1));
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.state_mut().select_only(0);
+    h.run_steps(1);
+    assert_eq!(h.state().table_focus, Some(0));
+    h.key_press_modifiers(Modifiers::COMMAND, Key::PageDown);
+    h.run_steps(2);
+    assert_eq!(h.state().active_session, Some(sid(2)));
+    assert_eq!(h.state().table_focus, None);
+    assert!(h.state().selected_rows.is_empty());
+}
+
+#[test]
+fn p3_desktop_copy_event_copies_selected_table_rows() {
+    let mut app = App::new_test(&egui::Context::default());
+    seed_table(&mut app, &[("a", "SigA", 42)]);
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.state_mut().select_only(0);
+    h.run_steps(1);
+    assert_eq!(h.state().table_focus, Some(0));
+    h.event(egui::Event::Copy);
+    h.run_steps(1);
+    assert_eq!(
+        h.state().status,
+        opcda_egui::i18n::tr(opcda_egui::i18n::Lang::Ru, opcda_egui::i18n::Tr::Copied)
+    );
+}
+
+#[test]
+fn p3_enter_on_write_cancel_never_dispatches_or_opens_confirmation() {
+    for confirm in [false, true] {
+        let ctx = egui::Context::default();
+        let mut app = App::new_test(&ctx);
+        app.record_dispatches_for_test();
+        app.settings.view.options.confirm_write = confirm;
+        seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+        app.select_only(0);
+        app.open_write_dialog(Vec::new());
+        let mut h = harness(app);
+        h.run_steps(3);
+        h.get_by_label("Отмена").focus();
+        h.run_steps(1);
+        h.key_press(Key::Enter);
+        h.run_steps(3);
+        assert!(!h.state().dialogs.write.open);
+        assert!(h.state().dialogs.confirm.is_none());
+        assert!(
+            !h.state()
+                .dispatched_for_test()
+                .iter()
+                .any(|command| matches!(command.kind, CommandKind::Write { .. }))
+        );
+    }
+}
+
+#[test]
+fn p3_enter_on_options_cancel_does_not_save_draft() {
+    with_settings_lock(|| {
+        let mut app = App::new_test(&egui::Context::default());
+        app.open_options_dialog();
+        let original = app.settings.view.options.auto_reconnect;
+        app.dialogs.options.draft.auto_reconnect = !original;
+        let mut h = harness(app);
+        h.run_steps(3);
+        h.get_by_label("Отмена").focus();
+        h.run_steps(1);
+        h.key_press(Key::Enter);
+        h.run_steps(3);
+        assert!(!h.state().dialogs.options.open);
+        assert_eq!(h.state().settings.view.options.auto_reconnect, original);
+    });
+}
+
+#[test]
+fn p3_enter_on_add_cancel_does_not_submit() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.record_dispatches_for_test();
+    seed_table(&mut app, &[("a", "SigA", 42)]);
+    app.dialogs.add_signal.open = true;
+    app.dialogs.add_signal.session = Some(sid(1));
+    app.dialogs.add_signal.item_id = "ns=2;i=23".into();
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.get_by_label("Отмена").focus();
+    h.run_steps(1);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(!h.state().dialogs.add_signal.open);
+    assert!(h.state().dialogs.add_signal.error.is_none());
+    assert!(!h.state().dispatched_for_test().iter().any(|c| matches!(
+        c.kind,
+        CommandKind::AddItems { .. } | CommandKind::ResolveBrowsePath { .. }
+    )));
+}
+
+#[test]
+fn p3_ime_space_on_column_reset_does_not_change_settings() {
+    with_settings_lock(|| {
+        use opcda_egui::columns::ColumnId;
+        let mut app = App::new_test(&egui::Context::default());
+        app.settings
+            .view
+            .columns
+            .set_visible(ColumnId::FullName, false);
+        app.dialogs.columns.open = true;
+        let mut h = harness(app);
+        h.run_steps(3);
+        h.get_by_label("Сбросить").focus();
+        h.run_steps(1);
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit {
+            text: "a".into(),
+            active_range_chars: None,
+        }));
+        h.key_press(Key::Space);
+        h.run_steps(3);
+        assert!(
+            !h.state()
+                .settings
+                .view
+                .columns
+                .is_visible(ColumnId::FullName)
+        );
+        assert!(h.state().dialogs.columns.open);
+    });
+}
+
+#[test]
+fn p3_modified_enter_on_write_cancel_never_dispatches() {
+    for modifiers in [Modifiers::SHIFT, Modifiers::CTRL] {
+        for confirm in [false, true] {
+            let mut app = App::new_test(&egui::Context::default());
+            app.record_dispatches_for_test();
+            app.settings.view.options.confirm_write = confirm;
+            seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+            app.select_only(0);
+            app.open_write_dialog(Vec::new());
+            let mut h = harness(app);
+            h.run_steps(3);
+            h.get_by_label("Отмена").focus();
+            h.run_steps(1);
+            h.key_press_modifiers(modifiers, Key::Enter);
+            h.run_steps(3);
+            assert!(h.state().dialogs.confirm.is_none());
+            assert!(
+                !h.state()
+                    .dispatched_for_test()
+                    .iter()
+                    .any(|c| matches!(c.kind, CommandKind::Write { .. }))
+            );
+        }
+    }
+}
+
+#[test]
+fn p3_enter_on_write_type_combo_never_dispatches() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.record_dispatches_for_test();
+    app.settings.view.options.confirm_write = false;
+    seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+    app.select_only(0);
+    app.open_write_dialog(Vec::new());
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.query_all_by_value("Auto")
+        .last()
+        .expect("type combo")
+        .click();
+    h.run_steps(2);
+    h.get_by_label("VT_I8").focus();
+    h.run_steps(1);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().dialogs.write.open);
+    assert!(
+        !h.state()
+            .dispatched_for_test()
+            .iter()
+            .any(|c| matches!(c.kind, CommandKind::Write { .. }))
+    );
+}
+
+#[test]
+fn p3_modified_enter_on_write_value_never_dispatches() {
+    for modifiers in [Modifiers::SHIFT, Modifiers::CTRL] {
+        for confirm in [false, true] {
+            let mut app = App::new_test(&egui::Context::default());
+            app.record_dispatches_for_test();
+            app.settings.view.options.confirm_write = confirm;
+            seed_writable_table(&mut app, &[("a", "SigA", 42)]);
+            app.select_only(0);
+            app.open_write_dialog(Vec::new());
+            let mut h = harness(app);
+            h.run_steps(3);
+            h.key_press_modifiers(modifiers, Key::Enter);
+            h.run_steps(3);
+            assert!(h.state().dialogs.write.open);
+            assert!(h.state().dialogs.confirm.is_none());
+            assert!(
+                !h.state()
+                    .dispatched_for_test()
+                    .iter()
+                    .any(|c| matches!(c.kind, CommandKind::Write { .. }))
+            );
+        }
+    }
+}
+
+#[test]
+fn p3_ime_space_on_options_checkbox_does_not_modify_draft() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.open_options_dialog();
+    let before = app.dialogs.options.draft.confirm_write;
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.get_by_label("Запрашивать подтверждение изменения сигнала")
+        .focus();
+    h.run_steps(1);
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit {
+        text: "a".into(),
+        active_range_chars: None,
+    }));
+    h.key_press(Key::Space);
+    h.run_steps(2);
+    assert_eq!(h.state().dialogs.options.draft.confirm_write, before);
+}
+
+#[test]
+fn p3_enter_on_add_session_combo_does_not_submit() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.record_dispatches_for_test();
+    seed_table(&mut app, &[("a", "SigA", 42)]);
+    app.dialogs.add_signal.open = true;
+    app.dialogs.add_signal.session = Some(sid(1));
+    app.dialogs.add_signal.item_id = "ns=2;i=23".into();
+    let session_label = app.active_sessions()[0].1.clone();
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.query_all_by_value(&session_label)
+        .last()
+        .expect("session combo")
+        .focus();
+    h.run_steps(1);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().dialogs.add_signal.open);
+    assert!(!h.state().dispatched_for_test().iter().any(|c| matches!(
+        c.kind,
+        CommandKind::AddItems { .. } | CommandKind::ResolveBrowsePath { .. }
+    )));
+}
+
+#[test]
+fn p3_enter_on_options_checkbox_does_not_save_draft() {
+    with_settings_lock(|| {
+        let mut app = App::new_test(&egui::Context::default());
+        app.open_options_dialog();
+        let before = app.settings.view.options.confirm_write;
+        let mut h = harness(app);
+        h.run_steps(3);
+        h.get_by_label("Запрашивать подтверждение изменения сигнала")
+            .focus();
+        h.run_steps(1);
+        h.key_press(Key::Enter);
+        h.run_steps(3);
+        assert!(h.state().dialogs.options.open);
+        assert_eq!(h.state().settings.view.options.confirm_write, before);
+    });
+}
+
+#[test]
+fn p3_enter_in_add_name_field_submits_once() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.record_dispatches_for_test();
+    seed_table(&mut app, &[("a", "SigA", 42)]);
+    app.dialogs.add_signal.open = true;
+    app.dialogs.add_signal.session = Some(sid(1));
+    app.dialogs.add_signal.item_id = "another".into();
+    app.dialogs.add_signal.focus_pending = true;
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(
+        h.state()
+            .dispatched_for_test()
+            .iter()
+            .filter(|c| matches!(c.kind, CommandKind::AddItems { .. }))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn p3_enter_on_options_save_applies_draft() {
+    with_settings_lock(|| {
+        let mut app = App::new_test(&egui::Context::default());
+        app.open_options_dialog();
+        let target = !app.settings.view.options.auto_reconnect;
+        app.dialogs.options.draft.auto_reconnect = target;
+        let mut h = harness(app);
+        h.run_steps(3);
+        h.get_by_label("Сохранить").focus();
+        h.run_steps(1);
+        h.key_press(Key::Enter);
+        h.run_steps(3);
+        assert!(!h.state().dialogs.options.open);
+        assert_eq!(h.state().settings.view.options.auto_reconnect, target);
+    });
 }

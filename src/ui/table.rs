@@ -594,43 +594,54 @@ pub(super) fn handle_table_keys(app: &mut App, ui: &mut egui::Ui) {
     let ctx = ui.ctx();
     let focus = app.table_focus.unwrap_or(0).min(len - 1);
     let shift = ctx.input(|i| i.modifiers.shift);
-    let ctrl = ctx.input(|i| i.modifiers.ctrl || i.modifiers.command);
 
-    if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
+    if super::keymap::key(super::keymap::KeyAction::TableDown)
+        .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
+    {
         let target = (focus + 1).min(len - 1);
         if shift {
             app.select_extend_to(target);
         } else {
             app.select_only(target);
         }
-    } else if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
+    } else if super::keymap::key(super::keymap::KeyAction::TableUp)
+        .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
+    {
         let target = focus.saturating_sub(1);
         if shift {
             app.select_extend_to(target);
         } else {
             app.select_only(target);
         }
-    } else if ctx.input(|i| i.key_pressed(egui::Key::PageDown)) {
+    } else if super::keymap::key(super::keymap::KeyAction::TablePageDown)
+        .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
+    {
         let target = (focus + 10).min(len - 1);
         if shift {
             app.select_extend_to(target);
         } else {
             app.select_only(target);
         }
-    } else if ctx.input(|i| i.key_pressed(egui::Key::PageUp)) {
+    } else if super::keymap::key(super::keymap::KeyAction::TablePageUp)
+        .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
+    {
         let target = focus.saturating_sub(10);
         if shift {
             app.select_extend_to(target);
         } else {
             app.select_only(target);
         }
-    } else if ctx.input(|i| i.key_pressed(egui::Key::Home)) {
+    } else if super::keymap::key(super::keymap::KeyAction::TableHome)
+        .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
+    {
         if shift {
             app.select_extend_to(0);
         } else {
             app.select_only(0);
         }
-    } else if ctx.input(|i| i.key_pressed(egui::Key::End)) {
+    } else if super::keymap::key(super::keymap::KeyAction::TableEnd)
+        .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
+    {
         if shift {
             app.select_extend_to(len - 1);
         } else {
@@ -639,30 +650,38 @@ pub(super) fn handle_table_keys(app: &mut App, ui: &mut egui::Ui) {
     }
 
     // V3: → opens the focused row's structure (again: every level), ← closes it.
-    if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
+    if super::keymap::key(super::keymap::KeyAction::TableRight)
+        .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
+    {
         app.expand_focused_value();
-    } else if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
+    } else if super::keymap::key(super::keymap::KeyAction::TableLeft)
+        .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
+    {
         app.collapse_focused_value();
     }
 
-    if ctrl && ctx.input(|i| i.key_pressed(egui::Key::A)) {
+    if super::keymap::modified_key_pressed(ctx, super::keymap::KeyAction::SelectAll) {
         app.select_all_rows();
     }
-    if ctrl && ctx.input(|i| i.key_pressed(egui::Key::C)) {
+    if super::keymap::modified_key_pressed(ctx, super::keymap::KeyAction::Copy) {
         if let Some(text) = app.copy_selected_rows() {
             ctx.copy_text(text);
             app.status = tr(app.lang(), Tr::Copied).to_string();
         }
     }
-    if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
+    if super::keymap::key(super::keymap::KeyAction::Delete)
+        .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
+    {
         app.remove_selected_rows();
     }
-    if crate::ui::key_pressed_once(ctx, egui::Key::Enter)
-        || crate::ui::key_pressed_once(ctx, egui::Key::F2)
+    if super::keymap::bindings(super::keymap::KeyAction::TableWrite)
+        .any(|binding| crate::ui::key_pressed_once(ctx, binding.key))
     {
         app.open_write_dialog(Vec::new());
     }
-    if ctx.input(|i| i.key_pressed(egui::Key::F5)) {
+    if super::keymap::key(super::keymap::KeyAction::Refresh)
+        .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
+    {
         refresh_selected(app);
     }
 }

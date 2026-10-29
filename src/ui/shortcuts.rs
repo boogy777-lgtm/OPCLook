@@ -4,6 +4,37 @@ use crate::app::App;
 use crate::bff::model::{NodeKind, SessionId};
 use crate::i18n::Tr;
 
+/// Translate portable catalog defaults to egui's logical shortcut representation.
+pub(super) fn action_shortcut(
+    id: opclook_contract::actions::ActionId,
+) -> Option<egui::KeyboardShortcut> {
+    use opclook_contract::actions::{CATALOG, DefaultShortcut};
+    CATALOG
+        .iter()
+        .find(|spec| spec.id == id)?
+        .shortcut
+        .map(|shortcut| match shortcut {
+            DefaultShortcut::ModN => {
+                egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::N)
+            }
+        })
+}
+
+pub(super) fn binding_text(ctx: &egui::Context, action: super::keymap::KeyAction) -> String {
+    super::keymap::bindings(action)
+        .next()
+        .map(|binding| {
+            ctx.format_shortcut(&egui::KeyboardShortcut::new(binding.modifiers, binding.key))
+        })
+        .unwrap_or_default()
+}
+
+pub(super) fn connect_shortcut_text(ctx: &egui::Context) -> String {
+    action_shortcut(crate::app::actions::UiAction::OpenConnectDialog.id())
+        .map(|shortcut| ctx.format_shortcut(&shortcut))
+        .unwrap_or_default()
+}
+
 /// Window-level keys, handled BEFORE the panels draw (K3) so egui's own Tab
 /// focus walk never runs for them:
 /// - Tab / Shift+Tab / F6: move the keyboard between the tag tree and the
@@ -14,31 +45,66 @@ use crate::i18n::Tr;
 /// A focused text field or an open dialog keeps every key.
 pub(super) fn keyboard_prepass(app: &mut App, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
-    if ctx.text_edit_focused() || app.dialogs.any_open() || app.csv_import.is_some() {
+    if ctx.text_edit_focused()
+        || app.dialogs.any_open()
+        || app.csv_import.is_some()
+        || super::ime_blocks_keys(&ctx)
+    {
         return;
     }
-    let ctrl = egui::Modifiers::COMMAND;
-    let ctrl_shift = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
-    let take = |modifiers: egui::Modifiers, key: egui::Key| {
-        ctx.input_mut(|i| i.consume_key(modifiers, key))
+    // Focus changes are applied later in the pass. Do not dispatch a shortcut
+    // before a simultaneous pointer press can focus its destination widget.
+    if ctx.input(|input| {
+        input
+            .events
+            .iter()
+            .any(|event| matches!(event, egui::Event::PointerButton { pressed: true, .. }))
+    }) {
+        return;
+    }
+    let take = |action| {
+        super::keymap::bindings(action)
+            .any(|binding| ctx.input_mut(|i| i.consume_key(binding.modifiers, binding.key)))
     };
 
-    if take(ctrl, egui::Key::N) {
+    let shortcut = action_shortcut(crate::app::actions::UiAction::OpenConnectDialog.id());
+    let is_mac = ctx.os().is_mac();
+    let hit = shortcut.is_some_and(|shortcut| {
+        ctx.input_mut(|input| {
+            let mut matched = false;
+            input.events.retain(|event| match event {
+                egui::Event::Key {
+                    key,
+                    pressed: true,
+                    repeat,
+                    modifiers,
+                    ..
+                } if *key == shortcut.logical_key
+                    && modifiers.matches_exact(shortcut.modifiers)
+                    && !(is_mac && modifiers.ctrl) =>
+                {
+                    matched |= !repeat;
+                    false
+                }
+                _ => true,
+            });
+            matched
+        })
+    });
+    if hit {
         let _ = app.execute_ui_action(crate::app::actions::UiAction::OpenConnectDialog);
         return;
     }
-    if take(ctrl_shift, egui::Key::Tab) || take(ctrl, egui::Key::PageUp) {
+    use super::keymap::KeyAction;
+    if take(KeyAction::PreviousSession) {
         app.cycle_session(false);
         return;
     }
-    if take(ctrl, egui::Key::Tab) || take(ctrl, egui::Key::PageDown) {
+    if take(KeyAction::NextSession) {
         app.cycle_session(true);
         return;
     }
-    let pane_switch = take(egui::Modifiers::NONE, egui::Key::Tab)
-        || take(egui::Modifiers::SHIFT, egui::Key::Tab)
-        || take(egui::Modifiers::NONE, egui::Key::F6)
-        || take(egui::Modifiers::SHIFT, egui::Key::F6);
+    let pane_switch = take(KeyAction::SwitchPane);
     if pane_switch {
         // egui already read the Tab for its widget focus walk at the start of
         // the pass; cancel it so no button silently takes the keyboard.
@@ -63,7 +129,8 @@ pub(super) fn handle_shortcuts(app: &mut App, ui: &mut egui::Ui) {
     // tag tree must no longer own it. (`text_edit_focused` iff a text edit has
     // egui keyboard focus; plain button/checkbox focus is harmless and must
     // NOT drop the tree focus or arrow keys would stop working after a click.)
-    if ui.ctx().text_edit_focused() {
+    if ui.ctx().text_edit_focused() || super::ime_blocks_keys(ui.ctx()) || app.csv_import.is_some()
+    {
         app.tree_focused = false;
         return;
     }
@@ -89,7 +156,10 @@ pub(super) fn handle_shortcuts(app: &mut App, ui: &mut egui::Ui) {
     }
     // Selection can exist without a focused table row (e.g. right after Ctrl+A,
     // which clears table_focus). A Delete key must still act on that selection.
-    if !app.selected_rows.is_empty() && ui.ctx().input(|i| i.key_pressed(egui::Key::Delete)) {
+    if !app.selected_rows.is_empty()
+        && super::keymap::key(super::keymap::KeyAction::Delete)
+            .is_some_and(|key| ui.ctx().input(|i| i.key_pressed(key)))
+    {
         app.remove_selected_rows();
     }
 }
@@ -112,9 +182,13 @@ pub(super) fn handle_tree_keys(app: &mut App, ui: &mut egui::Ui) {
         if ids.is_empty() {
             return;
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
+        if super::keymap::key(super::keymap::KeyAction::TreeDown)
+            .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
+        {
             app.set_tree_focus(session, ids[0]);
-        } else if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
+        } else if super::keymap::key(super::keymap::KeyAction::TreeUp)
+            .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
+        {
             app.set_tree_focus(session, ids[ids.len() - 1]);
         }
         return;
@@ -149,17 +223,27 @@ pub(super) fn handle_tree_keys(app: &mut App, ui: &mut egui::Ui) {
         .tree_item(session, focus_id)
         .and_then(|item| item.parent);
 
-    if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) && pos < hi {
+    if super::keymap::key(super::keymap::KeyAction::TreeDown)
+        .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
+        && pos < hi
+    {
         app.set_tree_focus(session, visible_ids[pos + 1]);
-    } else if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) && pos > lo {
+    } else if super::keymap::key(super::keymap::KeyAction::TreeUp)
+        .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
+        && pos > lo
+    {
         app.set_tree_focus(session, visible_ids[pos - 1]);
-    } else if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
+    } else if super::keymap::key(super::keymap::KeyAction::TreeLeft)
+        .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
+    {
         if expanded {
             toggle_tree_item(app, session, focus_id);
         } else if let Some(parent) = parent {
             app.set_tree_focus(session, parent);
         }
-    } else if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
+    } else if super::keymap::key(super::keymap::KeyAction::TreeRight)
+        .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
+    {
         if expanded {
             if let Some(&first_child) = visible_ids
                 .get(pos + 1)
@@ -172,13 +256,19 @@ pub(super) fn handle_tree_keys(app: &mut App, ui: &mut egui::Ui) {
         }
     }
 
-    if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
+    if super::keymap::key(super::keymap::KeyAction::TreeToggle)
+        .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
+    {
         toggle_tree_item(app, session, focus_id);
     }
-    if crate::ui::key_pressed_once(ctx, egui::Key::Enter) {
+    if super::keymap::key(super::keymap::KeyAction::TreeEnter)
+        .is_some_and(|key| crate::ui::key_pressed_once(ctx, key))
+    {
         tree_enter(app, session, focus_id);
     }
-    if ctx.input(|i| i.key_pressed(egui::Key::F5)) {
+    if super::keymap::key(super::keymap::KeyAction::Refresh)
+        .is_some_and(|key| ctx.input(|i| i.key_pressed(key)))
+    {
         refresh_selected(app);
     }
 }

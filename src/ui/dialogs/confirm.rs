@@ -1,6 +1,7 @@
 use super::dialog_spacing;
 use crate::app::App;
 use crate::i18n::{Tr, tr};
+use crate::ui::ImeSafeClick;
 
 pub(super) fn confirm_dialog(app: &mut App, ui: &mut egui::Ui, was_open: bool) {
     let ctx = ui.ctx().clone();
@@ -23,20 +24,40 @@ pub(super) fn confirm_dialog(app: &mut App, ui: &mut egui::Ui, was_open: bool) {
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(&ctx, |ui| {
             dialog_spacing(ui);
-            let enter = was_open
-                && crate::ui::key_pressed_once(ui.ctx(), egui::Key::Enter)
-                && ui.input(|i| i.modifiers.is_none());
-            let esc = was_open && ui.input(|i| i.key_pressed(egui::Key::Escape));
+            let (plain_enter, modified_enter) = ui.input(|input| {
+                input
+                    .events
+                    .iter()
+                    .fold((false, false), |(plain, modified), event| match event {
+                        egui::Event::Key {
+                            key: egui::Key::Enter,
+                            pressed: true,
+                            repeat: false,
+                            modifiers,
+                            ..
+                        } => (
+                            plain || modifiers.is_none(),
+                            modified || !modifiers.is_none(),
+                        ),
+                        _ => (plain, modified),
+                    })
+            });
+            let enter = was_open && !crate::ui::ime_blocks_keys(ui.ctx()) && plain_enter;
+            let esc = was_open
+                && (!crate::ui::ime_blocks_keys(ui.ctx())
+                    && ui.input(|i| i.key_pressed(egui::Key::Escape)));
             ui.label(text);
             ui.separator();
             ui.horizontal(|ui| {
-                if ui.button(tr(lang, Tr::Yes)).clicked()
+                let yes_button = ui.button(tr(lang, Tr::Yes));
+                if (yes_button.clicked_by(egui::PointerButton::Primary)
+                    || (yes_button.ime_safe_clicked() && !modified_enter))
                     && !crate::ui::key_repeat(ui.ctx(), egui::Key::Enter)
                     && !crate::ui::key_repeat(ui.ctx(), egui::Key::Space)
                 {
                     yes = true;
                 }
-                if ui.button(tr(lang, Tr::No)).clicked() {
+                if ui.button(tr(lang, Tr::No)).ime_safe_clicked() {
                     no = true;
                 }
             });

@@ -201,3 +201,23 @@ fn p2_disabled_action_scene() {
     app.dialogs.about.open = true;
     save("p2-disabled-action-ru", app);
 }
+
+#[test]
+#[ignore = "manual visual QA requiring a headless wgpu renderer"]
+fn p3_shortcut_menu_ru() {
+    let mut h = Harness::builder()
+        .with_size([1200.0, 900.0])
+        .with_accessibility_check(false)
+        .with_render_cursor(false)
+        .with_context_setup(|ctx| {
+            assert!(opcda_egui::app::install_fonts(ctx).is_some());
+        })
+        .build_ui_state(|ui, app: &mut App| app.update(ui), base(Lang::Ru));
+    h.run_steps(5);
+    h.get_by_label("OPC клиент").click();
+    h.run_steps(3);
+    h.render()
+        .unwrap()
+        .save("docs/screenshots/p3-shortcut-menu-ru.png")
+        .unwrap();
+}

@@ -30,7 +30,8 @@ pub(super) fn csv_import_dialog(app: &mut App, ui: &mut egui::Ui) {
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(&ctx, |ui| {
             dialog_spacing(ui);
-            let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            let esc = !crate::ui::ime_blocks_keys(ui.ctx())
+                && ui.input(|i| i.key_pressed(egui::Key::Escape));
             ui.label(if job_cancelled {
                 tr(lang, Tr::ImportStopped).to_string()
             } else if job_done {

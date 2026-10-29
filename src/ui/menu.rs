@@ -22,7 +22,13 @@ pub(super) fn menu(app: &mut App, ui: &mut egui::Ui) {
                     app,
                     ui,
                     crate::app::actions::UiAction::OpenConnectDialog,
-                    egui::Button::new(tr(lang, Tr::ConnectEllipsis)).shortcut_text("Ctrl+N"),
+                    egui::Button::new(tr(lang, Tr::ConnectEllipsis)).shortcut_text(
+                        super::shortcuts::action_shortcut(
+                            crate::app::actions::UiAction::OpenConnectDialog.id(),
+                        )
+                        .map(|shortcut| ui.ctx().format_shortcut(&shortcut))
+                        .unwrap_or_default(),
+                    ),
                 )
                 .clicked()
                 {
@@ -146,7 +152,14 @@ pub(super) fn menu(app: &mut App, ui: &mut egui::Ui) {
                 ui.separator();
                 if ui
                     .button(tr(lang, Tr::SelectAll))
-                    .on_hover_text(tr(lang, Tr::HintCtrlA))
+                    .on_hover_text(crate::i18n::fmt(
+                        lang,
+                        Tr::HintCtrlA,
+                        &[&super::shortcuts::binding_text(
+                            ui.ctx(),
+                            super::keymap::KeyAction::SelectAll,
+                        )],
+                    ))
                     .clicked()
                 {
                     app.selected_rows = app.rows().iter().map(|row| row.key).collect();
