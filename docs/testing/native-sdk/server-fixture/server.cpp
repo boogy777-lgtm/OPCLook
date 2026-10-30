@@ -15,7 +15,23 @@ public:
         setDeviceIOMode(SODaSItemTag::direct);
     }
     void handleRequest(SODaSRequest* request) override {
-        if (request) request->complete();
+        if (!request) return;
+        if (request->getOperation() == SODaSRequest::write) {
+            SOCmnVariant value;
+            if (!request->getWriteValue(&value)) {
+                request->complete(E_FAIL, FALSE, OPC_QUALITY_UNCERTAIN, FALSE, FALSE);
+                return;
+            }
+            if (value.vt & VT_ARRAY) {
+                // This fixture models a device that replaces the whole value.
+                // SDK default updateValue instead merges array index ranges.
+                SOCmnPointer<SODaSCache> cache = getCache();
+                const HRESULT result = cache.isNotNull() && cache->setValue(value) ? S_OK : E_FAIL;
+                request->complete(result, FALSE, OPC_QUALITY_UNCERTAIN, FALSE, FALSE);
+                return;
+            }
+        }
+        request->complete();
     }
 };
 

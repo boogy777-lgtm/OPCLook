@@ -1,5 +1,19 @@
 # Текущий статус
 
+## 2026-10-31 — N3 fixture array semantics (Windows CI ожидается)
+
+На head `bd6b9f74` Gateway прошёл Discover, Browse, scalar и UI1 array
+read/write, но Ints write с HRESULT S_OK не изменил старый массив. Причина
+подтверждена исходниками pinned SDK сервера: `SODaSRequest::complete` вызывает
+`cache->updateValue`, игнорируя его BOOL; `doUpdateValue` сливает по индексам,
+а disjoint bounds [0..1] и [5..7] не пересекаются. Test server теперь явно
+моделирует замену массива через SDK `setValue` и возвращает ошибку при неудаче;
+strict changed-length и nonzero-bound read assertions сохранены. Это изменение
+fixture, не product workaround; новая Win32 проверка ожидается. `Value::Array`
+не хранит lower bound; accepted write не доказывает применение значения.
+Предыдущий `0xc0000005` на `9553bce` и возможная гонка уничтожения временного
+SDK worker остаются открытыми; их причина не установлена этим тестом.
+
 ## 2026-10-31 — N3 Gateway crash диагностика
 
 На `9553bce` [COM interop](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41119942026)

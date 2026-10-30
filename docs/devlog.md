@@ -1178,3 +1178,12 @@ dispatch/reply и ранний init/discovery; Defect = `9553bce` заверши
 violation, а стандартный test capture скрыл пройденные этапы. Markers и
 `--nocapture` не исправляют runtime; строгие assertions и cleanup сохранены.
 Windows повторное воспроизведение требуется для определения причины.
+
+2026-10-31 N3 fixture arrays: Class = семантика устройства для записи массива;
+Inv = строгий тест получает объявленную замену или ошибку; N+1 = изменение
+длины и nonzero lower bound; Defect = pinned SDK server default updateValue
+делает индексный merge и возвращает FALSE для disjoint bounds, тогда как
+complete игнорирует этот результат. На `bd6b9f74` измерено S_OK и прежнее
+значение Ints. Fixture явно использует SDK setValue, проверяет BOOL и не
+позволяет default merge повторно изменить результат; это не правка backend и
+не утверждение о других серверах. Windows live regression ожидается.

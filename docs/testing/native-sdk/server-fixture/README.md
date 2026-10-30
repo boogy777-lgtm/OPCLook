@@ -39,3 +39,14 @@ with lower bound 5; Strings: BSTR ["РУГ 中文", ""]; Mixed: VARIANT
 [I4(-42), BSTR("РУГ 中文"), UI8-array([2,255])]. DateBeforeEpoch is DATE -1.25,
 which denotes 1899-12-29 06:00 under OPCLook's existing UTC interpretation.
 The unsafe SDK initArray helper is not used. New fixtures need exact-head Windows proof.
+
+The fixture models whole-array replacement explicitly through SDK `setValue`;
+failure is returned as an error and automatic `updateValue` is disabled for that
+request. `setValue` supplies the timestamp; the initially good quality remains.
+The SDK's default array `updateValue` merges by index and may report success
+even when a disjoint range was not applied, so it is not a replacement oracle.
+OPCLook's `Value::Array` contains elements, not SAFEARRAY lower bounds; writes
+currently start at zero. Real DA servers may apply different array semantics;
+an accepted HRESULT is not proof that a value was applied. This fixture tests
+read of a nonzero lower bound and replacement by this particular server, not
+preservation of the lower bound on write.
