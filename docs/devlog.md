@@ -1187,3 +1187,11 @@ complete игнорирует этот результат. На `bd6b9f74` из�
 значение Ints. Fixture явно использует SDK setValue, проверяет BOOL и не
 позволяет default merge повторно изменить результат; это не правка backend и
 не утверждение о других серверах. Windows live regression ожидается.
+
+2026-10-31 N3 reconnect: Class = диагностика intermittently crashing native
+reconnect; Inv = каждый исходный assert и измерение отдельного процесса остаются
+обязательными; N+1 = resolve ProgID и каждая стадия SDK open; Defect = 1-й
+strict Gateway процесс на `4d22079` прошёл, 2-й завершился AV после Connect101,
+3-й не запущен. Добавлены test-only фазовые markers и AV observer, который
+возвращает EXCEPTION_CONTINUE_SEARCH; runtime поведение не менялось, дальнейшая
+локализация требует Windows CI.

@@ -1,5 +1,17 @@
 # Текущий статус
 
+## 2026-10-31 — N3 intermittent reconnect crash
+
+На `4d22079` [COM fixture](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41122495828)
+первый Gateway процесс прошёл весь strict сценарий и cleanup, включая массивы,
+Unicode, reconnect и subscription. Второй независимый процесс прошёл тот же
+путь до Disconnect, но получил `0xc0000005` после отправки следующего Connect;
+третий не запускался. Это 1/2 выполненных процесса, не зелёный gate. Добавлены
+test-only SDK markers для resolve, открытия и закрытия сессии, а также
+наблюдатель AV с адресом/модулем без перехвата исключения; причина и исправление AV
+ещё не установлены. Известный из source lifetime риск временных discovery/
+resolve worker отдельно требует регрессии и не считается причиной без доказательств.
+
 ## 2026-10-31 — N3 fixture array semantics (Windows CI ожидается)
 
 На head `bd6b9f74` Gateway прошёл Discover, Browse, scalar и UI1 array

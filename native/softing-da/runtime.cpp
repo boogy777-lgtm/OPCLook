@@ -15,6 +15,29 @@
 #ifdef OPCL_DA_TESTING
 #include <cstdio>
 #define OPCL_DISCOVERY_TRACE(phase) do { std::fprintf(stderr, "SDK discovery: %s\n", phase); std::fflush(stderr); } while (0)
+static LONG CALLBACK trace_test_access_violation(EXCEPTION_POINTERS* exception) {
+    if (!exception || !exception->ExceptionRecord ||
+        exception->ExceptionRecord->ExceptionCode != EXCEPTION_ACCESS_VIOLATION) return EXCEPTION_CONTINUE_SEARCH;
+    void* address = exception->ExceptionRecord->ExceptionAddress;
+    HMODULE module = nullptr;
+    char name[MAX_PATH] = {};
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCSTR>(address), &module)) {
+        GetModuleFileNameA(module, name, MAX_PATH);
+    }
+    std::fprintf(stderr, "SDK fixture AV: thread=%lu address=%p module=%s base=%p offset=%llu",
+                 static_cast<unsigned long>(GetCurrentThreadId()), address, name, module,
+                 module ? static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(address) - reinterpret_cast<uintptr_t>(module)) : 0ULL);
+    if (exception->ExceptionRecord->NumberParameters >= 2) std::fprintf(stderr, " access=%llu target=%p",
+        static_cast<unsigned long long>(exception->ExceptionRecord->ExceptionInformation[0]),
+        reinterpret_cast<void*>(exception->ExceptionRecord->ExceptionInformation[1]));
+#ifdef _M_IX86
+    if (exception->ContextRecord) std::fprintf(stderr, " EIP=%08lx ESP=%08lx",
+        static_cast<unsigned long>(exception->ContextRecord->Eip), static_cast<unsigned long>(exception->ContextRecord->Esp));
+#endif
+    std::fprintf(stderr, "\n"); std::fflush(stderr);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
 #else
 #define OPCL_DISCOVERY_TRACE(phase) do {} while (0)
 #endif
@@ -100,6 +123,10 @@ static bool owns(OpclDaSession* s, OpclDaItem* i) {
     return s && i && s->items.find(i) != s->items.end();
 }
 extern "C" int32_t opcl_da_host_create(OpclDaHost** out) try {
+#ifdef OPCL_DA_TESTING
+    static std::once_flag trace_handler;
+    std::call_once(trace_handler, [] { AddVectoredExceptionHandler(1, trace_test_access_violation); });
+#endif
     if (!out) return E_INVALIDARG;
     *out = nullptr;
     bool expected = false;
@@ -140,10 +167,14 @@ extern "C" int32_t opcl_da_session_open(OpclDaHost* host, const char* name, cons
     if (!to_wide(name, wide_name) || !to_wide(node, wide_node)) return E_INVALIDARG;
     GUID clsid{id->data1, id->data2, id->data3, {}};
     for (unsigned i = 0; i != 8; ++i) clsid.Data4[i] = id->data4[i];
+    OPCL_DISCOVERY_TRACE("session addServer");
     SODaCServer* server = host->entry->addServer(wide_name.data(), wide_node.data(), clsid);
     if (!server) return E_OUTOFMEMORY;
+    OPCL_DISCOVERY_TRACE("session connect");
     HRESULT hr = server->connect(FALSE);
+    OPCL_DISCOVERY_TRACE("session connect returned");
     if (SUCCEEDED(hr) && !server->isConnected()) hr = E_FAIL;
+    OPCL_DISCOVERY_TRACE("session addGroup");
     SODaCGroup* group = SUCCEEDED(hr) ? server->addGroup(nullptr, update_rate_ms) : nullptr;
     std::shared_ptr<PushState> push;
     if (SUCCEEDED(hr) && subscription) {
@@ -155,7 +186,9 @@ extern "C" int32_t opcl_da_session_open(OpclDaHost* host, const char* name, cons
         RuntimeGroup* runtime_group = static_cast<RuntimeGroup*>(group);
         runtime_group->push = push;
         group->setDataRetrieval(subscription ? SODaCGroup::drAsyncAdvise : SODaCGroup::drPolledRefresh);
+        OPCL_DISCOVERY_TRACE("session group start");
         hr = group->start(FALSE);
+        OPCL_DISCOVERY_TRACE("session group start returned");
         if (SUCCEEDED(hr) && !group->isStarted()) hr = E_FAIL;
         // The SDK must actually retain advise mode; never silently turn the
         // requested stream into its cyclic sync-read fallback.
@@ -173,7 +206,9 @@ extern "C" int32_t opcl_da_session_open(OpclDaHost* host, const char* name, cons
         server->disconnect(); host->entry->removeBranch(server); server->release();
         return E_OUTOFMEMORY;
     }
-    ++host->sessions; *out = session; return S_OK;
+    ++host->sessions; *out = session;
+    OPCL_DISCOVERY_TRACE("session open returned");
+    return S_OK;
 } catch (...) { return E_UNEXPECTED; }
 extern "C" int32_t opcl_da_item_add(OpclDaSession* s, const char* id, uint32_t registration_low,
                                      uint32_t registration_high, OpclDaItem** out,
@@ -245,6 +280,7 @@ extern "C" int32_t opcl_da_item_remove(OpclDaSession* s, OpclDaItem* item) try {
 static HRESULT clear_browse(OpclDaSession* s);
 extern "C" int32_t opcl_da_session_close(OpclDaSession* s) try {
     if (!s) return E_INVALIDARG;
+    OPCL_DISCOVERY_TRACE("session clear browse");
     const HRESULT cleared = clear_browse(s);
     if (FAILED(cleared)) return cleared;
     HRESULT result = S_OK;
@@ -252,14 +288,17 @@ extern "C" int32_t opcl_da_session_close(OpclDaSession* s) try {
         const HRESULT hr = opcl_da_item_remove(s, *s->items.begin());
         if (FAILED(hr)) result = hr;
     }
+    OPCL_DISCOVERY_TRACE("session disconnect group");
     HRESULT hr = s->group->disconnect(); if (FAILED(hr)) result = hr;
     if (!s->server->removeBranch(s->group)) result = E_FAIL;
     s->group->release();
     for (SODaCItem* retired : s->retired) retired->release();
     s->retired.clear();
+    OPCL_DISCOVERY_TRACE("session disconnect server");
     hr = s->server->disconnect(); if (FAILED(hr)) result = hr;
     if (!s->host->entry->removeBranch(s->server)) result = E_FAIL;
     s->server->release(); --s->host->sessions; delete s;
+    OPCL_DISCOVERY_TRACE("session close returned");
     return result;
 } catch (...) { return E_UNEXPECTED; }
 // Dispatch synchronous SDK operations through its own per-server worker. The
@@ -937,7 +976,9 @@ public:
         CLSID clsid{}; HRESULT hr = E_FAIL;
         if (kind_ == 0) {
             // Windows class lookup is a system service, not an OPC data-plane call.
+            OPCL_DISCOVERY_TRACE("CLSIDFromProgID");
             hr = CLSIDFromProgID(progid_, &clsid);
+            OPCL_DISCOVERY_TRACE("CLSIDFromProgID returned");
         } else {
             SOCmnPointer<SOCltServerBrowser> browser = new SOCltServerBrowser();
             browser->setNodeName(node_);
@@ -1019,10 +1060,13 @@ extern "C" int32_t opcl_da_resolve(OpclDaHost* host, const char* node, const cha
     *out = {};
     std::vector<WCHAR> n, p;
     if (!to_wide(node, n) || !to_wide(progid, p)) return E_INVALIDARG;
+    OPCL_DISCOVERY_TRACE("construct resolve context");
     SOCmnPointer<SODaCComServerDefault> context = new SODaCComServerDefault();
     ResolveServerTask* task = new (std::nothrow) ResolveServerTask(context, n.data(), p.data(), kind, out);
     if (!task) return E_OUTOFMEMORY;
+    OPCL_DISCOVERY_TRACE("execute resolve task");
     const HRESULT hr = context->executeTask(task); const bool ran = task->ran(); task->release();
+    OPCL_DISCOVERY_TRACE("resolve task returned");
     return ran || FAILED(hr) ? hr : E_UNEXPECTED;
 } catch (...) { return E_UNEXPECTED; }
 extern "C" int32_t opcl_da_discover(OpclDaHost* host, const char* node,
