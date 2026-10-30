@@ -12,6 +12,12 @@
 #include <mutex>
 #include <utility>
 #include <cstring>
+#ifdef OPCL_DA_TESTING
+#include <cstdio>
+#define OPCL_DISCOVERY_TRACE(phase) do { std::fprintf(stderr, "SDK discovery: %s\n", phase); std::fflush(stderr); } while (0)
+#else
+#define OPCL_DISCOVERY_TRACE(phase) do {} while (0)
+#endif
 
 // The SDK asks its host for this module handle to load resources.
 HINSTANCE getInstanceHandle() { return ::GetModuleHandle(nullptr); }
@@ -953,14 +959,20 @@ public:
           fallback_(fallback), ran_(false) {}
     void execute() override try {
         ran_ = true;
+        OPCL_DISCOVERY_TRACE("construct browser");
         SOCmnPointer<SOCltServerBrowser> browser = new SOCltServerBrowser();
+        OPCL_DISCOVERY_TRACE("set node");
         browser->setNodeName(local_node(node_) ? L"" : node_);
         SOCmnList<CLSID> classes;
         const DWORD categories = SOCLT_BROWSE_SERVER_CAT_DA10A | SOCLT_BROWSE_SERVER_DA20 | SOCLT_BROWSE_SERVER_DA30;
+        OPCL_DISCOVERY_TRACE("browse categories");
         BOOL ok = browser->browseServer(categories, classes);
+        OPCL_DISCOVERY_TRACE("browse categories returned");
         if (!ok && local_node(node_)) {
             classes.destroy();
+            OPCL_DISCOVERY_TRACE("browse registry fallback");
             ok = browser->browseServer(SOCLT_BROWSE_SERVER_REG_DA10A, classes);
+            OPCL_DISCOVERY_TRACE("browse registry returned");
             *fallback_ = 1;
         }
         if (!ok) {
@@ -1021,10 +1033,13 @@ extern "C" int32_t opcl_da_discover(OpclDaHost* host, const char* node,
     if (!host || capacity > OPCL_DA_MAX_SERVERS || (capacity && !out)) return E_INVALIDARG;
     std::vector<WCHAR> n;
     if (!to_wide(node, n)) return E_INVALIDARG;
+    OPCL_DISCOVERY_TRACE("construct discovery context");
     SOCmnPointer<SODaCComServerDefault> context = new SODaCComServerDefault();
     DiscoverServerTask* task = new (std::nothrow) DiscoverServerTask(context, n.data(), out, capacity, count, fallback);
     if (!task) return E_OUTOFMEMORY;
+    OPCL_DISCOVERY_TRACE("execute discovery task");
     const HRESULT hr = context->executeTask(task); const bool ran = task->ran(); task->release();
+    OPCL_DISCOVERY_TRACE("discovery task returned");
     return ran || FAILED(hr) ? hr : E_UNEXPECTED;
 } catch (...) { return E_UNEXPECTED; }
 

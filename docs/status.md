@@ -1,5 +1,14 @@
 # Текущий статус
 
+## 2026-10-31 — N3 Gateway crash диагностика
+
+На `9553bce` [COM interop](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41119942026)
+прошёл independent SDK client, C ABI и Rust owner, но Gateway live test упал
+`0xc0000005` до появления результатов; cleanup сервера/proxy прошёл. В строгий
+тест добавлены phase/request/reply markers и `--nocapture`, без изменения
+assertions и runtime. Локализация причины и исправление ожидают Windows CI;
+этот диагностический шаг не объявляет Gateway или production DA исправным.
+
 ## 2026-10-31 — N2 DATE precision, CI candidate
 
 На head `9553bce` Windows VARIANT regression измерил roundtrip DATE с ошибкой

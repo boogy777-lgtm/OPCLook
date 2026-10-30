@@ -38,6 +38,7 @@ fn reply(gateway: &Gateway, id: RequestId) -> Event {
     }
 }
 fn command(gateway: &Gateway, id: u64, kind: CommandKind) -> Event {
+    eprintln!("gateway fixture: dispatch request {id}: {kind:?}");
     let request_id = RequestId::new(id).unwrap();
     gateway
         .send(Command {
@@ -47,11 +48,15 @@ fn command(gateway: &Gateway, id: u64, kind: CommandKind) -> Event {
             kind,
         })
         .unwrap();
-    reply(gateway, request_id)
+    let response = reply(gateway, request_id);
+    eprintln!("gateway fixture: reply request {id}: {:?}", response.kind);
+    response
 }
 #[test]
 fn sdk_gateway_live() {
+    eprintln!("gateway fixture: create Gateway");
     let mut gateway = Gateway::new();
+    eprintln!("gateway fixture: dispatch discovery");
     let discovery_id = RequestId::new(90).unwrap();
     gateway
         .send(Command {
@@ -67,6 +72,7 @@ fn sdk_gateway_live() {
         matches!(reply(&gateway, discovery_id).kind, EventKind::Servers { servers, .. }
         if servers.iter().any(|server| server.id.eq_ignore_ascii_case("OPCLook.NativeDaFixture.1")))
     );
+    eprintln!("gateway fixture: discovery reply verified");
     let endpoint = EndpointSpec::da("localhost", "OPCLook.NativeDaFixture.1");
     assert!(matches!(
         command(&gateway, 1, CommandKind::Connect { endpoint }).kind,
