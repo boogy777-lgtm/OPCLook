@@ -1,5 +1,24 @@
 # Текущий статус
 
+## 2026-10-30 — N2 SDK Gateway preview (не production)
+
+Опциональный `native-da-preview` включает существующий Gateway/router с SDK
+host и scalar Connect/Add/Remove/Read/Write; сейчас Connect только по CLSID.
+Добавлены numeric/BOOL/DATE/CY scalar types через SDK variant setters; строки,
+массивы и остальные unsupported. Discover/Browse/Test, Subscription и Unicode
+ID явно недоступны. Process-level owner повторно использует entry, пока живы сессии,
+до явного финального shutdown процесса; зависшая сессия не приводит к
+освобождению под вызовом. Финальный SDK terminate ограничен для caller по времени;
+последствия timeout и recovery после исключения на C ABI ещё не доказаны. Production по умолчанию остаётся
+legacy; N2/N3/N4 открыты.
+
+Локально измерено: Linux stand подключает настоящие файлы Gateway router и
+SDK adapter, command/event test с mock ABI прошёл 1/1. Строгий Windows
+`sdk_gateway_live` добавлен без skip; compile/link и живое выполнение пока
+не измерены. SDK init/reuse и exception guards требуют Win32 interop.
+Отдельный C ABI live run 41089436547 завершился exit 32 до Write; добавлена
+диагностика исходных connect/add/read HRESULT и фактов для локализации причины.
+
 ## 2026-10-30 — N2 SDK C ABI runtime prototype (не production)
 
 Добавлены SDK host/session и I4 sync I/O C ABI и строгий `--live` fixture

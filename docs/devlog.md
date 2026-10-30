@@ -1069,8 +1069,8 @@ cyclic sync read (source inspection), Engine остаётся owner Poll. Produc
 SDK syncRead/syncWrite непосредственно вызывают COM на вызывающей thread;
 вызов с session thread без COM init был бы неверен. Prototype теперь запускает
 I/O через SDK `SOCltTask` и `executeTask` на per-server SDK worker, который
-сам инициализирует и балансирует MTA. Строгий fixture вызывает I/O на thread
-без COM context и проверяет, что она остаётся без COM context. Win32 compile
+сам инициализирует и балансирует MTA. Строгий fixture вызывает I/O на отдельной thread и проверяет, что её COM
+context до и после не меняется; Windows может назначить implicit MTA. Win32 compile
 и live выполнение этого изменения ещё не измерены.
 
 CMake создаёт статическую SDK bridge library; `softing_runtime.rs` оборачивает
@@ -1093,3 +1093,53 @@ SDK `executeTask` может вернуть S_FALSE, если task не пост
 до dispatch заполняется failed service/item sentinel, поэтому неисполненная
 операция не превращается в успешный ноль. I4 write создаётся через SDK
 SOCmnVariant::setI4. Проверка Windows compile/live ожидается.
+
+### N2 Gateway SDK preview и process host (2026-10-30)
+
+Feature `native-da-preview` выбирает один DA adapter за Gateway/router; direct
+SDK C ABI используется для I4 и CLSID endpoint. Доступные HRESULT записи
+сохраняются как per-item или service status, после dispatch отказ даёт Unknown,
+повтора Write нет. Другие типы и пока не подключённые SDK browse/discovery
+явно отклоняются. Default production не переключён.
+
+Process-level owner thread только управляет SDK entry: новый Gateway повторно
+получает тот же host, пока существует session reference; после исчезновения
+ссылок owner выполняет terminate на thread и может создать host снова. SDK
+per-server worker владеет OPC I/O. Возможное зависание terminate может задержать
+новый Gateway, recovery после исключений в C ABI ещё не доказан. Восемь ABI
+входов и две SDK task ловят C++ исключения; task устанавливает E_UNEXPECTED,
+чтобы SDK отправил completion. Неисполненная Write не превращается в per-item
+Rejected: при неизвестном dispatch остаётся Unknown с service HRESULT.
+
+Linux runtime-stand компилирует реальные файлы router, Gateway adapter,
+contract и Rust SDK owner с mock channel/ABI; 1 command/event test прошёл.
+`sdk_gateway_live` запускается только с явно выбранным feature, без ignore или
+условного успеха при отсутствии fixture. Win32 compile/link/live pending, типы,
+Unicode, Browse/Discover и Subscription остаются открыты.
+
+Process owner не выполняет idle termination: он переиспользует host между
+Gateway до явного финального `finish_native_sdk` и никогда не блокирует новый
+Gateway фоновым terminate. Финальный вызов возвращает Busy при живых сессиях,
+ожидает terminate ограниченное caller время и завершает owner после успеха
+или ошибки. `sdk_gateway_live` вызывает его после shutdown. Production app ещё
+не подключает этот финальный API; strict Windows proof pending.
+
+Live server run 41089436547: SDK direct client baseline прошёл cross-process
+Read 42/Write 73/Read 73 и shutdown. Следующий `core-probe --live` завершился
+exit 32 до Write; финальная печать затирала исходный HRESULT. Добавлены phase
+logging connect, caller COM context, Add и Read с raw facts. Причина до
+следующего Win32 прогона не установлена; не считать C ABI live зелёным.
+
+`CoGetContextToken == CO_E_NOTINITIALIZED` на новой thread нельзя требовать
+безусловно: в процессе может существовать implicit MTA. Строгий live fixture
+сравнивает caller context до/после SDK операции, принимая implicit MTA; при
+этом Read/Write выполняются на SDK worker. Причина run 41089436547 пока не
+доказана; следующий run должен показать phase diagnostics.
+
+N2 SDK scalar ABI переносит signed/unsigned 64-bit без f64 преобразования,
+BOOL, I1/I2/I4/I8/INT, UI1/UI2/UI4/UI8/UINT, R4/R8, CY и DATE; запись создаёт
+SOCmnVariant только SDK setters, диапазоны проверяются до dispatch. Raw type,
+service/item HRESULT, quality/time сохраняются; ARRAY/BSTR и прочие типы дают
+явный Unsupported. Linux stand: scalar boundary test и Gateway mock command
+test по 1/1. Strict Gateway fixture расширен bool/i64/u64/f64 read/write,
+SDK C++ Win32 compile и реальные значения ещё не измерены.

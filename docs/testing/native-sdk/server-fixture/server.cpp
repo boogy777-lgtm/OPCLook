@@ -9,8 +9,8 @@ static const CLSID fixture_clsid = {0x7d4bd1b1, 0x7422, 0x48c0, {0xad, 0x58, 0x6
 // SDK complete() performs cache updates and OPC request completion.
 class FixtureTag : public SODaSTagDefault {
 public:
-    FixtureTag() : SODaSTagDefault(_T("Value")) {
-        setNativeDatatype(VT_I4);
+    FixtureTag(LPCTSTR name, VARTYPE type) : SODaSTagDefault(name) {
+        setNativeDatatype(type);
         setAccessRights(OPC_READABLE | OPC_WRITEABLE);
         setDeviceIOMode(SODaSItemTag::direct);
     }
@@ -18,6 +18,16 @@ public:
         if (request) request->complete();
     }
 };
+
+static bool add_tag(SODaSNode* node, LPCTSTR name, SOCmnVariant& value) {
+    SOCmnPointer<SODaSTag> tag = new FixtureTag(name, value.vt);
+    if (!node->addLeaf(tag)) return false;
+    SOCmnPointer<SODaSCache> cache = tag->getCache();
+    SOCmnDateTime now;
+    now.now();
+    return cache.isNotNull() && cache->setValue(value) &&
+           cache->setQuality(OPC_QUALITY_GOOD) && cache->setTimeStamp(now);
+}
 
 static int run(int argc, char** argv) {
     SOCmnPointer<SODaSEntry> entry = getSODaSEntry();
@@ -36,14 +46,26 @@ static int run(int argc, char** argv) {
     } else if (argc == 3) {
         SOCmnPointer<SODaSNameSpaceRoot> root = entry->getNameSpaceRoot();
         SOCmnPointer<SODaSNode> node = new SODaSNodeDefault(_T("Fixture"));
-        SOCmnPointer<SODaSTag> tag = new FixtureTag;
-        if (!root.isNotNull() || !root->addBranch(node) || !node->addLeaf(tag)) result = 14;
+        if (!root.isNotNull() || !root->addBranch(node)) result = 14;
         if (result == 0) {
-            SOCmnPointer<SODaSCache> cache = tag->getCache();
-            SOCmnVariant initial(static_cast<LONG>(42));
-            SOCmnDateTime now;
-            now.now();
-            if (!cache.isNotNull() || !cache->setValue(initial) || !cache->setQuality(OPC_QUALITY_GOOD) || !cache->setTimeStamp(now)) result = 15;
+            SOCmnVariant value;
+            value.setI4(42);
+            bool tags = add_tag(node, _T("Value"), value);
+            value.setBOOL(true);
+            tags = add_tag(node, _T("Bool"), value) && tags;
+            value.setI8(static_cast<LONGLONG>(-9007199254740993LL));
+            tags = add_tag(node, _T("Int64"), value) && tags;
+            value.setUI8(static_cast<ULONGLONG>(18446744073709551600ULL));
+            tags = add_tag(node, _T("UInt64"), value) && tags;
+            value.setR8(12.5);
+            tags = add_tag(node, _T("Float64"), value) && tags;
+            value.setBSTR(_T("initial text"));
+            tags = add_tag(node, _T("Text"), value) && tags;
+            value.setBSTR(_T("\u0420\u0423\u0413 \u4e2d\u6587"));
+            tags = add_tag(node, _T("Unicode"), value) && tags;
+            value.setI4(314);
+            tags = add_tag(node, _T("\u0422\u0435\u0433"), value) && tags;
+            if (!tags) result = 15;
         }
         if (result == 0 && !entry->start()) result = 16;
         if (result == 0) {

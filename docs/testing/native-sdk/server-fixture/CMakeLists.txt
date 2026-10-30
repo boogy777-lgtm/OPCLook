@@ -27,7 +27,7 @@ file(GLOB server_sources CONFIGURE_DEPENDS "${core}/src/SOSrv/*.cpp" "${core}/sr
 file(GLOB client_sources CONFIGURE_DEPENDS "${core}/src/SOClt/*.cpp" "${core}/src/SODaC/*.cpp")
 add_executable(opcl_da_server server.cpp ${common_sources} ${server_sources}
   "${core}/src/demo/SOServer/SOSAllocHelpers.cpp" "${core}/src/include/SOProxy_i.c")
-target_compile_definitions(opcl_da_server PRIVATE SODMS_DA)
+target_compile_definitions(opcl_da_server PRIVATE SODMS_DA UNICODE _UNICODE)
 set_source_files_properties("${core}/src/demo/SOServer/SOSAllocHelpers.cpp" PROPERTIES
   COMPILE_OPTIONS "/FI${CMAKE_CURRENT_SOURCE_DIR}/stdafx.h")
 add_executable(opcl_da_sdk_client client-smoke.cpp ${common_sources} ${client_sources})

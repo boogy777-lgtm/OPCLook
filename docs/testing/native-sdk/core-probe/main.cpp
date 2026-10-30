@@ -11,6 +11,9 @@ static_assert(sizeof(OpclDaFact) == 24 && offsetof(OpclDaFact, client_handle) ==
               offsetof(OpclDaFact, filetime_high) == 12 && offsetof(OpclDaFact, i4) == 16 &&
               offsetof(OpclDaFact, quality) == 20 && offsetof(OpclDaFact, vartype) == 22 &&
               sizeof(OpclDaEnvelope) == 16 && offsetof(OpclDaEnvelope, master_error) == 12, "ABI layout");
+static_assert(sizeof(OpclDaScalar) == 28 && offsetof(OpclDaScalar, bits_low) == 16 &&
+              offsetof(OpclDaScalar, quality) == 24 && offsetof(OpclDaScalar, vartype) == 26,
+              "scalar ABI layout");
 
 
 static_assert(std::is_same<XML_Char, char>::value, "SDK expects narrow Expat strings");
@@ -128,21 +131,28 @@ static int live_fixture() {
     hr = opcl_da_session_open(host, "OPCLook.NativeDaFixture.1", "localhost", &clsid, &session);
     std::printf("live connect hr=%08lx\n", static_cast<unsigned long>(hr));
     bool ok = SUCCEEDED(hr);
-    // SDK task dispatch owns synchronous OPC I/O on its per-server worker.
-    // Windows may expose an implicit MTA on this thread while the SDK host
-    // owns the process MTA; do not require CO_E_NOTINITIALIZED here.
+    // SDK task dispatch performs synchronous OPC I/O on its per-server
+    // worker. Windows may place this caller in the process's implicit MTA.
     if (ok) { std::thread caller([&] {
     ULONG_PTR token = 0;
     const HRESULT caller_before = CoGetContextToken(&token);
     std::printf("live caller before=%08lx\n", static_cast<unsigned long>(caller_before));
+    const ULONG_PTR token_before = token;
+    ok = true;
     if (ok) hr = opcl_da_item_add(session, "Fixture.Value", &item, &type, &rights);
+    std::printf("live add hr=%08lx type=%u rights=%lu item=%p\n",
+                static_cast<unsigned long>(hr), type, static_cast<unsigned long>(rights), static_cast<void*>(item));
     if (SUCCEEDED(hr)) hr = opcl_da_read_i4(session, item, 0, &value);
-    std::printf("live read hr=%08lx service=%08lx item=%08lx vt=%u value=%ld quality=%04x\n", static_cast<unsigned long>(hr), static_cast<unsigned long>(value.service_result), static_cast<unsigned long>(value.item_result), value.vartype, static_cast<long>(value.value), value.quality);
+    std::printf("live read hr=%08lx service=%08lx item=%08lx vt=%u value=%ld quality=%04x time=%08lx:%08lx\n",
+                static_cast<unsigned long>(hr), static_cast<unsigned long>(value.service_result),
+                static_cast<unsigned long>(value.item_result), value.vartype, static_cast<long>(value.value), value.quality,
+                static_cast<unsigned long>(value.filetime_high), static_cast<unsigned long>(value.filetime_low));
     ok = ok && SUCCEEDED(hr) && SUCCEEDED(value.service_result) && SUCCEEDED(value.item_result) &&
               type == VT_I4 && (rights & OPC_WRITEABLE) && value.value == 42 &&
               (value.quality & 0xc0) == 0xc0 && (value.filetime_low || value.filetime_high);
     if (ok) {
         hr = opcl_da_write_i4(session, item, 77, &write_result);
+        std::printf("live write hr=%08lx item=%08lx\n", static_cast<unsigned long>(hr), static_cast<unsigned long>(write_result));
         ok = SUCCEEDED(hr) && SUCCEEDED(write_result);
     }
     if (ok) {
@@ -151,7 +161,7 @@ static int live_fixture() {
     }
     const HRESULT caller_after = CoGetContextToken(&token);
     std::printf("live caller after=%08lx\n", static_cast<unsigned long>(caller_after));
-    ok = ok && caller_after == caller_before;
+    ok = ok && caller_after == caller_before && (FAILED(caller_before) || token == token_before);
     }); caller.join(); }
     if (ok) {
         hr = opcl_da_item_remove(session, item); item = nullptr;

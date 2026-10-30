@@ -1,0 +1,9 @@
+[package]
+name = "da-runtime-stand"
+version = "0.1.0"
+edition = "2024"
+[workspace]
+[dependencies]
+opclook-contract = { path = "../../../../crates/contract" }
+chrono = "0.4"
+opclook-locale = { path = "../../../../crates/locale" }

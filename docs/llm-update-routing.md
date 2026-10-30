@@ -128,3 +128,10 @@ N2 direct C ABI prototype и strict `core-probe --live` добавлены; он
 
 SDK C ABI теперь имеет Rust-владельческую обёртку для I4 и strict sdk-live
 fixture executable; они не подключены к Gateway, Win32 link/live pending.
+
+N2 opt-in Gateway SDK preview: I4/CLSID только, все незаконченные capabilities
+явно отклоняются. Реальный router/adapter Linux mock stand 1/1; Windows strict
+Gateway fixture pending. Default DA legacy, N2/N3/N4 не закрыты.
+
+N2 preview добавляет SDK scalar ABI (numeric, BOOL/CY/DATE), strict fixture
+на реальные 64-bit данные ожидает Win32 CI. Unicode/BSTR/arrays открыты.

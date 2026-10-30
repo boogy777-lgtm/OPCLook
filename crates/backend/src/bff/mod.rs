@@ -3,15 +3,22 @@
 // with an "unsupported on this platform" error.
 #[cfg(windows)]
 mod com;
-#[cfg(windows)]
+#[cfg(all(windows, not(feature = "native-da-preview")))]
 pub mod da;
-#[cfg(not(windows))]
+#[cfg(feature = "native-da-preview")]
+#[path = "softing_da.rs"]
+pub mod da;
+#[cfg(all(not(windows), not(feature = "native-da-preview")))]
 #[path = "da_unsupported.rs"]
 pub mod da;
 #[cfg(windows)]
 pub mod da_variant;
 mod filetime;
 pub mod softing_facts;
+#[cfg(feature = "native-da-preview")]
+mod softing_runtime;
+#[cfg(feature = "native-da-preview")]
+mod softing_scalar;
 /// Non-Windows: only the platform-neutral part of the VARIANT layer.
 #[cfg(not(windows))]
 pub mod da_variant {
@@ -27,6 +34,9 @@ pub mod ua;
 pub mod vt;
 
 pub use model::*;
+
+#[cfg(feature = "native-da-preview")]
+pub use da::finish_native_sdk;
 
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::thread::JoinHandle;

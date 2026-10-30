@@ -406,8 +406,16 @@ live delivery, transaction correlation, teardown or two-session isolation.
 
 | N2L04 | Fixture connect, add I4, device read, write, remove/re-add, read | SDK ABI returns raw service/item result and original value/quality/time | `core-probe --live`; Windows fixture/CI pending |
 
-| N2L05 | Read/write с вызывающей thread без COM context | SDK выполняет I/O на своём per-server COM worker, caller context не создаётся | `core-probe --live`; Windows fixture/CI pending |
+| N2L05 | Read/write с отдельной вызывающей thread | SDK выполняет I/O на своём per-server COM worker, caller context не изменяется (implicit MTA допустим) | `core-probe --live`; Windows fixture/CI pending |
 
 | N2L06 | Remove/re-add и чужая session registration в Rust ABI wrapper | Старый/чужой ключ отклоняется до native call | Реальный wrapper + mock ABI: Linux stand прошёл; `sdk-live` Win32 pending |
 
 | N2L07 | Owner закрывает host при живой session thread | Busy; native host остаётся живым для завершения зависшей операции | Реальный Rust wrapper + mock ABI, Linux stand прошёл; Windows live pending |
+
+| N2L08 | Gateway Connect/Add/Read/Write/Remove через SDK preview | Обычные correlated Command/Event, raw write status, unsupported явно | Real router/adapter + mock ABI Linux stand прошёл; strict Win32 sdk_gateway_live pending |
+| N2L09 | Новый Gateway пока старый worker удерживает SDK host | Общий process owner повторно выдаёт существующий host; не освобождает его под вызовом | Linux mock reuse прошёл; hung server и SDK terminate live pending |
+| N2L10 | SDK task выбрасывает исключение при Write | Task завершается ошибкой, Write outcome Unknown с available service HRESULT, повтора нет | Код с catch и status mapping; injection/Win32 pending |
+
+| N2L11 | Новый Gateway после idle и финальное завершение процесса | Один SDK host переиспользуется; terminate только final и ожидание ограничено | Linux mock Gateway test прошёл; strict Win32 final shutdown pending |
+
+| N2L12 | SDK scalar value I8/UI8 выше точности f64, bool, R8 | Exact integer bits, raw status/quality/time, checked write, unsupported explicit | Linux mapper tests прошли; strict Windows Gateway fixture pending |

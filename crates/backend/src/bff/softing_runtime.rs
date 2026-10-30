@@ -30,6 +30,18 @@ pub struct ReadI4 {
     pub quality: u16,
     pub vartype: u16,
 }
+#[repr(C)]
+#[derive(Default, Debug)]
+pub struct ReadScalar {
+    pub service_result: i32,
+    pub item_result: i32,
+    pub filetime_low: u32,
+    pub filetime_high: u32,
+    pub bits_low: u32,
+    pub bits_high: u32,
+    pub quality: u16,
+    pub vartype: u16,
+}
 unsafe extern "C" {
     fn opcl_da_host_create(out: *mut *mut c_void) -> i32;
     fn opcl_da_host_destroy(host: *mut c_void) -> i32;
@@ -50,6 +62,20 @@ unsafe extern "C" {
     ) -> i32;
     fn opcl_da_item_remove(session: *mut c_void, item: *mut c_void) -> i32;
     fn opcl_da_read_i4(session: *mut c_void, item: *mut c_void, age: u32, out: *mut ReadI4) -> i32;
+    fn opcl_da_read_scalar(
+        session: *mut c_void,
+        item: *mut c_void,
+        age: u32,
+        out: *mut ReadScalar,
+    ) -> i32;
+    fn opcl_da_write_scalar(
+        session: *mut c_void,
+        item: *mut c_void,
+        vt: u16,
+        low: u32,
+        high: u32,
+        result: *mut i32,
+    ) -> i32;
     fn opcl_da_write_i4(
         session: *mut c_void,
         item: *mut c_void,
@@ -118,6 +144,9 @@ impl Host {
             core: Arc::clone(&self.core),
         }
     }
+    pub fn is_idle(&self) -> bool {
+        Arc::strong_count(&self.core) == 1
+    }
     pub fn close(mut self) -> Result<(), Error> {
         self.closed = true;
         if Arc::strong_count(&self.core) != 1 {
@@ -138,6 +167,10 @@ impl Drop for Host {
     }
 }
 impl SharedHost {
+    #[cfg(test)]
+    pub fn same_host(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.core, &other.core)
+    }
     pub fn open(&self, name: &str, node: &str, clsid: &Guid) -> Result<Session, Error> {
         let name = string(name)?;
         let node = string(node)?;
@@ -202,6 +235,29 @@ impl Session {
         // SAFETY: the map owns the live registration; out is valid for the synchronous call.
         check(unsafe { opcl_da_read_i4(self.ptr.as_ptr(), item.as_ptr(), max_age, &mut out) })?;
         Ok(out)
+    }
+    pub fn read_scalar(&mut self, key: u64, max_age: u32) -> Result<ReadScalar, Error> {
+        let item = self.items.get(&key).ok_or(Error::InvalidHandle)?;
+        let mut out = ReadScalar::default();
+        // SAFETY: the map owns this live registration and the output remains valid for the call.
+        check(unsafe { opcl_da_read_scalar(self.ptr.as_ptr(), item.as_ptr(), max_age, &mut out) })?;
+        Ok(out)
+    }
+    pub fn write_scalar(&mut self, key: u64, vt: u16, bits: u64) -> Result<i32, Error> {
+        let item = self.items.get(&key).ok_or(Error::InvalidHandle)?;
+        let mut result = 0;
+        // SAFETY: the map owns the registration and the output remains valid for the synchronous call.
+        check(unsafe {
+            opcl_da_write_scalar(
+                self.ptr.as_ptr(),
+                item.as_ptr(),
+                vt,
+                bits as u32,
+                (bits >> 32) as u32,
+                &mut result,
+            )
+        })?;
+        Ok(result)
     }
     pub fn write_i4(&mut self, key: u64, value: i32) -> Result<i32, Error> {
         let item = self.items.get(&key).ok_or(Error::InvalidHandle)?;
@@ -305,8 +361,41 @@ mod tests {
         }
         0
     }
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn opcl_da_read_scalar(
+        _: *mut c_void,
+        _: *mut c_void,
+        _: u32,
+        out: *mut ReadScalar,
+    ) -> i32 {
+        // SAFETY: the wrapper passes a valid output pointer.
+        unsafe {
+            (*out).vartype = 3;
+            (*out).bits_low = 42;
+        }
+        0
+    }
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn opcl_da_write_scalar(
+        _: *mut c_void,
+        _: *mut c_void,
+        _: u16,
+        _: u32,
+        _: u32,
+        result: *mut i32,
+    ) -> i32 {
+        // SAFETY: the wrapper passes a valid output pointer.
+        unsafe {
+            *result = 0;
+        }
+        0
+    }
     #[test]
     fn stale_and_foreign_registrations_do_not_reach_native_read() {
+        assert_eq!(std::mem::size_of::<ReadScalar>(), 28);
+        assert_eq!(std::mem::offset_of!(ReadScalar, bits_low), 16);
+        assert_eq!(std::mem::offset_of!(ReadScalar, quality), 24);
+        assert_eq!(std::mem::offset_of!(ReadScalar, vartype), 26);
         let guid = Guid {
             data1: 1,
             data2: 2,

@@ -5,6 +5,9 @@ edition = "2024"
 rust-version = "1.99"
 license = "MIT"
 
+[features]
+native-da-preview = []
+
 [dependencies]
 opclook-contract = { path = "../contract" }
 serde = { version = "1", features = ["derive"] }
