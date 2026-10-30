@@ -47,6 +47,12 @@ COM bindings. Общий scheduler остаётся оправданным то�
 
 ### UA
 
+Обновление2026-10-31: [pinned 0.19 source checkpoint](testing/ua-sdk-0.19-recovery-audit.md)
+разделяет SDK reconnect/transfer/recreation/Publish ownership и ещё открытую
+adapter observability/registration/replay приёмку. Историческое moving-latest
+наблюдение ниже не использовать как API oracle. Installed-crate VCS guard
+добавлен, его реальный CI результат ожидается.
+
 `crates/backend/Cargo.toml` содержит async-opcua 0.19.
 `ua/session/connection.rs` запускает SDK event loop.
 Публичные страницы [Session](https://docs.rs/async-opcua-client/latest/opcua_client/struct.Session.html)

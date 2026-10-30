@@ -29,6 +29,13 @@ jobs:
             python -c "import base64,json,pathlib,subprocess; names=subprocess.check_output(['git','diff','--name-only','--','*.rs'],text=True).splitlines(); [(lambda data,p: [(print('RUSTFMT_REPLACE '+json.dumps({'path':p,'sha':subprocess.check_output(['git','hash-object','--stdin'],input=data).decode().strip(),'part':i//9000,'total':(len(data)+8999)//9000,'data':base64.b64encode(data[i:i+9000]).decode()}))) for i in range(0,len(data),9000)])(pathlib.Path(p).read_bytes().replace(b'\r\n',b'\n'),p) for p in names]"
             exit 1
           }
+      - name: Verify installed locked UA SDK source identity
+        shell: pwsh
+        run: |
+          python docs/testing/test-ua-sdk-source.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python docs/testing/ua-sdk-source.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build both app binaries and check layer boundaries
         shell: bash
         run: |
