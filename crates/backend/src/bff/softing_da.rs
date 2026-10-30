@@ -1,6 +1,7 @@
 //! Experimental Gateway integration for the direct SDK ABI. This feature is
 //! intentionally opt-in until the live gate and missing capabilities are done.
 use super::da_router::{DaHost, SESSION_JOIN_BUDGET, no_connection_reply, run_router};
+use super::da_clsid::{resolve_clsid, ClsidLookup, DiscoveredClsids};
 use super::model::{
     BackendMsg, Command, CommandKind, DataValue, Event, EventKind, ItemInfo, ItemKey, Operation,
     Owner, SessionId, WriteOutcome,
@@ -8,7 +9,7 @@ use super::model::{
 use super::softing_runtime::{Error as SdkError, Guid, Host, Session, SharedHost};
 use std::collections::HashMap;
 use std::sync::{
-    Arc, OnceLock,
+    Arc, Mutex, OnceLock, PoisonError,
     mpsc::{self, Sender},
 };
 use std::time::Duration;
@@ -94,6 +95,29 @@ pub fn finish_native_sdk(timeout: Duration) -> Result<(), String> {
 
 struct NativeHost {
     sdk: SharedHost,
+    discovered: Mutex<DiscoveredClsids>,
+}
+fn guid_to_u128(g: Guid) -> u128 {
+    (u128::from(g.data1) << 96) | (u128::from(g.data2) << 80) |
+        (u128::from(g.data3) << 64) | u128::from(u64::from_be_bytes(g.data4))
+}
+fn guid_from_u128(v: u128) -> Guid {
+    Guid { data1: (v >> 96) as u32, data2: (v >> 80) as u16,
+        data3: (v >> 64) as u16, data4: (v as u64).to_be_bytes() }
+}
+struct NativeClsidLookup<'a> { host: &'a NativeHost }
+impl ClsidLookup for NativeClsidLookup<'_> {
+    fn remote_enum(&mut self, node: &str, progid: &str) -> Result<u128, BackendMsg> {
+        self.host.sdk.resolve(node, progid, true).map(guid_to_u128).map_err(|e|
+            BackendMsg::DaOpcEnumUnavailable { host: node.to_string(), cause: Box::new(message(format!("{e:?}"))) })
+    }
+    fn discovered(&self, node: &str, progid: &str) -> Option<u128> {
+        self.host.discovered.lock().unwrap_or_else(PoisonError::into_inner).get(node, progid)
+    }
+    fn local_registry(&mut self, progid: &str) -> Result<u128, BackendMsg> {
+        self.host.sdk.resolve("", progid, false).map(guid_to_u128).map_err(|e|
+            BackendMsg::DaProgIdLookupFailed { prog_id: progid.to_string(), detail: format!("{e:?}") })
+    }
 }
 fn message(s: impl std::fmt::Display) -> BackendMsg {
     BackendMsg::raw(s.to_string())
@@ -154,12 +178,36 @@ fn guid(input: &str) -> Option<Guid> {
 }
 impl DaHost for NativeHost {
     fn run_discovery(&self, command: Command, events: &Sender<Event>) {
-        failure(
-            events,
-            &command,
-            Operation::Discover,
-            message("DA SDK discovery is not wired"),
-        );
+        let CommandKind::Discover { host } = &command.kind else {
+            failure(events, &command, command.kind.operation(), BackendMsg::NoConnection);
+            return;
+        };
+        match self.sdk.discover(host) {
+            Ok((records, fallback)) => {
+                let mut servers = Vec::with_capacity(records.len());
+                let mut missing_description = false;
+                {
+                    let mut cache = self.discovered.lock().unwrap_or_else(PoisonError::into_inner);
+                    for record in records {
+                        cache.remember(host, &record.progid, guid_to_u128(record.clsid));
+                        missing_description |= record.description_missing;
+                        servers.push(super::model::ServerEntry { id: record.progid, description: record.description });
+                    }
+                }
+                send(events, command.owner, command.request_id, EventKind::Servers { host: host.clone(), servers });
+                if fallback {
+                    send(events, command.owner, None, EventKind::Log { message: message(
+                        "DA discovery used the SDK's local DA 1 registry fallback; newer-only servers may be absent") });
+                }
+                if missing_description {
+                    send(events, command.owner, None, EventKind::Log { message: message(
+                        "DA discovery returned one or more servers without a description") });
+                }
+            }
+            Err(error) => failure(events, &command, Operation::Discover, BackendMsg::DaServerListHostUnavailable {
+                host: host.clone(), detail: format!("{error:?}"),
+            }),
+        }
     }
     fn run_session(
         &self,
@@ -182,7 +230,8 @@ impl DaHost for NativeHost {
             match &command.kind {
                 CommandKind::Connect { endpoint } => {
                     let result = guid(&endpoint.address)
-                        .ok_or_else(|| message("DA SDK preview requires a CLSID endpoint"))
+                        .map(Ok)
+                        .unwrap_or_else(|| resolve_clsid(&endpoint.host, &endpoint.address, &mut NativeClsidLookup { host: self }).map(guid_from_u128))
                         .and_then(|clsid| {
                             self.sdk
                                 .open("", &endpoint.host, &clsid)
@@ -306,12 +355,22 @@ impl DaHost for NativeHost {
                     };
                     send(events, owner, request_id, EventKind::Wrote { key, result });
                 }
-                CommandKind::Browse { .. } => failure(
-                    events,
-                    &command,
-                    Operation::Browse,
-                    message("DA SDK browse is not wired"),
-                ),
+                CommandKind::Browse { node_id, .. } => {
+                    let result = session.as_mut().ok_or(BackendMsg::NoConnection).and_then(|s| {
+                        s.browse(node_id).map_err(|e| message(format!("DA browse: {e:?}")))
+                    });
+                    match result {
+                        Ok(entries) => {
+                            let children = entries.into_iter().map(|entry| super::model::BrowseNode {
+                                node_id: entry.node_id, name: entry.name,
+                                kind: if entry.is_branch { super::model::NodeKind::Branch } else { super::model::NodeKind::Item },
+                                has_children: entry.is_branch,
+                            }).collect();
+                            send(events, owner, request_id, EventKind::Browse { node_id: node_id.clone(), children });
+                        }
+                        Err(error) => failure(events, &command, Operation::Browse, error),
+                    }
+                }
                 CommandKind::Test => failure(
                     events,
                     &command,
@@ -351,7 +410,7 @@ pub(crate) fn spawn(events: Sender<Event>) -> super::WorkerHandle {
         .spawn(move || {
             let outcome = match acquire_host() {
                 Ok(sdk) => run_router(
-                    Arc::new(NativeHost { sdk }),
+                    Arc::new(NativeHost { sdk, discovered: Mutex::new(DiscoveredClsids::default()) }),
                     rx,
                     events.clone(),
                     SESSION_JOIN_BUDGET,
@@ -410,11 +469,28 @@ mod tests {
             })
             .unwrap()
         };
-        let recv = || rx.recv_timeout(Duration::from_secs(5)).unwrap().kind;
+        let recv = || loop {
+            let event = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            if matches!(event.origin, super::super::model::Origin::Reply(_)) { break event.kind; }
+        };
+        cmd.send(Command { protocol: Protocol::OpcDa, owner: Owner::Discovery,
+            request_id: Some(RequestId::FIRST), kind: CommandKind::Discover { host: "localhost".into() } }).unwrap();
+        assert!(matches!(recv(), EventKind::Servers { servers, .. } if servers.len() == 1 && servers[0].id == "OPCLook.NativeDaFixture.1"));
         send(CommandKind::Connect {
-            endpoint: EndpointSpec::da("localhost", "{7D4BD1B1-7422-48C0-AD58-601B701449C6}"),
+            endpoint: EndpointSpec::da("localhost", "OPCLook.NativeDaFixture.1"),
         });
         assert!(matches!(recv(), EventKind::Connected { .. }));
+        send(CommandKind::Browse { node_id: String::new(), filter: super::super::model::NodeClassFilter::All, view_id: None });
+        let branch = match recv() {
+            EventKind::Browse { children, .. } => {
+                assert_eq!(children.len(), 1);
+                assert_eq!(children[0].name, "Fixture");
+                children[0].node_id.clone()
+            }
+            other => panic!("unexpected browse: {other:?}"),
+        };
+        send(CommandKind::Browse { node_id: branch, filter: super::super::model::NodeClassFilter::All, view_id: None });
+        assert!(matches!(recv(), EventKind::Browse { children, .. } if children.len() == 1 && children[0].node_id == "Fixture.Value"));
         send(CommandKind::AddItems {
             items: vec![ItemSpec {
                 key: ItemKey::FIRST,

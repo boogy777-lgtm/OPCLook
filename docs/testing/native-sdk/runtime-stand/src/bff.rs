@@ -45,3 +45,6 @@ impl WorkerHandle {
 
 #[path = "../../../../../crates/backend/src/bff/softing_scalar.rs"]
 pub mod softing_scalar;
+
+#[path = "../../../../../crates/backend/src/bff/da_clsid.rs"]
+pub mod da_clsid;

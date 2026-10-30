@@ -191,20 +191,37 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(decode((raw, None)).unwrap().value, Value::I64(-1));
-        assert_eq!(decode((ReadScalar { vartype: 8, ..Default::default() }, Some("РУГ 中文".into()))).unwrap().value, Value::Str("РУГ 中文".into()));
+        assert_eq!(
+            decode((
+                ReadScalar {
+                    vartype: 8,
+                    ..Default::default()
+                },
+                Some("РУГ 中文".into())
+            ))
+            .unwrap()
+            .value,
+            Value::Str("РУГ 中文".into())
+        );
         assert!(
-            decode((ReadScalar {
-                vartype: 0x2003,
-                ..Default::default()
-            }, None))
+            decode((
+                ReadScalar {
+                    vartype: 0x2003,
+                    ..Default::default()
+                },
+                None
+            ))
             .is_err()
         );
         assert!(
-            decode((ReadScalar {
-                vartype: 3,
-                item_result: -1,
-                ..Default::default()
-            }, None))
+            decode((
+                ReadScalar {
+                    vartype: 3,
+                    item_result: -1,
+                    ..Default::default()
+                },
+                None
+            ))
             .is_err()
         );
     }

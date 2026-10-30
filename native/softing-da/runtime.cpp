@@ -3,6 +3,8 @@
 #include <atomic>
 #include <new>
 #include <unordered_set>
+#include <unordered_map>
+#include <string>
 #include <vector>
 #include <cwchar>
 
@@ -18,11 +20,24 @@ struct OpclDaHost {
     std::atomic<unsigned> sessions;
 };
 struct OpclDaItem { SODaCItem* sdk; };
+// A reference to an SDK browse object, never a COM interface or VARIANT.
+struct BrowseRef {
+    explicit BrowseRef(SOCltBrowseObject* object = nullptr) : p(object) { if (p) p->addRef(); }
+    BrowseRef(const BrowseRef& other) : p(other.p) { if (p) p->addRef(); }
+    BrowseRef& operator=(const BrowseRef& other) {
+        if (other.p) other.p->addRef();
+        if (p) p->release();
+        p = other.p; return *this;
+    }
+    ~BrowseRef() { if (p) p->release(); }
+    SOCltBrowseObject* p;
+};
 struct OpclDaSession {
     OpclDaHost* host;
     SODaCServer* server;
     SODaCGroup* group;
     std::unordered_set<OpclDaItem*> items;
+    std::unordered_map<std::string, BrowseRef> branches;
 };
 static std::atomic<bool> host_exists(false);
 // ABI text is bounded UTF-8. SDK objects remain responsible for BSTR/VARIANT.
@@ -96,7 +111,7 @@ extern "C" int32_t opcl_da_session_open(OpclDaHost* host, const char* name, cons
         server->disconnect(); host->entry->removeBranch(server); server->release();
         return hr;
     }
-    OpclDaSession* session = new (std::nothrow) OpclDaSession{host, server, group, {}};
+    OpclDaSession* session = new (std::nothrow) OpclDaSession{host, server, group, {}, {}};
     if (!session) {
         group->disconnect(); server->removeBranch(group); group->release();
         server->disconnect(); host->entry->removeBranch(server); server->release();
@@ -131,8 +146,11 @@ extern "C" int32_t opcl_da_item_remove(OpclDaSession* s, OpclDaItem* item) try {
     item->sdk->release(); delete item;
     return FAILED(hr) ? hr : (removed ? S_OK : E_FAIL);
 } catch (...) { return E_UNEXPECTED; }
+static HRESULT clear_browse(OpclDaSession* s);
 extern "C" int32_t opcl_da_session_close(OpclDaSession* s) try {
     if (!s) return E_INVALIDARG;
+    const HRESULT cleared = clear_browse(s);
+    if (FAILED(cleared)) return cleared;
     HRESULT result = S_OK;
     while (!s->items.empty()) {
         const HRESULT hr = opcl_da_item_remove(s, *s->items.begin());
@@ -389,4 +407,312 @@ extern "C" int32_t opcl_da_write_text(OpclDaSession* s, OpclDaItem* item, const 
     if (!task) return E_OUTOFMEMORY;
     const HRESULT hr = s->group->executeTask(task); const bool sent = task->dispatched(); task->release();
     return sent || FAILED(hr) ? hr : E_UNEXPECTED;
+} catch (...) { return E_UNEXPECTED; }
+
+static HRESULT wide_to_utf8(LPCTSTR input, char* output, uint32_t capacity, uint32_t* length) {
+    if (!input || !output || !length) return E_INVALIDARG;
+    const size_t chars = std::wcslen(input);
+    if (chars > 65536) return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+    if (!chars) { *length = 0; return S_OK; }
+    const int bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, input,
+                                           static_cast<int>(chars), nullptr, 0, nullptr, nullptr);
+    if (bytes <= 0) return E_INVALIDARG;
+    if (static_cast<uint32_t>(bytes) > capacity) return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, input, static_cast<int>(chars),
+                            output, bytes, nullptr, nullptr) != bytes) return E_INVALIDARG;
+    *length = static_cast<uint32_t>(bytes);
+    return S_OK;
+}
+static void copy_guid(const CLSID& input, OpclDaGuid* output) {
+    output->data1 = input.Data1; output->data2 = input.Data2; output->data3 = input.Data3;
+    std::memcpy(output->data4, input.Data4, 8);
+}
+static bool local_node(const WCHAR* node) {
+    return !*node || _wcsicmp(node, L"localhost") == 0 || _wcsicmp(node, L".") == 0;
+}
+// Every discovery/resolve gets an independent SDK server worker. A hung
+// OPCEnum therefore cannot block a different session or discovery.
+class ResolveServerTask : public SOCltTask {
+public:
+    ResolveServerTask(SODaCServer* context, const WCHAR* node, const WCHAR* progid,
+                      uint32_t kind, OpclDaGuid* out)
+        : SOCltTask(context), node_(node), progid_(progid), kind_(kind), out_(out), ran_(false) {}
+    void execute() override try {
+        ran_ = true;
+        CLSID clsid{}; HRESULT hr = E_FAIL;
+        if (kind_ == 0) {
+            // Windows class lookup is a system service, not an OPC data-plane call.
+            hr = CLSIDFromProgID(progid_, &clsid);
+        } else {
+            SOCmnPointer<SOCltServerBrowser> browser = new SOCltServerBrowser();
+            browser->setNodeName(node_);
+            if (browser->getCLSIDFromProgID(progid_, &clsid)) hr = S_OK;
+            else { hr = browser->getLastError(nullptr); if (SUCCEEDED(hr)) hr = E_FAIL; }
+        }
+        if (SUCCEEDED(hr)) copy_guid(clsid, out_);
+        setResult(hr);
+    } catch (...) { setResult(E_UNEXPECTED); }
+    bool ran() const { return ran_; }
+private:
+    const WCHAR* node_; const WCHAR* progid_; uint32_t kind_; OpclDaGuid* out_; bool ran_;
+};
+class DiscoverServerTask : public SOCltTask {
+public:
+    DiscoverServerTask(SODaCServer* context, const WCHAR* node, OpclDaServerRecord* out,
+                       uint32_t capacity, uint32_t* count, uint32_t* fallback)
+        : SOCltTask(context), node_(node), out_(out), capacity_(capacity), count_(count),
+          fallback_(fallback), ran_(false) {}
+    void execute() override try {
+        ran_ = true;
+        SOCmnPointer<SOCltServerBrowser> browser = new SOCltServerBrowser();
+        browser->setNodeName(local_node(node_) ? L"" : node_);
+        SOCmnList<CLSID> classes;
+        const DWORD categories = SOCLT_BROWSE_SERVER_CAT_DA10A | SOCLT_BROWSE_SERVER_DA20 | SOCLT_BROWSE_SERVER_DA30;
+        BOOL ok = browser->browseServer(categories, classes);
+        if (!ok && local_node(node_)) {
+            classes.destroy();
+            ok = browser->browseServer(SOCLT_BROWSE_SERVER_REG_DA10A, classes);
+            *fallback_ = 1;
+        }
+        if (!ok) {
+            HRESULT hr = browser->getLastError(nullptr);
+            setResult(FAILED(hr) ? hr : E_FAIL); return;
+        }
+        const DWORD count = classes.getCount();
+        if (count > capacity_ || count > OPCL_DA_MAX_SERVERS || (count && !out_)) {
+            setResult(HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER)); return;
+        }
+        std::vector<OpclDaServerRecord> pending;
+        pending.reserve(count);
+        SOCmnListPosition pos = classes.getStartPosition();
+        while (pos) {
+            CLSID* id = classes.getNext(pos);
+            if (!id) { setResult(E_FAIL); return; }
+            SOCmnString progid, description;
+            if (!browser->getServerProgId(*id, progid)) {
+                HRESULT hr = browser->getLastError(nullptr);
+                setResult(FAILED(hr) ? hr : E_FAIL); return;
+            }
+            OpclDaServerRecord record{};
+            copy_guid(*id, &record.clsid);
+            HRESULT hr = wide_to_utf8((LPCTSTR)progid, record.progid, OPCL_DA_PROGID_BYTES, &record.progid_len);
+            if (FAILED(hr)) { setResult(hr); return; }
+            if (browser->getServerDescription(*id, description)) {
+                hr = wide_to_utf8((LPCTSTR)description, record.description, OPCL_DA_DESCRIPTION_BYTES, &record.description_len);
+                if (FAILED(hr)) { setResult(hr); return; }
+            } else record.flags |= 1;
+            pending.push_back(record);
+        }
+        if (!pending.empty()) std::memcpy(out_, pending.data(), pending.size() * sizeof(OpclDaServerRecord));
+        *count_ = static_cast<uint32_t>(pending.size());
+        setResult(S_OK);
+    } catch (...) { setResult(E_UNEXPECTED); }
+    bool ran() const { return ran_; }
+private:
+    const WCHAR* node_; OpclDaServerRecord* out_; uint32_t capacity_;
+    uint32_t* count_; uint32_t* fallback_; bool ran_;
+};
+extern "C" int32_t opcl_da_resolve(OpclDaHost* host, const char* node, const char* progid,
+                                     uint32_t kind, OpclDaGuid* out) try {
+    if (!host || !out || kind > 1) return E_INVALIDARG;
+    *out = {};
+    std::vector<WCHAR> n, p;
+    if (!to_wide(node, n) || !to_wide(progid, p)) return E_INVALIDARG;
+    SOCmnPointer<SODaCComServerDefault> context = new SODaCComServerDefault();
+    ResolveServerTask* task = new (std::nothrow) ResolveServerTask(context, n.data(), p.data(), kind, out);
+    if (!task) return E_OUTOFMEMORY;
+    const HRESULT hr = context->executeTask(task); const bool ran = task->ran(); task->release();
+    return ran || FAILED(hr) ? hr : E_UNEXPECTED;
+} catch (...) { return E_UNEXPECTED; }
+extern "C" int32_t opcl_da_discover(OpclDaHost* host, const char* node,
+                                      OpclDaServerRecord* out, uint32_t capacity,
+                                      uint32_t* count, uint32_t* fallback) try {
+    if (!count || !fallback) return E_INVALIDARG;
+    *count = 0; *fallback = 0;
+    if (!host || capacity > OPCL_DA_MAX_SERVERS || (capacity && !out)) return E_INVALIDARG;
+    std::vector<WCHAR> n;
+    if (!to_wide(node, n)) return E_INVALIDARG;
+    SOCmnPointer<SODaCComServerDefault> context = new SODaCComServerDefault();
+    DiscoverServerTask* task = new (std::nothrow) DiscoverServerTask(context, n.data(), out, capacity, count, fallback);
+    if (!task) return E_OUTOFMEMORY;
+    const HRESULT hr = context->executeTask(task); const bool ran = task->ran(); task->release();
+    return ran || FAILED(hr) ? hr : E_UNEXPECTED;
+} catch (...) { return E_UNEXPECTED; }
+
+// Re-resolve a canonical branch path against the current SDK browser when a
+// fresh connection has no cached object for it. Never reuse another session's object.
+static HRESULT resolve_branch(OpclDaSession* session, const char* path,
+                              SOCmnPointer<SODaCNameSpaceBrowser>& browser,
+                              SOCltBrowseObject** out) {
+    browser = session->server->getNameSpaceBrowser();
+    if (!browser.isNotNull()) return E_NOINTERFACE;
+    browser->setRetrieveItemID(TRUE);
+    browser->setMaxElements(OPCL_DA_MAX_BROWSE);
+    SOCltBrowseObject* parent = browser;
+    const std::string full(path);
+    std::string prefix;
+    size_t start = 0;
+    while (start < full.size()) {
+        const size_t end = full.find('\x1f', start);
+        const std::string component = full.substr(start, end == std::string::npos ? end : end - start);
+        if (component.empty()) return E_INVALIDARG;
+        if (!prefix.empty()) prefix.push_back('\x1f');
+        prefix += component;
+        auto existing = session->branches.find(prefix);
+        if (existing != session->branches.end()) {
+            parent = existing->second.p;
+            browser = static_cast<SODaCNode*>(parent)->getNameSpaceBrowser();
+        } else {
+            if (session->branches.size() >= 5000) return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+            browser->setContinuationPoint(_T(""));
+            SOCmnList<SOCltBrowseObject> children;
+            if (!parent->expand(SOCMNOBJECT_TYPE_NODE, children)) return E_FAIL;
+            LPCTSTR continuation = browser->getContinuationPoint();
+            if ((continuation && *continuation) || children.getCount() >= OPCL_DA_MAX_BROWSE)
+                return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+            SOCltBrowseObject* found = nullptr;
+            SOCmnListPosition pos = children.getStartPosition();
+            while (pos) {
+                SOCltBrowseObject* child = children.getNext(pos);
+                if (!child || !child->is(SOCMNOBJECT_TYPE_NODE)) continue;
+                SOCmnString name = child->getDisplayName();
+                char buffer[OPCL_DA_BROWSE_NAME_BYTES]{}; uint32_t length = 0;
+                const HRESULT hr = wide_to_utf8((LPCTSTR)name, buffer, sizeof(buffer), &length);
+                if (FAILED(hr)) return hr;
+                if (component == std::string(buffer, length)) {
+                    if (found) return E_FAIL;
+                    found = child;
+                }
+            }
+            if (!found) return E_INVALIDARG;
+            auto inserted = session->branches.emplace(prefix, BrowseRef(found));
+            parent = inserted.first->second.p;
+            browser = static_cast<SODaCNode*>(parent)->getNameSpaceBrowser();
+        }
+        if (!parent || !browser.isNotNull()) return E_FAIL;
+        if (end == std::string::npos) break;
+        start = end + 1;
+        if (start == full.size()) return E_INVALIDARG;
+    }
+    *out = parent;
+    return S_OK;
+}
+class BrowseTask : public SOCltTask {
+public:
+    BrowseTask(OpclDaSession* session, const char* path, OpclDaBrowseRecord* out,
+               uint32_t capacity, uint32_t* count)
+        : SOCltTask(session->group), session_(session), path_(path), out_(out),
+          capacity_(capacity), count_(count), ran_(false) {}
+    void execute() override try {
+        ran_ = true;
+        SOCmnPointer<SODaCNameSpaceBrowser> browser;
+        SOCltBrowseObject* parent = nullptr;
+        const HRESULT resolved = resolve_branch(session_, path_, browser, &parent);
+        if (FAILED(resolved)) { setResult(resolved); return; }
+        browser->setRetrieveItemID(TRUE);
+        browser->setMaxElements(OPCL_DA_MAX_BROWSE);
+        browser->setContinuationPoint(_T(""));
+        SOCmnList<SOCltBrowseObject> children;
+        if (!parent->expand(SOCMNOBJECT_TYPE_NODE | SOCMNOBJECT_TYPE_LEAF, children)) {
+            setResult(E_FAIL); return;
+        }
+        LPCTSTR continuation = browser->getContinuationPoint();
+        if ((continuation && *continuation) || children.getCount() > capacity_ ||
+            children.getCount() >= OPCL_DA_MAX_BROWSE) {
+            setResult(HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER)); return;
+        }
+        std::vector<OpclDaBrowseRecord> pending;
+        std::vector<std::pair<std::string, SOCltBrowseObject*>> branches;
+        pending.reserve(children.getCount());
+        SOCmnListPosition position = children.getStartPosition();
+        while (position) {
+            SOCltBrowseObject* child = children.getNext(position);
+            if (!child) { setResult(E_FAIL); return; }
+            OpclDaBrowseRecord record{};
+            SOCmnString name = child->getDisplayName();
+            HRESULT hr = wide_to_utf8((LPCTSTR)name, record.name, OPCL_DA_BROWSE_NAME_BYTES, &record.name_len);
+            if (FAILED(hr)) { setResult(hr); return; }
+            record.is_branch = child->is(SOCMNOBJECT_TYPE_NODE) ? 1 : 0;
+            if (record.is_branch) {
+                std::string component(record.name, record.name_len);
+                if (component.empty()) { setResult(E_FAIL); return; }
+                if (component.find('\x1f') != std::string::npos) { setResult(E_INVALIDARG); return; }
+                std::string id(path_);
+                if (!id.empty()) id.push_back('\x1f');
+                id += component;
+                if (id.size() > OPCL_DA_BROWSE_ID_BYTES) { setResult(HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER)); return; }
+                record.node_id_len = static_cast<uint32_t>(id.size());
+                if (!id.empty()) std::memcpy(record.node_id, id.data(), id.size());
+                branches.emplace_back(id, child);
+            } else {
+                SOCmnString id = child->getItemID();
+                hr = wide_to_utf8((LPCTSTR)id, record.node_id, OPCL_DA_BROWSE_ID_BYTES, &record.node_id_len);
+                if (FAILED(hr) || !record.node_id_len) { setResult(FAILED(hr) ? hr : E_FAIL); return; }
+            }
+            pending.push_back(record);
+            // DA3 browse elements can be both branches and readable items.
+            // Return both views rather than silently dropping the item role.
+            if (record.is_branch && static_cast<SODaCNode*>(child)->isItem()) {
+                OpclDaBrowseRecord item = record;
+                item.is_branch = 0;
+                SOCmnString id = child->getItemID();
+                hr = wide_to_utf8((LPCTSTR)id, item.node_id, OPCL_DA_BROWSE_ID_BYTES, &item.node_id_len);
+                if (FAILED(hr) || !item.node_id_len) { setResult(FAILED(hr) ? hr : E_FAIL); return; }
+                pending.push_back(item);
+            }
+        }
+        if (pending.size() > capacity_ || pending.size() > OPCL_DA_MAX_BROWSE) {
+            setResult(HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER)); return;
+        }
+        size_t new_branches = 0;
+        std::unordered_set<std::string> names;
+        for (const auto& entry : branches) {
+            if (!names.insert(entry.first).second) { setResult(E_FAIL); return; }
+            if (session_->branches.find(entry.first) == session_->branches.end()) ++new_branches;
+        }
+        if (new_branches > 5000 || session_->branches.size() > 5000 - new_branches) {
+            setResult(HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER)); return;
+        }
+        for (const auto& entry : branches) {
+            auto it = session_->branches.find(entry.first);
+            if (it == session_->branches.end()) session_->branches.emplace(entry.first, BrowseRef(entry.second));
+            else it->second = BrowseRef(entry.second);
+        }
+        if (!pending.empty()) std::memcpy(out_, pending.data(), pending.size() * sizeof(OpclDaBrowseRecord));
+        *count_ = static_cast<uint32_t>(pending.size());
+        setResult(S_OK);
+    } catch (...) { setResult(E_UNEXPECTED); }
+    bool ran() const { return ran_; }
+private:
+    OpclDaSession* session_; const char* path_; OpclDaBrowseRecord* out_;
+    uint32_t capacity_; uint32_t* count_; bool ran_;
+};
+class ClearBrowseTask : public SOCltTask {
+public:
+    explicit ClearBrowseTask(OpclDaSession* session)
+        : SOCltTask(session->group), session_(session), ran_(false) {}
+    void execute() override try { ran_ = true; session_->branches.clear(); setResult(S_OK); }
+    catch (...) { setResult(E_UNEXPECTED); }
+    bool ran() const { return ran_; }
+private:
+    OpclDaSession* session_; bool ran_;
+};
+static HRESULT clear_browse(OpclDaSession* session) {
+    if (session->branches.empty()) return S_OK;
+    ClearBrowseTask* task = new (std::nothrow) ClearBrowseTask(session);
+    if (!task) return E_OUTOFMEMORY;
+    const HRESULT hr = session->group->executeTask(task); const bool ran = task->ran(); task->release();
+    return ran || FAILED(hr) ? hr : E_UNEXPECTED;
+}
+extern "C" int32_t opcl_da_browse(OpclDaSession* s, const char* path, OpclDaBrowseRecord* out,
+                                    uint32_t capacity, uint32_t* count) try {
+    if (!count) return E_INVALIDARG;
+    *count = 0;
+    if (!s || !path || capacity > OPCL_DA_MAX_BROWSE || (capacity && !out)) return E_INVALIDARG;
+    std::vector<WCHAR> validated;
+    if (!to_wide(path, validated)) return E_INVALIDARG;
+    BrowseTask* task = new (std::nothrow) BrowseTask(s, path, out, capacity, count);
+    if (!task) return E_OUTOFMEMORY;
+    const HRESULT hr = s->group->executeTask(task); const bool ran = task->ran(); task->release();
+    return ran || FAILED(hr) ? hr : E_UNEXPECTED;
 } catch (...) { return E_UNEXPECTED; }

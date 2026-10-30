@@ -4169,4 +4169,40 @@ mod tests {
                 .is_err()
         );
     }
+    #[test]
+    fn browse_reply_from_old_connection_does_not_replace_new_branch() {
+        use opclook_contract::model::NodeClassFilter;
+        let now = Instant::now();
+        let endpoint = EndpointSpec::da("localhost", "Fixture.Server.1");
+        let mut engine = Engine::<()>::default();
+        engine.test_skip_dispatch = true;
+        let mut view = SessionRuntime::new(endpoint.clone(), now);
+        view.state = SessionState::Connected;
+        view.connection_id = Some(rid(77));
+        engine.sessions.insert(sid(1), view);
+        let make_browse = || CommandKind::Browse {
+            node_id: "Fixture".into(), filter: NodeClassFilter::All, view_id: None,
+        };
+        let old = engine.send(sid(1), Protocol::OpcDa, make_browse(), ()).unwrap();
+        let disconnect = engine.send(sid(1), Protocol::OpcDa, CommandKind::Disconnect, ()).unwrap();
+        engine.accept_at(&Event {
+            owner: owner(1), origin: Origin::Reply(disconnect),
+            kind: EventKind::Disconnected { reason: BackendMsg::ConnectionClosed },
+        }, now).unwrap();
+        let connect = engine.send(sid(1), Protocol::OpcDa,
+            CommandKind::Connect { endpoint: endpoint.clone() }, ()).unwrap();
+        engine.accept_at(&Event {
+            owner: owner(1), origin: Origin::Reply(connect),
+            kind: EventKind::Connected { endpoint, info: BackendMsg::raw("connected") },
+        }, now).unwrap();
+        let current = engine.send(sid(1), Protocol::OpcDa, make_browse(), ()).unwrap();
+        let response = |id| Event {
+            owner: owner(1), origin: Origin::Reply(id),
+            kind: EventKind::Browse { node_id: "Fixture".into(), children: vec![] },
+        };
+        assert!(engine.accept_at(&response(old), now).is_err());
+        assert!(engine.accept_at(&response(current), now).is_ok());
+        assert_eq!(engine.connection_id(sid(1)), Some(connect));
+    }
+
 }

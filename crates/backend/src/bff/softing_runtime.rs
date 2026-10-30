@@ -13,11 +13,55 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT_REGISTRATION: AtomicU64 = AtomicU64::new(1);
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Guid {
     pub data1: u32,
     pub data2: u16,
     pub data3: u16,
     pub data4: [u8; 8],
+}
+#[repr(C)]
+#[derive(Clone)]
+struct BrowseRecord {
+    is_branch: u32,
+    name_len: u32,
+    node_id_len: u32,
+    name: [u8; 1024],
+    node_id: [u8; 4096],
+}
+impl Default for BrowseRecord {
+    fn default() -> Self {
+        Self { is_branch: 0, name_len: 0, node_id_len: 0, name: [0; 1024], node_id: [0; 4096] }
+    }
+}
+#[derive(Debug)]
+pub struct BrowseEntry {
+    pub name: String,
+    pub node_id: String,
+    pub is_branch: bool,
+}
+#[repr(C)]
+#[derive(Clone)]
+struct ServerRecord {
+    clsid: Guid,
+    progid_len: u32,
+    description_len: u32,
+    flags: u32,
+    progid: [u8; 1024],
+    description: [u8; 2048],
+}
+impl Default for ServerRecord {
+    fn default() -> Self {
+        Self { clsid: Guid::default(), progid_len: 0, description_len: 0, flags: 0,
+               progid: [0; 1024], description: [0; 2048] }
+    }
+}
+#[derive(Debug)]
+pub struct DiscoveredServer {
+    pub clsid: Guid,
+    pub progid: String,
+    pub description: String,
+    pub description_missing: bool,
 }
 #[repr(C)]
 #[derive(Default, Debug)]
@@ -44,6 +88,9 @@ pub struct ReadScalar {
     pub text_len: u32,
 }
 unsafe extern "C" {
+    fn opcl_da_browse(session: *mut c_void, node_id: *const c_char, out: *mut BrowseRecord, capacity: u32, count: *mut u32) -> i32;
+    fn opcl_da_resolve(host: *mut c_void, node: *const c_char, progid: *const c_char, kind: u32, out: *mut Guid) -> i32;
+    fn opcl_da_discover(host: *mut c_void, node: *const c_char, out: *mut ServerRecord, capacity: u32, count: *mut u32, fallback: *mut u32) -> i32;
     fn opcl_da_host_create(out: *mut *mut c_void) -> i32;
     fn opcl_da_host_destroy(host: *mut c_void) -> i32;
     fn opcl_da_session_open(
@@ -175,6 +222,33 @@ impl SharedHost {
     pub fn same_host(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.core, &other.core)
     }
+    pub fn resolve(&self, node: &str, progid: &str, remote: bool) -> Result<Guid, Error> {
+        let node = string(node)?; let progid = string(progid)?; let mut out = Guid::default();
+        // SAFETY: the shared host remains live and the inputs and output live through this synchronous call.
+        check(unsafe { opcl_da_resolve(self.core.ptr.as_ptr(), node.as_ptr(), progid.as_ptr(), u32::from(remote), &mut out) })?;
+        Ok(out)
+    }
+    pub fn discover(&self, node: &str) -> Result<(Vec<DiscoveredServer>, bool), Error> {
+        let node = string(node)?;
+        let mut records = vec![ServerRecord::default(); 256];
+        let mut count = 0; let mut fallback = 0;
+        // SAFETY: the host is live, records owns capacity entries, and every output remains valid for the call.
+        check(unsafe { opcl_da_discover(self.core.ptr.as_ptr(), node.as_ptr(), records.as_mut_ptr(), 256, &mut count, &mut fallback) })?;
+        let count = usize::try_from(count).map_err(|_| Error::InvalidString)?;
+        if count > records.len() || fallback > 1 { return Err(Error::InvalidString); }
+        let mut found = Vec::with_capacity(count);
+        for record in records.into_iter().take(count) {
+            let progid = record.progid.get(..record.progid_len as usize).ok_or(Error::InvalidString)?;
+            let description = record.description.get(..record.description_len as usize).ok_or(Error::InvalidString)?;
+            found.push(DiscoveredServer {
+                clsid: record.clsid,
+                progid: String::from_utf8(progid.to_vec()).map_err(|_| Error::InvalidString)?,
+                description: String::from_utf8(description.to_vec()).map_err(|_| Error::InvalidString)?,
+                description_missing: record.flags & 1 != 0,
+            });
+        }
+        Ok((found, fallback != 0))
+    }
     pub fn open(&self, name: &str, node: &str, clsid: &Guid) -> Result<Session, Error> {
         let name = string(name)?;
         let node = string(node)?;
@@ -206,6 +280,24 @@ pub struct Session {
     _thread: PhantomData<Rc<()>>,
 }
 impl Session {
+    pub fn browse(&mut self, node_id: &str) -> Result<Vec<BrowseEntry>, Error> {
+        let node_id = string(node_id)?;
+        let mut records = vec![BrowseRecord::default(); 256]; let mut count = 0;
+        // SAFETY: the session is uniquely owned and the input/output buffers live until this synchronous call returns.
+        check(unsafe { opcl_da_browse(self.ptr.as_ptr(), node_id.as_ptr(), records.as_mut_ptr(), 256, &mut count) })?;
+        let count = usize::try_from(count).map_err(|_| Error::InvalidString)?;
+        if count > records.len() { return Err(Error::InvalidString); }
+        let mut result = Vec::with_capacity(count);
+        for record in records.into_iter().take(count) {
+            if record.is_branch > 1 { return Err(Error::InvalidString); }
+            let name = record.name.get(..record.name_len as usize).ok_or(Error::InvalidString)?;
+            let id = record.node_id.get(..record.node_id_len as usize).ok_or(Error::InvalidString)?;
+            result.push(BrowseEntry { name: String::from_utf8(name.to_vec()).map_err(|_| Error::InvalidString)?,
+                node_id: String::from_utf8(id.to_vec()).map_err(|_| Error::InvalidString)?,
+                is_branch: record.is_branch == 1 });
+        }
+        Ok(result)
+    }
     pub fn add(&mut self, id: &str) -> Result<(u64, u16, u32), Error> {
         let key = NEXT_REGISTRATION
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
@@ -307,6 +399,41 @@ mod tests {
     static HANDLE: AtomicUsize = AtomicUsize::new(100);
     fn handle() -> *mut c_void {
         HANDLE.fetch_add(1, Ordering::Relaxed) as *mut c_void
+    }
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn opcl_da_browse(_: *mut c_void, path: *const c_char, out: *mut BrowseRecord, capacity: u32, count: *mut u32) -> i32 {
+        // SAFETY: the wrapper supplies a valid NUL-terminated string and writable output pointers.
+        unsafe {
+            if capacity == 0 { return -1; }
+            let name = if std::ffi::CStr::from_ptr(path).to_bytes().is_empty() { b"Fixture".as_slice() } else { b"Value".as_slice() };
+            let id = if name == b"Fixture" { b"Fixture".as_slice() } else { b"Fixture.Value".as_slice() };
+            let record = &mut *out;
+            record.name[..name.len()].copy_from_slice(name);
+            record.node_id[..id.len()].copy_from_slice(id);
+            record.name_len = name.len() as u32; record.node_id_len = id.len() as u32;
+            record.is_branch = u32::from(name == b"Fixture"); *count = 1;
+        }
+        0
+    }
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn opcl_da_resolve(_: *mut c_void, _: *const c_char, _: *const c_char, _: u32, out: *mut Guid) -> i32 {
+        // SAFETY: the wrapper supplies a valid output pointer.
+        unsafe { *out = Guid { data1: 1, ..Guid::default() }; }
+        0
+    }
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn opcl_da_discover(_: *mut c_void, _: *const c_char, out: *mut ServerRecord, capacity: u32, count: *mut u32, fallback: *mut u32) -> i32 {
+        // SAFETY: the wrapper supplies at least one record and valid output pointers.
+        unsafe {
+            if capacity == 0 { return -1; }
+            let record = &mut *out;
+            let id = b"OPCLook.NativeDaFixture.1";
+            record.progid[..id.len()].copy_from_slice(id);
+            record.progid_len = id.len() as u32;
+            record.clsid = Guid { data1: 1, ..Guid::default() };
+            *count = 1; *fallback = 1;
+        }
+        0
     }
     #[unsafe(no_mangle)]
     unsafe extern "C" fn opcl_da_host_create(out: *mut *mut c_void) -> i32 {
@@ -422,6 +549,12 @@ mod tests {
     #[test]
     fn stale_and_foreign_registrations_do_not_reach_native_read() {
         assert_eq!(std::mem::size_of::<ReadScalar>(), 32);
+        assert_eq!(std::mem::size_of::<BrowseRecord>(), 5132);
+        assert_eq!(std::mem::offset_of!(BrowseRecord, name), 12);
+        assert_eq!(std::mem::offset_of!(BrowseRecord, node_id), 1036);
+        assert_eq!(std::mem::size_of::<ServerRecord>(), 3100);
+        assert_eq!(std::mem::offset_of!(ServerRecord, progid), 28);
+        assert_eq!(std::mem::offset_of!(ServerRecord, description), 1052);
         assert_eq!(std::mem::offset_of!(ReadScalar, bits_low), 16);
         assert_eq!(std::mem::offset_of!(ReadScalar, quality), 24);
         assert_eq!(std::mem::offset_of!(ReadScalar, vartype), 26);

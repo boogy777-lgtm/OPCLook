@@ -4,7 +4,7 @@
 use opclook_backend::bff::Gateway;
 use opclook_contract::model::{
     Command, CommandKind, EndpointSpec, Event, EventKind, ItemKey, ItemSpec, NativeWriteStatus,
-    Origin, Owner, Protocol, RequestId, SessionId, Value, VarType, WriteDisposition, WriteRequest,
+    NodeClassFilter, NodeKind, Origin, Owner, Protocol, RequestId, SessionId, Value, VarType, WriteDisposition, WriteRequest,
 };
 use std::time::{Duration, Instant};
 
@@ -38,11 +38,35 @@ fn command(gateway: &Gateway, id: u64, kind: CommandKind) -> Event {
 #[test]
 fn sdk_gateway_live() {
     let mut gateway = Gateway::new();
-    let endpoint = EndpointSpec::da("localhost", "{7D4BD1B1-7422-48C0-AD58-601B701449C6}");
+    let discovery_id = RequestId::new(90).unwrap();
+    gateway.send(Command { protocol: Protocol::OpcDa, owner: Owner::Discovery,
+        request_id: Some(discovery_id), kind: CommandKind::Discover { host: "localhost".into() } }).unwrap();
+    assert!(matches!(reply(&gateway, discovery_id).kind, EventKind::Servers { servers, .. }
+        if servers.iter().any(|server| server.id.eq_ignore_ascii_case("OPCLook.NativeDaFixture.1"))));
+    let endpoint = EndpointSpec::da("localhost", "OPCLook.NativeDaFixture.1");
     assert!(matches!(
         command(&gateway, 1, CommandKind::Connect { endpoint }).kind,
         EventKind::Connected { .. }
     ));
+    let browse = command(&gateway, 91, CommandKind::Browse {
+        node_id: String::new(), filter: NodeClassFilter::All, view_id: None,
+    });
+    let branch = match browse.kind {
+        EventKind::Browse { children, .. } => children.into_iter()
+            .find(|child| child.name == "Fixture" && child.kind == NodeKind::Branch)
+            .expect("SDK Browse root must contain Fixture branch").node_id,
+        other => panic!("SDK Browse root failed: {other:?}"),
+    };
+    let browse = command(&gateway, 92, CommandKind::Browse {
+        node_id: branch.clone(), filter: NodeClassFilter::All, view_id: None,
+    });
+    match browse.kind {
+        EventKind::Browse { children, .. } => {
+            assert!(children.iter().any(|node| node.name == "Value" && node.node_id == "Fixture.Value" && node.kind == NodeKind::Item));
+            assert!(children.iter().any(|node| node.name == "Тег" && node.node_id == "Fixture.Тег" && node.kind == NodeKind::Item));
+        }
+        other => panic!("SDK Browse branch failed: {other:?}"),
+    }
     let key = ItemKey::FIRST;
     assert!(
         matches!(command(&gateway, 2, CommandKind::AddItems { items: vec![ItemSpec { key, item_id: "Fixture.Value".into() }] }).kind,
@@ -177,6 +201,15 @@ fn sdk_gateway_live() {
         command(&gateway, 7, CommandKind::Disconnect).kind,
         EventKind::Disconnected { .. }
     ));
+    let endpoint = EndpointSpec::da("localhost", "OPCLook.NativeDaFixture.1");
+    assert!(matches!(command(&gateway, 101, CommandKind::Connect { endpoint }).kind, EventKind::Connected { .. }));
+    assert!(matches!(command(&gateway, 104, CommandKind::Browse { node_id: String::new(),
+        filter: NodeClassFilter::All, view_id: None }).kind,
+        EventKind::Browse { children, .. } if children.iter().any(|node| node.name == "Fixture")));
+    assert!(matches!(command(&gateway, 102, CommandKind::Browse { node_id: branch,
+        filter: NodeClassFilter::All, view_id: None }).kind,
+        EventKind::Browse { children, .. } if children.iter().any(|node| node.node_id == "Fixture.Value")));
+    assert!(matches!(command(&gateway, 103, CommandKind::Disconnect).kind, EventKind::Disconnected { .. }));
     let shutdown = gateway.shutdown();
     assert_eq!(shutdown.da, opclook_backend::bff::ShutdownOutcome::Joined);
     opclook_backend::bff::finish_native_sdk(Duration::from_secs(10)).unwrap();

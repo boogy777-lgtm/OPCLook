@@ -14,6 +14,10 @@ static_assert(sizeof(OpclDaFact) == 24 && offsetof(OpclDaFact, client_handle) ==
 static_assert(sizeof(OpclDaScalar) == 32 && offsetof(OpclDaScalar, bits_low) == 16 &&
               offsetof(OpclDaScalar, quality) == 24 && offsetof(OpclDaScalar, vartype) == 26,
               "scalar ABI layout");
+static_assert(sizeof(OpclDaServerRecord) == 3100 && offsetof(OpclDaServerRecord, progid) == 28 &&
+              offsetof(OpclDaServerRecord, description) == 1052, "discovery ABI layout");
+static_assert(sizeof(OpclDaBrowseRecord) == 5132 && offsetof(OpclDaBrowseRecord, name) == 12 &&
+              offsetof(OpclDaBrowseRecord, node_id) == 1036, "browse ABI layout");
 
 
 static_assert(std::is_same<XML_Char, char>::value, "SDK expects narrow Expat strings");

@@ -33,6 +33,32 @@ typedef struct OpclDaScalar {
     uint32_t text_len;
 } OpclDaScalar;
 
+#define OPCL_DA_MAX_BROWSE 256u
+#define OPCL_DA_BROWSE_NAME_BYTES 1024u
+#define OPCL_DA_BROWSE_ID_BYTES 4096u
+typedef struct OpclDaBrowseRecord {
+    uint32_t is_branch, name_len, node_id_len;
+    char name[OPCL_DA_BROWSE_NAME_BYTES];
+    char node_id[OPCL_DA_BROWSE_ID_BYTES];
+} OpclDaBrowseRecord;
+int32_t opcl_da_browse(OpclDaSession* session, const char* node_id, OpclDaBrowseRecord* out,
+                       uint32_t capacity, uint32_t* count);
+
+#define OPCL_DA_MAX_SERVERS 256u
+#define OPCL_DA_PROGID_BYTES 1024u
+#define OPCL_DA_DESCRIPTION_BYTES 2048u
+typedef struct OpclDaServerRecord {
+    OpclDaGuid clsid;
+    uint32_t progid_len, description_len, flags;
+    char progid[OPCL_DA_PROGID_BYTES];
+    char description[OPCL_DA_DESCRIPTION_BYTES];
+} OpclDaServerRecord;
+
+/* kind 0 = local Windows class lookup; kind 1 = remote SDK OPCEnum. */
+int32_t opcl_da_resolve(OpclDaHost* host, const char* node, const char* progid,
+                        uint32_t kind, OpclDaGuid* out);
+int32_t opcl_da_discover(OpclDaHost* host, const char* node,
+                         OpclDaServerRecord* out, uint32_t capacity, uint32_t* count, uint32_t* fallback);
 int32_t opcl_da_host_create(OpclDaHost** out);
 /* Returns E_PENDING while sessions remain; leaves host alive in that case. */
 int32_t opcl_da_host_destroy(OpclDaHost* host);

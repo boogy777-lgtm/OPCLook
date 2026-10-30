@@ -1,5 +1,8 @@
 use std::fmt;
 
+/// Maximum distinct registration identities during one connection epoch.
+pub const MAX_ITEM_KEYS_PER_CONNECTION: usize = 100_000;
+
 /// Nonzero identity of a session, distinct from a request identity.
 ///
 /// ```compile_fail
