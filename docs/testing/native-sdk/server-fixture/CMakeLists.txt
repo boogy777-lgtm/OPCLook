@@ -26,7 +26,7 @@ target_compile_definitions(fixture_expat PRIVATE XML_STATIC COMPILED_FROM_DSP)
 file(GLOB server_sources CONFIGURE_DEPENDS "${core}/src/SOSrv/*.cpp" "${core}/src/SODaS/*.cpp")
 file(GLOB client_sources CONFIGURE_DEPENDS "${core}/src/SOClt/*.cpp" "${core}/src/SODaC/*.cpp")
 add_executable(opcl_da_server server.cpp ${common_sources} ${server_sources}
-  "${core}/src/demo/SOServer/SOSAllocHelpers.cpp")
+  "${core}/src/demo/SOServer/SOSAllocHelpers.cpp" "${core}/src/include/SOProxy_i.c")
 target_compile_definitions(opcl_da_server PRIVATE SODMS_DA)
 set_source_files_properties("${core}/src/demo/SOServer/SOSAllocHelpers.cpp" PROPERTIES
   COMPILE_OPTIONS "/FI${CMAKE_CURRENT_SOURCE_DIR}/stdafx.h")
