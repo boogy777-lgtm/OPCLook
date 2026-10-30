@@ -75,6 +75,50 @@ impl UaRevisedSubscription {
     }
 }
 
+/// A logical need coalesced into one read attempt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ReadNeed {
+    Initial,
+    Poll,
+    ExplicitRefresh,
+    WriteReadback,
+    Direct,
+}
+
+/// Why a pending or in-flight read need was cancelled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReadCancelReason {
+    Removed,
+    Disconnected,
+    EpochChanged,
+    Cancelled,
+}
+
+/// Terminal status for one requested key; received values keep their complete
+/// quality, timestamp and backend reason, including Bad/Uncertain results.
+#[derive(Clone, Debug)]
+pub enum ReadTerminalStatus {
+    /// A delivered value, whose quality and reason still determine usability.
+    Received(DataValue),
+    MissingResult,
+    ServiceError(BackendMsg),
+    Timeout {
+        seconds: u64,
+    },
+    Cancelled(ReadCancelReason),
+    DispatchFailed(super::SendError),
+    Unavailable,
+    UnexpectedReply,
+}
+
+#[derive(Clone, Debug)]
+pub struct ReadTerminal {
+    pub request_id: Option<super::RequestId>,
+    pub key: ItemKey,
+    pub needs: Vec<ReadNeed>,
+    pub status: ReadTerminalStatus,
+}
+
 /// Terminal outcome of a subnet scan. Partial discoveries are reported separately.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScanEnd {
