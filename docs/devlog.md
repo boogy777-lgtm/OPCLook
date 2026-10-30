@@ -935,3 +935,19 @@ Source-method harness: 14 случаев двух read режимов / семи
 Исходный SDK body/fragment компилировались с fake dependencies, а не полным SDK.
 Физические Windows/DA, транзитивные лицензии и lifecycle не проверены.
 Финальный Win32 core probe подготовлен; его результат необходимо получить в CI.
+
+## N1 CI setup: анализ до исправления
+
+Class: перенос test harness между Windows и Linux, не OPC protocol.
+Inv: оба SDK probe применяют один и тот же patch к точному blob; CMake
+использует нормализованный путь и не ослабляет сборку или assertions.
+N+1: CRLF/LF patch, спецсимволы и пробелы пути, source-method и core job.
+Defect: CI run 41061743112 остановился до core-компиляции: Windows patch
+не применился; CMake VerifyGlobs получил путь с обратными слешами.
+
+Воспроизведено локально: CRLF patch к точному LF blob даёт git apply exit 1
+на строке 982, как в Windows CI. Общий helper нормализует CRLF в LF, сверяет
+blob SHA и выполняет `git apply --check` до применения. Тесты проверяют
+идентичность результата LF/CRLF и отсутствие изменения при ошибках. CMake
+нормализует SDK path до configure/glob; x86 SDK compilation по-прежнему
+не выполнена локально.

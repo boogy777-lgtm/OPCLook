@@ -6,14 +6,16 @@ endif()
 if(NOT DEFINED SOFTING_SDK_ROOT)
   message(FATAL_ERROR "Set SOFTING_SDK_ROOT to the pinned SDK checkout")
 endif()
+include("${CMAKE_CURRENT_SOURCE_DIR}/normalize-sdk-path.cmake")
+normalize_sdk_path("${SOFTING_SDK_ROOT}" SOFTING_SDK_ROOT_NORMALIZED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
-execute_process(COMMAND "${CMAKE_COMMAND}" -E env "SOFTING_SDK_ROOT=${SOFTING_SDK_ROOT}"
+execute_process(COMMAND "${CMAKE_COMMAND}" -E env "SOFTING_SDK_ROOT=${SOFTING_SDK_ROOT_NORMALIZED}"
   "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../verify-softing-sdk.py"
   RESULT_VARIABLE pin_result)
 if(NOT pin_result EQUAL 0)
   message(FATAL_ERROR "Softing SDK pin/header verification failed")
 endif()
-set(core "${SOFTING_SDK_ROOT}/development/core")
+set(core "${SOFTING_SDK_ROOT_NORMALIZED}/development/core")
 file(GLOB core_sources CONFIGURE_DEPENDS
   "${core}/src/SOCmn/*.cpp" "${core}/src/SOClt/*.cpp" "${core}/src/SODaC/*.cpp"
   "${core}/src/opc/*_i.c")

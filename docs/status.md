@@ -11,8 +11,14 @@ item handle. Пinned source-method harness показал 6 read + 6 write-cache
 устранил их в том же изолированном harness. Это не linked SDK или live proof.
 См. [полный N1 audit](testing/native-sdk/softing-4.47.1.md).
 
-Подготовлен Win32 SDK core build/probe без OTB/MFC; до результата CI его сборка,
-link, init/cleanup и callback остаются непроверенными. Системный Windows/DA
+CI run 41061743112: Linux source-method probe прошёл; Windows x86 public
+headers и baseline source-method прошли, но fixed source-method остановился
+на применении CRLF patch. Core configure прошёл, build остановился в CMake
+VerifyGlobs из-за обратных слешей пути. Это ошибки нашего setup до SDK
+компиляции, не результат SDK. Общий helper теперь нормализует patch и проверяет
+исходный blob; CMake нормализует путь до генерации и проверяется отдельно.
+Win32 SDK core build/probe без OTB/MFC, link, init/cleanup и callback остаются
+непроверенными до результата нового CI. Системный Windows/DA
 сервер здесь недоступен. UA SDK не менялся; старый production DA worker
 сохранён, native DA migration и полная проверка лицензий SDK closure открыты.
 Предыдущий published head 2335b8e прошёл Linux/Windows x86 CI run 41051563765;

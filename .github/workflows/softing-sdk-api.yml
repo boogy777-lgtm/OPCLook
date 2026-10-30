@@ -34,6 +34,8 @@ jobs:
         run: |
           set -euo pipefail
           docs/testing/native-sdk/check-softing-api.sh
+          cmake -P docs/testing/native-sdk/core-probe/test-normalize-sdk-path.cmake
+          python3 docs/testing/native-sdk/test_softing_patch.py
           python3 docs/testing/native-sdk/reproduce-softing-status.py --expect-existing-defect
           python3 docs/testing/native-sdk/reproduce-softing-status.py --patched
       - name: Compile public API and exercise exact SDK method (Windows x86)
@@ -50,6 +52,10 @@ jobs:
           call "%VSROOT%\VC\Auxiliary\Build\vcvarsall.bat" x86
           if errorlevel 1 exit /b 1
           python docs\testing\native-sdk\verify-softing-sdk.py
+          if errorlevel 1 exit /b 1
+          cmake -P docs\testing\native-sdk\core-probe\test-normalize-sdk-path.cmake
+          if errorlevel 1 exit /b 1
+          python docs\testing\native-sdk\test_softing_patch.py
           if errorlevel 1 exit /b 1
           cl /nologo /std:c++14 /EHsc /Zs /D_WINDOWS /DWIN32 /DTBC_USING_LIB /I "%SOFTING_SDK_ROOT%\development\C++\src" /I "%SOFTING_SDK_ROOT%\development\core\include" docs\testing\native-sdk\softing-public-api-probe.cpp
           if errorlevel 1 exit /b 1
@@ -90,7 +96,7 @@ jobs:
         run: |
           python -c "import pathlib,subprocess; pathlib.Path('softing-sdk/development/core/src/SODaC/SODaCCallback.cpp').write_bytes(subprocess.check_output(['git','-C','softing-sdk','cat-file','blob','59205bb9b6e32641c966d334589fe355bafe273f']))"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git -C softing-sdk apply --whitespace=nowarn ../opclook/docs/testing/native-sdk/softing-status-alignment.patch
+          python opclook/docs/testing/native-sdk/softing_patch.py softing-sdk
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build softing-build --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

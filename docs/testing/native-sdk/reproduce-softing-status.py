@@ -10,6 +10,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from softing_patch import apply_patch
 
 root = Path(os.environ["SOFTING_SDK_ROOT"])
 subprocess.run([sys.executable, str(Path(__file__).with_name("verify-softing-sdk.py"))], check=True)
@@ -34,9 +35,7 @@ if patched:
         target = Path(patch_dir) / "development/core/src/SODaC/SODaCCallback.cpp"
         target.parent.mkdir(parents=True)
         target.write_bytes(source)
-        subprocess.run(["git", "apply", "--whitespace=nowarn",
-                        str(Path(__file__).with_name("softing-status-alignment.patch").resolve())],
-                       cwd=patch_dir, check=True)
+        apply_patch(Path(patch_dir))
         source = target.read_bytes()
 text = source.decode("utf-8")
 start = text.index("HRESULT SODaCDataCallback::handleReadAdvise(")

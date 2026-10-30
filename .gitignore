@@ -52,3 +52,6 @@ Desktop.ini
 # CI helper logs
 /test-output.txt*
 /gate-output.txt*
+
+# Python test helpers
+__pycache__/
