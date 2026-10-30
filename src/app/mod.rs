@@ -955,7 +955,7 @@ impl App {
             runtime.items = self
                 .rows
                 .iter()
-                .filter(|row| row.session == view.id)
+                .filter(|row| row.session == view.id && view.state == SessionState::Connected)
                 .map(|row| (row.key, row.poll_only))
                 .collect();
             self.engine.seed_session_for_test(view.id, runtime);

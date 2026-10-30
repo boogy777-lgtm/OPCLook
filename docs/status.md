@@ -21,6 +21,12 @@ GUI library — 230 тестов, no-hardcoded — 5; CLI — 9 unit и 2 live U
 отправленный snapshot могут оба доставить одно значение; live тест сохраняет
 оба события и проверяет последующее изменение.
 
+Полный Linux gate на дереве с исправленным test fixture прошёл; UI interaction:
+235 passed, 1 Windows-only ignored. Первый полный запуск остановился с E0463
+для `opclook_backend`; следующий обнаружил два падения reconnect fixture, те же
+два падения были в Linux CI для 74fa313. Fixture исправлен без сброса ledger
+или permit; после этого полный gate прошёл. Причина E0463 не установлена.
+
 Остаются открытыми общая очередь WriteReadback/Refresh, raw Write status,
 политики AcquisitionConfig и явный Poll/Subscription в GUI/CLI, частичные
 Read outcomes, fairness для Browse и все ещё не исполненные строки G/D/C/U/M/E/S/T/A/O.

@@ -849,6 +849,15 @@ timeout; изолированный повтор после сборки про�
 наблюдения snapshot и позднего push, но требует последующее изменённое значение.
 Физический DA и Windows текущего HEAD не выполнялись.
 
+Полный Linux gate сначала остановился на E0463 для opclook_backend; после
+очистки собственных backend/engine артефактов повтор обнаружил два падающих
+reconnect UI теста, воспроизведённых и CI 74fa313. Test fixture при Connecting
+ошибочно возвращал старые GUI rows в runtime.items. Fixture теперь сохраняет
+пустую регистрацию при Connecting, не сбрасывая ledger или permit; тесты
+по-прежнему проходят реальные reconnect request/reply и проверяют AddItems.
+После исправления полный `scripts/check-linux.sh` прошёл; UI interactions
+235 passed, 1 Windows-only ignored. Точную причину E0463 не определяли.
+
 WriteReadback не подключён: UA write сводит Uncertain и Good к Ok(()), а DA
 теряет положительные HRESULT, поэтому текущий результат не позволяет надёжно
 распознать принятый Good. Общий конфиг, Refresh и корректное завершение каждого
