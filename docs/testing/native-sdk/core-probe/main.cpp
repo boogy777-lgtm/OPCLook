@@ -43,26 +43,30 @@ static int run_callbacks() {
     values[1].vt = VT_I4; values[1].lVal = 22;
     WORD qualities[] = {0, 0xc0};
     FILETIME times[] = {{0, 0}, {1, 0}};
-    HRESULT errors[] = {E_INVALIDARG, S_OK};
-    bool read_setup, read_correct, write_setup, write_correct;
+    // Distinguish ordinary S_OK and a positive non-S_OK HRESULT. The latter
+    // is a test fixture for preserving raw bits, not a claim about a server.
+    const HRESULT valid_statuses[] = {S_OK, static_cast<HRESULT>(7)};
+    bool read_setup = true, read_correct = true, write_setup = true, write_correct = true;
+    bool unchanged = true;
     {
         ProbeCallback callback(group);
-        read_setup = true;
-        read_correct = true;
-        for (BYTE mode = 0; mode < 2; ++mode) {
-            HRESULT call = callback.handleReadAdvise(mode, 42, group->getOpcHandle(), S_OK, S_OK,
-                                                     2, handles, values, qualities, times, errors);
-            read_setup = read_setup && SUCCEEDED(call) && group->read_count == 1 && group->read_item == item &&
-                         group->read_value == 22 && group->read_quality == 0xc0 &&
-                         group->read_time.dwLowDateTime == 1 && item->getReadResult() == S_OK;
-            read_correct = read_correct && group->read_result == S_OK;
+        for (HRESULT valid_status : valid_statuses) {
+            HRESULT errors[] = {E_INVALIDARG, valid_status};
+            for (BYTE mode = 0; mode < 2; ++mode) {
+                HRESULT call = callback.handleReadAdvise(mode, 42, group->getOpcHandle(), S_OK, S_OK,
+                                                         2, handles, values, qualities, times, errors);
+                read_setup = read_setup && SUCCEEDED(call) && group->read_count == 1 && group->read_item == item &&
+                             group->read_value == 22 && group->read_quality == 0xc0 &&
+                             group->read_time.dwLowDateTime == 1 && item->getReadResult() == valid_status;
+                read_correct = read_correct && group->read_result == valid_status;
+            }
+            HRESULT call = callback.OnWriteComplete(42, group->getOpcHandle(), S_OK, 2, handles, errors);
+            write_setup = write_setup && SUCCEEDED(call) && group->write_count == 1 &&
+                          group->write_item == item && group->write_result == valid_status;
+            write_correct = write_correct && item->getWriteResult() == valid_status;
+            unchanged = unchanged && errors[0] == E_INVALIDARG && errors[1] == valid_status;
         }
-        HRESULT call = callback.OnWriteComplete(42, group->getOpcHandle(), S_OK, 2, handles, errors);
-        write_setup = SUCCEEDED(call) && group->write_count == 1 &&
-                      group->write_item == item && group->write_result == S_OK;
-        write_correct = item->getWriteResult() == S_OK;
     }
-    const bool unchanged = errors[0] == E_INVALIDARG && errors[1] == S_OK;
     std::printf("read_setup=%d read_correct=%d write_setup=%d write_correct=%d unchanged=%d\n",
                 read_setup, read_correct, write_setup, write_correct, unchanged);
     VariantClear(&values[0]); VariantClear(&values[1]);
@@ -75,7 +79,7 @@ static int run_callbacks() {
 int main(int argc, char** argv) {
     const bool baseline = argc == 2 && std::strcmp(argv[1], "--expect-existing-defect") == 0;
     SOCmnPointer<SODaCEntry> entry = getSODaCEntry();
-    if (entry.isNull() || !entry->initialize(COINIT_MULTITHREADED)) return 10;
+    if (!entry.isNotNull() || !entry->initialize(COINIT_MULTITHREADED)) return 10;
     const int result = run_callbacks();
     // Always terminate the initialized SDK, including fixture failures.
     if (!entry->terminate()) return 14;

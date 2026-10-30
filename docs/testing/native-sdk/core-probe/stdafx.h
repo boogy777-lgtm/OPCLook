@@ -11,6 +11,17 @@
 #include <tchar.h>
 #include <atlbase.h>
 #include "SOCmnCfg.h"
+// This isolated probe covers native DA/DCOM only; it does not exercise
+// XML-DA or SDK Watch. SOCmnCfg.h permits custom feature undefs.
+// BEGIN N1 DCOM-ONLY FEATURES
+#undef SOFEATURE_WATCH
+#undef SOFEATURE_XML_METHOD
+#undef SOFEATURE_CMN_XML
+// END N1 DCOM-ONLY FEATURES
+#if !defined(SOFEATURE_DCOM) || defined(SOFEATURE_SOAP) || \
+    defined(SOFEATURE_WATCH) || defined(SOFEATURE_XML_METHOD) || defined(SOFEATURE_CMN_XML)
+#error Invalid feature set for the DA/DCOM-only core probe
+#endif
 #include "SOCmnOsCompat.h"
 #include "opcda.h"
 #include "SOCmn.h"

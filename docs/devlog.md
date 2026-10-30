@@ -951,3 +951,20 @@ blob SHA и выполняет `git apply --check` до применения. Т
 идентичность результата LF/CRLF и отсутствие изменения при ошибках. CMake
 нормализует SDK path до configure/glob; x86 SDK compilation по-прежнему
 не выполнена локально.
+
+## N1 Win32 core build: анализ до исправления
+
+Class: изолированная конфигурация сборочного probe и использование API SDK.
+Inv: тот же upstream DA/DCOM core и callback test компилируются без изменений
+протокольных исходников или обхода SDK; отключение непроверенной capability
+не выдаётся за её поддержку в production.
+N+1: pointer API, зависимости Watch/XML/Expat и оба варианта SDK patch.
+Defect: CI 41062539737 дошёл до компиляции и получил `isNull` C2039 и конфликт
+Expat `ELEMENT_TYPE` с WinSDK; вторичные ошибки ещё не классифицированы.
+
+Публичный SDK `SOCmnPointer` предоставляет `isNotNull`; probe переключён на
+него. В рассмотренных core исходниках XML-DA ограждён `SOFEATURE_SOAP`,
+Expat — `SOFEATURE_CMN_XML`. Изолированный native DA/DCOM probe отключает
+только Watch/XML в test stdafx после SDK config. Pinned config preprocessor
+check подтверждает DCOM/DA1 и отсутствие SOAP/Watch/XML; полноценная Win32
+сборка и классификация остальных ошибок ещё ожидаются в CI.

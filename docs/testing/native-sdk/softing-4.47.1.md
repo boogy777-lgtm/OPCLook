@@ -26,6 +26,16 @@
 нужен воспроизводимый Win32 core build/link/init/cleanup без sample UI,
 затем проверка server/teardown и типов. Не менять приватную активацию.
 
+CI run 41062539737 дошёл до Win32 C++ и показал несовместимость probe с API
+`SOCmnPointer::isNull` и конфликт имён встроенного Expat и текущего WinSDK.
+Проба использует публичный `isNotNull`; её DCOM-only config исключает Watch и
+XML после `SOCmnCfg.h`, оставаясь с DA/DCOM. В рассмотренных core исходниках
+XML-DA ограждён `SOFEATURE_SOAP`, Expat — `SOFEATURE_CMN_XML`; такой профиль
+не проверяет и не заявляет поддержку XML-DA/Watch. `test-core-features.py`
+проверяет макросы точного SDK config на препроцессоре; он не заменяет Windows
+compile/link. Остальные compiler ошибки могут быть зависимыми — это ещё не
+доказано и они должны быть повторно измерены в CI.
+
 ## SDK defect: неверное сопоставление HRESULT после неизвестного handle
 
 В [SODaCCallback.cpp](https://github.com/SoftingIndustrial/OPC-Classic-SDK/blob/5130e763998189c822882434c43e6be2eb0174cf/development/core/src/SODaC/SODaCCallback.cpp)

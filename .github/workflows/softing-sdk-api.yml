@@ -34,6 +34,7 @@ jobs:
         run: |
           set -euo pipefail
           docs/testing/native-sdk/check-softing-api.sh
+          python3 docs/testing/native-sdk/test-core-features.py
           cmake -P docs/testing/native-sdk/core-probe/test-normalize-sdk-path.cmake
           python3 docs/testing/native-sdk/test_softing_patch.py
           python3 docs/testing/native-sdk/reproduce-softing-status.py --expect-existing-defect

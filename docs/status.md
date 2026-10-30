@@ -17,8 +17,12 @@ headers и baseline source-method прошли, но fixed source-method ост�
 VerifyGlobs из-за обратных слешей пути. Это ошибки нашего setup до SDK
 компиляции, не результат SDK. Общий helper теперь нормализует patch и проверяет
 исходный blob; CMake нормализует путь до генерации и проверяется отдельно.
-Win32 SDK core build/probe без OTB/MFC, link, init/cleanup и callback остаются
-непроверенными до результата нового CI. Системный Windows/DA
+Следующий run 41062539737 прошёл оба source-probe и Win32 configure/ZeroCheck;
+в core C++ получены `isNull` C2039 и Expat/WinSDK `ELEMENT_TYPE` C2371,
+а также ещё не классифицированные ошибки компилятора Expat. Probe исправлен
+на публичный `isNotNull` и DCOM-only test configuration без Watch/XML;
+preprocessor test сохраняет DA/DCOM/DA1. Реальный Win32 link, init/cleanup
+и callback остаются непроверенными до результата нового CI. Системный Windows/DA
 сервер здесь недоступен. UA SDK не менялся; старый production DA worker
 сохранён, native DA migration и полная проверка лицензий SDK closure открыты.
 Предыдущий published head 2335b8e прошёл Linux/Windows x86 CI run 41051563765;
