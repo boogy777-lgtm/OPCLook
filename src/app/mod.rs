@@ -154,6 +154,8 @@ pub(super) enum PendingCtx {
     /// places of the tree, so the reply must land under the item that was
     /// expanded, not under the first node with that id).
     TreeItem(u64),
+    /// A user-entered browse target not yet present in the tree.
+    PaletteBrowse(String),
     /// `Discover` of one DA host: only that host's temporary route is released
     /// when the request fails.
     Host(String),

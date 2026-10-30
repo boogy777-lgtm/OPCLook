@@ -238,6 +238,7 @@ pub struct AddSignalDialog {
 #[derive(Default)]
 pub struct WriteDialog {
     pub open: bool,
+    pub epoch: Option<RequestId>,
     pub keys: Vec<ItemKey>,
     pub text: String,
     pub type_index: usize,
@@ -276,6 +277,7 @@ pub struct MessageDialog {
 #[derive(Clone, Debug)]
 pub struct PendingWrites {
     pub session: SessionId,
+    pub epoch: Option<RequestId>,
     pub protocol: Protocol,
     pub requests: Vec<WriteRequest>,
     pub type_label: String,
@@ -301,6 +303,10 @@ pub struct PaletteDialog {
     pub query: String,
     pub selected: Option<opclook_contract::actions::ActionId>,
     pub focus_pending: bool,
+    pub browse_node: String,
+    pub context_session: Option<SessionId>,
+    pub context_epoch: Option<RequestId>,
+    pub context_initialized: bool,
 }
 
 #[derive(Default)]

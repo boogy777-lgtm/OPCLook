@@ -1780,6 +1780,7 @@ fn write_request(key: ItemKey) -> WriteRequest {
 fn start_batch(app: &mut App, keys: &[ItemKey]) {
     app.perform_write(PendingWrites {
         session: crate::bff::model::SessionId::new(1).unwrap(),
+        epoch: app.engine.connection_id(SessionId::FIRST),
         protocol: Protocol::OpcUa,
         requests: keys.iter().copied().map(write_request).collect(),
         type_label: "Int".to_string(),
@@ -2396,6 +2397,7 @@ fn partial_write_then_closed_worker_finishes_batch() {
     app.engine.limit_dispatch_for_test(1);
     app.perform_write(PendingWrites {
         session: crate::bff::model::SessionId::new(1).unwrap(),
+        epoch: app.engine.connection_id(SessionId::FIRST),
         protocol: Protocol::OpcUa,
         requests: vec![
             WriteRequest {
@@ -2519,6 +2521,7 @@ fn old_disconnect_preserves_new_connection_write_confirmation() {
         focus_pending: true,
         action: ConfirmAction::Write(PendingWrites {
             session,
+            epoch: Some(b),
             protocol: Protocol::OpcUa,
             requests: vec![],
             type_label: String::new(),
@@ -3569,5 +3572,157 @@ fn failed_migration_cannot_open_legacy_profile() {
     assert_eq!(
         app.status,
         tr(app.lang(), Tr::SettingsAcquisitionMigrationBlocked)
+    );
+}
+
+#[test]
+fn p4_stale_write_form_cannot_cross_connection_epoch() {
+    let (_ctx, mut app) = tree_app();
+    let session = SessionId::FIRST;
+    app.record_dispatches_for_test();
+    let endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+    let a = app
+        .send(
+            session,
+            Protocol::OpcUa,
+            CommandKind::Connect {
+                endpoint: endpoint.clone(),
+            },
+        )
+        .unwrap();
+    app.on_event_for_test_with_request(
+        session,
+        a,
+        EventKind::Connected {
+            endpoint: endpoint.clone(),
+            info: BackendMsg::raw("A"),
+        },
+    );
+    let key = app.seed_writable_row(session, "a", "A", Value::I64(1));
+    app.settings.view.options.confirm_write = false;
+    app.open_write_dialog(vec![key]);
+    app.dialogs.write.text = "7".into();
+    let b = app
+        .send(
+            session,
+            Protocol::OpcUa,
+            CommandKind::Connect {
+                endpoint: endpoint.clone(),
+            },
+        )
+        .unwrap();
+    app.on_event_for_test_with_request(
+        session,
+        b,
+        EventKind::Connected {
+            endpoint,
+            info: BackendMsg::raw("B"),
+        },
+    );
+    assert_ne!(a, b);
+    app.record_dispatches_for_test();
+    app.apply_write();
+    assert!(
+        app.dispatched_for_test()
+            .iter()
+            .all(|command| !matches!(command.kind, CommandKind::Write { .. }))
+    );
+    assert_eq!(
+        app.dialogs.write.error.as_deref(),
+        Some(tr(app.lang(), Tr::PaletteWriteStale))
+    );
+}
+
+#[test]
+fn p4_stale_write_confirmation_cannot_cross_connection_epoch() {
+    let (_ctx, mut app) = tree_app();
+    app.record_dispatches_for_test();
+    let session = SessionId::FIRST;
+    let endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+    let a = app
+        .send(
+            session,
+            Protocol::OpcUa,
+            CommandKind::Connect {
+                endpoint: endpoint.clone(),
+            },
+        )
+        .unwrap();
+    app.on_event_for_test_with_request(
+        session,
+        a,
+        EventKind::Connected {
+            endpoint: endpoint.clone(),
+            info: BackendMsg::raw("A"),
+        },
+    );
+    let key = app.seed_writable_row(session, "a", "A", Value::I64(1));
+    app.settings.view.options.confirm_write = true;
+    app.open_write_dialog(vec![key]);
+    app.dialogs.write.text = "7".into();
+    app.apply_write();
+    // Simulate a previously queued confirmation being delivered after reconnect.
+    let old_confirmation = app.dialogs.confirm.take().expect("write confirmation");
+    let b = app
+        .send(
+            session,
+            Protocol::OpcUa,
+            CommandKind::Connect {
+                endpoint: endpoint.clone(),
+            },
+        )
+        .unwrap();
+    app.on_event_for_test_with_request(
+        session,
+        b,
+        EventKind::Connected {
+            endpoint,
+            info: BackendMsg::raw("B"),
+        },
+    );
+    assert_ne!(a, b);
+    app.dialogs.confirm = Some(old_confirmation);
+    app.confirm_yes();
+    assert!(
+        app.dispatched_for_test()
+            .iter()
+            .all(|command| !matches!(command.kind, CommandKind::Write { .. }))
+    );
+    assert_eq!(app.status, tr(app.lang(), Tr::PaletteWriteStale));
+}
+
+#[test]
+fn p4_palette_captures_connection_when_opened() {
+    use opclook_contract::actions::ActionId;
+    let (_ctx, mut app) = tree_app();
+    app.record_dispatches_for_test();
+    app.open_command_palette();
+    let old = app.dialogs.palette.context_epoch;
+    let endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+    app.send(SessionId::FIRST, Protocol::OpcUa, CommandKind::Test)
+        .unwrap();
+    let id = app
+        .send(
+            SessionId::FIRST,
+            Protocol::OpcUa,
+            CommandKind::Connect {
+                endpoint: endpoint.clone(),
+            },
+        )
+        .unwrap();
+    app.on_event_for_test_with_request(
+        SessionId::FIRST,
+        id,
+        EventKind::Connected {
+            endpoint,
+            info: BackendMsg::raw("new"),
+        },
+    );
+    assert_ne!(old, app.engine.connection_id(SessionId::FIRST));
+    app.prepare_palette_context();
+    assert_eq!(app.dialogs.palette.context_epoch, old);
+    assert_eq!(
+        app.execute_palette_action(ActionId::Browse),
+        Err(Tr::PaletteConnectionChanged)
     );
 }

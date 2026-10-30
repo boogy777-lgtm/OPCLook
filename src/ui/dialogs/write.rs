@@ -39,7 +39,7 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
             return;
         }
     };
-    let unavailable = first.and_then(|row| app.write_unavailable(row.session, protocol));
+    let unavailable = first.and_then(|row| app.write_dialog_unavailable(row.session, protocol));
     let choices = write_type_choices(protocol);
     let mut submit = false;
     let mut close = false;

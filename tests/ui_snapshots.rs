@@ -407,3 +407,58 @@ fn active_acquisition_profile_scenes() {
         assert!(!h.state().dialogs.acquisition.open);
     }
 }
+
+#[test]
+#[ignore = "manual visual QA requiring a headless wgpu renderer"]
+fn p4_palette_browse_ru() {
+    use opclook_contract::actions::ActionId;
+    for (lang, suffix) in [(Lang::Ru, "ru"), (Lang::En, "en"), (Lang::Zh, "zh")] {
+        let mut app = base(lang);
+        app.settings.view.options.theme = opclook::settings::Theme::Dark;
+        app.seed_session(
+            SessionId::FIRST,
+            EndpointSpec::ua("opc.tcp://127.0.0.1:4840"),
+        );
+        app.open_command_palette();
+        app.dialogs.palette.query = "2001".into();
+        app.dialogs.palette.selected = Some(ActionId::Browse);
+        app.dialogs.palette.browse_node = "ns=2;s=Plant/Line1".into();
+        save(&format!("p4-palette-browse-{suffix}"), app);
+    }
+    let mut app = base(Lang::Ru);
+    app.settings.view.options.theme = opclook::settings::Theme::Light;
+    app.seed_session(
+        SessionId::FIRST,
+        EndpointSpec::da("localhost", "Vendor.OPC"),
+    );
+    let key = app.seed_writable_row(SessionId::FIRST, "Fixture.Value", "Насос", Value::I64(42));
+    app.settings.view.options.confirm_write = true;
+    app.select_only(0);
+    let mut h = Harness::builder()
+        .with_size([1200.0, 900.0])
+        .with_accessibility_check(false)
+        .with_render_cursor(false)
+        .with_context_setup(|ctx| {
+            assert!(opclook::app::install_fonts(ctx).is_some());
+        })
+        .build_ui_state(|ui, app: &mut App| app.update(ui), app);
+    h.run_steps(5);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::P);
+    h.run_steps(3);
+    h.event(egui::Event::Text("2002".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().dialogs.write.keys, vec![key]);
+    h.event(egui::Event::Text("77".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().dialogs.confirm.is_some());
+    assert!(h.state().dispatched_for_test().is_empty());
+    std::fs::create_dir_all("docs/screenshots").unwrap();
+    h.render()
+        .unwrap()
+        .save("docs/screenshots/p4-palette-write-confirm-ru.png")
+        .unwrap();
+}

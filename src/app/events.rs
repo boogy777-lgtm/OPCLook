@@ -287,11 +287,17 @@ impl App {
                 self.remove_rows(&keys.into_iter().collect());
             }
             EventKind::Browse { node_id, children } => {
+                if matches!(&ctx, PendingCtx::PaletteBrowse(expected) if expected != &node_id) {
+                    self.status = tr(self.lang(), Tr::PaletteBrowseMismatch).to_string();
+                    self.journal.error_l(Tr::PaletteBrowseMismatch, &[]);
+                    return;
+                }
                 // U7: the reply belongs to the tree ITEM that was expanded (the
                 // app remembered it per request id), not to the first node
                 // that happens to share the NodeId. Unsolicited replies
                 // (request id 0) fall back to the first matching node.
                 let mut target: Option<u64> = None;
+                let mut palette_id_exhausted = false;
                 if let Some(view) = self.session_mut(session) {
                     if node_id.is_empty() {
                         replace_roots(view, children);
@@ -300,6 +306,36 @@ impl App {
                     } else {
                         let item_id = match &ctx {
                             PendingCtx::TreeItem(id) => Some(*id),
+                            PendingCtx::PaletteBrowse(expected) if expected == &node_id => {
+                                if let Some(existing) =
+                                    view.tree.iter().find(|item| item.node.node_id == node_id)
+                                {
+                                    Some(existing.id)
+                                } else if let Some(next) = view.next_tree_id.checked_add(1) {
+                                    let id = view.next_tree_id;
+                                    view.next_tree_id = next;
+                                    view.tree.push(crate::app::TreeItem {
+                                        id,
+                                        parent: None,
+                                        node: BrowseNode {
+                                            node_id: node_id.clone(),
+                                            name: node_id.clone(),
+                                            kind: crate::bff::model::NodeKind::Branch,
+                                            has_children: true,
+                                        },
+                                        depth: 0,
+                                        expanded: true,
+                                        loaded: false,
+                                        loading: false,
+                                    });
+                                    view.invalidate_tree();
+                                    Some(id)
+                                } else {
+                                    palette_id_exhausted = true;
+                                    None
+                                }
+                            }
+                            PendingCtx::PaletteBrowse(_) => None,
                             _ => view
                                 .tree
                                 .iter()
@@ -317,6 +353,10 @@ impl App {
                             }
                         }
                     }
+                }
+                if palette_id_exhausted {
+                    self.status = tr(self.lang(), Tr::PaletteBrowseLimit).to_string();
+                    self.journal.error_l(Tr::PaletteBrowseLimit, &[]);
                 }
                 // Drive the recursive add-children job. The job is keyed by the
                 // request id it issued, so a manual browse or a stale reply is

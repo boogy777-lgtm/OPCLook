@@ -6773,7 +6773,7 @@ fn p4_open_from_menu_and_block_background_pointer() {
     let menu_pos = h.get_by_label("OPC клиент").rect().center();
     h.get_by_label("OPC клиент").click();
     h.run_steps(2);
-    h.get_by_label("Палитра команд").click();
+    h.get_by_label_contains("Палитра команд").click();
     h.run_steps(3);
     assert!(h.state().dialogs.palette.open);
     pointer_click(&h, menu_pos, PointerButton::Primary);
@@ -8251,4 +8251,143 @@ fn active_profile_enter_message_and_missing_target_are_safe() {
     h.get_by_label("Отмена").click();
     h.run_steps(3);
     assert!(!h.state().dialogs.acquisition.open);
+}
+
+#[test]
+fn p4_keyboard_palette_typed_browse_and_unknown_result() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.record_dispatches_for_test();
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::P);
+    h.run_steps(3);
+    assert!(h.state().dialogs.palette.open);
+    h.event(egui::Event::Text("2001".into()));
+    h.run_steps(3);
+    assert!(h.state().dispatched_for_test().is_empty());
+    h.get_by_label("OPC DA item id или OPC UA NodeId").focus();
+    h.run_steps(1);
+    h.event(egui::Event::Text("ns=2;s=Unknown".into()));
+    h.run_steps(2);
+    assert!(h.state().dispatched_for_test().is_empty());
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    let commands = h.state().dispatched_for_test();
+    let browse = commands.iter().find(|c| matches!(&c.kind, CommandKind::Browse { node_id, .. } if node_id == "ns=2;s=Unknown")).expect("typed Browse dispatched");
+    let request = browse.request_id.unwrap();
+    h.state_mut().on_event_for_test_with_request(
+        sid(1),
+        request,
+        EventKind::Browse {
+            node_id: "ns=2;s=Unknown".into(),
+            children: vec![BrowseNode {
+                node_id: "ns=2;s=Child".into(),
+                name: "Child".into(),
+                kind: NodeKind::Item,
+                has_children: false,
+            }],
+        },
+    );
+    h.run_steps(2);
+    assert!(
+        h.state().sessions[0]
+            .tree()
+            .iter()
+            .any(|item| item.node.node_id == "ns=2;s=Unknown" && item.loaded)
+    );
+    assert!(
+        h.state().sessions[0]
+            .tree()
+            .iter()
+            .any(|item| item.node.node_id == "ns=2;s=Child")
+    );
+}
+
+#[test]
+fn p4_palette_write_reuses_typed_dialog_and_confirmation() {
+    let mut app = App::new_test(&egui::Context::default());
+    let key = seed_writable_table(&mut app, &[("a", "SigA", 42)])[0];
+    app.select_only(0);
+    app.settings.view.options.confirm_write = true;
+    app.record_dispatches_for_test();
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::P);
+    h.run_steps(3);
+    h.event(egui::Event::Text("2002".into()));
+    h.run_steps(2);
+    assert!(h.state().dispatched_for_test().is_empty());
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().dialogs.write.open);
+    h.event(egui::Event::Text("77".into()));
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    assert!(h.state().dialogs.confirm.is_some());
+    assert!(h.state().dispatched_for_test().is_empty());
+    h.get_by_label("Да").click();
+    h.run_steps(3);
+    let commands = h.state().dispatched_for_test();
+    assert_eq!(commands.iter().filter(|c| matches!(&c.kind, CommandKind::Write { request } if request.key == key && request.value == Value::I64(77))).count(), 1);
+}
+
+#[test]
+fn p4_palette_keyboard_refuses_repeat_ime_and_modal() {
+    for mode in 0..3 {
+        let mut app = App::new_test(&egui::Context::default());
+        if mode == 2 {
+            app.dialogs.about.open = true;
+        }
+        let mut h = harness(app);
+        h.run_steps(3);
+        if mode == 1 {
+            h.event(egui::Event::Ime(egui::ImeEvent::Preedit {
+                text: "x".into(),
+                active_range_chars: None,
+            }));
+        }
+        if mode == 0 {
+            h.event(egui::Event::Key {
+                key: Key::P,
+                physical_key: None,
+                pressed: true,
+                repeat: true,
+                modifiers: Modifiers::COMMAND,
+            });
+        } else {
+            h.key_press_modifiers(Modifiers::COMMAND, Key::P);
+        }
+        h.run_steps(2);
+        assert!(!h.state().dialogs.palette.open);
+    }
+}
+
+#[test]
+fn p4_palette_actions_are_pure_and_localized_for_disabled_context() {
+    use opclook::i18n::{Lang, Tr, tr};
+    for lang in [Lang::Ru, Lang::En, Lang::Zh] {
+        let mut app = App::new_test(&egui::Context::default());
+        app.settings.set_lang(lang);
+        app.seed_session(sid(1), EndpointSpec::da("localhost", "Srv.Test"));
+        app.seed_row(sid(1), "readonly", "ReadOnly", Value::I64(1));
+        app.select_only(0);
+        app.record_dispatches_for_test();
+        app.open_command_palette();
+        app.dialogs.palette.query = "2002".into();
+        let mut h = Harness::builder()
+            .with_size([1200.0, 900.0])
+            .with_max_steps(60)
+            .with_accessibility_check(false)
+            .allow_missing_glyphs()
+            .build_ui_state(|ui, app| opclook::ui::draw(app, ui), app);
+        h.run_steps(3);
+        assert!(h.query_by_label(tr(lang, Tr::ReadOnly)).is_some());
+        assert!(!widget_enabled(&h, tr(lang, Tr::PaletteExecute)));
+        h.key_press(Key::Enter);
+        h.run_steps(2);
+        assert!(h.state().dialogs.palette.open);
+        assert!(h.state().dispatched_for_test().is_empty());
+    }
 }
