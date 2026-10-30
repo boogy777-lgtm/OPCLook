@@ -1,5 +1,20 @@
 # Текущий статус
 
+## 2026-10-30 — R2.TEST: тестовые таблицы и общий конфиг UA/DA
+
+Добавлены [таблицы R2.TEST](testing/acquisition-truth-tables.md) и два полных
+CSV по 128 комбинаций: допуск Read и возникновение потребности.
+Таблицы задают ожидаемые результаты для нового агента; тесты продукта ещё
+не написаны. [Настройки соединения](connection-acquisition.md) определены как
+AcquisitionConfig в EndpointSpec: Subscription/Poll, интервал, read-after-write,
+freshness; Sync/Async DA отделены от UpdateMode. Исследованы официальные PTC DA
+Group/Communications/Quick Client. Текущий DA код читает Cache через SyncIO;
+generated Async/callback bindings не означают готовую подписку.
+
+В этом коммите только документация/CSV. Проверены полнота и уникальность CSV,
+формулы/сокращённые строки, ссылки и whitespace. Cargo/rustfmt отсутствуют;
+fmt, сборки и runtime-тесты не запускались. Настройки в Rust/UI ещё не реализованы.
+
 ## 2026-10-30 — R2: утверждён план обновления значений
 
 Утверждён общий механизм Engine для #13/#16/#17 и сохранение происхождения

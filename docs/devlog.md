@@ -1,3 +1,31 @@
+## 2026-10-30 — R2.TEST: передача агенту тестов и конфиг соединения
+
+Запрос владельца: таблица истинности для нового чата, push и общий механизм
+настроек Poll/Subscription с учётом OPC DA Kepware. «Push vs sub» трактовано
+в контексте R2 как Poll vs Subscription; Push не вводится третьим режимом.
+
+Подготовлены [нормативные таблицы](testing/acquisition-truth-tables.md):
+G/D в CSV полностью перечисляют по 128 комбинаций; C/U/M задают конфигурацию,
+E/S — терминальные исходы и перестановки, T — время, A — adapter obligations.
+Это данные задания, не результаты исполнения тестов.
+
+[Конфиг](connection-acquisition.md) хранится по соединению в EndpointSpec;
+Engine использует capability и общий scheduler. DA UpdateMode и Sync/Async
+Read Method — разные оси: callback завершения Async Read не является stream.
+PTC DA Communications также описывает отдельный Read after Write.
+Источник DA-кода main проверен: активная группа/items, IOPCSyncIO::Read(Cache),
+без готовой data callback доставки. До Device/callback реализации недоступные
+режимы должны иметь причину, а не фиктивный переключатель.
+
+Реализация UI/contract/DA/Engine остаётся открытой по R2.3. Старый DA профиль
+мигрируется как Poll/Sync/CacheAllowed без автоматического read-back, сохраняя
+опубликованный baseline. Новые FreshSource/read-back требуют реальной capability.
+Отдельно зафиксированы snapshot профиля на эпоху, явный reconnect и отсутствие
+скрытых fallback. Параллельная работа в старых local checkout не изменялась.
+
+Проверены CSV/Markdown/ссылки/whitespace; продуктовые тесты и fmt не запускались:
+Cargo/rustfmt недоступны. Live UA/Windows COM/DA в этой сессии не проверялись.
+
 ## 2026-10-30 — R2: утверждение механизма и исследование Kepware
 
 Владелец утвердил перенос обновления значений в Engine и сохранение исходных
