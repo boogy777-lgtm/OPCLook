@@ -1,26 +1,45 @@
 #include "stdafx.h"
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 HINSTANCE getInstanceHandle() { return ::GetModuleHandle(nullptr); }
+static HANDLE isolation_entered = nullptr;
+static HANDLE isolation_release = nullptr;
+
 static const CLSID fixture_clsid = {0x7d4bd1b1, 0x7422, 0x48c0, {0xad, 0x58, 0x60, 0x1b, 0x70, 0x14, 0x49, 0xc6}};
 
 // This is application tag behavior through the SDK's public extension point.
 // SDK complete() performs cache updates and OPC request completion.
 class FixtureTag : public SODaSTagDefault {
 public:
-    FixtureTag(LPCTSTR name, VARTYPE type) : SODaSTagDefault(name) {
+    FixtureTag(LPCTSTR name, VARTYPE type, bool delayed = false, bool state = false) : SODaSTagDefault(name), delayed_(delayed), state_(state) {
         setNativeDatatype(type);
         setAccessRights(OPC_READABLE | OPC_WRITEABLE);
         setDeviceIOMode(SODaSItemTag::direct);
     }
     void handleRequest(SODaSRequest* request) override {
         if (!request) return;
+        if (delayed_ && request->getOperation() == SODaSRequest::write) {
+            if (!isolation_entered || !isolation_release || !SetEvent(isolation_entered) ||
+                WaitForSingleObject(isolation_release, 60000) != WAIT_OBJECT_0) {
+                request->complete(E_FAIL, FALSE, OPC_QUALITY_UNCERTAIN, FALSE, FALSE);
+                return;
+            }
+        }
         if (request->getOperation() == SODaSRequest::write) {
             SOCmnVariant value;
             if (!request->getWriteValue(&value)) {
                 request->complete(E_FAIL, FALSE, OPC_QUALITY_UNCERTAIN, FALSE, FALSE);
                 return;
+            }
+            if (state_) {
+                SOCmnPointer<SODaSEntry> entry = getSODaSEntry();
+                if (value.vt != VT_I4 || (value.lVal != 1 && value.lVal != 2) ||
+                    !entry.isNotNull() || !entry->setServerState(static_cast<OPCSERVERSTATE>(value.lVal))) {
+                    request->complete(E_INVALIDARG, FALSE, OPC_QUALITY_UNCERTAIN, FALSE, FALSE);
+                    return;
+                }
             }
             if (value.vt & VT_ARRAY) {
                 // This fixture models a device that replaces the whole value.
@@ -33,10 +52,13 @@ public:
         }
         request->complete();
     }
+private:
+    bool delayed_;
+    bool state_;
 };
 
-static bool add_tag(SODaSNode* node, LPCTSTR name, SOCmnVariant& value) {
-    SOCmnPointer<SODaSTag> tag = new FixtureTag(name, value.vt);
+static bool add_tag(SODaSNode* node, LPCTSTR name, SOCmnVariant& value, bool delayed = false, bool state = false) {
+    SOCmnPointer<SODaSTag> tag = new FixtureTag(name, value.vt, delayed, state);
     if (!node->addLeaf(tag)) return false;
     SOCmnPointer<SODaSCache> cache = tag->getCache();
     SOCmnDateTime now;
@@ -110,14 +132,24 @@ static int run(int argc, char** argv) {
         result = FAILED(entry->registerServer()) ? 12 : 0;
     } else if (argc == 2 && std::strcmp(argv[1], "--unregister") == 0) {
         result = FAILED(entry->unregisterServer()) ? 13 : 0;
-    } else if (argc == 3) {
+    } else if (argc == 3 || argc == 4) {
+        if (argc == 4) {
+            const std::string prefix(argv[3]);
+            isolation_entered = CreateEventA(nullptr, TRUE, FALSE, (prefix + "-entered").c_str());
+            if (!isolation_entered || GetLastError() == ERROR_ALREADY_EXISTS) result = 21;
+            isolation_release = CreateEventA(nullptr, TRUE, FALSE, (prefix + "-release").c_str());
+            if (!isolation_release || GetLastError() == ERROR_ALREADY_EXISTS) result = 21;
+        }
         SOCmnPointer<SODaSNameSpaceRoot> root = entry->getNameSpaceRoot();
         SOCmnPointer<SODaSNode> node = new SODaSNodeDefault(_T("Fixture"));
-        if (!root.isNotNull() || !root->addBranch(node)) result = 14;
+        if (result == 0 && (!root.isNotNull() || !root->addBranch(node))) result = 14;
         if (result == 0) {
             SOCmnVariant value;
             value.setI4(42);
             bool tags = add_tag(node, _T("Value"), value);
+            if (argc == 4) tags = add_tag(node, _T("Delayed"), value, true) && tags;
+            value.setI4(1);
+            tags = add_tag(node, _T("ServerState"), value, false, true) && tags;
             value.setBOOL(true);
             tags = add_tag(node, _T("Bool"), value) && tags;
             value.setI8(static_cast<LONGLONG>(-9007199254740993LL));
@@ -150,6 +182,8 @@ static int run(int argc, char** argv) {
             }
         }
         entry->stop();
+        if (isolation_entered) CloseHandle(isolation_entered);
+        if (isolation_release) CloseHandle(isolation_release);
     } else result = 19;
     if (!entry->terminate()) result = 20;
     entry.release();

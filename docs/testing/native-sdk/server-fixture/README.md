@@ -50,3 +50,27 @@ currently start at zero. Real DA servers may apply different array semantics;
 an accepted HRESULT is not proof that a value was applied. This fixture tests
 read of a nonzero lower bound and replacement by this particular server, not
 preservation of the lower bound on write.
+
+## Session isolation and server state controls
+
+`--isolation` on `run-interop.py` enables `Fixture.Delayed` (I4, 42) and creates
+unique per-process Windows events. Its direct SDK device-write handler signals
+that the request arrived, then waits at most 60 seconds for release; a timeout
+completes the request with failure. The Rust live test sends the write through
+Gateway session A, waits for the server event, and checks session B read, write,
+and read-back before releasing A. It then requires both disconnects, Gateway and
+SDK shutdown; the launcher still checks server exit and unregisters server/proxy.
+A failure guard releases the event on test assertion failure. Events are test
+control only and never provide OPC data. This is a local, specific interleaving;
+it is not evidence of remote-server behavior or general deadlock freedom.
+
+Run on Windows after building the fixture and RPC proxy:
+
+```
+python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll --isolation -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-preview --test sdk_session_isolation_live -- --nocapture
+```
+
+`Fixture.ServerState` is an I4 control tag with initial value 1. Writes 1 and 2
+call SDK `SODaSEntry::setServerState` for Running and Failed respectively;
+other values fail. Its initial value leaves the normal SDK state unchanged.
+This fixture control is not a claim about other servers' response to Failed.

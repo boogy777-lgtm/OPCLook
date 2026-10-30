@@ -6,6 +6,8 @@ from pathlib import Path
 import subprocess
 import tempfile
 import time
+import sys
+import uuid
 
 
 def checked(command, timeout=20):
@@ -19,6 +21,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--server", type=Path, required=True)
     parser.add_argument("--proxy", type=Path, required=True)
+    parser.add_argument("--isolation", action="store_true")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
@@ -39,7 +42,15 @@ def main():
         with tempfile.TemporaryDirectory(prefix="opcl-da-fixture-") as directory:
             ready = Path(directory) / "ready"
             stop = Path(directory) / "stop"
-            process = subprocess.Popen([server, str(ready), str(stop)])
+            server_command = [server, str(ready), str(stop)]
+            env = os.environ.copy()
+            if args.isolation:
+                prefix = "Local\\OPCLookIsolation-" + uuid.uuid4().hex
+                server_command.append(prefix)
+                env["OPCLOOK_ISOLATION_PREFIX"] = prefix
+                env["OPCLOOK_ISOLATION_HELPER"] = str(Path(__file__).with_name("isolation-event.py"))
+                env["OPCLOOK_ISOLATION_PYTHON"] = sys.executable
+            process = subprocess.Popen(server_command)
             try:
                 deadline = time.monotonic() + 15
                 while not ready.exists():
@@ -48,7 +59,8 @@ def main():
                     if time.monotonic() >= deadline:
                         raise RuntimeError("server startup timed out")
                     time.sleep(0.05)
-                checked(command, timeout=90)
+                print(f"fixture command: {command!r}", flush=True)
+                subprocess.run(command, check=True, timeout=90, env=env)
             finally:
                 stop.touch()
                 try:
