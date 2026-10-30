@@ -96,7 +96,7 @@ fn sdk_session_isolation_live() {
     let b = SessionId::new(2).unwrap();
     setup(&gateway, a, 1, "Fixture.Delayed");
     setup(&gateway, b, 3, "Fixture.Value");
-    event("release", "clear");
+    event("release", "assert-unset");
     send(
         &gateway,
         a,
@@ -110,7 +110,7 @@ fn sdk_session_isolation_live() {
         },
     );
     event("entered", "wait");
-    event("release", "clear");
+    event("release", "assert-unset");
     send(
         &gateway,
         b,
@@ -148,7 +148,7 @@ fn sdk_session_isolation_live() {
     assert!(
         matches!(reply(&gateway, 8).kind, EventKind::Values { values } if values.len() == 1 && values[0].1.value == Value::I64(77) && values[0].1.reason.is_none())
     );
-    event("release", "clear");
+    event("release", "assert-unset");
     event("release", "set");
     assert!(
         matches!(reply(&gateway, 5).kind, EventKind::Wrote { result: Ok(outcome), .. } if outcome.disposition == WriteDisposition::Accepted)

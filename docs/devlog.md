@@ -1218,3 +1218,15 @@ documentation-only commit не меняет код и не объявляетс�
 Следующий gap: remote/другой сервер, late/failure/timeout teardown,
 session isolation и license closure. Выборочная серия не доказывает отсутствие
 всех races и единственную причинность прежнего AV.
+
+2026-10-31 N2.TEST/N3.ISOLATION integration: Class = native status verdict и
+независимость сессий при device I/O; Inv = один SDK owner и коррелированный
+Test, B завершает read/write/read-back пока A подтверждённо ожидает release.
+N+1 = общий D6 mapper и существующий fixture mode; Defect = native Test был
+заглушкой, реальный isolation proof отсутствовал. Два агента подготовили
+раздельные commits. Родитель добавил da_status в stand, полный stand и launcher
+регрессии в Linux SDK CI, strict isolation gate после Gateway 3-run gate.
+Event action assert-unset только проверяет отсутствие release, не сбрасывает его.
+Measured локально агентами: 41 mock stand test, launcher success/failure,
+fmt/diff; Windows/live пока pending. HRESULT failure mock, Running/Failed
+должен проверить реальный SDK fixture; production DA остаётся legacy.

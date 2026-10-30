@@ -1,5 +1,7 @@
 #[path = "../../../../../crates/backend/src/bff/da_convert.rs"]
 pub mod da_convert;
+#[path = "../../../../../crates/backend/src/bff/da_status.rs"]
+pub mod da_status;
 #[path = "../../../../../crates/backend/src/bff/ole_time.rs"]
 pub mod ole_time;
 pub use opclook_contract::model;

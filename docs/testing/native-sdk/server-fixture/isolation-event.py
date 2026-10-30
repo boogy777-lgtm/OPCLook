@@ -27,7 +27,7 @@ try:
         result = kernel.WaitForSingleObject(handle, 15000)
         if result != 0:
             raise RuntimeError(f"event {name} wait failed: {result:#x}")
-    elif action == "clear":
+    elif action == "assert-unset":
         result = kernel.WaitForSingleObject(handle, 0)
         if result != 0x102:
             raise RuntimeError(f"event {name} was signaled or wait failed: {result:#x}")

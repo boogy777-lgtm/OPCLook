@@ -1,5 +1,26 @@
 # Текущий статус
 
+## 2026-10-31 — N2.TEST и N3.ISOLATION (Win32/live CI ожидается)
+
+Две отдельные задачи интегрированы в native preview. Test активной DA-сессии
+использует public status API Softing на worker SDK и общий D6 mapper. Только
+RUNNING даёт DaStateOk; прочие/неизвестные состояния и native failure дают
+коррелированную Test-ошибку. Negative HRESULT сохраняется в detail как hex;
+успешный raw HRESULT общий Event не хранит. Zero-initialized output превращает
+отсутствующий SDK status в unknown 0. Windows live fixture должен проверить
+RUNNING → FAILED → RUNNING через SDK ServerState; mock ABI этого не заменяет.
+
+N3.ISOLATION добавляет test-only SDK device-write barrier: сервер подтверждает
+приход A, B выполняет Read/Write/Read-back до освобождения A, затем обе сессии
+и Gateway/SDK завершаются, launcher проверяет server/proxy cleanup. Barrier
+ограничен 60 с, ошибки/assertions освобождают его; три проверки assert-unset
+не сбрасывают событие. Новый live gate пока не измерен, это не remote proof.
+
+Локально агенты измерили 41 mock-ABI stand test и две launcher test functions
+с success/failure subcases, fmt и diff-check. Exact Windows SDK build, Test
+сценарий и межсессионная изоляция требуют CI нового кода. Production DA
+остаётся legacy, N2/N3/N4 не объявляются полностью закрытыми.
+
 ## 2026-10-31 — N3 локальная приёмка native preview на `46339cc`
 
 Проверенный код: `46339ccf0bb46fb15ef4ab4fcc4cbfaa5baba0b7`. Все шесть
