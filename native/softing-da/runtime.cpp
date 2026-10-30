@@ -3,6 +3,8 @@
 #include <atomic>
 #include <new>
 #include <unordered_set>
+#include <vector>
+#include <cwchar>
 
 // The SDK asks its host for this module handle to load resources.
 HINSTANCE getInstanceHandle() { return ::GetModuleHandle(nullptr); }
@@ -23,9 +25,20 @@ struct OpclDaSession {
     std::unordered_set<OpclDaItem*> items;
 };
 static std::atomic<bool> host_exists(false);
-static bool ascii(const char* s) {
-    if (!s) return false;
-    for (; *s; ++s) if (static_cast<unsigned char>(*s) >= 128) return false;
+// ABI text is bounded UTF-8. SDK objects remain responsible for BSTR/VARIANT.
+static bool to_wide(const char* input, std::vector<WCHAR>& output) {
+    if (!input) return false;
+    size_t size = 0;
+    while (size <= 65536 && input[size]) ++size;
+    if (size > 65536) return false;
+    if (size == 0) { output.assign(1, 0); return true; }
+    const int needed = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input,
+                                            static_cast<int>(size), nullptr, 0);
+    if (needed <= 0) return false;
+    output.resize(static_cast<size_t>(needed) + 1);
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input, static_cast<int>(size),
+                            output.data(), needed) != needed) return false;
+    output[needed] = 0;
     return true;
 }
 static bool owns(OpclDaSession* s, OpclDaItem* i) {
@@ -60,10 +73,12 @@ extern "C" int32_t opcl_da_session_open(OpclDaHost* host, const char* name, cons
                                            const OpclDaGuid* id, OpclDaSession** out) try {
     if (!out) return E_INVALIDARG;
     *out = nullptr;
-    if (!host || !id || !ascii(name) || !ascii(node)) return E_INVALIDARG;
+    if (!host || !id) return E_INVALIDARG;
+    std::vector<WCHAR> wide_name, wide_node;
+    if (!to_wide(name, wide_name) || !to_wide(node, wide_node)) return E_INVALIDARG;
     GUID clsid{id->data1, id->data2, id->data3, {}};
     for (unsigned i = 0; i != 8; ++i) clsid.Data4[i] = id->data4[i];
-    SODaCServer* server = host->entry->addServer(name, node, clsid);
+    SODaCServer* server = host->entry->addServer(wide_name.data(), wide_node.data(), clsid);
     if (!server) return E_OUTOFMEMORY;
     HRESULT hr = server->connect(FALSE);
     if (SUCCEEDED(hr) && !server->isConnected()) hr = E_FAIL;
@@ -93,8 +108,10 @@ extern "C" int32_t opcl_da_item_add(OpclDaSession* s, const char* id, OpclDaItem
                                      uint16_t* type, uint32_t* rights) try {
     if (!out || !type || !rights) return E_INVALIDARG;
     *out = nullptr; *type = 0; *rights = 0;
-    if (!s || !ascii(id)) return E_INVALIDARG;
-    SODaCItem* sdk = s->group->addItem(id);
+    if (!s) return E_INVALIDARG;
+    std::vector<WCHAR> wide_id;
+    if (!to_wide(id, wide_id)) return E_INVALIDARG;
+    SODaCItem* sdk = s->group->addItem(wide_id.data());
     if (!sdk) return E_OUTOFMEMORY;
     HRESULT hr = sdk->start(FALSE);
     if (SUCCEEDED(hr) && !sdk->isStarted()) hr = E_FAIL;
@@ -271,8 +288,8 @@ static HRESULT scalar_set(SOCmnVariant& value, uint16_t vt, uint32_t low, uint32
 }
 class ReadScalarTask : public SOCltTask {
 public:
-    ReadScalarTask(SODaCGroup* group, SODaCItem* item, DWORD age, OpclDaScalar* out)
-        : SOCltTask(group), group_(group), item_(item), age_(age), out_(out) {}
+    ReadScalarTask(SODaCGroup* group, SODaCItem* item, DWORD age, OpclDaScalar* out, char* text, uint32_t capacity)
+        : SOCltTask(group), group_(group), item_(item), age_(age), out_(out), text_(text), capacity_(capacity) {}
     void execute() override try {
         SODaCItem* items[] = {item_}; SOCmnVariant value; SOCmnDateTime time;
         WORD quality = 0; HRESULT item_result = E_FAIL;
@@ -281,13 +298,30 @@ public:
         out_->service_result = service; out_->item_result = item_result;
         out_->filetime_low = ft.dwLowDateTime; out_->filetime_high = ft.dwHighDateTime;
         out_->quality = quality; out_->vartype = value.vt;
-        if (SUCCEEDED(service) && SUCCEEDED(item_result)) (void)scalar_copy(value, out_);
+        if (SUCCEEDED(service) && SUCCEEDED(item_result) && value.vt == VT_BSTR) {
+            // SDK helper owns its copy. The original BSTR is only borrowed to
+            // reject embedded NUL before it could be silently truncated.
+            const UINT original = value.bstrVal ? SysStringLen(value.bstrVal) : 0;
+            if (original > 65536) { setResult(HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER)); return; }
+            SOCmnString storage; LPCTSTR wide = value.getBSTR(storage);
+            const size_t length = wide ? std::wcslen(wide) : 0;
+            if (length != original) { setResult(DISP_E_TYPEMISMATCH); return; }
+            if (length) {
+                const int needed = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide,
+                    static_cast<int>(length), nullptr, 0, nullptr, nullptr);
+                if (needed <= 0) { setResult(E_INVALIDARG); return; }
+                if (static_cast<uint32_t>(needed) > capacity_ || !text_) { setResult(HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER)); return; }
+                if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, static_cast<int>(length),
+                    text_, needed, nullptr, nullptr) != needed) { setResult(E_INVALIDARG); return; }
+                out_->text_len = static_cast<uint32_t>(needed);
+            }
+        } else if (SUCCEEDED(service) && SUCCEEDED(item_result)) (void)scalar_copy(value, out_);
         // The raw VARTYPE crosses the ABI even when no scalar conversion is
         // supported; Rust maps it to the common explicit Unsupported error.
         setResult(S_OK);
     } catch (...) { setResult(E_UNEXPECTED); }
 private:
-    SODaCGroup* group_; SODaCItem* item_; DWORD age_; OpclDaScalar* out_;
+    SODaCGroup* group_; SODaCItem* item_; DWORD age_; OpclDaScalar* out_; char* text_; uint32_t capacity_;
 };
 class WriteScalarTask : public SOCltTask {
 public:
@@ -306,11 +340,11 @@ private:
     SODaCGroup* group_; SODaCItem* item_; uint16_t vt_; uint32_t low_, high_; int32_t* result_; bool dispatched_;
 };
 extern "C" int32_t opcl_da_read_scalar(OpclDaSession* s, OpclDaItem* item, uint32_t max_age,
-                                        OpclDaScalar* out) try {
+                                        OpclDaScalar* out, char* text, uint32_t text_capacity) try {
     if (!out) return E_INVALIDARG;
     *out = {}; out->service_result = E_FAIL; out->item_result = E_FAIL;
     if (!owns(s, item)) return E_INVALIDARG;
-    ReadScalarTask* task = new (std::nothrow) ReadScalarTask(s->group, item->sdk, max_age, out);
+    ReadScalarTask* task = new (std::nothrow) ReadScalarTask(s->group, item->sdk, max_age, out, text, text_capacity);
     if (!task) return E_OUTOFMEMORY;
     const HRESULT hr = s->group->executeTask(task); task->release(); return hr;
 } catch (...) { return E_UNEXPECTED; }
@@ -322,6 +356,36 @@ extern "C" int32_t opcl_da_write_scalar(OpclDaSession* s, OpclDaItem* item, uint
     SOCmnVariant check; const HRESULT conversion = scalar_set(check, vt, low, high);
     if (FAILED(conversion)) return conversion;
     WriteScalarTask* task = new (std::nothrow) WriteScalarTask(s->group, item->sdk, vt, low, high, item_result);
+    if (!task) return E_OUTOFMEMORY;
+    const HRESULT hr = s->group->executeTask(task); const bool sent = task->dispatched(); task->release();
+    return sent || FAILED(hr) ? hr : E_UNEXPECTED;
+} catch (...) { return E_UNEXPECTED; }
+
+class WriteTextTask : public SOCltTask {
+public:
+    WriteTextTask(SODaCGroup* group, SODaCItem* item, const char* utf8, int32_t* result)
+        : SOCltTask(group), group_(group), item_(item), utf8_(utf8), result_(result), dispatched_(false) {}
+    void execute() override try {
+        std::vector<WCHAR> wide;
+        if (!to_wide(utf8_, wide)) { setResult(E_INVALIDARG); return; }
+        SOCmnVariant value; value.setBSTR(wide.data());
+        if (value.vt != VT_BSTR || !value.bstrVal) { setResult(E_OUTOFMEMORY); return; }
+        SODaCItem* items[] = {item_}; HRESULT error = E_FAIL;
+        dispatched_ = true;
+        const HRESULT service = group_->syncWrite(1, items, &value, nullptr, nullptr, &error);
+        *result_ = error; setResult(service);
+    } catch (...) { setResult(E_UNEXPECTED); }
+    bool dispatched() const { return dispatched_; }
+private:
+    SODaCGroup* group_; SODaCItem* item_; const char* utf8_; int32_t* result_; bool dispatched_;
+};
+extern "C" int32_t opcl_da_write_text(OpclDaSession* s, OpclDaItem* item, const char* text,
+                                       int32_t* item_result) try {
+    if (!item_result || !owns(s, item)) return E_INVALIDARG;
+    *item_result = E_FAIL;
+    std::vector<WCHAR> validated;
+    if (!to_wide(text, validated)) return E_INVALIDARG;
+    WriteTextTask* task = new (std::nothrow) WriteTextTask(s->group, item->sdk, text, item_result);
     if (!task) return E_OUTOFMEMORY;
     const HRESULT hr = s->group->executeTask(task); const bool sent = task->dispatched(); task->release();
     return sent || FAILED(hr) ? hr : E_UNEXPECTED;

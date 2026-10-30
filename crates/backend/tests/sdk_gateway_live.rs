@@ -127,6 +127,29 @@ fn sdk_gateway_live() {
             matches!(readback.kind, EventKind::Values { values } if values.len() == 1 && &values[0].1.value == written && values[0].1.reason.is_none())
         );
     }
+    let text_items = [
+        (6, "Fixture.Text", "initial text", "written text"),
+        (7, "Fixture.Unicode", "РУГ 中文", "中文 Русский"),
+    ];
+    let specs = text_items.iter().map(|(n, id, _, _)| ItemSpec {
+        key: ItemKey::new(*n).unwrap(), item_id: (*id).into(),
+    }).chain(std::iter::once(ItemSpec { key: ItemKey::new(8).unwrap(), item_id: "Fixture.Тег".into() })).collect();
+    assert!(matches!(command(&gateway, 40, CommandKind::AddItems { items: specs }).kind,
+        EventKind::AddItems { results } if results.len() == 3 && results.iter().all(|(_, result)| result.is_ok())));
+    for (index, (n, _, initial, written)) in text_items.iter().enumerate() {
+        let item = ItemKey::new(*n).unwrap();
+        let read = command(&gateway, 41 + index as u64 * 3, CommandKind::Read { keys: vec![item] });
+        assert!(matches!(read.kind, EventKind::Values { values } if values.len() == 1 && values[0].1.value == Value::Str((*initial).into()) && values[0].1.reason.is_none()));
+        let write = command(&gateway, 42 + index as u64 * 3, CommandKind::Write { request: WriteRequest {
+            key: item, value: Value::Str((*written).into()), type_hint: Some(VarType::BSTR),
+        }});
+        assert!(matches!(write.kind, EventKind::Wrote { result: Ok(outcome), .. }
+            if outcome.disposition == WriteDisposition::Accepted && matches!(outcome.raw, Some(NativeWriteStatus::Da(_)))));
+        let readback = command(&gateway, 43 + index as u64 * 3, CommandKind::Read { keys: vec![item] });
+        assert!(matches!(readback.kind, EventKind::Values { values } if values.len() == 1 && values[0].1.value == Value::Str((*written).into()) && values[0].1.reason.is_none()));
+    }
+    assert!(matches!(command(&gateway, 50, CommandKind::Read { keys: vec![ItemKey::new(8).unwrap()] }).kind,
+        EventKind::Values { values } if values.len() == 1 && values[0].1.value == Value::I64(314) && values[0].1.reason.is_none()));
     assert!(matches!(
         command(
             &gateway,

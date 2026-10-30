@@ -41,6 +41,7 @@ pub struct ReadScalar {
     pub bits_high: u32,
     pub quality: u16,
     pub vartype: u16,
+    pub text_len: u32,
 }
 unsafe extern "C" {
     fn opcl_da_host_create(out: *mut *mut c_void) -> i32;
@@ -67,7 +68,10 @@ unsafe extern "C" {
         item: *mut c_void,
         age: u32,
         out: *mut ReadScalar,
+        text: *mut c_char,
+        text_capacity: u32,
     ) -> i32;
+    fn opcl_da_write_text(session: *mut c_void, item: *mut c_void, text: *const c_char, result: *mut i32) -> i32;
     fn opcl_da_write_scalar(
         session: *mut c_void,
         item: *mut c_void,
@@ -100,7 +104,7 @@ fn check(hr: i32) -> Result<(), Error> {
     }
 }
 fn string(s: &str) -> Result<CString, Error> {
-    if !s.is_ascii() {
+    if s.len() > 65_536 {
         return Err(Error::InvalidString);
     }
     CString::new(s).map_err(|_| Error::InvalidString)
@@ -236,12 +240,27 @@ impl Session {
         check(unsafe { opcl_da_read_i4(self.ptr.as_ptr(), item.as_ptr(), max_age, &mut out) })?;
         Ok(out)
     }
-    pub fn read_scalar(&mut self, key: u64, max_age: u32) -> Result<ReadScalar, Error> {
+    pub fn read_scalar(&mut self, key: u64, max_age: u32) -> Result<(ReadScalar, Option<String>), Error> {
         let item = self.items.get(&key).ok_or(Error::InvalidHandle)?;
         let mut out = ReadScalar::default();
-        // SAFETY: the map owns this live registration and the output remains valid for the call.
-        check(unsafe { opcl_da_read_scalar(self.ptr.as_ptr(), item.as_ptr(), max_age, &mut out) })?;
-        Ok(out)
+        let mut text = vec![0u8; 65_536];
+        // SAFETY: the map owns the registration and both buffers remain valid for the call.
+        check(unsafe { opcl_da_read_scalar(self.ptr.as_ptr(), item.as_ptr(), max_age, &mut out, text.as_mut_ptr().cast(), text.len() as u32) })?;
+        let text = if out.vartype == 8 {
+            let count = usize::try_from(out.text_len).map_err(|_| Error::InvalidString)?;
+            if count > text.len() { return Err(Error::InvalidString); }
+            text.truncate(count);
+            Some(String::from_utf8(text).map_err(|_| Error::InvalidString)?)
+        } else { None };
+        Ok((out, text))
+    }
+    pub fn write_text(&mut self, key: u64, value: &str) -> Result<i32, Error> {
+        let item = self.items.get(&key).ok_or(Error::InvalidHandle)?;
+        let text = string(value)?;
+        let mut result = 0;
+        // SAFETY: the registration and the C string and output outlive the call.
+        check(unsafe { opcl_da_write_text(self.ptr.as_ptr(), item.as_ptr(), text.as_ptr(), &mut result) })?;
+        Ok(result)
     }
     pub fn write_scalar(&mut self, key: u64, vt: u16, bits: u64) -> Result<i32, Error> {
         let item = self.items.get(&key).ok_or(Error::InvalidHandle)?;
@@ -367,12 +386,22 @@ mod tests {
         _: *mut c_void,
         _: u32,
         out: *mut ReadScalar,
+        _: *mut c_char,
+        _: u32,
     ) -> i32 {
         // SAFETY: the wrapper passes a valid output pointer.
         unsafe {
             (*out).vartype = 3;
             (*out).bits_low = 42;
         }
+        0
+    }
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn opcl_da_write_text(
+        _: *mut c_void, _: *mut c_void, _: *const c_char, result: *mut i32,
+    ) -> i32 {
+        // SAFETY: the wrapper passes a valid output pointer.
+        unsafe { *result = 0; }
         0
     }
     #[unsafe(no_mangle)]
@@ -392,7 +421,7 @@ mod tests {
     }
     #[test]
     fn stale_and_foreign_registrations_do_not_reach_native_read() {
-        assert_eq!(std::mem::size_of::<ReadScalar>(), 28);
+        assert_eq!(std::mem::size_of::<ReadScalar>(), 32);
         assert_eq!(std::mem::offset_of!(ReadScalar, bits_low), 16);
         assert_eq!(std::mem::offset_of!(ReadScalar, quality), 24);
         assert_eq!(std::mem::offset_of!(ReadScalar, vartype), 26);
@@ -417,6 +446,9 @@ mod tests {
         assert_eq!(a.read_i4(fresh, 0).unwrap().value, 42);
         assert!(matches!(a.write_i4(old, 7), Err(Error::InvalidHandle)));
         assert_eq!(a.write_i4(fresh, 7).unwrap(), 0);
+        let unicode = a.add("Fixture.Тег").unwrap().0;
+        assert_eq!(a.write_text(unicode, "РУГ 中文").unwrap(), 0);
+        assert_eq!(a.write_text(unicode, "bad\0string"), Err(Error::InvalidString));
         a.close().unwrap();
         b.close().unwrap();
         drop(shared);

@@ -11,7 +11,7 @@ static_assert(sizeof(OpclDaFact) == 24 && offsetof(OpclDaFact, client_handle) ==
               offsetof(OpclDaFact, filetime_high) == 12 && offsetof(OpclDaFact, i4) == 16 &&
               offsetof(OpclDaFact, quality) == 20 && offsetof(OpclDaFact, vartype) == 22 &&
               sizeof(OpclDaEnvelope) == 16 && offsetof(OpclDaEnvelope, master_error) == 12, "ABI layout");
-static_assert(sizeof(OpclDaScalar) == 28 && offsetof(OpclDaScalar, bits_low) == 16 &&
+static_assert(sizeof(OpclDaScalar) == 32 && offsetof(OpclDaScalar, bits_low) == 16 &&
               offsetof(OpclDaScalar, quality) == 24 && offsetof(OpclDaScalar, vartype) == 26,
               "scalar ABI layout");
 

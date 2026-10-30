@@ -4,7 +4,7 @@ use super::model::{BackendMsg, DataValue, Quality, Value};
 use super::softing_runtime::ReadScalar;
 use chrono::{NaiveDate, TimeZone, Utc};
 
-pub fn decode(raw: ReadScalar) -> Result<DataValue, BackendMsg> {
+pub fn decode((raw, text): (ReadScalar, Option<String>)) -> Result<DataValue, BackendMsg> {
     if raw.service_result < 0 || raw.item_result < 0 {
         return Err(BackendMsg::raw(format!(
             "DA read HRESULT service={:#x}, item={:#x}",
@@ -39,6 +39,7 @@ pub fn decode(raw: ReadScalar) -> Result<DataValue, BackendMsg> {
                 .ok_or(BackendMsg::DaBadDate)?;
             Value::DateTime(Utc.from_utc_datetime(&date))
         }
+        8 => Value::Str(text.ok_or_else(|| BackendMsg::raw("DA SDK string missing"))?),
         11 => Value::Bool(bits != 0),
         vt => return Err(BackendMsg::DaVtUnsupported { vt: vt.into() }),
     };
@@ -189,20 +190,21 @@ mod tests {
             quality: 0xc0,
             ..Default::default()
         };
-        assert_eq!(decode(raw).unwrap().value, Value::I64(-1));
+        assert_eq!(decode((raw, None)).unwrap().value, Value::I64(-1));
+        assert_eq!(decode((ReadScalar { vartype: 8, ..Default::default() }, Some("РУГ 中文".into()))).unwrap().value, Value::Str("РУГ 中文".into()));
         assert!(
-            decode(ReadScalar {
+            decode((ReadScalar {
                 vartype: 0x2003,
                 ..Default::default()
-            })
+            }, None))
             .is_err()
         );
         assert!(
-            decode(ReadScalar {
+            decode((ReadScalar {
                 vartype: 3,
                 item_result: -1,
                 ..Default::default()
-            })
+            }, None))
             .is_err()
         );
     }

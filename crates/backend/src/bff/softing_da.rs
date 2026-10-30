@@ -98,6 +98,16 @@ struct NativeHost {
 fn message(s: impl std::fmt::Display) -> BackendMsg {
     BackendMsg::raw(s.to_string())
 }
+fn write_outcome(result: Result<i32, SdkError>) -> WriteOutcome {
+    match result {
+        Ok(hr) => WriteOutcome::from_da(hr, format!("HRESULT {hr:#x}")),
+        Err(SdkError::Native(hr)) => WriteOutcome::unknown_with_status(
+            super::model::NativeWriteStatus::DaService(hr),
+            format!("DA write HRESULT {hr:#x}"),
+        ),
+        Err(e) => WriteOutcome::unknown(format!("DA write: {e:?}")),
+    }
+}
 fn send(tx: &Sender<Event>, owner: Owner, id: Option<super::model::RequestId>, kind: EventKind) {
     let _ = tx.send(Event {
         origin: id.into(),
@@ -279,23 +289,21 @@ impl DaHost for NativeHost {
                 }
                 CommandKind::Write { request } => {
                     let key = request.key;
-                    let result =
-                        match (session.as_mut(), items.get(&key)) {
-                            (None, _) => Err(BackendMsg::NoConnection),
-                            (_, None) => Err(BackendMsg::SignalNotSubscribed),
-                            (Some(s), Some(reg)) => super::softing_scalar::encode(
-                                &request.value,
-                                request.type_hint.map(|v| v.0),
-                            )
-                            .map(|(vt, bits)| match s.write_scalar(*reg, vt, bits) {
-                                Ok(hr) => WriteOutcome::from_da(hr, format!("HRESULT {hr:#x}")),
-                                Err(SdkError::Native(hr)) => WriteOutcome::unknown_with_status(
-                                    super::model::NativeWriteStatus::DaService(hr),
-                                    format!("DA write HRESULT {hr:#x}"),
-                                ),
-                                Err(e) => WriteOutcome::unknown(format!("DA write: {e:?}")),
-                            }),
-                        };
+                    let result = match (session.as_mut(), items.get(&key)) {
+                        (None, _) => Err(BackendMsg::NoConnection),
+                        (_, None) => Err(BackendMsg::SignalNotSubscribed),
+                        (Some(s), Some(reg)) => match (&request.value, request.type_hint) {
+                            (super::model::Value::Str(text), hint) if hint.is_none_or(|v| v.0 == 8) => {
+                                if text.contains('\0') || text.len() > 65_536 {
+                                    Err(message("DA string contains NUL or exceeds the SDK limit"))
+                                } else {
+                                    Ok(write_outcome(s.write_text(*reg, text)))
+                                }
+                            }
+                            _ => super::softing_scalar::encode(&request.value, request.type_hint.map(|v| v.0))
+                                .map(|(vt, bits)| write_outcome(s.write_scalar(*reg, vt, bits))),
+                        },
+                    };
                     send(events, owner, request_id, EventKind::Wrote { key, result });
                 }
                 CommandKind::Browse { .. } => failure(

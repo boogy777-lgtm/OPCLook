@@ -39,6 +39,6 @@ target_include_directories(softing_da_bridge PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/../../../../native/softing-da" "${core}/src/include" "${core}/src/opc"
   "${core}/src/common" "${core}/common")
 target_compile_definitions(softing_da_bridge PUBLIC
-  _WINDOWS WIN32 _WIN32_DCOM _CRT_SECURE_NO_WARNINGS _CRT_NON_CONFORMING_SWPRINTFS)
+  _WINDOWS WIN32 _UNICODE UNICODE _WIN32_DCOM _CRT_SECURE_NO_WARNINGS _CRT_NON_CONFORMING_SWPRINTFS)
 target_compile_options(softing_da_bridge PUBLIC /W3 /Zc:wchar_t- /EHsc)
 target_link_libraries(softing_da_bridge PUBLIC softing_expat ole32 oleaut32 uuid advapi32 ws2_32 mpr rpcrt4)

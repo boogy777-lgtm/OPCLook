@@ -23,13 +23,14 @@ typedef struct OpclDaReadI4 {
 } OpclDaReadI4;
 
 /* Scalar numeric payload uses low/high words to keep its ABI layout stable on
-   Win32. Unsupported values (including arrays, strings and BYREF) fail without
+   Win32. Unsupported values (including arrays and BYREF) fail without
    manufacturing a value. Float and DATE use IEEE f64 bits. */
 typedef struct OpclDaScalar {
     int32_t service_result, item_result;
     uint32_t filetime_low, filetime_high;
     uint32_t bits_low, bits_high;
     uint16_t quality, vartype;
+    uint32_t text_len;
 } OpclDaScalar;
 
 int32_t opcl_da_host_create(OpclDaHost** out);
@@ -44,9 +45,11 @@ int32_t opcl_da_item_remove(OpclDaSession* session, OpclDaItem* item);
 int32_t opcl_da_read_i4(OpclDaSession* session, OpclDaItem* item, uint32_t max_age,
                         OpclDaReadI4* out);
 int32_t opcl_da_read_scalar(OpclDaSession* session, OpclDaItem* item, uint32_t max_age,
-                            OpclDaScalar* out);
+                            OpclDaScalar* out, char* text, uint32_t text_capacity);
 int32_t opcl_da_write_scalar(OpclDaSession* session, OpclDaItem* item, uint16_t vartype,
                              uint32_t bits_low, uint32_t bits_high, int32_t* item_result);
+int32_t opcl_da_write_text(OpclDaSession* session, OpclDaItem* item, const char* utf8,
+                           int32_t* item_result);
 int32_t opcl_da_write_i4(OpclDaSession* session, OpclDaItem* item, int32_t value,
                          int32_t* item_result);
 #ifdef __cplusplus
