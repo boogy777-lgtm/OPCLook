@@ -37,6 +37,9 @@ jobs:
           set -euo pipefail
           python3 docs/testing/native-sdk/verify-license-closure.py "$SOFTING_SDK_ROOT"
           python3 docs/testing/native-sdk/test-license-closure.py
+          python3 docs/testing/native-sdk/test-opcf-mit-inputs.py
+          python3 docs/testing/native-sdk/test-generate-opcf-midl.py
+          python3 docs/testing/native-sdk/test-opcf-include-trace.py
           docs/testing/native-sdk/check-softing-api.sh
           python3 docs/testing/native-sdk/test-core-features.py
           docs/testing/native-sdk/test-expat-link.sh
@@ -45,7 +48,7 @@ jobs:
           python3 docs/testing/native-sdk/test_softing_patch.py
           python3 docs/testing/native-sdk/reproduce-softing-status.py --expect-existing-defect
           python3 docs/testing/native-sdk/reproduce-softing-status.py --patched
-          cargo test --locked --manifest-path docs/testing/native-sdk/runtime-stand/Cargo.toml --target x86_64-unknown-linux-gnu
+          cargo test --locked --manifest-path docs/testing/native-sdk/runtime-stand/Cargo.toml --target x86_64-unknown-linux-gnu --features native-da-test-hooks
           python3 docs/testing/native-sdk/server-fixture/test-launcher.py
           python3 docs/testing/native-sdk/server-fixture/test-isolation-launcher.py
       - name: Compile public API and exercise exact SDK method (Windows x86)
@@ -81,6 +84,10 @@ jobs:
           if errorlevel 1 exit /b 1
 
   core-win32:
+    strategy:
+      fail-fast: false
+      matrix:
+        opc_inputs: [sdk, official-mit]
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -92,6 +99,25 @@ jobs:
           repository: SoftingIndustrial/OPC-Classic-SDK
           ref: 5130e763998189c822882434c43e6be2eb0174cf
           path: softing-sdk
+      - uses: actions/checkout@v4
+        if: matrix.opc_inputs == 'official-mit'
+        with:
+          repository: OPCF-Members/OPC-Classic-CoreComponents
+          ref: efe0d1d1ea86a8a727bf26a501a261765e836766
+          path: opc-core
+      - name: Stage and generate pinned official MIT OPC inputs
+        if: matrix.opc_inputs == 'official-mit'
+        shell: cmd
+        run: |
+          @echo off
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSROOT=%%i"
+          if not defined VSROOT exit /b 1
+          call "%VSROOT%\VC\Auxiliary\Build\vcvarsall.bat" x86
+          if errorlevel 1 exit /b 1
+          python opclook/docs/testing/native-sdk/stage-opcf-mit-inputs.py --repo opc-core --output opcf-staged
+          if errorlevel 1 exit /b 1
+          python opclook/docs/testing/native-sdk/generate-opcf-midl.py --source opcf-staged --output opcf-generated
+          if errorlevel 1 exit /b 1
       - uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: i686-pc-windows-msvc
@@ -108,13 +134,23 @@ jobs:
           $env:SOFTING_SDK_ROOT = "${{ github.workspace }}/softing-sdk"
           python opclook/docs/testing/native-sdk/verify-softing-sdk.py --core-clean
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake -S opclook/docs/testing/native-sdk/core-probe -B softing-build -A Win32 "-DSOFTING_SDK_ROOT=${{ github.workspace }}/softing-sdk"
+          $opcfArgs = @()
+          if ("${{ matrix.opc_inputs }}" -eq "official-mit") { $opcfArgs = @("-DOPCF_MIT_STAGED=${{ github.workspace }}/opcf-staged", "-DOPCF_MIT_GENERATED=${{ github.workspace }}/opcf-generated") }
+          cmake -S opclook/docs/testing/native-sdk/core-probe -B softing-build -A Win32 "-DSOFTING_SDK_ROOT=${{ github.workspace }}/softing-sdk" @opcfArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build and reproduce with original SDK core
         shell: pwsh
         run: |
-          cmake --build softing-build --config Release --parallel 2
+          if ("${{ matrix.opc_inputs }}" -eq "official-mit") {
+            cmake --build softing-build --config Release --verbose --parallel 1 2>&1 | Tee-Object -FilePath core-mit-build.log
+          } else {
+            cmake --build softing-build --config Release --parallel 2
+          }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ("${{ matrix.opc_inputs }}" -eq "official-mit") {
+            python opclook/docs/testing/native-sdk/check-opcf-include-trace.py --log core-mit-build.log --old-opc-dir "${{ github.workspace }}/softing-sdk/development/core/src/opc" --generated-dir "${{ github.workspace }}/opcf-generated" --require opcda.h --require opccomn.h --require OpcEnum.h --require opc_ae.h --require opcSec.h --require opcerror.h --require opcda_i.c --require opccomn_i.c --require OpcEnum_i.c --require opc_ae_i.c --require opcSec_i.c
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
           python opclook/docs/testing/native-sdk/test-ephemeral-worker.py ./softing-build/Release/softing_core_probe.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python opclook/docs/testing/native-sdk/run-native-probe.py -- ./softing-build/Release/softing_expat_smoke.exe
@@ -148,3 +184,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo run --locked --manifest-path docs/testing/native-sdk/rust-stand/Cargo.toml --target i686-pc-windows-msvc -- fixture-output.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Preserve official MIT include and link evidence
+        if: always() && matrix.opc_inputs == 'official-mit'
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-win32-official-mit-trace
+          path: |
+            *-mit-build.log
+            opcf-staged/**
+            opcf-generated/**
+          if-no-files-found: warn

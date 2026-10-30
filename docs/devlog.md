@@ -1248,3 +1248,34 @@ Defect = missing live timeout acceptance и неполная source/license clos
 launcher, compile-only stubGateway,4checker tests; Win32/live нового test
 pending. Legal clearance и release inventory не установлены. Следующая
 пара03: UA cache/maxAge и MIT OPC inputs, изолированное владение.
+
+2026-10-31 пары02/03: `70357117` SDK3/3 и COMPASS; pending-write shutdown
+измерен5.003833с, Busy до release, одинAcceptedWrite и финальныйcleanup;
+app41139818993 ещё выполняется. N1 guard проверил271 cleanSDKentry.
+R2.3 Class=UA cache allowance, Inv=FreshSource доминирует в общей reservation,
+N+1=mixed/readback/stale/direct/subscription, Defect=SDKmaxAge был0 и
+CacheAllowed rejected. Engine-generated ReadCached ограничен permit, Poll
+используетrequestedinterval; Subscription initial stronger0 доnegotiated.
+4realEngine pathstand tests PASS; UA wiretest добавлен, compile/livepending.
+N1 Class=officialMIT inputprovenance, Inv=no oldSDK OPC includes/IID opt-in,
+N+1=pin/tamper/fallback/trace guards, Defect=oldgrantclosure unresolved.
+Opt-in immutable8 inputs +MIDL CMake route,12Python tests PASS; rootдобавил
+sdk/official-mit Win32matrix, retainedlogs/traceguard/COMsuite. Это кандидат,
+не провереннаяABI/лицензионнаязакрытость. Root native stand41/41PASS.
+Пара04 приступила к SDK negotiatedfacts и hostreuse во времяpendingwrite.
+
+2026-10-31 пара04: Class=SDK negotiatedfacts и processhostreuse приpendingIO;
+Inv=requested не revised, epochorigin и perkeygrace, fresh0доминирует;
+SDKhostживдоreleaseA; N+1=mixedsub/partialmodify/stale/invalidratio/hugeinterval
+и timedoutA→newB; Defect=applied=requested и отсутствующийN2L09liveproof.
+SDKfacts берутсяиз publicstate0.19, servernormalizedrawсохранены; scheduling
+acceptance1..3600000ms явнаяapppolicy,invalid→log/fallbackgrace/cache0.
+Measured4negotiatedstand+2cacheповтора,41native/mockstandwithhooks иtestshim;
+actualSDKsample1000→2000 и Win32hostreuse pending. Rootreviewдобавилstrict
+rejectвсехunexpectedReply и nativeDa0. UIprojection/recoveryfacts/itemvalidity
+ещёopen. CIпроверит03/04общимhead, old02testsнеотменялись.
+
+2026-10-31 exact-head checkpoint: `70357117` завершил app41139818993
+Linux/Windows2/2SUCCESS. Вместе сSDK41139819035(3) иCOM41139819114(1)
+все6jobsSUCCESS. Только послеэтогопубликуютсяcodecommitsпар03/04 иих
+новаяmatrix. Это не доказательство новыхнеисполненныхtestcases.

@@ -3,6 +3,58 @@
 Режим продолжения по поручению владельца: все оставшиеся задачи выполнять
 парами Terra High; [очередь и зависимости](remaining-work.md).
 
+## 2026-10-31 — пара 04 интегрирована, новый runtime CI ожидается
+
+Два отдельных commits добавляют SDK negotiated snapshot и N2L09 host reuse.
+UA backend получает publishing/lifetime/keepalive и per-item sampling/queue
+из закреплённого SDK state, отдельно от accepted requested values, с Connect
+origin. Engine хранит факты текущей эпохи, grace использует revised interval
+ключа, CacheAllowed Subscription initial — минимум известных валидных
+интервалов пачки. Refresh/readback доминируют maxAge0; unknown/invalid также
+не разрешает cached read. Scheduling принимает1..3600000мс (политика OPCLook,
+не протокольный максимум), lifetime ratio проверяется checked. Raw normalized
+SDK facts сохраняются и при invalid; initial grace использует configured
+fallback, не выдавая его за revised. Sampling -1 — SDK sentinel, не миллисекунды;
+wire f64 до нормализации SDK недоступен. UI projection/полная item validity и
+recovery-driven обновление facts ещё открыты. 4 negotiated/O08 stand tests и
+2 cache-permit повтора прошли; sample1000→2000 compile/live ожидает CI.
+
+N2L09 проверяет новый Gateway после bounded shutdown старого с pending Write:
+тот же живой SharedCore, B I/O до release, Busy SDK, затем один Accepted reply
+и cleanup. Feature native-da-test-hooks добавляет bounded наблюдение host
+acquisitions; pointer наружу не передаётся. 41 mock-ABI stand tests с feature
+и compile-only test shim прошли; новый strict Win32/live test ожидает CI.
+CI следующего head объединяет принятые code commits пар03/04 без отмены
+проверок предыдущего head. Пара05 выполняет migration старых профилей и
+исключение Write task N2L10; production DA по-прежнему legacy.
+
+## 2026-10-31 — пара 02 native gates прошли; пара 03 подготовлена
+
+Head `70357117b8ba6ed128ee0c37a76bac9d71fac009`:
+[SDK 41139819035](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41139819035)
+прошёл 3/3 jobs; [COM 41139819114](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41139819114)
+прошёл, включая новый sdk_pending_shutdown_live. Измерено: shutdown DA TimedOut,
+UA Joined за 5.003833 с; до release SDK Busy, после release один Accepted Write
+и final SDK cleanup. Test duration 5.21 с. Полный clean SDK inventory271 также
+прошёл до patch. App Linux/Windows [41139818993](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41139818993)
+также прошёл2/2: все6 jobs этого exact head зелёные.
+
+Пара 03: UA Poll CacheAllowed теперь передаёт SDK maxAge=requested poll interval.
+Engine сам создаёт ReadCached лишь из действительного permit; direct Read,
+Refresh и read-back остаются maxAge0, включая mixed batch. Subscription initial
+сохраняет более строгий0, пока revised publishing interval недоступен; полная
+семантика effective interval ещё открыта. Четыре теста реального Engine через
+path-stand прошли; новый sample-UA wire1234/0 test ожидает compile/live CI.
+Native real-file/mock-ABI stand на интегрированном коде прошёл41/41.
+
+N1 MIT candidate: отдельный opt-in CMake path генерирует headers/IID/proxy
+из8 immutable official MIT-labelled inputs. Старые SDK OPC includes/IID в этом
+варианте исключены. Подготовлена CI matrix sdk/official-mit с retained include/
+link logs, trace guard и live COM suite; старый путь остаётся default. Локально
+прошли12 Python tests (3staging+2generation+3trace+4inventory). Реальные MIDL,
+Win32 compile/trace/link/live этого пути ещё не измерены; полного license/release
+closure нет. Пара04 выполняет negotiated UA facts и host reuse при pending I/O.
+
 ## 2026-10-31 — пара 01 принята на `36fa668`, пара 02 ожидает CI
 
 На `36fa668a4b5777cbf751ee4eee866e9c1151518a` успешно завершились все

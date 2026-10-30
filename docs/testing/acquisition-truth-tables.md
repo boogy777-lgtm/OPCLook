@@ -380,15 +380,22 @@ transaction не превращать в unsolicited value ради прохож
 Проверка исходного документационного коммита была ограничена данными CSV и документацией.
 128+128 — число строк данных, не число пройденных тестов продукта.
 
-### N2.1 offline Softing fact boundary (partial; CI pending)
+### N2.1 offline Softing fact boundary (partial; measured Win32)
+
+Measurement baseline: `36fa668a4b5777cbf751ee4eee866e9c1151518a`,
+[SDK run 41137831955](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41137831955)
+and [COM run 41137831873](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41137831873)
+passed. SDK fact cases below use offline callback injection into the actual
+SDK/C ABI/Rust adapter; they are not independent live device cases. N2L rows
+name the precise live scope. New code after this baseline requires its own CI.
 
 | ID | Case | Adapter expectation | Evidence / limit |
 | --- | --- | --- | --- |
-| N2F01 | Callback containing invalid SDK handle before valid item | Patched SDK supplies aligned per-item HRESULT; C ABI copies valid client handle, mode, transaction, master statuses, quality and FILETIME | Win32 fixture calls real SDK callback, C ABI, then Rust `adapt` via serialized test output; exact-head CI pending |
+| N2F01 | Callback containing invalid SDK handle before valid item | Patched SDK supplies aligned per-item HRESULT; C ABI copies valid client handle, mode, transaction, master statuses, quality and FILETIME | Win32 fixture calls real SDK callback, C ABI, then Rust `adapt` via serialized test output; measured in SDK Win32 baseline above |
 | N2F02 | Failed item HRESULT with Good quality | `Failed`, raw HRESULT/quality retained separately; never a usable value | Rust actual adapter test; not yet an Engine terminal event |
 | N2F03 | Unknown VT including ARRAY/BYREF | `UnsupportedType`, raw VT retained; no Empty/Good value | Rust actual adapter test |
 | N2F04 | Zero FILETIME, one tick, max | Raw ticks retained; zero maps to no timestamp, one tick converts with 100 ns precision, max is representable by chrono | Rust actual adapter and existing time tests |
-| N2F05 | Empty callback with failed master status | Empty batch and envelope retained; previous facts are inaccessible | Win32 fixture calls group adapter directly for this edge; exact-head CI pending |
+| N2F05 | Empty callback with failed master status | Empty batch and envelope retained; previous facts are inaccessible | Win32 fixture calls group adapter directly for this edge; measured in SDK Win32 baseline above |
 | N2F06 | 64 accepted; too many entries, null required arrays or invalid identity | 64 facts accepted; explicit overflow/invalid, no partial batch or stale facts; Rust handle/mode errors are typed | Win32 fixture / Rust actual adapter test; SDK callback inputs beyond SDK validation remain untrusted |
 | N2F07 | Failed master error with positive item HRESULT and Good quality | `BatchFailed`, both raw statuses and quality retained; no usable value | Rust actual adapter test |
 
@@ -396,26 +403,49 @@ The 64-item limit applies after the SDK has received and prepared the callback; 
 not a queue or history, is not wired to the production backend, and cannot prove
 live delivery, transaction correlation, teardown or two-session isolation.
 
-### N2 SDK initialization owner (Win32 CI pending)
+### N2 SDK initialization owner (partial; scope by row)
 
 | ID | Условие | Ожидаемый результат | Проверка |
 | --- | --- | --- | --- |
-| N2L01 | Успешный MTA initialize и terminate на одной thread | COM initialization balanced; исходный SDK не балансирует | direct core probe проверяет CoGetContextToken для baseline и исправленного SDK; Windows CI pending |
+| N2L01 | Успешный MTA initialize и terminate на одной thread | COM initialization balanced; исходный SDK не балансирует | direct core probe проверил CoGetContextToken для baseline и исправленного SDK; SDK run выше прошёл |
 | N2L02 | Несовпадение любого из двух SDK source blobs | Patch не изменяет ни один исходный файл | Python test, локально прошёл |
-| N2L03 | Две независимые сессии, одна зависла | Вторая продолжает обслуживаться, teardown ограничен | source: per-server SDK worker; live interop pending |
+| N2L03 | Две независимые сессии, одна зависла | Вторая продолжает обслуживаться, teardown ограничен | sdk_session_isolation_live: A device Write blocked, B cache Read/Write/Read-back до release; COM run выше прошёл; indefinite/network failure отдельно |
 
-| N2L04 | Fixture connect, add I4, device read, write, remove/re-add, read | SDK ABI returns raw service/item result and original value/quality/time | `core-probe --live`; Windows fixture/CI pending |
+| N2L04 | Fixture connect, add I4, device read, write, remove/re-add, read | SDK ABI returns raw service/item result and original value/quality/time | `core-probe --live` прошёл в COM run выше |
 
-| N2L05 | Read/write с отдельной вызывающей thread | SDK выполняет I/O на своём per-server COM worker, caller context не изменяется (implicit MTA допустим) | `core-probe --live`; Windows fixture/CI pending |
+| N2L05 | Read/write с отдельной вызывающей thread | SDK выполняет I/O на своём per-server COM worker, caller context не изменяется (implicit MTA допустим) | `core-probe --live` прошёл в COM run выше |
 
-| N2L06 | Remove/re-add и чужая session registration в Rust ABI wrapper | Старый/чужой ключ отклоняется до native call | Реальный wrapper + mock ABI: Linux stand прошёл; `sdk-live` Win32 pending |
+| N2L06 | Remove/re-add и чужая session registration в Rust ABI wrapper | Старый/чужой ключ отклоняется до native call | Реальный wrapper + mock ABI и `sdk-live` Win32 прошли; проверены stale/foreign registrations |
 
-| N2L07 | Owner закрывает host при живой session thread | Busy; native host остаётся живым для завершения зависшей операции | Реальный Rust wrapper + mock ABI, Linux stand прошёл; Windows live pending |
+| N2L07 | Owner закрывает host при живой session thread | Busy; native host остаётся живым для завершения зависшей операции | Реальный Rust wrapper + mock ABI прошёл; sdk_pending_shutdown_live прошёл на70357117: Busy до release и финальный cleanup после |
 
-| N2L08 | Gateway Connect/Add/Read/Write/Remove через SDK preview | Обычные correlated Command/Event, raw write status, unsupported явно | Real router/adapter + mock ABI Linux stand прошёл; strict Win32 sdk_gateway_live pending |
-| N2L09 | Новый Gateway пока старый worker удерживает SDK host | Общий process owner повторно выдаёт существующий host; не освобождает его под вызовом | Linux mock reuse прошёл; hung server и SDK terminate live pending |
+| N2L08 | Gateway Connect/Add/Read/Write/Remove через SDK preview | Обычные correlated Command/Event, raw write status, unsupported явно | Real router/adapter + mock ABI прошёл; strict Win32 sdk_gateway_live прошёл 3/3, включая Test RUNNING/FAILED/RUNNING |
+| N2L09 | Новый Gateway пока старый worker удерживает SDK host | Общий process owner повторно выдаёт существующий host; не освобождает его под вызовом | sdk_host_reuse_live добавлен: bounded A, same live SharedCore, B I/O до release; 41 mock stand/hook PASS, Win32 live pending |
 | N2L10 | SDK task выбрасывает исключение при Write | Task завершается ошибкой, Write outcome Unknown с available service HRESULT, повтора нет | Код с catch и status mapping; injection/Win32 pending |
 
-| N2L11 | Новый Gateway после idle и финальное завершение процесса | Один SDK host переиспользуется; terminate только final и ожидание ограничено | Linux mock Gateway test прошёл; strict Win32 final shutdown pending |
+| N2L11 | Новый Gateway после idle и финальное завершение процесса | Один SDK host переиспользуется; terminate только final и ожидание ограничено | Linux mock Gateway test и strict Win32 Gateway final shutdown прошли; это idle/normal scope |
 
-| N2L12 | SDK scalar value I8/UI8 выше точности f64, bool, R8 | Exact integer bits, raw status/quality/time, checked write, unsupported explicit | Linux mapper tests прошли; strict Windows Gateway fixture pending |
+| N2L12 | SDK scalar value I8/UI8 выше точности f64, bool, R8 | Exact integer bits, raw status/quality/time, checked write, unsupported explicit | Linux mapper tests и strict Windows Gateway fixture прошли; проверенные scalar cases см. sdk_gateway_live |
+
+### N3 дополнительные строгие live gates
+
+| ID | Сценарий и доказательство | Граница |
+| --- | --- | --- |
+| N3.TEST | sdk_gateway_live, Test RUNNING → FAILED → RUNNING, 3/3 процессов на `36fa668` | Не все vendor states; negative HRESULT отдельно mock |
+| N3.ISOLATION | sdk_session_isolation_live, B42→77→77 пока A ждёт device-write release; PASS1/1 на `36fa668` | Локальный SDK fixture, не remote server/transport failure |
+| N3.PENDING-IO-SHUTDOWN | sdk_pending_shutdown_live: bounded shutdown, Busy до release, один Write reply, final SDK cleanup | Win32 live PASS на70357117, COM41139819114; shutdown5.003833с, app2/2 success, все6 jobs зелёные |
+
+N2L09 получил отдельный strict test пары04 и ожидает нового Win32 CI;
+N2L10 (реальное исключение SDK Write task) выполняется парой05. N3
+pending shutdown не считается доказательством этих условий. Remote/другой
+сервер и полный late-callback/epoch matrix не закрыты локальным fixture.
+
+### Пары03/04 — ожидающие SDK runtime gates
+
+UA Engine stand проверил cache permit/fresh dominance, per-key revised grace,
+mixed minimum age, stale epoch и invalid/overflow ratio. Реальные backend
+sample tests `ua_live_read_sends_requested_max_age_and_direct_read_sends_zero`
+и `ua_live_reports_requested_and_server_revised_subscription_parameters`
+добавлены в обычный suite, но ещё не измерены. O01/O02/O08 не объявляются
+полностью закрытыми до SDK compile/live и UI projection; item sentinel -1
+сохраняется как SDK факт, не как положительный sampling interval.

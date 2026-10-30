@@ -10,8 +10,11 @@ ExplicitRefresh и CLI opt-in WriteReadback описан в status.md. Полн�
 
 Текущий проверенный runtime: `36fa668` в PR #18; все 6 CI jobs прошли.
 Пара 01 также проверила native Test RUNNING/FAILED и межсессионную изоляцию
-при blocked device write. Пара 02 добавляет pending-I/O shutdown и license
-inventory guard; их новый Win32 результат ожидается, полный N1 не закрыт.
+при blocked device write. Пара 02 на `70357117` прошла SDK3/3 и COM, включая pending-I/O shutdown
+и clean SDK inventory guard; app run41139818993 прошёл2/2, все6 jobs success. Полный N1
+не закрыт. Пара03 добавляет bounded UA Poll maxAge и opt-in MIT build inputs,
+новый live/Windows gate pending; пара04 добавляет negotiated facts и N2L09
+host reuse, также pending нового runtime CI. Пара05 — M03/M04 и N2L10.
 Native DA preview имеет реальный SDK → C ABI → Rust → Gateway путь.
 Локальный strict fixture прошёл 3/3 процесса с Discover/Browse, Unicode,
 scalar/array I/O, reconnect и subscription. SDK barrier regression проверяет
