@@ -628,12 +628,27 @@ impl DaHost for NativeHost {
                         Err(error) => failure(events, &command, Operation::Browse, error),
                     }
                 }
-                CommandKind::Test => failure(
-                    events,
-                    &command,
-                    Operation::Test,
-                    message("DA SDK status is not wired"),
-                ),
+                CommandKind::Test => {
+                    let result = session
+                        .as_mut()
+                        .ok_or(BackendMsg::NoConnection)
+                        .and_then(|s| {
+                            s.test_status()
+                                .map_err(|error| match error {
+                                    SdkError::Native(hr) => BackendMsg::DaLinkLost {
+                                        detail: format!("HRESULT 0x{:08X}", hr as u32),
+                                    },
+                                    other => BackendMsg::DaLinkLost {
+                                        detail: format!("SDK status: {other:?}"),
+                                    },
+                                })
+                                .and_then(super::da_status::check_server_state)
+                        });
+                    match result {
+                        Ok(message) => send(events, owner, request_id, EventKind::Log { message }),
+                        Err(error) => failure(events, &command, Operation::Test, error),
+                    }
+                }
                 _ => {
                     if let Some(reply) = no_connection_reply(&command) {
                         let _ = events.send(reply);
@@ -707,6 +722,87 @@ mod tests {
     use super::super::model::{EndpointSpec, ItemSpec, Protocol, RequestId, Value, WriteRequest};
     use super::*;
     use std::time::Duration;
+    #[test]
+    fn test_command_reports_sdk_state_and_native_error_through_router() {
+        use super::super::model::Origin;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut worker = spawn(tx);
+        let cmd = worker.tx.take().unwrap();
+        let owner = Owner::Session(SessionId::new(301).unwrap());
+        let request = |id, kind| {
+            cmd.send(Command {
+                protocol: Protocol::OpcDa,
+                owner,
+                request_id: Some(RequestId::new(id).unwrap()),
+                kind,
+            })
+            .unwrap();
+            let event = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert_eq!(event.origin, Origin::Reply(RequestId::new(id).unwrap()));
+            assert_eq!(event.owner, owner);
+            event.kind
+        };
+        assert!(matches!(
+            request(1, CommandKind::Test),
+            EventKind::Error {
+                operation: Operation::Test,
+                message: BackendMsg::NoConnection,
+            }
+        ));
+        for (index, (clsid, expected)) in [
+            ("FEDC0001", 1),
+            ("FEDC0002", 2),
+            ("FEDC0003", 3),
+            ("FEDC0004", 4),
+            ("FEDC0005", 5),
+            ("FEDC0006", 6),
+            ("FEDC002A", 42),
+            ("FEDC0000", 0),
+            ("FEDCDEAD", i32::MIN + 5),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let base = 10 + index as u64 * 3;
+            let endpoint =
+                EndpointSpec::da("localhost", &format!("{clsid}-0000-0000-0000-000000000000"));
+            assert!(matches!(
+                request(base, CommandKind::Connect { endpoint }),
+                EventKind::Connected { .. }
+            ));
+            let verdict = request(base + 1, CommandKind::Test);
+            match expected {
+                1 => assert!(matches!(
+                    verdict,
+                    EventKind::Log {
+                        message: BackendMsg::DaStateOk
+                    }
+                )),
+                2 => assert!(
+                    matches!(verdict, EventKind::Error { operation: Operation::Test,
+                    message: BackendMsg::DaNotReady { state: 2, ref name } } if name == "FAILED")
+                ),
+                3..=6 => assert!(
+                    matches!(verdict, EventKind::Error { operation: Operation::Test,
+                    message: BackendMsg::DaNotReady { state, .. } } if state == expected)
+                ),
+                42 | 0 => assert!(
+                    matches!(verdict, EventKind::Error { operation: Operation::Test,
+                    message: BackendMsg::DaUnknownState { state } } if state == expected)
+                ),
+                _ => assert!(
+                    matches!(verdict, EventKind::Error { operation: Operation::Test,
+                    message: BackendMsg::DaLinkLost { ref detail } } if detail.contains("80000005"))
+                ),
+            }
+            assert!(matches!(
+                request(base + 2, CommandKind::Disconnect),
+                EventKind::Disconnected { .. }
+            ));
+        }
+        drop(cmd);
+        worker.join.take().unwrap().join().unwrap();
+    }
     #[test]
     fn preview_contract_connect_add_read_write_remove() {
         let first_host = acquire_host().unwrap();

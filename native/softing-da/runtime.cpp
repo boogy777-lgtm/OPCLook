@@ -303,6 +303,38 @@ extern "C" int32_t opcl_da_session_close(OpclDaSession* s) try {
 } catch (...) { return E_UNEXPECTED; }
 // Dispatch synchronous SDK operations through its own per-server worker. The
 // worker initializes COM; the session caller need not own a COM apartment.
+class TestStatusTask : public SOCltTask {
+public:
+    TestStatusTask(SODaCServer* server, int32_t* state)
+        : SOCltTask(server), server_(server), state_(state), ran_(false) {}
+    void execute() override try {
+        ran_ = true;
+        SODaCComServerImpl* sdk = dynamic_cast<SODaCComServerImpl*>(server_);
+        if (!sdk) { setResult(E_NOINTERFACE); return; }
+        // The public SDK overload owns COM status and vendor allocations. A
+        // zero-initialized output prevents a missing SDK status from becoming
+        // a false RUNNING verdict; zero is an unknown state in the contract.
+        OPCSERVERSTATUS status{};
+        const HRESULT hr = sdk->getStatus(&status, nullptr);
+        if (SUCCEEDED(hr)) *state_ = static_cast<int32_t>(status.dwServerState);
+        setResult(hr);
+    } catch (...) { setResult(E_UNEXPECTED); }
+    bool ran() const { return ran_; }
+private:
+    SODaCServer* server_;
+    int32_t* state_;
+    bool ran_;
+};
+extern "C" int32_t opcl_da_test_status(OpclDaSession* session, int32_t* state) try {
+    if (!session || !state) return E_INVALIDARG;
+    *state = 0;
+    TestStatusTask* task = new (std::nothrow) TestStatusTask(session->server, state);
+    if (!task) return E_OUTOFMEMORY;
+    const HRESULT hr = session->server->executeTask(task);
+    const bool ran = task->ran();
+    task->release();
+    return ran || FAILED(hr) ? hr : E_UNEXPECTED;
+} catch (...) { return E_UNEXPECTED; }
 class ReadI4Task : public SOCltTask {
 public:
     ReadI4Task(SODaCGroup* group, SODaCItem* item, DWORD age, OpclDaReadI4* out)

@@ -163,6 +163,7 @@ unsafe extern "C" {
         out: *mut *mut c_void,
     ) -> i32;
     fn opcl_da_session_close(session: *mut c_void) -> i32;
+    fn opcl_da_test_status(session: *mut c_void, state: *mut i32) -> i32;
     fn opcl_da_item_add(
         session: *mut c_void,
         id: *const c_char,
@@ -421,6 +422,14 @@ pub struct Session {
     _thread: PhantomData<Rc<()>>,
 }
 impl Session {
+    pub fn test_status(&mut self) -> Result<i32, Error> {
+        let mut state = 0;
+        // SAFETY: this owner serializes access to its live session, and the
+        // output remains valid until the SDK worker call returns.
+        check(unsafe { opcl_da_test_status(self.ptr.as_ptr(), &mut state) })?;
+        Ok(state)
+    }
+
     #[cfg(test)]
     pub(crate) fn inject_mock_push(&self, registration: u64, value: i32, overflow: bool) {
         tests::inject(self.ptr.as_ptr() as usize, registration, value, overflow);
@@ -660,6 +669,10 @@ mod tests {
     use std::sync::{Mutex, OnceLock};
     type MockQueues = HashMap<usize, (VecDeque<PushRecord>, bool)>;
     static QUEUES: OnceLock<Mutex<MockQueues>> = OnceLock::new();
+    static STATUS: OnceLock<Mutex<HashMap<usize, i32>>> = OnceLock::new();
+    fn statuses() -> &'static Mutex<HashMap<usize, i32>> {
+        STATUS.get_or_init(|| Mutex::new(HashMap::new()))
+    }
     fn queues() -> &'static Mutex<MockQueues> {
         QUEUES.get_or_init(|| Mutex::new(HashMap::new()))
     }
@@ -774,7 +787,7 @@ mod tests {
         _: *mut c_void,
         _: *const c_char,
         _: *const c_char,
-        _: *const Guid,
+        guid: *const Guid,
         _: u32,
         _: u32,
         _: u32,
@@ -783,13 +796,48 @@ mod tests {
     ) -> i32 {
         // SAFETY: the wrapper passes valid output pointers.
         unsafe {
-            *out = handle();
+            let session = handle();
+            *out = session;
             *revised = 1000;
+            let test_state = match (*guid).data1 {
+                0xfedc0002 => 2,
+                0xfedc0003 => 3,
+                0xfedc0004 => 4,
+                0xfedc0005 => 5,
+                0xfedc0006 => 6,
+                0xfedc002a => 42,
+                0xfedc0000 => 0,
+                0xfedcdead => i32::MIN + 5,
+                _ => 1,
+            };
+            statuses()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(session as usize, test_state);
         };
         0
     }
     #[unsafe(no_mangle)]
-    unsafe extern "C" fn opcl_da_session_close(_: *mut c_void) -> i32 {
+    unsafe extern "C" fn opcl_da_session_close(session: *mut c_void) -> i32 {
+        statuses()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&(session as usize));
+        0
+    }
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn opcl_da_test_status(session: *mut c_void, state: *mut i32) -> i32 {
+        let outcome = statuses()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&(session as usize))
+            .copied()
+            .unwrap_or(i32::MIN);
+        if outcome < 0 {
+            return outcome;
+        }
+        // SAFETY: the wrapper supplies a valid output pointer for this call.
+        unsafe { *state = outcome };
         0
     }
     #[unsafe(no_mangle)]

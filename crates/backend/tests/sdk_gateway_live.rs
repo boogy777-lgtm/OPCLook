@@ -78,6 +78,39 @@ fn sdk_gateway_live() {
         command(&gateway, 1, CommandKind::Connect { endpoint }).kind,
         EventKind::Connected { .. }
     ));
+    assert!(matches!(
+        command(&gateway, 99, CommandKind::Test).kind,
+        EventKind::Log {
+            message: opclook_contract::model::BackendMsg::DaStateOk
+        }
+    ));
+    let state_key = ItemKey::new(15).unwrap();
+    assert!(
+        matches!(command(&gateway, 94, CommandKind::AddItems { items: vec![ItemSpec {
+        key: state_key, item_id: "Fixture.ServerState".into(),
+    }] }).kind, EventKind::AddItems { results } if results.len() == 1 && results[0].1.is_ok())
+    );
+    assert!(
+        matches!(command(&gateway, 95, CommandKind::Write { request: WriteRequest {
+        key: state_key, value: Value::I64(2), type_hint: Some(VarType::I4),
+    }}).kind, EventKind::Wrote { result: Ok(outcome), .. }
+        if outcome.disposition == WriteDisposition::Accepted)
+    );
+    assert!(matches!(command(&gateway, 96, CommandKind::Test).kind,
+        EventKind::Error { operation: opclook_contract::model::Operation::Test,
+            message: opclook_contract::model::BackendMsg::DaNotReady { state: 2, ref name } } if name == "FAILED"));
+    assert!(
+        matches!(command(&gateway, 97, CommandKind::Write { request: WriteRequest {
+        key: state_key, value: Value::I64(1), type_hint: Some(VarType::I4),
+    }}).kind, EventKind::Wrote { result: Ok(outcome), .. }
+        if outcome.disposition == WriteDisposition::Accepted)
+    );
+    assert!(matches!(
+        command(&gateway, 98, CommandKind::Test).kind,
+        EventKind::Log {
+            message: opclook_contract::model::BackendMsg::DaStateOk
+        }
+    ));
     let browse = command(
         &gateway,
         91,
