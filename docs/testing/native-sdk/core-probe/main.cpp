@@ -126,14 +126,18 @@ static int live_fixture() {
     HRESULT hr = opcl_da_host_create(&host);
     if (FAILED(hr)) { std::printf("host %08lx\n", hr); return 31; }
     hr = opcl_da_session_open(host, "OPCLook.NativeDaFixture.1", "localhost", &clsid, &session);
+    std::printf("live connect hr=%08lx\n", static_cast<unsigned long>(hr));
     bool ok = SUCCEEDED(hr);
-    // This caller has no COM apartment. SDK task dispatch must perform all
-    // synchronous OPC I/O on the SDK's per-server worker.
+    // SDK task dispatch owns synchronous OPC I/O on its per-server worker.
+    // Windows may expose an implicit MTA on this thread while the SDK host
+    // owns the process MTA; do not require CO_E_NOTINITIALIZED here.
     if (ok) { std::thread caller([&] {
     ULONG_PTR token = 0;
-    ok = CoGetContextToken(&token) == CO_E_NOTINITIALIZED;
+    const HRESULT caller_before = CoGetContextToken(&token);
+    std::printf("live caller before=%08lx\n", static_cast<unsigned long>(caller_before));
     if (ok) hr = opcl_da_item_add(session, "Fixture.Value", &item, &type, &rights);
     if (SUCCEEDED(hr)) hr = opcl_da_read_i4(session, item, 0, &value);
+    std::printf("live read hr=%08lx service=%08lx item=%08lx vt=%u value=%ld quality=%04x\n", static_cast<unsigned long>(hr), static_cast<unsigned long>(value.service_result), static_cast<unsigned long>(value.item_result), value.vartype, static_cast<long>(value.value), value.quality);
     ok = ok && SUCCEEDED(hr) && SUCCEEDED(value.service_result) && SUCCEEDED(value.item_result) &&
               type == VT_I4 && (rights & OPC_WRITEABLE) && value.value == 42 &&
               (value.quality & 0xc0) == 0xc0 && (value.filetime_low || value.filetime_high);
@@ -145,7 +149,9 @@ static int live_fixture() {
         hr = opcl_da_read_i4(session, item, 0, &value);
         ok = SUCCEEDED(hr) && SUCCEEDED(value.service_result) && SUCCEEDED(value.item_result) && value.value == 77;
     }
-    ok = ok && CoGetContextToken(&token) == CO_E_NOTINITIALIZED;
+    const HRESULT caller_after = CoGetContextToken(&token);
+    std::printf("live caller after=%08lx\n", static_cast<unsigned long>(caller_after));
+    ok = ok && caller_after == caller_before;
     }); caller.join(); }
     if (ok) {
         hr = opcl_da_item_remove(session, item); item = nullptr;
