@@ -3528,3 +3528,46 @@ fn profile_connect_dispatch_failure_keeps_saved_candidate() {
     drop(redirect);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn migrated_profiles_are_reported_as_localized_warning_and_status() {
+    use crate::journal::{JournalMessage, Level};
+    use crate::settings::SettingsNotice;
+    let mut app = App::new_inner(Settings::default());
+    let message = app.report_settings_notice(SettingsNotice::AcquisitionMigrated {
+        ua: 1,
+        da: 1,
+        interval_ms: 5000,
+    });
+    assert_eq!(app.status, message);
+    assert!(
+        app.journal
+            .entries()
+            .iter()
+            .any(|entry| matches!(entry, crate::journal::Entry {
+        level: Level::Warning,
+        message: JournalMessage::Localized { key: Tr::SettingsAcquisitionMigrated, args }, ..
+    } if args == &vec!["1", "1", "5000"]))
+    );
+    for lang in Lang::ALL {
+        let text = crate::i18n::fmt(lang, Tr::SettingsAcquisitionMigrated, &[&1, &1, &5000]);
+        assert!(text.contains("5000"));
+        assert!(text.contains("poll_only"));
+    }
+}
+
+#[test]
+fn failed_migration_cannot_open_legacy_profile() {
+    let settings = Settings {
+        save_blocked: true,
+        legacy_migration_failed: true,
+        ..Settings::default()
+    };
+    let mut app = App::new_inner(settings);
+    assert!(!app.open_tab_for_endpoint(EndpointSpec::ua("opc.tcp://127.0.0.1:4840")));
+    assert!(app.sessions.is_empty());
+    assert_eq!(
+        app.status,
+        tr(app.lang(), Tr::SettingsAcquisitionMigrationBlocked)
+    );
+}

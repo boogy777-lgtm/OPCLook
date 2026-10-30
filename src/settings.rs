@@ -1,3 +1,6 @@
+#[path = "settings_migration.rs"]
+mod migration;
+
 use crate::bff::model::{EndpointSpec, UaSecurityMode, UaSecurityPolicy};
 use crate::columns::{ColumnId, ColumnSet};
 use crate::constants::{
@@ -157,6 +160,16 @@ pub enum SettingsNotice {
     SaveFailed { path: String, error: String },
     /// Saving would overwrite the only copy of unreadable settings.
     SaveBlocked { path: String },
+    /// Legacy endpoints were converted using the previous global interval.
+    AcquisitionMigrated {
+        ua: usize,
+        da: usize,
+        interval_ms: u64,
+    },
+    /// The original file remains protected until its legacy interval is fixed.
+    AcquisitionMigrationFailed { seconds: u64 },
+    /// A legacy interval failure prevents overwriting the original file.
+    AcquisitionMigrationBlocked,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -209,6 +222,9 @@ pub struct Settings {
     /// Prevent overwriting an unreadable file or a failed backup.
     #[serde(skip)]
     pub save_blocked: bool,
+    /// A legacy interval could not be converted; prevent use of those profiles.
+    #[serde(skip)]
+    pub legacy_migration_failed: bool,
 }
 
 fn deserialize_adapter_id<'de, D: Deserializer<'de>>(
@@ -318,11 +334,25 @@ impl Settings {
         };
         match serde_json::from_slice::<Settings>(&bytes) {
             Ok(mut settings) => {
-                settings.view.options = settings.view.options.clamped();
-                Loaded {
-                    settings,
-                    notices: Vec::new(),
+                // Convert before clamping: silently truncating a legacy value
+                // would change the meaning of every migrated connection.
+                let mut notices = Vec::new();
+                match settings.migrate_legacy_endpoints() {
+                    Ok(Some(notice)) => {
+                        notices.push(notice);
+                        if let Err(error) = settings.save() {
+                            notices.push(error);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(notice) => {
+                        settings.save_blocked = true;
+                        settings.legacy_migration_failed = true;
+                        notices.push(notice);
+                    }
                 }
+                settings.view.options = settings.view.options.clamped();
+                Loaded { settings, notices }
             }
             Err(err) => {
                 let backup = backup_damaged_file(&path);
@@ -342,10 +372,24 @@ impl Settings {
         }
     }
 
+    fn migrate_legacy_endpoints(&mut self) -> Result<Option<SettingsNotice>, SettingsNotice> {
+        let seconds = self.view.options.update_interval_secs;
+        let migrated = migration::migrate(&mut self.recent_endpoints, seconds)
+            .map_err(|()| SettingsNotice::AcquisitionMigrationFailed { seconds })?;
+        Ok(migrated.map(|result| SettingsNotice::AcquisitionMigrated {
+            ua: result.ua,
+            da: result.da,
+            interval_ms: result.interval_ms,
+        }))
+    }
+
     /// Persist atomically, returning a diagnostic to the application on failure.
     pub fn save(&self) -> Result<(), SettingsNotice> {
         let path = settings_path();
         let shown = path.display().to_string();
+        if self.legacy_migration_failed {
+            return Err(SettingsNotice::AcquisitionMigrationBlocked);
+        }
         if self.save_blocked {
             return Err(SettingsNotice::SaveBlocked { path: shown });
         }
@@ -1595,6 +1639,139 @@ mod tests {
             loaded.save().unwrap();
             assert!(Settings::load().notices.is_empty());
             assert_eq!(std::fs::read_to_string(backup).unwrap(), "{ not json");
+        });
+    }
+
+    #[test]
+    fn legacy_profiles_migrate_once_and_preserve_explicit_profiles() {
+        use crate::bff::model::{AcquisitionConfig, PollFreshness, UpdateMode};
+        let dir = fresh_dir("migrate-mixed");
+        with_appdata(&dir, || {
+            let mut original = Settings::default();
+            original.view.options.update_interval_secs = 5;
+            let mut explicit = EndpointSpec::ua("opc.tcp://localhost:4842");
+            let mut requested = AcquisitionConfig::ua_default();
+            requested.interval_ms = 17;
+            explicit.acquisition = Some(requested.clone());
+            original.recent_endpoints = vec![
+                EndpointSpec::ua("opc.tcp://localhost:4840"),
+                EndpointSpec::da("", "Vendor.Server"),
+                explicit,
+            ];
+            original.save().unwrap();
+            let loaded = Settings::load();
+            assert!(matches!(
+                loaded.notices.as_slice(),
+                [SettingsNotice::AcquisitionMigrated {
+                    ua: 1,
+                    da: 1,
+                    interval_ms: 5000
+                }]
+            ));
+            let ua = loaded.settings.recent_endpoints[0]
+                .acquisition
+                .as_ref()
+                .unwrap();
+            assert_eq!(
+                (
+                    ua.update_mode,
+                    ua.interval_ms,
+                    ua.poll_freshness,
+                    ua.read_after_write
+                ),
+                (
+                    UpdateMode::Subscription,
+                    5000,
+                    PollFreshness::FreshSource,
+                    false
+                )
+            );
+            let da = loaded.settings.recent_endpoints[1]
+                .acquisition
+                .as_ref()
+                .unwrap();
+            assert_eq!(
+                (
+                    da.update_mode,
+                    da.interval_ms,
+                    da.poll_freshness,
+                    da.read_after_write
+                ),
+                (UpdateMode::Poll, 5000, PollFreshness::CacheAllowed, false)
+            );
+            assert_eq!(
+                loaded.settings.recent_endpoints[2].acquisition.as_ref(),
+                Some(&requested)
+            );
+            let first = std::fs::read(settings_path()).unwrap();
+            let again = Settings::load();
+            assert!(again.notices.is_empty());
+            assert_eq!(std::fs::read(settings_path()).unwrap(), first);
+            assert_eq!(
+                again.settings.recent_endpoints[0].acquisition.as_ref(),
+                Some(ua)
+            );
+        });
+    }
+
+    #[test]
+    fn legacy_interval_overflow_or_out_of_range_protects_original() {
+        for seconds in [0, 3601, u64::MAX] {
+            let dir = fresh_dir(&format!("migrate-bad-{seconds}"));
+            with_appdata(&dir, || {
+                let mut settings = Settings::default();
+                settings.view.options.update_interval_secs = seconds;
+                settings
+                    .recent_endpoints
+                    .push(EndpointSpec::ua("opc.tcp://localhost:4840"));
+                settings.save().unwrap();
+                let bytes = std::fs::read(settings_path()).unwrap();
+                let loaded = Settings::load();
+                assert!(
+                    matches!(loaded.notices.as_slice(), [SettingsNotice::AcquisitionMigrationFailed { seconds: got }] if *got == seconds)
+                );
+                assert!(loaded.settings.save_blocked && loaded.settings.legacy_migration_failed);
+                assert!(loaded.settings.recent_endpoints[0].acquisition.is_none());
+                assert!(matches!(
+                    loaded.settings.save(),
+                    Err(SettingsNotice::AcquisitionMigrationBlocked)
+                ));
+                assert_eq!(std::fs::read(settings_path()).unwrap(), bytes);
+            });
+        }
+    }
+
+    #[test]
+    fn migration_save_failure_reports_and_keeps_original_then_retries() {
+        let dir = fresh_dir("migrate-save-failure");
+        with_appdata(&dir, || {
+            let mut settings = Settings::default();
+            settings
+                .recent_endpoints
+                .push(EndpointSpec::ua("opc.tcp://localhost:4840"));
+            settings.save().unwrap();
+            let path = settings_path();
+            let before = std::fs::read(&path).unwrap();
+            let mut temp = path.as_os_str().to_owned();
+            temp.push(".tmp");
+            std::fs::create_dir(PathBuf::from(&temp)).unwrap();
+            let loaded = Settings::load();
+            assert!(matches!(
+                loaded.notices.as_slice(),
+                [
+                    SettingsNotice::AcquisitionMigrated { .. },
+                    SettingsNotice::SaveFailed { .. }
+                ]
+            ));
+            assert!(loaded.settings.recent_endpoints[0].acquisition.is_some());
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+            std::fs::remove_dir(PathBuf::from(temp)).unwrap();
+            let retried = Settings::load();
+            assert!(matches!(
+                retried.notices.as_slice(),
+                [SettingsNotice::AcquisitionMigrated { .. }]
+            ));
+            assert!(Settings::load().notices.is_empty());
         });
     }
 

@@ -70,6 +70,15 @@ impl App {
     /// Return false when the requested operation was rejected so the caller
     /// can keep its dialog open and show the error.
     pub fn open_tab_for_endpoint(&mut self, endpoint: EndpointSpec) -> bool {
+        if self.settings.legacy_migration_failed && endpoint.acquisition.is_none() {
+            let message = tr(self.lang(), Tr::SettingsAcquisitionMigrationBlocked).to_string();
+            self.status.clone_from(&message);
+            self.journal.error(message.clone());
+            if self.dialogs.connect.open {
+                self.dialogs.connect.error = Some(message);
+            }
+            return false;
+        }
         if opclook_engine::validate_acquisition(&endpoint).is_err() {
             let message = tr(self.lang(), Tr::AcquisitionInvalid).to_string();
             self.status.clone_from(&message);

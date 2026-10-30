@@ -367,6 +367,13 @@ impl App {
         notice: crate::settings::SettingsNotice,
     ) -> String {
         use crate::settings::SettingsNotice;
+        let warning = matches!(notice, SettingsNotice::AcquisitionMigrated { .. });
+        let migration = matches!(
+            notice,
+            SettingsNotice::AcquisitionMigrated { .. }
+                | SettingsNotice::AcquisitionMigrationFailed { .. }
+                | SettingsNotice::AcquisitionMigrationBlocked
+        );
         let (key, args): (Tr, Vec<String>) = match notice {
             SettingsNotice::ReadFailed { path, error } => {
                 (Tr::SettingsReadFailed, vec![path, error])
@@ -385,13 +392,36 @@ impl App {
                 (Tr::SettingsSaveFailed, vec![path, error])
             }
             SettingsNotice::SaveBlocked { path } => (Tr::SettingsSaveBlocked, vec![path]),
+            SettingsNotice::AcquisitionMigrationBlocked => {
+                (Tr::SettingsAcquisitionMigrationBlocked, vec![])
+            }
+            SettingsNotice::AcquisitionMigrated {
+                ua,
+                da,
+                interval_ms,
+            } => (
+                Tr::SettingsAcquisitionMigrated,
+                vec![ua.to_string(), da.to_string(), interval_ms.to_string()],
+            ),
+            SettingsNotice::AcquisitionMigrationFailed { seconds } => (
+                Tr::SettingsAcquisitionMigrationFailed,
+                vec![seconds.to_string()],
+            ),
         };
         let refs: Vec<&dyn std::fmt::Display> = args
             .iter()
             .map(|arg| arg as &dyn std::fmt::Display)
             .collect();
-        self.journal.error_l(key, &refs);
-        crate::i18n::fmt(self.lang(), key, &refs)
+        if warning {
+            self.journal.warn_l(key, &refs);
+        } else {
+            self.journal.error_l(key, &refs);
+        }
+        let message = crate::i18n::fmt(self.lang(), key, &refs);
+        if migration {
+            self.status.clone_from(&message);
+        }
+        message
     }
 
     /// Populate the network state from `settings.network.cached_adapters` without

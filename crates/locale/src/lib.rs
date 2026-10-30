@@ -146,6 +146,9 @@ translation_keys! {
     SettingsParseNoBackup,
     SettingsSaveFailed,
     SettingsSaveBlocked,
+    SettingsAcquisitionMigrated,
+    SettingsAcquisitionMigrationFailed,
+    SettingsAcquisitionMigrationBlocked,
     NetworkCacheWarning,
     NetworkCacheLoaded,
     NetworkCacheSkipped,
@@ -920,6 +923,15 @@ fn ru(key: Tr) -> &'static str {
             "Файл настроек {0} повреждён ({1}), копию сделать не удалось ({2}). Файл не будет перезаписан, используются значения по умолчанию"
         }
         SettingsSaveFailed => "Не удалось сохранить настройки {0}: {1}",
+        SettingsAcquisitionMigrated => {
+            "Перенесены профили: UA {0}, DA {1}; интервал {2} мс. UA: подписка, разовые чтения из источника, без чтения после записи; прежний резервный опрос poll_only отключён. DA: опрос Sync, кэш, без чтения после записи."
+        }
+        SettingsAcquisitionMigrationFailed => {
+            "Не удалось перенести профили: старый интервал {0} с вне допустимого диапазона или переполнен. Исходный файл защищён от записи; исправьте интервал и перезапустите приложение."
+        }
+        SettingsAcquisitionMigrationBlocked => {
+            "Старый профиль недоступен: исправьте интервал в файле настроек и перезапустите приложение."
+        }
         SettingsSaveBlocked => {
             "Не удалось сохранить настройки {0}: существующий файл повреждён или недоступен, а его резервная копия не создана. Файл не будет перезаписан"
         }
@@ -1597,6 +1609,15 @@ fn en(key: Tr) -> &'static str {
             "Settings file {0} is damaged ({1}) and could not be backed up ({2}). It will not be overwritten; defaults are used"
         }
         SettingsSaveFailed => "Could not save settings {0}: {1}",
+        SettingsAcquisitionMigrated => {
+            "Migrated profiles: UA {0}, DA {1}; interval {2} ms. UA: subscription, one-shot reads from source, no read after write; legacy poll_only fallback is disabled. DA: Sync poll, cache allowed, no read after write."
+        }
+        SettingsAcquisitionMigrationFailed => {
+            "Could not migrate profiles: legacy interval {0} s is out of range or overflows. The original file is protected; correct the interval and restart the application."
+        }
+        SettingsAcquisitionMigrationBlocked => {
+            "Legacy profile unavailable: correct the interval in the settings file and restart the application."
+        }
         SettingsSaveBlocked => {
             "Could not save settings {0}: the existing file is damaged or unreadable and could not be backed up. It will not be overwritten"
         }
@@ -2258,6 +2279,13 @@ fn zh(key: Tr) -> &'static str {
             "设置文件 {0} 已损坏（{1}），且无法备份（{2}）。不会覆盖该文件，使用默认值"
         }
         SettingsSaveFailed => "无法保存设置 {0}：{1}",
+        SettingsAcquisitionMigrated => {
+            "已迁移配置：UA {0}，DA {1}；间隔 {2} 毫秒。UA：订阅、单次读取源、不在写入后读取；旧的 poll_only 备用轮询已停用。DA：同步轮询、允许缓存、不在写入后读取。"
+        }
+        SettingsAcquisitionMigrationFailed => {
+            "无法迁移配置：旧间隔 {0} 秒超出范围或溢出。原文件已保护；请修正间隔并重启应用。"
+        }
+        SettingsAcquisitionMigrationBlocked => "旧配置不可用：请修正设置文件中的间隔并重启应用。",
         SettingsSaveBlocked => {
             "无法保存设置 {0}：现有文件已损坏或无法读取，且无法备份。不会覆盖该文件"
         }
