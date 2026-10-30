@@ -1,5 +1,26 @@
 # Текущий статус
 
+## 2026-10-30 — явные Read intents (частичный R2)
+
+Engine резервирует ExplicitRefresh и opt-in WriteReadback вместе с текущими
+снимками/periodic Reads, переносит покрытые цели в PendingRequest и сохраняет
+новые цели отдельно при занятом слоте. Только коррелированный принятый Wrote
+создаёт read-back, push его не закрывает; reconnect отменяет старую эпоху.
+CLI `--read-after-write` для UA дожидается коррелированного Read и возвращает
+отдельно outcome записи и данные/quality наблюдения. Это временный булев флаг;
+общий per-connection профиль и UI выбора пока не готовы. Без флага привычная
+политика сохранена. DA Cache-only отказывает в FreshSource до отправки Write.
+GUI пока не включает новую опцию; единый end-to-end GUI/CLI workflow не заявлен.
+Проверки текущего code tree: полный scripts/check-linux.sh exit 0 (debug=0,
+incremental=0, jobs=1): backend 223, contract 33+3 doctest, Engine 42+2,
+CLI 13+2 UA sample live, GUI library 233, UI interactions 235 и один
+Windows-only ignored; внешний Engine stand 42+2. Wrong-key CLI regression и
+ограничение JSON проверены отдельно. Предшествующий прогон остановлен до конца
+для исправления ошибочной корреляции; прежний E0463 без установленной причины
+зафиксирован в devlog. CI нового head ещё не измерен.
+Отдельные terminal outcome API для всех сообъединённых потребителей, полный
+G/D и E набор, fairness и native DA SDK остаются незавершёнными.
+
 ## 2026-10-30 — результат записи (частичный R2)
 
 UA adapter сохраняет native status записи, включая Good_CompletesAsynchronously,

@@ -2,8 +2,8 @@
 
 Дата: 2026-10-30. ID: R2.ROUTE. Область: получение значений OPC UA/DA.
 База исследования: `main@4738cbd9ace14bdd3f59808f40ffa7f8c635a2f0`.
-Это входное задание для нового чата. Маршруты направляют к существующим
-механизмам; они не означают, что runtime уже обновлён.
+Это входное задание для нового чата. Маршруты направляют к существующим механизмам; текущий частичный runtime срез
+ExplicitRefresh и CLI opt-in WriteReadback описан в status.md. Полный R2 не завершён.
 
 ## 1. Начало работы
 
@@ -48,13 +48,13 @@ Routing — навигация, а не новый источник проток
 | --- | --- | --- | --- | --- | --- |
 | R00-REUSE | «костыль», «библиотека уже умеет», новый backend/recovery | Native SDK обязателен; один владелец каждого lifecycle | native-backend-migration; backend-ownership; OF05/OF12 | crates/backend/Cargo.toml; Cargo.lock; ua/session/connection.rs; bff/da.rs | O28/O30–O35; trace владельцев |
 | R01-CONFIG | Poll/Subscription, интервал, per-connection настройки, CLI | AcquisitionConfig snapshot; capability без скрытой смены режима | connection-acquisition | crates/contract/src/model/endpoint.rs; src/settings.rs; src/ui/dialogs/connect.rs; crates/cli/src/main.rs | C01–C26; U01–U09; M01–M12 |
-| R02-DEMAND | Пустой тег после Add; старое значение после Write; Refresh | Существующий Engine queue/read-slot; pending отдельно от in-flight | value-refresh-plan; таблицы G/D/E | crates/engine/src/lib.rs; src/app/events.rs; src/app/runtime.rs | Полные CSV G/D; E01–E22; S01–S07 |
+| R02-DEMAND | Пустой тег после Add; старое значение после Write; Refresh | Существующий Engine queue/read-slot; pending отдельно от in-flight | value-refresh-plan; таблицы G/D/E | crates/engine/src/lib.rs (request_refresh, read_demands, due/send_due_read); src/app/events.rs; src/app/runtime.rs | Полные CSV G/D; E01–E22; S01–S07 |
 | R03-IDENTITY | Late reply/push, Remove/re-add, смена режима | RequestId + Connect epoch + registration guard; чужое событие не меняет state | OF12; identity раздел таблиц | crates/engine/src/lib.rs; crates/contract/src/model/ids.rs; ua/worker.rs; bff/da_router.rs | S08–S10; S13–S16; O12–O13/O27 |
 | R04-UA-PARAMS | Фактический publish/sample/queue/keepalive, requested vs revised | SDK negotiated state -> adapter -> contract; не подменять requested | OF01/OF04; F05 | ua/session/subscription.rs; ua/session/mod.rs; crates/backend/src/constants.rs; contract/event.rs; contract/endpoint.rs | O01–O02; O08–O09 |
 | R05-UA-FILTER | Timestamp-only update, deadband, изменение quality | DataChangeTrigger/Filter адаптера; качество не скрыто фильтром | OF02; F03/F11 | ua/values.rs; ua/session/mod.rs; ua/session/subscription.rs | O03–O05; T01–T17 |
 | R06-UA-QUEUE | Потеря переходов, Overflow, обещание полной истории | SDK monitored queue; latest-view и history completeness раздельны | OF03; F04 | ua/session/mod.rs; ua/values.rs; contract/quality.rs; contract/value.rs; src/ui/status.rs | O06–O07; A03 |
 | R07-UA-RECOVERY | Разрыв связи, missing sequence, Republish/Transfer/ResendData | SDK recovery owner; gap остаётся виден; Engine не второй Publish loop | R00; OF05/OF12; F01/F02/F14 | ua/session/connection.rs; ua/session/subscription.rs; ua/worker.rs; sdk locked source | O10–O13; O27–O28 |
-| R08-WRITE | Ok без нового значения, Uncertain, async completion, timeout | Raw per-item write outcome + read-back intent; unknown не success | OF06; F06/F07 | ua/io.rs; bff/da.rs; contract/event.rs; contract/message.rs; src/app/events.rs | O14–O17; C23–C24; S17–S18 |
+| R08-WRITE | Ok без нового значения, Uncertain, async completion, timeout | Raw per-item write outcome + read-back intent; unknown не success | OF06; F06/F07 | ua/io.rs; bff/da.rs; contract/event.rs; contract/message.rs; crates/engine/src/lib.rs (send_write_with_readback); crates/cli/src/main.rs; src/app/events.rs | O14–O17; C23–C24; S17–S18 |
 | R09-DA-METHOD | DA Sync/Async, Cache/Device, Subscription + Sync | DA library/adapter strategy; method отдельно от UpdateMode | R00; OF10/OF11; F12/F13 | bff/da.rs; bff/com.rs; opc/bindings/da.rs; bff/da_variant.rs | C03–C07; O23–O26; A04–A10 |
 | R10-LIMITS | Большая пачка, TooManyOperations, partial reply | Existing bounded/adaptive chunker; key outcomes сохранены | OF07; F08 | ua/session/core.rs; ua/session/mod.rs; ua/session/subscription.rs; ua/io.rs | O18–O19; E11/E19/E20 |
 | R11-ALIASES | RegisterNodes, NodeId alias, reconnect reuse | SDK/adapter scoped aliases; canonical identity отдельно | OF08; F09 | ua/session/items.rs; ua/session/core.rs; contract/ids.rs; contract/endpoint.rs | O20–O21 |

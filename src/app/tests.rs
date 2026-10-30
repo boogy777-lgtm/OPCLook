@@ -1136,11 +1136,11 @@ fn pend_discover(app: &mut App, request_id: RequestId, host: &str) {
     app.engine.insert_pending_for_test(
         crate::bff::model::Owner::Discovery,
         request_id,
-        PendingRequest {
-            operation: Operation::Discover,
-            sent: Instant::now(),
-            ctx: PendingCtx::Host(host.to_string()),
-        },
+        PendingRequest::new(
+            Operation::Discover,
+            Instant::now(),
+            PendingCtx::Host(host.to_string()),
+        ),
     );
 }
 
@@ -1457,11 +1457,7 @@ fn k1_fresh_requests_do_not_expire() {
     app.engine.insert_pending_for_test(
         crate::bff::model::SessionId::new(1).unwrap(),
         RequestId::new(501).unwrap(),
-        PendingRequest {
-            operation: Operation::Browse,
-            sent: Instant::now(),
-            ctx: PendingCtx::None,
-        },
+        PendingRequest::new(Operation::Browse, Instant::now(), PendingCtx::None),
     );
     app.age_pending_requests_for_test(crate::bff::model::SessionId::new(1).unwrap(), 20);
     app.tick_for_test();

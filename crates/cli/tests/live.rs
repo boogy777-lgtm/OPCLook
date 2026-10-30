@@ -175,6 +175,10 @@ fn browse_read_write_push_forced_poll_and_idle_interrupt() {
         server.execute(&["read", &server.node])["data"]["value"]["value"],
         2.5
     );
+    let observed = server.execute(&["--read-after-write", "write", &server.node, "f64", "2.5"]);
+    assert_eq!(observed["accepted"], true);
+    assert_eq!(observed["readback"]["status"], "observed");
+    assert_eq!(observed["readback"]["data"]["value"]["value"], 2.5);
 
     let poll = server
         .command(&["--poll", "--count", "3", "watch", &server.node])

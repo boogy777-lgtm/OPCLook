@@ -14,7 +14,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::task::Poll;
 use std::time::{Duration, Instant};
 
-const HELP: &str = "opclook-cli — headless OPC DA/UA client\n\nUsage: opclook-cli [options] COMMAND [arguments]\n\nEndpoints (choose one):\n  --ua URL                  OPC UA endpoint\n  --da HOST PROGID          OPC DA server (Windows)\n\nOptions:\n  --timeout SECONDS         Per-operation deadline (default 30)\n  --bind IP                 Local UA source address\n  --if-index INDEX          Interface index for the source address\n  --scope INDEX             IPv6 scope ID\n  --policy POLICY           UA policy (Auto, None, Basic256Sha256, etc.)\n  --mode MODE               UA mode (Auto, None, Sign, SignAndEncrypt)\n  --trust-server-cert       Trust the UA server certificate\n  --client-cert             Use the client certificate from the PKI store\n  --session-timeout-ms N    Requested UA session timeout in milliseconds\n  --user-env NAME           Read username from an environment variable\n  --password-env NAME       Read password from an environment variable\n  --interval SECONDS        Watch polling interval (default 1)\n  --count N                 Stop watch after N value records (default: Ctrl+C)\n  --poll                    Watch by periodic reads instead of UA subscription\n  --json                    Emit JSON or JSONL (the default)\n  --help                    Print this help\n\nCommands:\n  browse [NODE]             Browse a node (default: root)\n  read NODE                 Add and read a node\n  write NODE TYPE VALUE     Write bool, i64, u64, f64 or string\n  watch NODE                Subscribe/poll until count or Ctrl+C\n\n64-bit integers are decimal strings. Non-finite f64 values are strings NaN,\nInfinity and -Infinity. Credentials are read from the environment.\n";
+const HELP: &str = "opclook-cli — headless OPC DA/UA client\n\nUsage: opclook-cli [options] COMMAND [arguments]\n\nEndpoints (choose one):\n  --ua URL                  OPC UA endpoint\n  --da HOST PROGID          OPC DA server (Windows)\n\nOptions:\n  --timeout SECONDS         Per-operation deadline (default 30)\n  --bind IP                 Local UA source address\n  --if-index INDEX          Interface index for the source address\n  --scope INDEX             IPv6 scope ID\n  --policy POLICY           UA policy (Auto, None, Basic256Sha256, etc.)\n  --mode MODE               UA mode (Auto, None, Sign, SignAndEncrypt)\n  --trust-server-cert       Trust the UA server certificate\n  --client-cert             Use the client certificate from the PKI store\n  --session-timeout-ms N    Requested UA session timeout in milliseconds\n  --user-env NAME           Read username from an environment variable\n  --password-env NAME       Read password from an environment variable\n  --interval SECONDS        Watch polling interval (default 1)\n  --count N                 Stop watch after N value records (default: Ctrl+C)\n  --poll                    Watch by periodic reads instead of UA subscription\n  --read-after-write        Observe after accepted UA write (maxAge=0)\n  --json                    Emit JSON or JSONL (the default)\n  --help                    Print this help\n\nCommands:\n  browse [NODE]             Browse a node (default: root)\n  read NODE                 Add and read a node\n  write NODE TYPE VALUE     Write bool, i64, u64, f64 or string\n  watch NODE                Subscribe/poll until count or Ctrl+C\n\n64-bit integers are decimal strings. Non-finite f64 values are strings NaN,\nInfinity and -Infinity. Credentials are read from the environment.\n";
 const MAX_ARG: usize = 4096;
 const MAX_JSON_BUDGET: usize = 1_000_000;
 const MAX_DEPTH: usize = 32;
@@ -25,6 +25,7 @@ struct Options {
     interval: Duration,
     count: Option<usize>,
     poll: bool,
+    read_after_write: bool,
     command: Vec<String>,
 }
 fn value_arg(args: &[String], i: &mut usize, name: &str) -> Result<String, String> {
@@ -49,6 +50,7 @@ fn parse(args: Vec<String>) -> Result<Option<Options>, String> {
     let mut interval = Duration::from_secs(1);
     let mut count = None;
     let mut poll = false;
+    let mut read_after_write = false;
     let mut policy = None;
     let mut mode = None;
     let mut trust = false;
@@ -145,6 +147,7 @@ fn parse(args: Vec<String>) -> Result<Option<Options>, String> {
             }
             "--json" => {}
             "--poll" => poll = true,
+            "--read-after-write" => read_after_write = true,
             "--help" | "-h" => return Ok(None),
             _ => return Err("unknown option".into()),
         }
@@ -199,6 +202,7 @@ fn parse(args: Vec<String>) -> Result<Option<Options>, String> {
         interval,
         count,
         poll,
+        read_after_write,
         command,
     }))
 }
@@ -416,7 +420,7 @@ fn write_response(
     timeout: Duration,
     stop: &Receiver<Result<(), String>>,
 ) -> Result<opclook_contract::model::WriteOutcome, opclook_contract::model::BackendMsg> {
-    use opclook_contract::model::{BackendMsg, Origin, WriteOutcome};
+    use opclook_contract::model::{Origin, WriteOutcome};
     let deadline = match checked_deadline(Instant::now(), timeout) {
         Ok(deadline) => deadline,
         Err(error) => return Ok(WriteOutcome::unknown(error)),
@@ -428,7 +432,10 @@ fn write_response(
         };
         if event.origin == Origin::Reply(request) {
             return match event.kind {
-                EventKind::Wrote { result, .. } => result,
+                EventKind::Wrote { key, result } if key == ItemKey::FIRST => result,
+                EventKind::Wrote { .. } => {
+                    Ok(WriteOutcome::unknown("write reply has unexpected item key"))
+                }
                 EventKind::Error { message, .. } => WriteOutcome::from_dispatch_error(message),
                 _ => Ok(WriteOutcome::unknown("unexpected write response")),
             };
@@ -437,6 +444,37 @@ fn write_response(
             return Ok(WriteOutcome::unknown_because(reason));
         }
     }
+}
+
+fn send_explicit_due(
+    engine: &mut Engine<()>,
+    interval: Duration,
+    kind: opclook_engine::ReadDemandKind,
+) -> Result<opclook_contract::model::RequestId, String> {
+    for due in engine.due(Instant::now(), interval, None) {
+        match due {
+            Due::Read {
+                session,
+                protocol,
+                keys,
+                permit,
+            } if session == SessionId::FIRST => {
+                let demand = opclook_engine::ReadDemand {
+                    key: ItemKey::FIRST,
+                    kind,
+                };
+                if !engine.reservation_covers(session, permit, demand) {
+                    return Err("scheduled read does not cover requested demand".into());
+                }
+                return engine
+                    .send_due_read(session, protocol, keys, permit, ())
+                    .map_err(dispatch_error);
+            }
+            Due::ReadUnavailable { .. } => return Err("read request identifiers exhausted".into()),
+            _ => {}
+        }
+    }
+    Err("read-back or refresh could not be scheduled".into())
 }
 
 fn encode(value: &Value, depth: usize, remaining: &mut usize) -> Result<Json, String> {
@@ -544,6 +582,36 @@ fn write_outcome_json(
     });
     json!({"node_id":node,"written":outcome.accepted(),"accepted":outcome.accepted(),"outcome":disposition,"raw_status":raw,"detail":redact(outcome.detail.clone(),endpoint),"reason":outcome.reason.as_ref().map(|reason| message(reason,endpoint))})
 }
+fn apply_readback(
+    record: &mut Json,
+    observed: Result<opclook_contract::model::DataValue, String>,
+    endpoint: &EndpointSpec,
+) -> Result<(), String> {
+    let result = observed.and_then(|data| {
+        let usable = data.reason.is_none()
+            && data.quality.kind == opclook_contract::model::QualityKind::Good;
+        let encoded = data_json(&data, endpoint)?;
+        record["readback"] =
+            json!({"status": if usable { "observed" } else { "unusable" }, "data": encoded});
+        if usable {
+            Ok(())
+        } else {
+            Err("read-back returned Bad or Uncertain quality or an error".into())
+        }
+    });
+    if let Err(error) = &result
+        && record.get("readback").is_none()
+    {
+        record["readback"] = json!({"status":"failed", "error":redact(error.clone(), endpoint)});
+    }
+    if record.get("readback").is_some() && output_to(record, io::sink()).is_err() {
+        let error = "read-back JSON output limit exceeded".to_string();
+        record["readback"] = json!({"status":"failed", "error":error});
+        return Err(error);
+    }
+    result
+}
+
 // Serialize into a bounded buffer before writing, so oversized output never emits a
 // partial JSON record and escaped strings count against the actual byte limit.
 struct LimitedOutput(Vec<u8>);
@@ -638,6 +706,11 @@ fn run_with_engine(
     if !expected.contains(&options.command.len()) {
         return Err("wrong number of command arguments".into());
     }
+    if options.read_after_write
+        && (command != "write" || !opclook_engine::supports_fresh_source(protocol))
+    {
+        return Err("--read-after-write requires a UA write with FreshSource capability".into());
+    }
     let id = send(
         &mut engine,
         protocol,
@@ -707,28 +780,51 @@ fn run_with_engine(
             options.command.get(2).ok_or("type required")?,
             options.command.get(3).ok_or("value required")?,
         )?;
-        let id = send(
-            &mut engine,
-            protocol,
-            CommandKind::Write {
-                request: WriteRequest {
-                    key: ItemKey::FIRST,
-                    value,
-                    type_hint: None,
-                },
-            },
-        )?;
+        let request = WriteRequest {
+            key: ItemKey::FIRST,
+            value,
+            type_hint: None,
+        };
+        let id = if options.read_after_write {
+            engine
+                .send_write_with_readback(SessionId::FIRST, protocol, request, ())
+                .map_err(|error| format!("read-back write unavailable: {error:?}"))?
+        } else {
+            send(&mut engine, protocol, CommandKind::Write { request })?
+        };
+
         return match write_response(&mut engine, id, options.timeout, stop) {
             Ok(outcome) => {
-                output(&write_outcome_json(&node, &outcome, &options.endpoint))?;
-                if outcome.accepted() {
-                    Ok(())
-                } else {
-                    Err(redact(
+                let mut record = write_outcome_json(&node, &outcome, &options.endpoint);
+                if !outcome.accepted() {
+                    output(&record)?;
+                    return Err(redact(
                         opclook_locale::write_outcome_text(Lang::En, &outcome),
                         &options.endpoint,
-                    ))
+                    ));
                 }
+                if options.read_after_write {
+                    let observed = (|| -> Result<opclook_contract::model::DataValue, String> {
+                        let id = send_explicit_due(
+                            &mut engine,
+                            options.interval,
+                            opclook_engine::ReadDemandKind::WriteReadback,
+                        )?;
+                        match response(&mut engine, id, options.timeout, stop, &options.endpoint)? {
+                            EventKind::Values { values } => values
+                                .into_iter()
+                                .find_map(|(key, data)| (key == ItemKey::FIRST).then_some(data))
+                                .ok_or_else(|| "read-back returned no value".into()),
+                            _ => Err("unexpected read-back response".into()),
+                        }
+                    })();
+                    let readback_result = apply_readback(&mut record, observed, &options.endpoint);
+                    output(&record)?;
+                    readback_result?;
+                } else {
+                    output(&record)?;
+                }
+                Ok(())
             }
             Err(error) => Err(format!(
                 "{}: {}",
@@ -738,13 +834,24 @@ fn run_with_engine(
         };
     }
     if command == "read" {
-        let id = send(
-            &mut engine,
-            protocol,
-            CommandKind::Read {
-                keys: vec![ItemKey::FIRST],
-            },
-        )?;
+        let id = if protocol == Protocol::OpcUa {
+            engine
+                .request_refresh(SessionId::FIRST, ItemKey::FIRST)
+                .map_err(|error| format!("refresh unavailable: {error:?}"))?;
+            send_explicit_due(
+                &mut engine,
+                options.interval,
+                opclook_engine::ReadDemandKind::ExplicitRefresh,
+            )?
+        } else {
+            send(
+                &mut engine,
+                protocol,
+                CommandKind::Read {
+                    keys: vec![ItemKey::FIRST],
+                },
+            )?
+        };
         return match response(&mut engine, id, options.timeout, stop, &options.endpoint)? {
             EventKind::Values { values } => {
                 let data = values
@@ -1003,6 +1110,142 @@ mod tests {
             encode(&Value::F64(f64::INFINITY), 0, &mut budget).unwrap()["value"],
             "Infinity"
         );
+    }
+
+    #[test]
+    fn wrong_key_write_reply_is_unknown_and_initial_read_is_not_readback() {
+        use opclook_contract::model::{
+            ItemInfo, Origin, Owner, SubscriptionState, WriteDisposition, WriteOutcome,
+        };
+        use opclook_engine::{ReadDemandKind, SessionRuntime, SessionState};
+        let mut engine = Engine::<()>::default();
+        engine.limit_dispatch_for_test(usize::MAX);
+        let mut view =
+            SessionRuntime::new(EndpointSpec::ua("opc.tcp://localhost:4840"), Instant::now());
+        view.state = SessionState::Connected;
+        view.subscription = SubscriptionState::Active;
+        engine.seed_session_for_test(SessionId::FIRST, view);
+        let add = engine
+            .send(
+                SessionId::FIRST,
+                Protocol::OpcUa,
+                CommandKind::AddItems {
+                    items: vec![ItemSpec {
+                        key: ItemKey::FIRST,
+                        item_id: "a".into(),
+                    }],
+                },
+                (),
+            )
+            .unwrap();
+        engine
+            .accept(&Event {
+                owner: Owner::Session(SessionId::FIRST),
+                origin: Origin::Reply(add),
+                kind: EventKind::AddItems {
+                    results: vec![(
+                        ItemKey::FIRST,
+                        Ok(ItemInfo {
+                            data_type: None,
+                            type_id: None,
+                            writable: true,
+                        }),
+                    )],
+                },
+            })
+            .unwrap();
+        let id = engine
+            .send_write_with_readback(
+                SessionId::FIRST,
+                Protocol::OpcUa,
+                WriteRequest {
+                    key: ItemKey::FIRST,
+                    value: Value::I64(1),
+                    type_hint: None,
+                },
+                (),
+            )
+            .unwrap();
+        engine.inject_event_for_test(Event {
+            owner: Owner::Session(SessionId::FIRST),
+            origin: Origin::Reply(id),
+            kind: EventKind::Wrote {
+                key: ItemKey::new(2).unwrap(),
+                result: Ok(WriteOutcome::from_ua(0, "good")),
+            },
+        });
+        let (_tx, rx) = mpsc::channel();
+        let outcome = write_response(&mut engine, id, Duration::from_secs(5), &rx).unwrap();
+        assert_eq!(outcome.disposition, WriteDisposition::Unknown);
+        assert!(
+            send_explicit_due(&mut engine, Duration::ZERO, ReadDemandKind::WriteReadback).is_err()
+        );
+        let sent = engine.dispatched_for_test();
+        assert_eq!(
+            sent.iter()
+                .filter(|cmd| matches!(cmd.kind, CommandKind::Write { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            sent.iter()
+                .filter(|cmd| matches!(cmd.kind, CommandKind::Read { .. }))
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn readback_failure_and_quality_preserve_accepted_write_record() {
+        use opclook_contract::model::{DataValue, Quality, WriteOutcome};
+        let endpoint = EndpointSpec::ua("opc.tcp://localhost:4840");
+        for kind in [
+            "missing",
+            "transport",
+            "bad",
+            "uncertain",
+            "oversize",
+            "escaped",
+            "different",
+        ] {
+            let mut record = write_outcome_json("a", &WriteOutcome::from_ua(0, "good"), &endpoint);
+            let result = match kind {
+                "missing" => Err("read-back returned no value".into()),
+                "transport" => Err("read-back timeout".into()),
+                _ => Ok(DataValue {
+                    value: if kind == "oversize" {
+                        Value::Str("x".repeat(MAX_JSON_BUDGET + 1))
+                    } else if kind == "escaped" {
+                        Value::Str("\u{0001}".repeat(200_000))
+                    } else {
+                        Value::I64(9)
+                    },
+                    quality: Quality::from_ua(
+                        match kind {
+                            "bad" => 0x8000_0000,
+                            "uncertain" => 0x4000_0000,
+                            _ => 0,
+                        },
+                        "status",
+                    ),
+                    timestamp: None,
+                    reason: None,
+                }),
+            };
+            let applied = apply_readback(&mut record, result, &endpoint);
+            assert_eq!(record["accepted"], true);
+            assert_eq!(record["outcome"], "accepted");
+            assert!(output_to(&record, io::sink()).is_ok());
+            assert_eq!(applied.is_ok(), kind == "different");
+            assert_eq!(
+                record["readback"]["status"],
+                match kind {
+                    "bad" | "uncertain" => "unusable",
+                    "different" => "observed",
+                    _ => "failed",
+                }
+            );
+        }
     }
 
     #[test]

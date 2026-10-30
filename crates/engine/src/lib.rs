@@ -163,6 +163,10 @@ pub fn reconnect_delay(attempt: u32, base: Duration, max: Duration) -> Duration 
     }
     delay
 }
+/// Current backend adapter capability, not a negotiated server guarantee.
+pub fn supports_fresh_source(protocol: Protocol) -> bool {
+    opclook_backend::supports_fresh_source(protocol)
+}
 pub fn request_timeout(operation: Operation, configured_secs: u64) -> Duration {
     let floor = match operation {
         Operation::Connect
@@ -178,7 +182,44 @@ pub struct PendingRequest<C> {
     pub operation: Operation,
     pub sent: Instant,
     pub ctx: C,
+    /// Product demands covered by this particular Read, not later requests.
+    pub read_demands: Vec<ReadDemand>,
+    write_readback_key: Option<ItemKey>,
 }
+impl<C> PendingRequest<C> {
+    pub fn new(operation: Operation, sent: Instant, ctx: C) -> Self {
+        Self {
+            operation,
+            sent,
+            ctx,
+            read_demands: Vec::new(),
+            write_readback_key: None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum ReadDemandKind {
+    ExplicitRefresh,
+    WriteReadback,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct ReadDemand {
+    pub key: ItemKey,
+    pub kind: ReadDemandKind,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DemandError {
+    SessionUnavailable,
+    ItemNotRegistered,
+    UnsupportedFreshness,
+}
+
+#[derive(Debug)]
+pub enum DemandWriteError {
+    Demand(DemandError),
+    Dispatch(DispatchError),
+}
+
 #[derive(Clone, Debug)]
 pub struct SessionRuntime {
     pub endpoint: EndpointSpec,
@@ -190,6 +231,8 @@ pub struct SessionRuntime {
     pub last_test: Instant,
     pub items: HashMap<ItemKey, bool>,
     pending_initial: HashMap<ItemKey, Instant>,
+    pending_demands: HashSet<ReadDemand>,
+    reserved_demands: HashSet<ReadDemand>,
     poll_defer_since: HashMap<ItemKey, Instant>,
     used_keys: HashSet<ItemKey>,
     reserved_read: Option<(ReadPermit, Vec<ItemKey>)>,
@@ -208,6 +251,8 @@ impl SessionRuntime {
             last_test: now,
             items: HashMap::new(),
             pending_initial: HashMap::new(),
+            pending_demands: HashSet::new(),
+            reserved_demands: HashSet::new(),
             poll_defer_since: HashMap::new(),
             used_keys: HashSet::new(),
             reserved_read: None,
@@ -383,6 +428,8 @@ impl<C> Engine<C> {
             view.subscription = SubscriptionState::Inactive;
             view.items.clear();
             view.pending_initial.clear();
+            view.pending_demands.clear();
+            view.reserved_demands.clear();
             view.poll_defer_since.clear();
             view.reserved_read = None;
             view.used_keys.clear();
@@ -392,6 +439,8 @@ impl<C> Engine<C> {
             PendingRequest {
                 operation,
                 sent: Instant::now(),
+                read_demands: Vec::new(),
+                write_readback_key: None,
                 ctx,
             },
         );
@@ -685,6 +734,79 @@ impl<C> Engine<C> {
         self.send_inner(owner.into(), protocol, kind, ctx, None)
     }
 
+    /// Queue a one-shot demand on the current registration; equal pending demands coalesce.
+    pub fn request_refresh(&mut self, session: SessionId, key: ItemKey) -> Result<(), DemandError> {
+        self.enqueue_demand(session, key, ReadDemandKind::ExplicitRefresh)
+    }
+    /// Opt in before dispatch. Only the matching accepted Wrote reply may create
+    /// read-back demand; stale replies cannot cross a connection epoch.
+    pub fn send_write_with_readback(
+        &mut self,
+        session: SessionId,
+        protocol: Protocol,
+        request: opclook_contract::model::WriteRequest,
+        ctx: C,
+    ) -> Result<RequestId, DemandWriteError> {
+        let view = self
+            .sessions
+            .get(&session)
+            .ok_or(DemandWriteError::Demand(DemandError::SessionUnavailable))?;
+        if view.state != SessionState::Connected || view.connection_id.is_none() {
+            return Err(DemandWriteError::Demand(DemandError::SessionUnavailable));
+        }
+        if !supports_fresh_source(view.endpoint.protocol) || view.endpoint.protocol != protocol {
+            return Err(DemandWriteError::Demand(DemandError::UnsupportedFreshness));
+        }
+        if !view.items.contains_key(&request.key) {
+            return Err(DemandWriteError::Demand(DemandError::ItemNotRegistered));
+        }
+        let key = request.key;
+        let id = self
+            .send(session, protocol, CommandKind::Write { request }, ctx)
+            .map_err(DemandWriteError::Dispatch)?;
+        if let Some(pending) = self.requests.get_mut(&(Owner::Session(session), id)) {
+            pending.write_readback_key = Some(key);
+        }
+        Ok(id)
+    }
+    fn enqueue_demand(
+        &mut self,
+        session: SessionId,
+        key: ItemKey,
+        kind: ReadDemandKind,
+    ) -> Result<(), DemandError> {
+        let view = self
+            .sessions
+            .get_mut(&session)
+            .ok_or(DemandError::SessionUnavailable)?;
+        if view.state != SessionState::Connected || view.connection_id.is_none() {
+            return Err(DemandError::SessionUnavailable);
+        }
+        if !supports_fresh_source(view.endpoint.protocol) {
+            return Err(DemandError::UnsupportedFreshness);
+        }
+        if !view.items.contains_key(&key) {
+            return Err(DemandError::ItemNotRegistered);
+        }
+        view.pending_demands.insert(ReadDemand { key, kind });
+        Ok(())
+    }
+
+    /// Whether this live reservation covers the requested product demand.
+    pub fn reservation_covers(
+        &self,
+        session: SessionId,
+        permit: ReadPermit,
+        demand: ReadDemand,
+    ) -> bool {
+        self.sessions.get(&session).is_some_and(|view| {
+            view.reserved_read
+                .as_ref()
+                .is_some_and(|(reserved, _)| *reserved == permit)
+                && view.reserved_demands.contains(&demand)
+        })
+    }
+
     pub fn send_due_read(
         &mut self,
         session: SessionId,
@@ -783,6 +905,7 @@ impl<C> Engine<C> {
                 return Err(DispatchError::ReadBusy);
             }
         }
+        let mut covered_demands = Vec::new();
         let Some(id) = self.next else {
             if matches!(&kind, CommandKind::Read { .. }) {
                 let pending_read = self.requests.iter().any(|(&(sid, _), pending)| {
@@ -790,6 +913,7 @@ impl<C> Engine<C> {
                 });
                 if let Some(view) = session.and_then(|session| self.sessions.get_mut(&session)) {
                     if permit.is_some() {
+                        view.reserved_demands.clear();
                         view.reserved_read = None;
                     }
                     view.read_in_flight = pending_read || view.reserved_read.is_some();
@@ -835,10 +959,16 @@ impl<C> Engine<C> {
                                 .or_insert_with(Instant::now);
                         }
                     }
+                    view.pending_demands.extend(
+                        view.reserved_demands
+                            .drain()
+                            .filter(|d| view.items.contains_key(&d.key)),
+                    );
                     view.read_in_flight = false;
                     view.reserved_read = None;
                     return Err(DispatchError::ReadBusy);
                 }
+                covered_demands.extend(view.reserved_demands.drain());
                 view.reserved_read = None;
             } else if view.read_in_flight {
                 return Err(DispatchError::ReadBusy);
@@ -867,6 +997,8 @@ impl<C> Engine<C> {
                 PendingRequest {
                     operation,
                     sent: Instant::now(),
+                    read_demands: covered_demands,
+                    write_readback_key: None,
                     ctx,
                 },
             );
@@ -898,6 +1030,8 @@ impl<C> Engine<C> {
             if let Some(view) = session.and_then(|id| self.sessions.get_mut(&id)) {
                 view.connection_id = None;
                 view.pending_initial.clear();
+                view.pending_demands.clear();
+                view.reserved_demands.clear();
                 view.poll_defer_since.clear();
                 view.reserved_read = None;
                 view.read_in_flight = false;
@@ -915,6 +1049,8 @@ impl<C> Engine<C> {
             view.subscription = SubscriptionState::Inactive;
             view.items.clear();
             view.pending_initial.clear();
+            view.pending_demands.clear();
+            view.reserved_demands.clear();
             view.poll_defer_since.clear();
             view.reserved_read = None;
             view.used_keys.clear();
@@ -942,6 +1078,8 @@ impl<C> Engine<C> {
             for key in removed {
                 view.items.remove(&key);
                 view.pending_initial.remove(&key);
+                view.pending_demands.retain(|d| d.key != key);
+                view.reserved_demands.retain(|d| d.key != key);
                 view.poll_defer_since.remove(&key);
             }
             if operation == Operation::Read {
@@ -1003,6 +1141,25 @@ impl<C> Engine<C> {
                 .is_some_and(|view| view.state != SessionState::Connecting);
         if failed_connect || disconnected {
             self.session_routes.remove(&session);
+        }
+        if let (
+            Some(pending),
+            EventKind::Wrote {
+                key,
+                result: Ok(outcome),
+            },
+        ) = (&pending, &event.kind)
+            && pending.operation == Operation::Write
+            && pending.write_readback_key == Some(*key)
+            && outcome.accepted()
+            && let Some(view) = self.sessions.get_mut(&session)
+            && view.state == SessionState::Connected
+            && view.items.contains_key(key)
+        {
+            view.pending_demands.insert(ReadDemand {
+                key: *key,
+                kind: ReadDemandKind::WriteReadback,
+            });
         }
         let additions = match event.origin {
             Origin::Unsolicited | Origin::Session(_) => None,
@@ -1084,6 +1241,8 @@ impl<C> Engine<C> {
                     view.read_in_flight = false;
                     view.subscription = SubscriptionState::Inactive;
                     view.pending_initial.clear();
+                    view.pending_demands.clear();
+                    view.reserved_demands.clear();
                     view.poll_defer_since.clear();
                     view.reserved_read = None;
                 }
@@ -1096,6 +1255,8 @@ impl<C> Engine<C> {
                     view.read_in_flight = false;
                     view.subscription = SubscriptionState::Inactive;
                     view.pending_initial.clear();
+                    view.pending_demands.clear();
+                    view.reserved_demands.clear();
                     view.poll_defer_since.clear();
                     view.reserved_read = None;
                     if was_connecting && matches!(view.reconnect, ReconnectState::Waiting { .. }) {
@@ -1113,6 +1274,8 @@ impl<C> Engine<C> {
                     view.read_in_flight = false;
                     view.subscription = SubscriptionState::Inactive;
                     view.pending_initial.clear();
+                    view.pending_demands.clear();
+                    view.reserved_demands.clear();
                     view.poll_defer_since.clear();
                     view.reserved_read = None;
                 }
@@ -1123,7 +1286,10 @@ impl<C> Engine<C> {
                 EventKind::Values { .. } if correlated_read => view.read_in_flight = read_pending,
                 EventKind::SubscriptionState { state } => {
                     view.subscription = *state;
-                    if *state == SubscriptionState::Active && !read_pending {
+                    if *state == SubscriptionState::Active
+                        && !read_pending
+                        && view.reserved_read.is_none()
+                    {
                         view.read_in_flight = false;
                     }
                 }
@@ -1173,6 +1339,7 @@ impl<C> Engine<C> {
                                     .then_some(key)
                             })
                             .collect();
+                        keys.extend(view.pending_demands.iter().map(|d| d.key));
                         if now.saturating_duration_since(view.last_poll) >= interval {
                             keys.extend(view.items.iter().filter_map(|(&key, &poll_only)| {
                                 let startup_wait = !view.force_poll
@@ -1192,11 +1359,13 @@ impl<C> Engine<C> {
                                 for key in &keys {
                                     view.pending_initial.remove(key);
                                 }
+                                view.pending_demands.clear();
                                 view.last_poll = now;
                                 work.push(Due::ReadUnavailable { session: id });
                                 continue;
                             };
                             self.next_permit = raw_permit.checked_add(1);
+                            view.reserved_demands = std::mem::take(&mut view.pending_demands);
                             let permit = ReadPermit(raw_permit);
                             for key in &keys {
                                 view.pending_initial.remove(key);
@@ -1397,6 +1566,8 @@ impl<C> Engine<C> {
             view.read_in_flight = false;
             view.subscription = SubscriptionState::Inactive;
             view.pending_initial.clear();
+            view.pending_demands.clear();
+            view.reserved_demands.clear();
             view.poll_defer_since.clear();
             view.reserved_read = None;
         }
@@ -1510,6 +1681,8 @@ impl<C> Engine<C> {
         if let Some(old) = self.sessions.get(&id) {
             session.connection_id = old.connection_id;
             session.pending_initial = old.pending_initial.clone();
+            session.pending_demands = old.pending_demands.clone();
+            session.reserved_demands = old.reserved_demands.clone();
             session.poll_defer_since = old.poll_defer_since.clone();
             session.reserved_read = old.reserved_read.clone();
             session.used_keys = old.used_keys.clone();
@@ -1517,6 +1690,10 @@ impl<C> Engine<C> {
             session.connection_id = Some(RequestId::FIRST);
         }
         self.sessions.insert(id, session);
+    }
+    #[cfg(feature = "test-support")]
+    pub fn inject_event_for_test(&mut self, event: Event) {
+        self.route_events.push_back(event);
     }
     #[cfg(feature = "test-support")]
     pub fn connection_id_for_test(&self, id: SessionId) -> Option<RequestId> {
@@ -1760,6 +1937,8 @@ mod tests {
             PendingRequest {
                 operation: Operation::Discover,
                 sent: Instant::now(),
+                read_demands: Vec::new(),
+                write_readback_key: None,
                 ctx: (),
             },
         );
@@ -1768,6 +1947,8 @@ mod tests {
             PendingRequest {
                 operation: Operation::Read,
                 sent: Instant::now(),
+                read_demands: Vec::new(),
+                write_readback_key: None,
                 ctx: (),
             },
         );
@@ -1799,6 +1980,8 @@ mod tests {
             PendingRequest {
                 operation: Operation::Discover,
                 sent: Instant::now() - Duration::from_secs(100),
+                read_demands: Vec::new(),
+                write_readback_key: None,
                 ctx: (),
             },
         );
@@ -2024,6 +2207,8 @@ mod tests {
             PendingRequest {
                 operation: Operation::Connect,
                 sent: Instant::now(),
+                read_demands: Vec::new(),
+                write_readback_key: None,
                 ctx: (),
             },
         );
@@ -2067,6 +2252,8 @@ mod tests {
             PendingRequest {
                 operation: Operation::Write,
                 sent: Instant::now(),
+                read_demands: Vec::new(),
+                write_readback_key: None,
                 ctx: (),
             },
         );
@@ -2121,6 +2308,8 @@ mod tests {
             PendingRequest {
                 operation: Operation::Read,
                 sent: Instant::now() - Duration::from_secs(100),
+                read_demands: Vec::new(),
+                write_readback_key: None,
                 ctx: (),
             },
         );
@@ -2165,6 +2354,8 @@ mod tests {
             PendingRequest {
                 operation: Operation::AddItems,
                 sent: Instant::now() - Duration::from_secs(100),
+                read_demands: Vec::new(),
+                write_readback_key: None,
                 ctx: (),
             },
         );
@@ -2179,6 +2370,468 @@ mod tests {
         );
         engine
     }
+    #[test]
+    fn old_read_reply_error_or_synthetic_timeout_does_not_cover_new_write() {
+        use opclook_contract::model::{BackendMsg, DataValue, Value, WriteOutcome, WriteRequest};
+        for old_terminal in 0..3 {
+            let now = Instant::now();
+            let mut engine = Engine::<()>::default();
+            engine.test_skip_dispatch = true;
+            let mut view = SessionRuntime::new(EndpointSpec::ua("opc.tcp://localhost:4840"), now);
+            view.state = SessionState::Connected;
+            view.connection_id = Some(rid(77));
+            view.subscription = SubscriptionState::Active;
+            view.last_poll = now;
+            view.items.insert(key(1), false);
+            engine.sessions.insert(sid(1), view);
+            let old = engine
+                .send(
+                    sid(1),
+                    Protocol::OpcUa,
+                    CommandKind::Read { keys: vec![key(1)] },
+                    (),
+                )
+                .unwrap();
+            let request = WriteRequest {
+                key: key(1),
+                value: Value::I64(7),
+                type_hint: None,
+            };
+            for _ in 0..2 {
+                let write = engine
+                    .send_write_with_readback(sid(1), Protocol::OpcUa, request.clone(), ())
+                    .unwrap();
+                engine
+                    .accept_at(
+                        &Event {
+                            owner: owner(1),
+                            origin: Origin::Reply(write),
+                            kind: EventKind::Wrote {
+                                key: key(1),
+                                result: Ok(WriteOutcome::from_ua(0, "Good")),
+                            },
+                        },
+                        now,
+                    )
+                    .unwrap();
+            }
+            engine
+                .accept_at(
+                    &Event {
+                        owner: owner(1),
+                        origin: Origin::Session(rid(77)),
+                        kind: EventKind::Values {
+                            values: vec![(key(1), DataValue::bad(BackendMsg::raw("push")))],
+                        },
+                    },
+                    now,
+                )
+                .unwrap();
+            assert!(engine.due(now, Duration::from_secs(60), None).is_empty());
+            if old_terminal == 2 {
+                engine.expire_requests(now + Duration::from_secs(120), 5);
+                let timeout = engine.route_events.pop_front().unwrap();
+                assert_eq!(timeout.origin, Origin::Reply(old));
+                engine.accept_at(&timeout, now).unwrap();
+            } else {
+                let kind = if old_terminal == 0 {
+                    EventKind::Values { values: vec![] }
+                } else {
+                    EventKind::Error {
+                        operation: Operation::Read,
+                        message: BackendMsg::raw("failed"),
+                    }
+                };
+                engine
+                    .accept_at(
+                        &Event {
+                            owner: owner(1),
+                            origin: Origin::Reply(old),
+                            kind,
+                        },
+                        now,
+                    )
+                    .unwrap();
+            }
+            assert!(
+                engine
+                    .accept_at(
+                        &Event {
+                            owner: owner(1),
+                            origin: Origin::Reply(old),
+                            kind: EventKind::Values { values: vec![] }
+                        },
+                        now
+                    )
+                    .is_err()
+            );
+            let due = engine.due(now, Duration::from_secs(60), None);
+            let [Due::Read { keys, permit, .. }] = due.as_slice() else {
+                panic!("read-back due")
+            };
+            assert_eq!(keys, &vec![key(1)]);
+            let read = engine
+                .send_due_read(sid(1), Protocol::OpcUa, keys.clone(), *permit, ())
+                .unwrap();
+            let write = engine
+                .send_write_with_readback(sid(1), Protocol::OpcUa, request.clone(), ())
+                .unwrap();
+            engine
+                .accept_at(
+                    &Event {
+                        owner: owner(1),
+                        origin: Origin::Reply(write),
+                        kind: EventKind::Wrote {
+                            key: key(1),
+                            result: Ok(WriteOutcome::from_ua(0x002e0000, "async")),
+                        },
+                    },
+                    now,
+                )
+                .unwrap();
+            let covered = engine
+                .accept_at(
+                    &Event {
+                        owner: owner(1),
+                        origin: Origin::Reply(read),
+                        kind: EventKind::Values { values: vec![] },
+                    },
+                    now,
+                )
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                covered.read_demands,
+                vec![ReadDemand {
+                    key: key(1),
+                    kind: ReadDemandKind::WriteReadback
+                }]
+            );
+            assert!(
+                matches!(engine.due(now, Duration::from_secs(60), None).as_slice(), [Due::Read { keys, .. }] if keys == &vec![key(1)])
+            );
+        }
+    }
+
+    #[test]
+    fn write_opt_in_only_accepts_matching_good_replies() {
+        use opclook_contract::model::{BackendMsg, Value, WriteOutcome, WriteRequest};
+        for mode in 0..5 {
+            let now = Instant::now();
+            let mut engine = Engine::<()>::default();
+            engine.test_skip_dispatch = true;
+            let mut view = SessionRuntime::new(EndpointSpec::ua("opc.tcp://localhost:4840"), now);
+            view.state = SessionState::Connected;
+            view.connection_id = Some(rid(77));
+            view.subscription = SubscriptionState::Active;
+            view.last_poll = now;
+            view.items.insert(key(1), false);
+            engine.sessions.insert(sid(1), view);
+            let request = WriteRequest {
+                key: key(1),
+                value: Value::I64(1),
+                type_hint: None,
+            };
+            let id = if mode == 0 {
+                engine
+                    .send(sid(1), Protocol::OpcUa, CommandKind::Write { request }, ())
+                    .unwrap()
+            } else {
+                engine
+                    .send_write_with_readback(sid(1), Protocol::OpcUa, request, ())
+                    .unwrap()
+            };
+            let result = match mode {
+                1 => Ok(WriteOutcome::unknown("timeout")),
+                2 => Ok(WriteOutcome::from_ua(0x80000000, "bad")),
+                3 => Err(BackendMsg::NodeNotSubscribed),
+                _ => Ok(WriteOutcome::from_ua(0, "good")),
+            };
+            engine
+                .accept_at(
+                    &Event {
+                        owner: owner(1),
+                        origin: Origin::Reply(id),
+                        kind: EventKind::Wrote {
+                            key: if mode == 4 { key(2) } else { key(1) },
+                            result,
+                        },
+                    },
+                    now,
+                )
+                .unwrap();
+            assert!(
+                engine.due(now, Duration::from_secs(60), None).is_empty(),
+                "mode {mode}"
+            );
+        }
+    }
+
+    #[test]
+    fn new_write_after_reservation_and_remove_are_distinct() {
+        use opclook_contract::model::{Value, WriteOutcome, WriteRequest};
+        let now = Instant::now();
+        let mut engine = Engine::<()>::default();
+        engine.test_skip_dispatch = true;
+        let mut view = SessionRuntime::new(EndpointSpec::ua("opc.tcp://localhost:4840"), now);
+        view.state = SessionState::Connected;
+        view.connection_id = Some(rid(77));
+        view.subscription = SubscriptionState::Active;
+        view.last_poll = now;
+        view.items.insert(key(1), false);
+        engine.sessions.insert(sid(1), view);
+        let request = WriteRequest {
+            key: key(1),
+            value: Value::I64(1),
+            type_hint: None,
+        };
+        let first = engine
+            .send_write_with_readback(sid(1), Protocol::OpcUa, request.clone(), ())
+            .unwrap();
+        engine
+            .accept_at(
+                &Event {
+                    owner: owner(1),
+                    origin: Origin::Reply(first),
+                    kind: EventKind::Wrote {
+                        key: key(1),
+                        result: Ok(WriteOutcome::from_ua(0, "good")),
+                    },
+                },
+                now,
+            )
+            .unwrap();
+        let due = engine.due(now, Duration::from_secs(60), None);
+        let [Due::Read { keys, permit, .. }] = due.as_slice() else {
+            panic!("due")
+        };
+        let second = engine
+            .send_write_with_readback(sid(1), Protocol::OpcUa, request, ())
+            .unwrap();
+        engine
+            .accept_at(
+                &Event {
+                    owner: owner(1),
+                    origin: Origin::Reply(second),
+                    kind: EventKind::Wrote {
+                        key: key(1),
+                        result: Ok(WriteOutcome::from_ua(0, "good")),
+                    },
+                },
+                now,
+            )
+            .unwrap();
+        assert!(engine.due(now, Duration::from_secs(60), None).is_empty());
+        let read = engine
+            .send_due_read(sid(1), Protocol::OpcUa, keys.clone(), *permit, ())
+            .unwrap();
+        engine
+            .accept_at(
+                &Event {
+                    owner: owner(1),
+                    origin: Origin::Reply(read),
+                    kind: EventKind::Values { values: vec![] },
+                },
+                now,
+            )
+            .unwrap();
+        let next = engine.due(now, Duration::from_secs(60), None);
+        let [Due::Read { keys, permit, .. }] = next.as_slice() else {
+            panic!("new write must remain pending")
+        };
+        assert_eq!(keys, &vec![key(1)]);
+        engine
+            .send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::RemoveItems { keys: vec![key(1)] },
+                (),
+            )
+            .unwrap();
+        assert!(matches!(
+            engine.send_due_read(sid(1), Protocol::OpcUa, keys.clone(), *permit, ()),
+            Err(DispatchError::ReadBusy)
+        ));
+        assert!(engine.due(now, Duration::from_secs(60), None).is_empty());
+    }
+
+    #[test]
+    fn old_write_and_read_replies_do_not_cross_reconnect() {
+        use opclook_contract::model::{BackendMsg, Value, WriteOutcome, WriteRequest};
+        let now = Instant::now();
+        let endpoint = EndpointSpec::ua("opc.tcp://localhost:4840");
+        let mut engine = Engine::<()>::default();
+        engine.test_skip_dispatch = true;
+        let mut view = SessionRuntime::new(endpoint.clone(), now);
+        view.state = SessionState::Connected;
+        view.connection_id = Some(rid(77));
+        view.subscription = SubscriptionState::Active;
+        view.last_poll = now;
+        view.items.insert(key(1), false);
+        engine.sessions.insert(sid(1), view);
+        let read = engine
+            .send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::Read { keys: vec![key(1)] },
+                (),
+            )
+            .unwrap();
+        let write = engine
+            .send_write_with_readback(
+                sid(1),
+                Protocol::OpcUa,
+                WriteRequest {
+                    key: key(1),
+                    value: Value::I64(1),
+                    type_hint: None,
+                },
+                (),
+            )
+            .unwrap();
+        let disconnect = engine
+            .send(sid(1), Protocol::OpcUa, CommandKind::Disconnect, ())
+            .unwrap();
+        engine
+            .accept_at(
+                &Event {
+                    owner: owner(1),
+                    origin: Origin::Reply(disconnect),
+                    kind: EventKind::Disconnected {
+                        reason: BackendMsg::ConnectionClosed,
+                    },
+                },
+                now,
+            )
+            .unwrap();
+        let connect = engine
+            .send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::Connect {
+                    endpoint: endpoint.clone(),
+                },
+                (),
+            )
+            .unwrap();
+        engine
+            .accept_at(
+                &Event {
+                    owner: owner(1),
+                    origin: Origin::Reply(connect),
+                    kind: EventKind::Connected {
+                        endpoint,
+                        info: BackendMsg::raw("connected"),
+                    },
+                },
+                now,
+            )
+            .unwrap();
+        assert!(
+            engine
+                .accept_at(
+                    &Event {
+                        owner: owner(1),
+                        origin: Origin::Reply(write),
+                        kind: EventKind::Wrote {
+                            key: key(1),
+                            result: Ok(WriteOutcome::from_ua(0, "good"))
+                        }
+                    },
+                    now
+                )
+                .is_err()
+        );
+        assert!(
+            engine
+                .accept_at(
+                    &Event {
+                        owner: owner(1),
+                        origin: Origin::Reply(read),
+                        kind: EventKind::Values { values: vec![] }
+                    },
+                    now
+                )
+                .is_err()
+        );
+        assert!(engine.sessions[&sid(1)].pending_demands.is_empty());
+    }
+
+    #[test]
+    fn e06_active_subscription_cannot_release_reservation() {
+        let now = Instant::now();
+        let mut engine = Engine::<()>::default();
+        engine.test_skip_dispatch = true;
+        let mut view = SessionRuntime::new(EndpointSpec::ua("opc.tcp://localhost:4840"), now);
+        view.state = SessionState::Connected;
+        view.connection_id = Some(rid(77));
+        view.items.insert(key(1), false);
+        engine.sessions.insert(sid(1), view);
+        engine.request_refresh(sid(1), key(1)).unwrap();
+        let first = engine.due(now, Duration::from_secs(60), None);
+        assert!(matches!(first.as_slice(), [Due::Read { .. }]));
+        engine
+            .accept_at(
+                &Event {
+                    owner: owner(1),
+                    origin: Origin::Session(rid(77)),
+                    kind: EventKind::SubscriptionState {
+                        state: SubscriptionState::Active,
+                    },
+                },
+                now,
+            )
+            .unwrap();
+        assert!(engine.due(now, Duration::from_secs(60), None).is_empty());
+    }
+
+    #[test]
+    fn unsupported_da_readback_fails_before_write_and_uncertain_never_queues() {
+        use opclook_contract::model::{Value, WriteOutcome, WriteRequest};
+        let now = Instant::now();
+        let mut engine = Engine::<()>::default();
+        engine.test_skip_dispatch = true;
+        let mut view = SessionRuntime::new(EndpointSpec::da("", "test"), now);
+        view.state = SessionState::Connected;
+        view.connection_id = Some(rid(77));
+        view.items.insert(key(1), false);
+        engine.sessions.insert(sid(1), view);
+        let request = WriteRequest {
+            key: key(1),
+            value: Value::I64(1),
+            type_hint: None,
+        };
+        assert!(matches!(
+            engine.request_refresh(sid(1), key(1)),
+            Err(DemandError::UnsupportedFreshness)
+        ));
+        assert!(matches!(
+            engine.send_write_with_readback(sid(1), Protocol::OpcDa, request.clone(), ()),
+            Err(DemandWriteError::Demand(DemandError::UnsupportedFreshness))
+        ));
+        assert!(engine.requests.is_empty());
+        engine.sessions.get_mut(&sid(1)).unwrap().endpoint =
+            EndpointSpec::ua("opc.tcp://localhost:4840");
+        engine.sessions.get_mut(&sid(1)).unwrap().subscription = SubscriptionState::Active;
+        let write = engine
+            .send_write_with_readback(sid(1), Protocol::OpcUa, request, ())
+            .unwrap();
+        engine
+            .accept_at(
+                &Event {
+                    owner: owner(1),
+                    origin: Origin::Reply(write),
+                    kind: EventKind::Wrote {
+                        key: key(1),
+                        result: Ok(WriteOutcome::from_ua(0x4000_0000, "uncertain")),
+                    },
+                },
+                now,
+            )
+            .unwrap();
+        assert!(engine.due(now, Duration::from_secs(60), None).is_empty());
+    }
+
     #[test]
     fn initial_snapshot_waits_for_inflight_read_and_coalesces() {
         use opclook_contract::model::{ItemInfo, ItemSpec};
@@ -2758,6 +3411,8 @@ mod tests {
             PendingRequest {
                 operation: Operation::AddItems,
                 sent: Instant::now(),
+                read_demands: Vec::new(),
+                write_readback_key: None,
                 ctx: (),
             },
         );
@@ -2862,6 +3517,8 @@ mod tests {
             PendingRequest {
                 operation: Operation::Connect,
                 sent: Instant::now(),
+                read_demands: Vec::new(),
+                write_readback_key: None,
                 ctx: (),
             },
         );
@@ -3036,6 +3693,8 @@ mod tests {
                 PendingRequest {
                     operation: Operation::Read,
                     sent: now,
+                    read_demands: Vec::new(),
+                    write_readback_key: None,
                     ctx: (),
                 },
             );
@@ -3092,6 +3751,8 @@ mod tests {
             PendingRequest {
                 operation: Operation::Read,
                 sent: Instant::now(),
+                read_demands: Vec::new(),
+                write_readback_key: None,
                 ctx: (),
             },
         );
@@ -3136,6 +3797,8 @@ mod tests {
             PendingRequest {
                 operation: Operation::Read,
                 sent: Instant::now(),
+                read_demands: Vec::new(),
+                write_readback_key: None,
                 ctx: (),
             },
         );
@@ -3204,6 +3867,8 @@ mod tests {
             PendingRequest {
                 operation: Operation::Read,
                 sent: Instant::now(),
+                read_demands: Vec::new(),
+                write_readback_key: None,
                 ctx: (),
             },
         );

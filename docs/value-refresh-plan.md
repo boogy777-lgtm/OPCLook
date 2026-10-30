@@ -257,3 +257,8 @@ R2.1–R2.2 могут сначала сохранить существующи�
 локальные ссылки и Markdown-ограждения. Cargo/rustfmt в среде недоступны:
 `cargo fmt --all -- --check`, сборки и runtime-тесты не запускались.
 Живой сервер не использовался. Пункты реализации и приёмки остаются открытыми.
+
+
+## Частичный runtime срез 2026-10-30
+
+Engine поддерживает явные UA ExplicitRefresh и opt-in WriteReadback через reservation и RequestId; CLI ожидает соответствующий Read. GUI профиль, per-item terminal API для объединённых потребителей, полная fairness и native DA SDK не завершены. Legacy DA Cache не объявляется FreshSource. Фактическая матрица проверок и открытые строки — в acquisition-truth-tables и status.

@@ -170,11 +170,21 @@ target\i686-pc-windows-msvc\release\opclook.exe
 
 ## Headless CLI
 
+Необязательный флаг `--read-after-write` включает наблюдение после принятой
+записи UA: JSON содержит отдельно исход записи и `readback` с данными и quality;
+ошибка или Bad/Uncertain результат чтения дают ненулевой exit, не повторяя Write.
+Отсутствие флага сохраняет прежнюю политику без read-back. Это временный
+boolean-флаг, а не запланированный синтаксис `--read-after-write true|false`;
+общий per-connection AcquisitionConfig ещё не реализован. DA opt-in отклоняется
+до записи: текущий адаптер читает Cache и не предоставляет FreshSource. Значение
+read-back не подтверждает физическое действие.
+
 ```sh
 cargo run -p opclook-cli --target x86_64-unknown-linux-gnu -- --help
 cargo run -p opclook-cli --target x86_64-unknown-linux-gnu -- --ua opc.tcp://127.0.0.1:4840 --policy None --mode None browse i=85
 cargo run -p opclook-cli --target x86_64-unknown-linux-gnu -- --ua opc.tcp://127.0.0.1:4840 read 'ns=2;s=Level'
 cargo run -p opclook-cli --target x86_64-unknown-linux-gnu -- --ua opc.tcp://127.0.0.1:4840 write 'ns=2;s=Level' f64 42.5
+cargo run -p opclook-cli --target x86_64-unknown-linux-gnu -- --ua opc.tcp://127.0.0.1:4840 --read-after-write write 'ns=2;s=Level' f64 42.5
 cargo run -p opclook-cli --target x86_64-unknown-linux-gnu -- --ua opc.tcp://127.0.0.1:4840 --poll --count 3 watch 'ns=2;s=Level'
 ```
 
