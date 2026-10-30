@@ -120,6 +120,8 @@ impl SessionKind {
 pub struct SessionView {
     pub id: SessionId,
     endpoint: EndpointSpec,
+    /// None means no staged change; Some(None) stages the legacy profile.
+    pub pending_acquisition: Option<Option<crate::bff::model::AcquisitionConfig>>,
     kind: SessionKind,
     /// Human-readable server name shown in the servers list and tab strip
     /// (OPC UA host:port or the advertised application name when known; for
@@ -152,6 +154,7 @@ impl SessionView {
             id,
             kind: SessionKind::for_protocol(endpoint.protocol),
             endpoint,
+            pending_acquisition: None,
             display_name,
             state: SessionState::Connecting,
             visible: true,

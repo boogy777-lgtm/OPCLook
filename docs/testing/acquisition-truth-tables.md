@@ -34,11 +34,26 @@ ItemKey). Read хранит набор покрытых demand identities; HashS
 
 ## Измеренный частичный срез 2026-10-30
 
-Текущий PR добавляет настоящие Engine тесты `old_read_reply_error_or_synthetic_timeout_does_not_cover_new_write` (покрытие старого Read, coalescing и push), `new_write_after_reservation_and_remove_are_distinct` (повторный demand после reservation и Remove), `e06_active_subscription_cannot_release_reservation`, `old_write_and_read_replies_do_not_cross_reconnect`, `write_opt_in_only_accepts_matching_good_replies` и `unsupported_da_readback_fails_before_write_and_uncertain_never_queues`. CLI `readback_failure_and_quality_preserve_accepted_write_record` проверяет сериализацию/quality; `wrong_key_write_reply_is_unknown_and_initial_read_is_not_readback` проверяет CLI event path и покрытие permit; `browse_read_write_push_forced_poll_and_idle_interrupt` также выполняет UA sample-server opt-in read-back. Они покрывают отдельные переходы E06/E08–E10/E13/E15–E16 и S01/S02/S04/S07/S17/S18, а не целиком соответствующие строки. Timeout тест — синтетический Engine timeout с работающим транспортом, не native UA IO quarantine S03. Общее per-key terminal API для многоключевого E11, fairness, полные G/D таблицы, физический DA/live, GUI настройки и остальные случаи остаются открытыми.
+Текущий PR добавляет настоящие Engine тесты `old_read_reply_error_or_synthetic_timeout_does_not_cover_new_write` (покрытие старого Read, coalescing и push), `new_write_after_reservation_and_remove_are_distinct` (повторный demand после reservation и Remove), `e06_active_subscription_cannot_release_reservation`, `old_write_and_read_replies_do_not_cross_reconnect`, `write_opt_in_only_accepts_matching_good_replies` и `unsupported_da_readback_fails_before_write_and_uncertain_never_queues`. CLI `readback_failure_and_quality_preserve_accepted_write_record` проверяет сериализацию/quality; `wrong_key_write_reply_is_unknown_and_initial_read_is_not_readback` проверяет CLI event path и покрытие permit; `browse_read_write_push_forced_poll_and_idle_interrupt` также выполняет UA sample-server opt-in read-back. Они покрывают отдельные переходы E06/E08–E10/E13/E15–E16 и S01/S02/S04/S07/S17/S18, а не целиком соответствующие строки. Timeout тест — синтетический Engine timeout с работающим транспортом, не native UA IO quarantine S03. Общее per-key terminal API для многоключевого E11, fairness, полные G/D таблицы, физический DA/live и остальные случаи остаются открытыми.
 
 ### Частичный R2.3 профиль
 
-`legacy_none_roundtrip_and_unknown_or_partial_profiles_fail`, `invalid_acquisition_interval_is_reported_with_backup`, `validates_known_adapter_capabilities_and_interval_boundaries`, `c14_c22_connection_profiles_are_snapshotted_and_poll_independently`, `c23_c24_profile_write_and_invalid_connect_guard` и `explicit_failed_subscription_has_no_hidden_periodic_poll` проверяют части M/C/U через реальные contract/backend/Engine entry points. `explicit_cli_poll_alias_uses_same_profile_and_rejects_invalid_options`, `explicit_poll_reads_without_monitored_value_stream`, GUI `acquisition_*`, `explicit_profiles_do_not_reconfigure_when_global_options_change` и `same_endpoint_with_different_profiles_creates_distinct_sessions` проверяют части C/U/GUI; это не полное покрытие таблиц. Полноценная миграция M03/M04, reported revised interval, UA CacheAllowed, DA Subscription/Device/native SDK, GUI Apply/Reconnect и G/D/fairness остаются открыты.
+`legacy_none_roundtrip_and_unknown_or_partial_profiles_fail`, `invalid_acquisition_interval_is_reported_with_backup`, `validates_known_adapter_capabilities_and_interval_boundaries`, `c14_c22_connection_profiles_are_snapshotted_and_poll_independently`, `c23_c24_profile_write_and_invalid_connect_guard` и `explicit_failed_subscription_has_no_hidden_periodic_poll` проверяют части M/C/U через реальные contract/backend/Engine entry points. `explicit_cli_poll_alias_uses_same_profile_and_rejects_invalid_options`, `explicit_poll_reads_without_monitored_value_stream`, GUI `acquisition_*`, `explicit_profiles_do_not_reconfigure_when_global_options_change` и `same_endpoint_with_different_profiles_creates_distinct_sessions` проверяют части C/U/GUI; это не полное покрытие таблиц. Полноценная миграция M03/M04, reported revised interval, UA CacheAllowed, DA Subscription/Device/native SDK и G/D/fairness остаются открыты; редактор активного профиля покрыт частично ниже.
+
+### Редактор активного профиля — границы покрытия
+
+`profile_save_auto_and_manual_reconnect_keep_distinct_snapshots` проверяет C16
+через реальные App/Engine Connect и команды; `profile_rejects_invalid_save_collision_and_stale_epoch`,
+`profile_late_collision_and_capacity_preserve_staged_choice` и
+`profile_connect_dispatch_failure_keeps_saved_candidate` проверяют части C18,
+включая отказ до остановки и сохранение отложенного выбора. Тест
+`profile_reconnect_rejects_old_read_write_and_push_and_reregisters_rows`
+покрывает часть C17 и корреляцию S13/S14 в обе стороны с реальными App/Engine событиями,
+но не доказывает поведение физического сервера. GUI тесты
+`active_profile_cancel_keeps_active_saved_and_staged_profile` и
+`active_profile_enter_message_and_missing_target_are_safe` проверяют C15,
+клавиатуру, приоритет сообщения и видимое отсутствие цели. Остальные требования
+таблиц, включая native UA timeout quarantine S03, DA live и fairness, не закрыты.
 
 ## 2. G — полная таблица допуска Read
 
@@ -147,7 +162,7 @@ UA Bad_WaitingForInitialData не является конечным снимко
 | C13 | DA percent deadband = 0 / 100 | Валидный конфиг; только Subscription применяет фильтр |
 | C14 | Глобальный interval изменён при активных A/B | Активные snapshots A/B неизменны |
 | C15 | Черновик A изменён, затем Cancel | Сохранённый и активный конфиги неизменны |
-| C16 | Apply без reconnect | Сохранён профиль следующего соединения; текущий snapshot неизменен |
+| C16 | Apply без reconnect | Сохранён профиль следующего ручного соединения; текущий snapshot и авто-reconnect неизменны |
 | C17 | ApplyAndReconnect с валидным профилем | Старый канал закрыт, новая эпоха, новый snapshot |
 | C18 | ApplyAndReconnect с невалидным профилем | Ошибка до остановки исправного старого соединения |
 | C19 | Async DA completion пришёл | Reply только соответствующему Read; не Subscription event |
@@ -348,5 +363,5 @@ transaction не превращать в unsolicited value ради прохож
 результат после, ограничения среды. Не менять ожидаемые результаты под старый код.
 Если противоречие требует изменения контракта, править R2 и эти таблицы вместе.
 
-Проверка текущего коммита ограничена данными CSV и документацией.
+Проверка исходного документационного коммита была ограничена данными CSV и документацией.
 128+128 — число строк данных, не число пройденных тестов продукта.

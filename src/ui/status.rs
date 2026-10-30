@@ -4,6 +4,7 @@ use crate::app::{App, ReconnectState, SessionState};
 use crate::bff::model::SubscriptionState;
 use crate::constants::{RECONNECT_MAX_ATTEMPTS, STATUS_BAR_HEIGHT, TRUNCATE_STATUS_NAME};
 use crate::i18n::{Lang, Tr, fmt, tr};
+use crate::ui::ImeSafeClick;
 
 #[derive(Clone, Default)]
 struct FooterFocus {
@@ -352,6 +353,9 @@ pub(super) fn status_popup(app: &mut App, ui: &mut egui::Ui) {
         };
         (line, attempts, cap)
     };
+    let can_edit = session.state == SessionState::Connected;
+    let staged = session.pending_acquisition.is_some();
+    let mut edit = false;
     let mut close = false;
     egui::Window::new(tr(lang, Tr::Server))
         .collapsible(false)
@@ -422,10 +426,19 @@ pub(super) fn status_popup(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
             ui.separator();
+            if staged {
+                ui.label(tr(lang, Tr::AcquisitionPending));
+            }
+            if can_edit && ui.button(tr(lang, Tr::AcquisitionEdit)).ime_safe_clicked() {
+                edit = true;
+            }
             if ui.button(tr(lang, Tr::Close)).clicked() {
                 close = true;
             }
         });
+    if edit {
+        app.open_acquisition_editor(session_id);
+    }
     if close {
         app.status_popup = false;
     }

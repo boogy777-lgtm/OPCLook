@@ -890,6 +890,7 @@ impl App {
         // A11: writes whose reply can no longer arrive count as failed, or the
         // batch counters would never reach zero.
         if lost_writes > 0 {
+            self.journal.warn_l(Tr::WriteUnknownStatus, &[]);
             self.write_batch.lost(lost_writes);
             self.finish_write_batch_if_done();
         }

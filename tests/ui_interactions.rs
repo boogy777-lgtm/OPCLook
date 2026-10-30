@@ -8151,3 +8151,104 @@ fn keyboard_clearing_selection_discards_additive_gesture_snapshot() {
         [keys[2], keys[3], keys[4]].into_iter().collect()
     );
 }
+
+#[test]
+fn active_profile_cancel_keeps_active_saved_and_staged_profile() {
+    use opclook::bff::model::{AcquisitionConfig, UpdateMode};
+    with_settings_lock(|| {
+        let mut app = App::new_test(&egui::Context::default());
+        let mut endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+        endpoint.acquisition = Some(AcquisitionConfig::ua_default());
+        app.seed_session(sid(1), endpoint.clone());
+        app.record_dispatches_for_test();
+        app.status_popup = true;
+        let mut h = harness(app);
+        h.run_steps(3);
+        h.get_by_label("Настроить профиль соединения").click();
+        h.run_steps(4);
+        assert!(!h.state().status_popup);
+        h.get_by_label("Опрос").click();
+        h.run_steps(2);
+        h.get_by_label("Сохранить для следующего ручного подключения")
+            .click();
+        h.run_steps(3);
+        assert_eq!(
+            h.state().sessions[0]
+                .pending_acquisition
+                .as_ref()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .update_mode,
+            UpdateMode::Poll
+        );
+        let settings = serde_json::to_value(&h.state().settings).unwrap();
+        let count = h.state().dispatched_for_test().len();
+        h.state_mut().status_popup = true;
+        h.run_steps(3);
+        h.get_by_label("Настроить профиль соединения").click();
+        h.run_steps(4);
+        h.get_by_label("Подписка").click();
+        h.run_steps(2);
+        h.key_press(Key::Escape);
+        h.run_steps(3);
+        assert!(!h.state().dialogs.acquisition.open);
+        assert_eq!(
+            h.state().sessions[0].endpoint().acquisition,
+            endpoint.acquisition
+        );
+        assert_eq!(
+            h.state().sessions[0]
+                .pending_acquisition
+                .as_ref()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .update_mode,
+            UpdateMode::Poll
+        );
+        assert_eq!(serde_json::to_value(&h.state().settings).unwrap(), settings);
+        assert_eq!(h.state().dispatched_for_test().len(), count);
+    });
+}
+
+#[test]
+fn active_profile_enter_message_and_missing_target_are_safe() {
+    use opclook::app::MessageDialog;
+    use opclook::bff::model::AcquisitionConfig;
+    let mut app = App::new_test(&egui::Context::default());
+    let mut endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+    endpoint.acquisition = Some(AcquisitionConfig::ua_default());
+    app.seed_session(sid(1), endpoint);
+    app.record_dispatches_for_test();
+    app.open_acquisition_editor(sid(1));
+    let mut h = harness(app);
+    h.run_steps(5);
+    let before = h.state().dispatched_for_test().len();
+    h.get_by_value("1000").click();
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().dialogs.acquisition.open);
+    assert_eq!(h.state().dispatched_for_test().len(), before);
+    h.state_mut().dialogs.message = Some(MessageDialog {
+        title: "notice".into(),
+        text: "server notice".into(),
+        details: String::new(),
+    });
+    h.run_steps(4);
+    assert!(h.query_by_label("server notice").is_some());
+    h.key_press(Key::Escape);
+    h.run_steps(4);
+    assert!(h.state().dialogs.message.is_none());
+    assert!(h.state().dialogs.acquisition.open);
+    h.state_mut().remove_session(sid(1));
+    h.run_steps(4);
+    assert!(h.state().dialogs.acquisition.open);
+    assert!(
+        h.query_by_label("Соединение изменилось или закрыто; откройте настройки снова")
+            .is_some()
+    );
+    h.get_by_label("Отмена").click();
+    h.run_steps(3);
+    assert!(!h.state().dialogs.acquisition.open);
+}

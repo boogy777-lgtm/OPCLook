@@ -378,3 +378,32 @@ fn acquisition_dialog_scenes() {
         }
     }
 }
+
+#[test]
+#[ignore = "manual visual QA requiring a headless wgpu renderer"]
+fn active_acquisition_profile_scenes() {
+    use opclook::bff::model::AcquisitionConfig;
+    let output = std::env::var("OPCLOOK_ACTIVE_PROFILE_SCREENSHOTS").unwrap();
+    for height in [900.0, 720.0] {
+        let mut app = base(Lang::Ru);
+        let mut endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+        endpoint.acquisition = Some(AcquisitionConfig::ua_default());
+        app.seed_session(SessionId::FIRST, endpoint);
+        app.open_acquisition_editor(SessionId::FIRST);
+        let mut h = Harness::builder()
+            .with_size([1200.0, height])
+            .with_accessibility_check(false)
+            .with_context_setup(|ctx| {
+                assert!(opclook::app::install_fonts(ctx).is_some());
+            })
+            .build_ui_state(|ui, app: &mut App| app.update(ui), app);
+        h.run_steps(8);
+        h.render()
+            .unwrap()
+            .save(format!("{output}/profile-{height}.png"))
+            .unwrap();
+        h.get_by_label("Отмена").click();
+        h.run_steps(3);
+        assert!(!h.state().dialogs.acquisition.open);
+    }
+}

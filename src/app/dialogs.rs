@@ -303,7 +303,17 @@ pub struct PaletteDialog {
     pub focus_pending: bool,
 }
 
+#[derive(Default)]
+pub struct AcquisitionDialog {
+    pub open: bool,
+    pub session: Option<SessionId>,
+    pub epoch: Option<RequestId>,
+    pub draft: Option<crate::bff::model::AcquisitionConfig>,
+    pub error: Option<String>,
+}
+
 pub struct Dialogs {
+    pub acquisition: AcquisitionDialog,
     pub palette: PaletteDialog,
     pub connect: ConnectDialog,
     pub add_signal: AddSignalDialog,
@@ -318,6 +328,7 @@ pub struct Dialogs {
 impl Default for Dialogs {
     fn default() -> Self {
         Self {
+            acquisition: AcquisitionDialog::default(),
             palette: PaletteDialog::default(),
             connect: ConnectDialog::default(),
             add_signal: AddSignalDialog::default(),
@@ -350,7 +361,8 @@ impl Dialogs {
     }
 
     pub fn any_open_except_palette(&self) -> bool {
-        self.connect.open
+        self.acquisition.open
+            || self.connect.open
             || self.add_signal.open
             || self.write.open
             || self.columns.open

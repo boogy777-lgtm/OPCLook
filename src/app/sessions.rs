@@ -539,6 +539,93 @@ impl App {
         }
     }
 
+    pub fn open_acquisition_editor(&mut self, session: SessionId) {
+        let Some(view) = self.session(session) else {
+            return;
+        };
+        if view.state != SessionState::Connected
+            || !self
+                .engine
+                .session(session)
+                .is_some_and(|runtime| runtime.state == SessionState::Connected)
+        {
+            return;
+        }
+        let Some(epoch) = self.engine.connection_id(session) else {
+            return;
+        };
+        let draft = view
+            .pending_acquisition
+            .clone()
+            .unwrap_or_else(|| view.endpoint().acquisition.clone());
+        self.dialogs.acquisition = super::dialogs::AcquisitionDialog {
+            open: true,
+            session: Some(session),
+            epoch: Some(epoch),
+            draft,
+            error: None,
+        };
+        self.status_popup = false;
+    }
+
+    pub fn apply_acquisition_editor(&mut self, reconnect: bool) -> bool {
+        let dialog = &self.dialogs.acquisition;
+        let Some(session) = dialog.session else {
+            return false;
+        };
+        let valid_epoch = dialog.epoch.is_some()
+            && dialog.epoch == self.engine.connection_id(session)
+            && self
+                .engine
+                .session(session)
+                .is_some_and(|runtime| runtime.state == SessionState::Connected);
+        let Some(view) = self.session(session) else {
+            self.dialogs.acquisition.error =
+                Some(tr(self.lang(), Tr::AcquisitionEpochChanged).to_string());
+            return false;
+        };
+        if !valid_epoch || view.state != SessionState::Connected {
+            self.dialogs.acquisition.error =
+                Some(tr(self.lang(), Tr::AcquisitionEpochChanged).to_string());
+            return false;
+        }
+        let mut candidate = view.endpoint().clone();
+        candidate.acquisition = self.dialogs.acquisition.draft.clone();
+        let error = if opclook_engine::validate_acquisition(&candidate).is_err() {
+            Some(Tr::AcquisitionInvalid)
+        } else if self.sessions.iter().any(|other| {
+            other.id != session && Self::dedup_key(other.endpoint()) == Self::dedup_key(&candidate)
+        }) {
+            Some(Tr::AcquisitionCollision)
+        } else if reconnect && !self.engine.has_request_capacity() {
+            Some(Tr::RequestIdsExhausted)
+        } else {
+            None
+        };
+        if let Some(error) = error {
+            self.dialogs.acquisition.error = Some(tr(self.lang(), error).to_string());
+            return false;
+        }
+        let mut settings = self.settings.clone();
+        settings.remember(&candidate);
+        if let Err(notice) = settings.save() {
+            let message = self.report_settings_notice(notice);
+            self.dialogs.acquisition.error = Some(message);
+            return false;
+        }
+        self.settings = settings;
+        if let Some(view) = self.session_mut(session) {
+            view.pending_acquisition = Some(candidate.acquisition);
+        }
+        self.dialogs.acquisition.open = false;
+        if reconnect {
+            self.reconnect_session(session);
+        } else {
+            self.journal.info_l(Tr::AcquisitionPending, &[]);
+        }
+        true
+    }
+
     pub fn reconnect_session(&mut self, session: SessionId) {
         if !self.engine.has_request_capacity() {
             let message = tr(self.lang(), Tr::RequestIdsExhausted).to_string();
@@ -546,10 +633,30 @@ impl App {
             self.journal.error(message);
             return;
         }
-        self.engine.resume_reconnect(session);
-        let Some(endpoint) = self.session(session).map(|s| s.endpoint().clone()) else {
+        let Some(view) = self.session(session) else {
             return;
         };
+        let mut endpoint = view.endpoint().clone();
+        if let Some(staged) = &view.pending_acquisition {
+            endpoint.acquisition = staged.clone();
+        }
+        if opclook_engine::validate_acquisition(&endpoint).is_err()
+            || self.sessions.iter().any(|other| {
+                other.id != session
+                    && Self::dedup_key(other.endpoint()) == Self::dedup_key(&endpoint)
+            })
+        {
+            let reason = if opclook_engine::validate_acquisition(&endpoint).is_err() {
+                Tr::AcquisitionInvalid
+            } else {
+                Tr::AcquisitionCollision
+            };
+            let message = tr(self.lang(), reason).to_string();
+            self.status.clone_from(&message);
+            self.journal.error(message);
+            return;
+        }
+        self.engine.resume_reconnect(session);
         let lang = self.lang();
         let Some(view) = self.session_mut(session) else {
             return;
@@ -573,20 +680,32 @@ impl App {
         }
         self.clear_pending_requests(session);
         if protocol == Protocol::OpcDa {
-            if let Err(error) =
-                self.send_da_prepared(session, CommandKind::Connect { endpoint }, PendingCtx::None)
-            {
+            if let Err(error) = self.send_da_prepared(
+                session,
+                CommandKind::Connect {
+                    endpoint: endpoint.clone(),
+                },
+                PendingCtx::None,
+            ) {
                 let message = error.localized(self.lang());
                 self.engine.manual_disconnect(session);
                 if let Some(view) = self.session_mut(session) {
                     view.state = SessionState::Disconnected;
                     view.info.clone_from(&message);
                 }
+                self.status.clone_from(&message);
                 self.journal.error(message);
+                return;
             }
         } else {
             if self
-                .send(session, protocol, CommandKind::Connect { endpoint })
+                .send(
+                    session,
+                    protocol,
+                    CommandKind::Connect {
+                        endpoint: endpoint.clone(),
+                    },
+                )
                 .is_none()
             {
                 self.engine.manual_disconnect(session);
@@ -596,6 +715,10 @@ impl App {
                 }
                 return;
             }
+        }
+        if let Some(view) = self.session_mut(session) {
+            view.update_endpoint(endpoint);
+            view.pending_acquisition = None;
         }
         self.journal.info_l(Tr::ReconnectRestoring, &[]);
     }

@@ -1600,6 +1600,12 @@ impl<C> Engine<C> {
     pub fn session(&self, id: SessionId) -> Option<&SessionRuntime> {
         self.sessions.get(&id)
     }
+    pub fn connection_id(&self, id: SessionId) -> Option<RequestId> {
+        self.sessions
+            .get(&id)
+            .and_then(|session| session.connection_id)
+    }
+
     pub fn set_force_poll(&mut self, id: SessionId, enabled: bool) {
         if let Some(view) = self.sessions.get_mut(&id) {
             view.force_poll = enabled;

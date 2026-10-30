@@ -3115,3 +3115,416 @@ fn same_endpoint_with_different_profiles_creates_distinct_sessions() {
     );
     assert_eq!(app.sessions[1].endpoint().acquisition, poll.acquisition);
 }
+
+fn profile_fixture() -> (egui::Context, App, EndpointSpec) {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    let mut endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+    endpoint.acquisition = Some(crate::bff::model::AcquisitionConfig::ua_default());
+    app.seed_session(SessionId::FIRST, endpoint.clone());
+    app.record_dispatches_for_test();
+    let connect = app
+        .send(
+            SessionId::FIRST,
+            Protocol::OpcUa,
+            CommandKind::Connect {
+                endpoint: endpoint.clone(),
+            },
+        )
+        .unwrap();
+    app.on_event(Event {
+        owner: SessionId::FIRST.into(),
+        origin: Origin::Reply(connect),
+        kind: EventKind::Connected {
+            endpoint: endpoint.clone(),
+            info: BackendMsg::raw("connected"),
+        },
+    });
+    (ctx, app, endpoint)
+}
+
+#[test]
+fn profile_save_auto_and_manual_reconnect_keep_distinct_snapshots() {
+    use crate::bff::model::UpdateMode;
+    let dir = std::env::temp_dir().join(format!("opclook-profile-{}-auto", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _redirect = crate::settings::thread_dir::redirect(&dir);
+    let (_ctx, mut app, active) = profile_fixture();
+    let session = SessionId::FIRST;
+    app.open_acquisition_editor(session);
+    app.dialogs.acquisition.draft.as_mut().unwrap().update_mode = UpdateMode::Poll;
+    assert!(app.apply_acquisition_editor(false));
+    assert_eq!(
+        app.session(session).unwrap().endpoint().acquisition,
+        active.acquisition
+    );
+    assert_eq!(
+        app.session(session)
+            .unwrap()
+            .pending_acquisition
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .update_mode,
+        UpdateMode::Poll
+    );
+    app.session_mut(session).unwrap().reconnect = ReconnectState::Waiting {
+        at: Instant::now(),
+        attempt: 1,
+    };
+    app.attempt_auto_reconnect(session);
+    let auto = app
+        .dispatched_for_test()
+        .into_iter()
+        .rev()
+        .find_map(|cmd| match cmd.kind {
+            CommandKind::Connect { endpoint } => Some((cmd.request_id.unwrap(), endpoint)),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(auto.1.acquisition, active.acquisition);
+    assert!(app.session(session).unwrap().pending_acquisition.is_some());
+    app.on_event(Event {
+        owner: session.into(),
+        origin: Origin::Reply(auto.0),
+        kind: EventKind::Connected {
+            endpoint: auto.1,
+            info: BackendMsg::raw("auto"),
+        },
+    });
+    app.reconnect_session(session);
+    let manual = app
+        .dispatched_for_test()
+        .into_iter()
+        .rev()
+        .find_map(|cmd| match cmd.kind {
+            CommandKind::Connect { endpoint } => Some(endpoint),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(manual.acquisition.unwrap().update_mode, UpdateMode::Poll);
+    assert!(app.session(session).unwrap().pending_acquisition.is_none());
+    drop(_redirect);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn profile_rejects_invalid_save_collision_and_stale_epoch() {
+    let (_ctx, mut app, active) = profile_fixture();
+    let session = SessionId::FIRST;
+    let epoch = app.engine.connection_id(session);
+    let dispatch_count = app.dispatched_for_test().len();
+    app.open_acquisition_editor(session);
+    app.dialogs.acquisition.draft.as_mut().unwrap().interval_ms = 0;
+    assert!(!app.apply_acquisition_editor(true));
+    assert_eq!(app.engine.connection_id(session), epoch);
+    assert_eq!(app.dispatched_for_test().len(), dispatch_count);
+    assert_eq!(
+        app.session(session).unwrap().endpoint().acquisition,
+        active.acquisition
+    );
+    app.dialogs.acquisition.draft = active.acquisition.clone();
+    app.settings.save_blocked = true;
+    assert!(!app.apply_acquisition_editor(true));
+    assert_eq!(app.engine.connection_id(session), epoch);
+    assert_eq!(app.dispatched_for_test().len(), dispatch_count);
+    app.settings.save_blocked = false;
+    app.seed_session(SessionId::new(2).unwrap(), active.clone());
+    assert!(!app.apply_acquisition_editor(true));
+    assert_eq!(app.engine.connection_id(session), epoch);
+    assert_eq!(app.dispatched_for_test().len(), dispatch_count);
+    app.sessions.retain(|v| v.id == session);
+    app.reconnect_session(session);
+    let new_connect = app
+        .dispatched_for_test()
+        .into_iter()
+        .rev()
+        .find_map(|cmd| match cmd.kind {
+            CommandKind::Connect { endpoint } => Some((cmd.request_id.unwrap(), endpoint)),
+            _ => None,
+        })
+        .unwrap();
+    app.on_event(Event {
+        owner: session.into(),
+        origin: Origin::Reply(new_connect.0),
+        kind: EventKind::Connected {
+            endpoint: new_connect.1,
+            info: BackendMsg::raw("new"),
+        },
+    });
+    assert!(!app.apply_acquisition_editor(true));
+    assert_eq!(
+        app.dialogs.acquisition.error.as_deref(),
+        Some(tr(app.lang(), Tr::AcquisitionEpochChanged))
+    );
+    assert_eq!(app.engine.connection_id(session), Some(new_connect.0));
+}
+
+#[test]
+fn profile_reconnect_rejects_old_read_write_and_push_and_reregisters_rows() {
+    use crate::bff::model::{DataValue, ItemInfo, Quality, UpdateMode, WriteOutcome};
+    for initial_mode in [UpdateMode::Subscription, UpdateMode::Poll] {
+        let dir = std::env::temp_dir().join(format!(
+            "opclook-profile-{}-{initial_mode:?}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let redirect = crate::settings::thread_dir::redirect(&dir);
+        let (_ctx, mut app, mut endpoint) = profile_fixture();
+        // Establish the initial profile using a real new Connect if Poll was requested.
+        if initial_mode == UpdateMode::Poll {
+            endpoint.acquisition.as_mut().unwrap().update_mode = initial_mode;
+            app.sessions[0].update_endpoint(endpoint.clone());
+            app.reconnect_session(SessionId::FIRST);
+            let connect = app
+                .dispatched_for_test()
+                .into_iter()
+                .rev()
+                .find_map(|cmd| match cmd.kind {
+                    CommandKind::Connect { endpoint } => Some((cmd.request_id.unwrap(), endpoint)),
+                    _ => None,
+                })
+                .unwrap();
+            app.on_event(Event {
+                owner: SessionId::FIRST.into(),
+                origin: Origin::Reply(connect.0),
+                kind: EventKind::Connected {
+                    endpoint: connect.1,
+                    info: BackendMsg::raw("poll"),
+                },
+            });
+        }
+        let session = SessionId::FIRST;
+        let old_epoch = app.engine.connection_id(session).unwrap();
+        assert!(app.add_items(session, vec![("ns=2;s=A".into(), "A".into())]));
+        let key = app.rows[0].key;
+        let add = app
+            .dispatched_for_test()
+            .into_iter()
+            .rev()
+            .find(|cmd| matches!(cmd.kind, CommandKind::AddItems { .. }))
+            .unwrap()
+            .request_id
+            .unwrap();
+        app.on_event(Event {
+            owner: session.into(),
+            origin: Origin::Reply(add),
+            kind: EventKind::AddItems {
+                results: vec![(
+                    key,
+                    Ok(ItemInfo {
+                        data_type: None,
+                        type_id: None,
+                        writable: true,
+                    }),
+                )],
+            },
+        });
+        let read = app
+            .send(
+                session,
+                Protocol::OpcUa,
+                CommandKind::Read { keys: vec![key] },
+            )
+            .unwrap();
+        let write = app
+            .send_with(
+                session,
+                Protocol::OpcUa,
+                CommandKind::Write {
+                    request: WriteRequest {
+                        key,
+                        value: Value::I64(9),
+                        type_hint: None,
+                    },
+                },
+                PendingCtx::WriteKey(key),
+            )
+            .unwrap();
+        app.open_acquisition_editor(session);
+        app.dialogs.acquisition.draft.as_mut().unwrap().update_mode =
+            if initial_mode == UpdateMode::Poll {
+                UpdateMode::Subscription
+            } else {
+                UpdateMode::Poll
+            };
+        assert!(app.apply_acquisition_editor(true));
+        let new_connect = app
+            .dispatched_for_test()
+            .into_iter()
+            .rev()
+            .find_map(|cmd| match cmd.kind {
+                CommandKind::Connect { endpoint } => Some((cmd.request_id.unwrap(), endpoint)),
+                _ => None,
+            })
+            .unwrap();
+        assert_ne!(app.engine.connection_id(session), Some(old_epoch));
+        assert_eq!(
+            new_connect.1.acquisition.as_ref().unwrap().update_mode,
+            if initial_mode == UpdateMode::Poll {
+                UpdateMode::Subscription
+            } else {
+                UpdateMode::Poll
+            }
+        );
+        let value_before = app.rows[0].value.clone();
+        let values = || EventKind::Values {
+            values: vec![(
+                key,
+                DataValue {
+                    value: Value::I64(99),
+                    quality: Quality::from_da(0xc0),
+                    timestamp: None,
+                    reason: None,
+                },
+            )],
+        };
+        app.on_event(Event {
+            owner: session.into(),
+            origin: Origin::Reply(read),
+            kind: values(),
+        });
+        app.on_event(Event {
+            owner: session.into(),
+            origin: Origin::Reply(write),
+            kind: EventKind::Wrote {
+                key,
+                result: Ok(WriteOutcome::from_ua(0, "Good")),
+            },
+        });
+        app.on_event(Event {
+            owner: session.into(),
+            origin: Origin::Session(old_epoch),
+            kind: values(),
+        });
+        assert_eq!(app.rows[0].value, value_before);
+        let before_connected = app.dispatched_for_test().len();
+        app.on_event(Event {
+            owner: session.into(),
+            origin: Origin::Reply(new_connect.0),
+            kind: EventKind::Connected {
+                endpoint: new_connect.1,
+                info: BackendMsg::raw("new"),
+            },
+        });
+        let after_connected = app.dispatched_for_test().len();
+        app.on_event(Event {
+            owner: session.into(),
+            origin: Origin::Reply(read),
+            kind: values(),
+        });
+        app.on_event(Event {
+            owner: session.into(),
+            origin: Origin::Reply(write),
+            kind: EventKind::Wrote {
+                key,
+                result: Ok(WriteOutcome::from_ua(0, "Good")),
+            },
+        });
+        app.on_event(Event {
+            owner: session.into(),
+            origin: Origin::Session(old_epoch),
+            kind: values(),
+        });
+        assert_eq!(app.rows[0].value, value_before);
+        assert_eq!(app.dispatched_for_test().len(), after_connected);
+        assert!(
+            app.dispatched_for_test()[before_connected..]
+                .iter()
+                .any(|cmd| match &cmd.kind {
+                    CommandKind::AddItems { items } => items.iter().any(|item| item.key == key),
+                    _ => false,
+                })
+        );
+        assert_eq!(
+            app.dispatched_for_test()
+                .iter()
+                .filter(|cmd| matches!(cmd.kind, CommandKind::Write { .. }))
+                .count(),
+            1
+        );
+        assert!(app.journal.entries().iter().any(|entry| {
+            entry
+                .render(app.lang())
+                .contains(tr(app.lang(), Tr::WriteUnknownStatus))
+        }));
+        drop(redirect);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[test]
+fn profile_late_collision_and_capacity_preserve_staged_choice() {
+    use crate::bff::model::UpdateMode;
+    let dir =
+        std::env::temp_dir().join(format!("opclook-profile-{}-collision", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let redirect = crate::settings::thread_dir::redirect(&dir);
+    let (_ctx, mut app, mut candidate) = profile_fixture();
+    app.open_acquisition_editor(SessionId::FIRST);
+    app.dialogs.acquisition.draft.as_mut().unwrap().update_mode = UpdateMode::Poll;
+    assert!(app.apply_acquisition_editor(false));
+    candidate.acquisition.as_mut().unwrap().update_mode = UpdateMode::Poll;
+    app.seed_session(SessionId::new(2).unwrap(), candidate);
+    let before = app.dispatched_for_test().len();
+    let epoch = app.engine.connection_id(SessionId::FIRST);
+    app.reconnect_session(SessionId::FIRST);
+    assert_eq!(app.dispatched_for_test().len(), before);
+    assert_eq!(app.engine.connection_id(SessionId::FIRST), epoch);
+    assert!(
+        app.session(SessionId::FIRST)
+            .unwrap()
+            .pending_acquisition
+            .is_some()
+    );
+    assert_eq!(app.status, tr(app.lang(), Tr::AcquisitionCollision));
+    app.sessions.retain(|view| view.id == SessionId::FIRST);
+    app.open_acquisition_editor(SessionId::FIRST);
+    app.dialogs.acquisition.draft = None;
+    app.engine.exhaust_requests_for_test();
+    assert!(!app.apply_acquisition_editor(true));
+    assert_eq!(app.dispatched_for_test().len(), before);
+    assert!(app.apply_acquisition_editor(false));
+    assert_eq!(
+        app.session(SessionId::FIRST).unwrap().pending_acquisition,
+        Some(None)
+    );
+    app.reconnect_session(SessionId::FIRST);
+    assert_eq!(app.dispatched_for_test().len(), before);
+    assert_eq!(app.engine.connection_id(SessionId::FIRST), epoch);
+    assert_eq!(
+        app.session(SessionId::FIRST).unwrap().pending_acquisition,
+        Some(None)
+    );
+    drop(redirect);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn profile_connect_dispatch_failure_keeps_saved_candidate() {
+    use crate::bff::model::UpdateMode;
+    let dir = std::env::temp_dir().join(format!("opclook-profile-{}-dispatch", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let redirect = crate::settings::thread_dir::redirect(&dir);
+    let (_ctx, mut app, active) = profile_fixture();
+    app.open_acquisition_editor(SessionId::FIRST);
+    app.dialogs.acquisition.draft.as_mut().unwrap().update_mode = UpdateMode::Poll;
+    app.engine.limit_dispatch_for_test(1); // Disconnect succeeds; Connect fails.
+    assert!(app.apply_acquisition_editor(true));
+    let view = app.session(SessionId::FIRST).unwrap();
+    assert_eq!(view.endpoint().acquisition, active.acquisition);
+    assert_eq!(
+        view.pending_acquisition
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .update_mode,
+        UpdateMode::Poll
+    );
+    assert_eq!(view.state, SessionState::Disconnected);
+    assert!(!app.status.is_empty());
+    drop(redirect);
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -895,3 +895,24 @@ CLI дополнительно проверяет ключ Wrote и покрыт
 Целевые результаты: contract 34+3 doctest, Engine 45+2, CLI 13, UA sample Poll live с отсутствием stream и реальным Read, App snapshot/dedup, Settings backup, три headless UI и DA double-click — зелёные. PNG UI 900px UA/DA и 720px UA просмотрены; на 720 действия достигаются прокруткой. Первый вариант 900px обрезал кнопки, исправлен адаптивной областью прокрутки; тест короткого окна также подтвердил Cancel. Linux CI 41014492173 на прежнем head: backend 223, CLI unit 13, ошибка Browse timeout 15s; локальный повтор того live случая прошёл. Test budget увеличен до 60s/120s без повторов и изменений assert; добавлен stage context connect/browse, первопричина не установлена.
 
 Финальный Linux gate после viewport/null/IME изменений: backend 225, contract 34+3 doctest, Engine 45+2, CLI 13+2 sample live, GUI library 236, UI interactions 238 и 1 Windows-only ignored; внешний Engine stand 45+2, внешний backend stand UA Poll live — passed. Отдельные PNG 900 UA/DA и 720 UA после прокрутки просмотрены; проверено что Cancel достижим. Runtime frozen до gate; CI нового head ожидается.
+
+## R2.3 — редактор профиля активного соединения: анализ до кода
+
+- Class: изменение конфигурации действующей сессии и корреляция её эпохи (R01/R03).
+- Inv: активный EndpointSpec/Engine snapshot неизменяем до принятия нового Connect существующим lifecycle (в DA — подготовкой маршрута); авто-reconnect использует активный snapshot; проверка, сохранение и проверка коллизии предшествуют остановке здоровой сессии; незавершённая Write становится Unknown и не повторяется.
+- N+1: соседние пути ручного/автоматического reconnect, отсутствие session, смена эпохи в открытом диалоге, занятые RequestId, коллизия после сохранения, Cancel и ошибка сохранения; проверить через настоящие App/Engine события и GUI взаимодействия.
+- Defect: профиль нового соединения уже существует, но редактор активного профиля отсутствует; глобальная перенастройка не должна обходить snapshot. Владелец протокола остаётся SDK; DA migration не входит в этот срез.
+
+R2.3 восстановление: исходный локальный checkout был удалён средой; дерево
+восстановлено из GitHub и проверено по tree SHA `763b4615ec2a0b1060489ae885c647d8c56edeb4`.
+Измерено: App 5/5, GUI interaction 2/2, RU PNG 900/720 просмотрены; внешний
+стенд настоящего Engine 45+2 doctest. Первый полный Linux gate остановился на
+`fonts_cjk` из-за ошибочно заданного DejaVuSans как CJK override: он не содержит
+китайских глифов. Это ошибка настройки среды, тест не изменён; последующий
+gate запускается с реальным CJK шрифтом без override.
+
+Повторный полный Linux gate с системным WQY CJK: exit 0, backend 225, CLI
+13+2 sample live, contract 34+3 doctest, Engine 45+2 doctest, GUI lib 241,
+UI interactions 240 и один Windows-only ignored. Font tests 2/2, PNG 900/720
+перерендерены и просмотрены. Физический DA и Windows локально не проверялись;
+Windows x86 остаётся за CI нового commit.

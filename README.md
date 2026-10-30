@@ -180,6 +180,11 @@ quality. Ошибка или Bad/Uncertain результата наблюден
 записи. UA CacheAllowed пока не подключён в OPCLook. Read-back не доказывает
 физическое действие. Старые соединения без профиля сохраняют legacy fallback.
 
+В окне состояния подключённого сервера можно изменить профиль: сохранение
+откладывает его до следующего ручного подключения, а сохранение с
+переподключением применяет его через новую сессию. Автоматическое
+переподключение сохраняет текущий профиль.
+
 ```sh
 cargo run -p opclook-cli --target x86_64-unknown-linux-gnu -- --help
 cargo run -p opclook-cli --target x86_64-unknown-linux-gnu -- --ua opc.tcp://127.0.0.1:4840 --policy None --mode None browse i=85

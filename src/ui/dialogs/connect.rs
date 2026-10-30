@@ -167,6 +167,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                             &mut dialog.ua_acquisition
                         },
                         is_da,
+                        false,
                     );
                     ui.add_space(4.0);
 
@@ -671,11 +672,12 @@ fn unavailable_hint(
         response.on_disabled_hover_text(tr(lang, reason))
     }
 }
-fn acquisition_editor(
+pub(super) fn acquisition_editor(
     ui: &mut egui::Ui,
     lang: Lang,
     draft: &mut Option<crate::bff::model::AcquisitionConfig>,
     is_da: bool,
+    default_open: bool,
 ) {
     use crate::bff::model::{AcquisitionConfig, PollFreshness, UpdateMode};
     let protocol = if is_da {
@@ -684,111 +686,113 @@ fn acquisition_editor(
         Protocol::OpcUa
     };
     let capabilities = opclook_engine::acquisition_capabilities(protocol);
-    ui.collapsing(tr(lang, Tr::AcquisitionTitle), |ui| {
-        let mut enabled = draft.is_some();
-        if ui
-            .checkbox(&mut enabled, tr(lang, Tr::AcquisitionExplicit))
-            .changed()
-        {
-            *draft = enabled.then(|| {
-                if is_da {
-                    AcquisitionConfig::da_available()
-                } else {
-                    AcquisitionConfig::ua_default()
-                }
-            });
-        }
-        if let Some(config) = draft {
-            ui.horizontal(|ui| {
-                ui.label(tr(lang, Tr::AcquisitionMode));
-                let response = ui.add_enabled(
-                    capabilities.subscription,
-                    egui::RadioButton::new(
-                        config.update_mode == UpdateMode::Subscription,
-                        tr(lang, Tr::AcquisitionSubscription),
-                    ),
-                );
-                if unavailable_hint(
-                    response,
-                    capabilities.subscription,
-                    lang,
-                    Tr::AcquisitionUnsupported,
-                )
-                .ime_safe_clicked()
-                {
-                    config.update_mode = UpdateMode::Subscription;
-                }
-                if ui
-                    .radio(
-                        config.update_mode == UpdateMode::Poll,
-                        tr(lang, Tr::AcquisitionPoll),
+    egui::CollapsingHeader::new(tr(lang, Tr::AcquisitionTitle))
+        .default_open(default_open)
+        .show(ui, |ui| {
+            let mut enabled = draft.is_some();
+            if ui
+                .checkbox(&mut enabled, tr(lang, Tr::AcquisitionExplicit))
+                .changed()
+            {
+                *draft = enabled.then(|| {
+                    if is_da {
+                        AcquisitionConfig::da_available()
+                    } else {
+                        AcquisitionConfig::ua_default()
+                    }
+                });
+            }
+            if let Some(config) = draft {
+                ui.horizontal(|ui| {
+                    ui.label(tr(lang, Tr::AcquisitionMode));
+                    let response = ui.add_enabled(
+                        capabilities.subscription,
+                        egui::RadioButton::new(
+                            config.update_mode == UpdateMode::Subscription,
+                            tr(lang, Tr::AcquisitionSubscription),
+                        ),
+                    );
+                    if unavailable_hint(
+                        response,
+                        capabilities.subscription,
+                        lang,
+                        Tr::AcquisitionUnsupported,
                     )
                     .ime_safe_clicked()
-                {
-                    config.update_mode = UpdateMode::Poll;
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label(tr(lang, Tr::AcquisitionInterval));
-                ui.add(egui::DragValue::new(&mut config.interval_ms).range(
-                    crate::bff::model::ACQUISITION_INTERVAL_MIN_MS
-                        ..=crate::bff::model::ACQUISITION_INTERVAL_MAX_MS,
-                ));
-            });
-            let response = ui.add_enabled(
-                capabilities.read_after_write,
-                egui::Checkbox::new(
-                    &mut config.read_after_write,
-                    tr(lang, Tr::AcquisitionReadback),
-                ),
-            );
-            unavailable_hint(
-                response,
-                capabilities.read_after_write,
-                lang,
-                Tr::AcquisitionUnsupported,
-            );
-            ui.horizontal(|ui| {
-                ui.label(tr(lang, Tr::AcquisitionFreshness));
-                let cache = ui.add_enabled(
-                    capabilities.cache_allowed,
-                    egui::RadioButton::new(
-                        config.poll_freshness == PollFreshness::CacheAllowed,
-                        tr(lang, Tr::AcquisitionCache),
+                    {
+                        config.update_mode = UpdateMode::Subscription;
+                    }
+                    if ui
+                        .radio(
+                            config.update_mode == UpdateMode::Poll,
+                            tr(lang, Tr::AcquisitionPoll),
+                        )
+                        .ime_safe_clicked()
+                    {
+                        config.update_mode = UpdateMode::Poll;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(tr(lang, Tr::AcquisitionInterval));
+                    ui.add(egui::DragValue::new(&mut config.interval_ms).range(
+                        crate::bff::model::ACQUISITION_INTERVAL_MIN_MS
+                            ..=crate::bff::model::ACQUISITION_INTERVAL_MAX_MS,
+                    ));
+                });
+                let response = ui.add_enabled(
+                    capabilities.read_after_write,
+                    egui::Checkbox::new(
+                        &mut config.read_after_write,
+                        tr(lang, Tr::AcquisitionReadback),
                     ),
                 );
-                if unavailable_hint(
-                    cache,
-                    capabilities.cache_allowed,
-                    lang,
-                    Tr::AcquisitionCacheGap,
-                )
-                .ime_safe_clicked()
-                {
-                    config.poll_freshness = PollFreshness::CacheAllowed;
-                }
-                let source = ui.add_enabled(
-                    capabilities.fresh_source,
-                    egui::RadioButton::new(
-                        config.poll_freshness == PollFreshness::FreshSource,
-                        tr(lang, Tr::AcquisitionSource),
-                    ),
-                );
-                if unavailable_hint(
-                    source,
-                    capabilities.fresh_source,
+                unavailable_hint(
+                    response,
+                    capabilities.read_after_write,
                     lang,
                     Tr::AcquisitionUnsupported,
-                )
-                .ime_safe_clicked()
-                {
-                    config.poll_freshness = PollFreshness::FreshSource;
-                }
-            });
-        } else {
-            ui.label(tr(lang, Tr::AcquisitionLegacy));
-        }
-    });
+                );
+                ui.horizontal(|ui| {
+                    ui.label(tr(lang, Tr::AcquisitionFreshness));
+                    let cache = ui.add_enabled(
+                        capabilities.cache_allowed,
+                        egui::RadioButton::new(
+                            config.poll_freshness == PollFreshness::CacheAllowed,
+                            tr(lang, Tr::AcquisitionCache),
+                        ),
+                    );
+                    if unavailable_hint(
+                        cache,
+                        capabilities.cache_allowed,
+                        lang,
+                        Tr::AcquisitionCacheGap,
+                    )
+                    .ime_safe_clicked()
+                    {
+                        config.poll_freshness = PollFreshness::CacheAllowed;
+                    }
+                    let source = ui.add_enabled(
+                        capabilities.fresh_source,
+                        egui::RadioButton::new(
+                            config.poll_freshness == PollFreshness::FreshSource,
+                            tr(lang, Tr::AcquisitionSource),
+                        ),
+                    );
+                    if unavailable_hint(
+                        source,
+                        capabilities.fresh_source,
+                        lang,
+                        Tr::AcquisitionUnsupported,
+                    )
+                    .ime_safe_clicked()
+                    {
+                        config.poll_freshness = PollFreshness::FreshSource;
+                    }
+                });
+            } else {
+                ui.label(tr(lang, Tr::AcquisitionLegacy));
+            }
+        });
 }
 
 /// Build a valid OPC UA URL from the search fields. An empty/invalid port

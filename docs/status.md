@@ -1,5 +1,29 @@
 # Текущий статус
 
+## 2026-10-30 — редактирование профиля активной сессии (частичный R2.3)
+
+Активный профиль остаётся snapshot текущего Connect; сохранение черновика
+применяется при следующем ручном переподключении, авто-reconnect продолжает
+использовать текущий профиль. Сохранение с reconnect проверяет профиль,
+коллизию, RequestId и запись settings до остановки здоровой сессии. Диалог
+связан с Connect epoch; поздние события старой эпохи не изменяют новую. При
+потерянном ответе Write журнал показывает Unknown, повторной Write нет. Для DA
+принятие Connect означает подготовку существующего маршрута, не подключение
+worker. Pending хранится в памяти сессии; recent endpoint сохраняется на диск.
+
+Целевые проверки Linux: 5 App тестов и 2 headless UI теста прошли; RU PNG
+900/720 просмотрены. Это синтетические события, не физический DA/live proof.
+Предыдущий опубликованный head 6d7ab38 имеет успешный Linux/Windows x86 CI
+run 41021101530; результаты этого head не относятся к новой работе. Native DA
+SDK, revised параметры, UA CacheAllowed, per-item terminal outcomes, полные G/D
+и fairness остаются открытыми. Финальный `scripts/check-linux.sh` (Linux x86_64, jobs=1, debug=0,
+incremental=0, системный WQY CJK) завершился exit 0: backend 225, CLI
+13+2 live, contract 34+3 doctest, Engine 45+2 doctest, GUI lib 241,
+UI interactions 240 и 1 Windows-only ignored; внешний Engine stand 45+2.
+Первый полный gate остановился на CJK font test из-за ошибочного DejaVu
+override, затем тест и весь gate прошли с настоящим CJK шрифтом. CI нового
+commit пока не измерен; физический DA и Windows локально не проверялись.
+
 ## 2026-10-30 — явный профиль соединения (частичный R2.3)
 
 EndpointSpec хранит явный AcquisitionConfig (mode, requested interval,
