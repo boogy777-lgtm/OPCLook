@@ -1,0 +1,134 @@
+name: Softing SDK source probe
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  source-probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: opclook
+      - uses: actions/checkout@v4
+        with:
+          repository: SoftingIndustrial/OPC-Classic-SDK
+          ref: 5130e763998189c822882434c43e6be2eb0174cf
+          path: softing-sdk
+      - uses: dtolnay/rust-toolchain@1.99.1
+        if: runner.os == 'Linux'
+      - name: Compile public API and exercise exact SDK method (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        working-directory: opclook
+        env:
+          SOFTING_SDK_ROOT: ${{ github.workspace }}/softing-sdk
+        run: |
+          set -euo pipefail
+          docs/testing/native-sdk/check-softing-api.sh
+          python3 docs/testing/native-sdk/test-core-features.py
+          docs/testing/native-sdk/test-expat-link.sh
+          cmake -P docs/testing/native-sdk/core-probe/test-normalize-sdk-path.cmake
+          python3 docs/testing/native-sdk/test-run-native-probe.py
+          python3 docs/testing/native-sdk/test_softing_patch.py
+          python3 docs/testing/native-sdk/reproduce-softing-status.py --expect-existing-defect
+          python3 docs/testing/native-sdk/reproduce-softing-status.py --patched
+          cargo test --locked --manifest-path docs/testing/native-sdk/runtime-stand/Cargo.toml --target x86_64-unknown-linux-gnu preview_contract
+          cargo test --locked --manifest-path docs/testing/native-sdk/runtime-stand/Cargo.toml --target x86_64-unknown-linux-gnu scalar_boundaries
+      - name: Compile public API and exercise exact SDK method (Windows x86)
+        if: runner.os == 'Windows'
+        shell: cmd
+        working-directory: opclook
+        env:
+          SOFTING_SDK_ROOT: ${{ github.workspace }}\softing-sdk
+          SDK_CXX_STYLE: msvc
+        run: |
+          @echo off
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSROOT=%%i"
+          if not defined VSROOT exit /b 1
+          call "%VSROOT%\VC\Auxiliary\Build\vcvarsall.bat" x86
+          if errorlevel 1 exit /b 1
+          python docs\testing\native-sdk\verify-softing-sdk.py
+          if errorlevel 1 exit /b 1
+          cmake -P docs\testing\native-sdk\core-probe\test-normalize-sdk-path.cmake
+          if errorlevel 1 exit /b 1
+          python docs\testing\native-sdk\test-run-native-probe.py
+          if errorlevel 1 exit /b 1
+          python docs\testing\native-sdk\test_softing_patch.py
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++14 /EHsc /Zs /D_WINDOWS /DWIN32 /DTBC_USING_LIB /I "%SOFTING_SDK_ROOT%\development\C++\src" /I "%SOFTING_SDK_ROOT%\development\core\include" docs\testing\native-sdk\softing-public-api-probe.cpp
+          if errorlevel 1 exit /b 1
+          python docs\testing\native-sdk\reproduce-softing-status.py --expect-existing-defect
+          if errorlevel 1 exit /b 1
+          python docs\testing\native-sdk\reproduce-softing-status.py --patched
+          if errorlevel 1 exit /b 1
+
+  core-win32:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: opclook
+      - uses: actions/checkout@v4
+        with:
+          repository: SoftingIndustrial/OPC-Classic-SDK
+          ref: 5130e763998189c822882434c43e6be2eb0174cf
+          path: softing-sdk
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: i686-pc-windows-msvc
+      - name: Configure public DA core test (Windows x86)
+        shell: pwsh
+        run: |
+          $env:SOFTING_SDK_ROOT = "${{ github.workspace }}/softing-sdk"
+          python opclook/docs/testing/native-sdk/verify-softing-sdk.py --core-clean
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake -S opclook/docs/testing/native-sdk/core-probe -B softing-build -A Win32 "-DSOFTING_SDK_ROOT=${{ github.workspace }}/softing-sdk"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build and reproduce with original SDK core
+        shell: pwsh
+        run: |
+          cmake --build softing-build --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python opclook/docs/testing/native-sdk/run-native-probe.py -- ./softing-build/Release/softing_expat_smoke.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python opclook/docs/testing/native-sdk/run-native-probe.py -- ./softing-build/Release/softing_core_probe.exe --expect-existing-defect
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build and check proposed library patch
+        shell: pwsh
+        run: |
+          python -c "import pathlib,subprocess; pathlib.Path('softing-sdk/development/core/src/SODaC/SODaCCallback.cpp').write_bytes(subprocess.check_output(['git','-C','softing-sdk','cat-file','blob','59205bb9b6e32641c966d334589fe355bafe273f']))"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -c "import pathlib,subprocess; r=pathlib.Path('softing-sdk'); [(r / p).write_bytes(subprocess.check_output(['git','-C',str(r),'cat-file','blob',sha])) for p,sha in [('development/core/src/SOClt/SOCltEntry.cpp','9e5304ddd9dd7d1131ebdcf5b05c88a0bac6b8ff'),('development/core/src/include/SOCltEntry.h','c2470da726a608e6242285b97d9156bc2885cecc')]]"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python opclook/docs/testing/native-sdk/softing_patch.py softing-sdk
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build softing-build --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python opclook/docs/testing/native-sdk/run-native-probe.py -- ./softing-build/Release/softing_core_probe.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Pass real SDK callback ABI facts through Rust adapter
+        shell: pwsh
+        working-directory: opclook
+        env:
+          CARGO_BUILD_JOBS: 1
+          CARGO_PROFILE_DEV_DEBUG: 0
+          CARGO_INCREMENTAL: 0
+        run: |
+          cargo test --locked --manifest-path docs/testing/native-sdk/rust-stand/Cargo.toml --target i686-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python docs/testing/native-sdk/run-native-probe.py -- ../softing-build/Release/softing_core_probe.exe > fixture-output.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo run --locked --manifest-path docs/testing/native-sdk/rust-stand/Cargo.toml --target i686-pc-windows-msvc -- fixture-output.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

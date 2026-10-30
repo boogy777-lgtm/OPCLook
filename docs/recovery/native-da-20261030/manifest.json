@@ -1,0 +1,152 @@
+{
+  "status": "executor-unavailable; migration not complete",
+  "date": "2026-10-30",
+  "application_head": "ad6db799bcec6e4426b4752cddb8b22180b78202",
+  "last_complete_published_before_recovery": "c2797a94ad7a6f2f3f051b261b816f49cc573812",
+  "intended_local_commit": "45f8d1d82adf0b217ad535d4eba690db1bde7e37",
+  "intended_local_tree": "3d472484c56e511ffefb30be2ca190d831fcf5c9",
+  "agent_last_committed": "0815cad",
+  "local_worktrees": {
+    "root": "/workspace/scratch/eeb8d70fbed3/OPCLook-server",
+    "client": "/workspace/scratch/eeb8d70fbed3/OPCLook-da-runtime"
+  },
+  "available": [
+    {
+      "path": ".github/workflows/softing-da-interop.yml",
+      "blob": "4a590742097ab78d39880b0faca43c943ccac5ef",
+      "checkpoint_path": "files/.github/workflows/softing-da-interop.yml"
+    },
+    {
+      "path": ".github/workflows/softing-sdk-api.yml",
+      "blob": "daacb074a4f6825b091fe46ba32ff17b261f1970",
+      "checkpoint_path": "files/.github/workflows/softing-sdk-api.yml"
+    },
+    {
+      "path": "crates/backend/Cargo.toml",
+      "blob": "c533100244eaf062473946295b71fa62023c9334",
+      "checkpoint_path": "files/crates/backend/Cargo.toml"
+    },
+    {
+      "path": "crates/backend/build.rs",
+      "blob": "c702dfe1f136c1abd26598ac54033bcfc1ff1b1d",
+      "checkpoint_path": "files/crates/backend/build.rs"
+    },
+    {
+      "path": "crates/backend/src/bff/mod.rs",
+      "blob": "197372efdadc0765f90797bcce644c4e4c4b6000",
+      "checkpoint_path": "files/crates/backend/src/bff/mod.rs"
+    },
+    {
+      "path": "crates/backend/src/bff/softing_da.rs",
+      "blob": "64d4b1a31ed332a40ae00105dbbbb5d5e9de81e9",
+      "checkpoint_path": "files/crates/backend/src/bff/softing_da.rs"
+    },
+    {
+      "path": "crates/backend/src/bff/softing_runtime.rs",
+      "blob": "b4d4c423a0020a29670b167b5dae877ea1326960",
+      "checkpoint_path": "files/crates/backend/src/bff/softing_runtime.rs"
+    },
+    {
+      "path": "crates/backend/src/bff/softing_scalar.rs",
+      "blob": "f18901e2197231355db53a2349136bfb3cddb679",
+      "checkpoint_path": "files/crates/backend/src/bff/softing_scalar.rs"
+    },
+    {
+      "path": "crates/backend/tests/sdk_gateway_live.rs",
+      "blob": "6df4576685f04d32cd8d1ed3c91e5881dceccb43",
+      "checkpoint_path": "files/crates/backend/tests/sdk_gateway_live.rs"
+    },
+    {
+      "path": "docs/audit-2026-10-27.md",
+      "blob": "d789c1fc01a17fd09097c5fda5eb9a02e03e0f92",
+      "checkpoint_path": "files/docs/audit-2026-10-27.md"
+    },
+    {
+      "path": "docs/devlog.md",
+      "blob": "d0c1a92f90b1d1c362401602ae0ba5f9041485af",
+      "checkpoint_path": "files/docs/devlog.md"
+    },
+    {
+      "path": "docs/llm-update-routing.md",
+      "blob": "bc6ce241b88a744966b4d873b373aeb19e959703",
+      "checkpoint_path": "files/docs/llm-update-routing.md"
+    },
+    {
+      "path": "docs/status.md",
+      "blob": "ad6cc20192e4bb1a2915ae879c42abf9cb60f353",
+      "checkpoint_path": "files/docs/status.md"
+    }
+  ],
+  "missing": [
+    {
+      "path": "docs/testing/acquisition-truth-tables.md",
+      "expected_blob": "8441dbb0a56b8249a73ba64c1cfc1907ff872993",
+      "size": 47673
+    },
+    {
+      "path": "docs/testing/native-sdk/core-probe/main.cpp",
+      "expected_blob": "49b3b6e54dc25b573724767fedccd6a64b681e4b",
+      "size": 15302
+    },
+    {
+      "path": "docs/testing/native-sdk/runtime-stand/Cargo.lock",
+      "expected_blob": "6122900354771847c54948a1714276722a30e7ab",
+      "size": 10064
+    },
+    {
+      "path": "docs/testing/native-sdk/runtime-stand/Cargo.toml",
+      "expected_blob": "1a8ace296ea9c46bd9485ba579e7c5ef8da753b0",
+      "size": 229
+    },
+    {
+      "path": "docs/testing/native-sdk/runtime-stand/src/bff.rs",
+      "expected_blob": "0a242e875b644bf3a4ecd22567818f18700b4ec5",
+      "size": 1294
+    },
+    {
+      "path": "docs/testing/native-sdk/runtime-stand/src/lib.rs",
+      "expected_blob": "4d4f3cf8e51bfc03fd5d609e984c6ae9a19dbd21",
+      "size": 1898
+    },
+    {
+      "path": "docs/testing/native-sdk/server-fixture/CMakeLists.txt",
+      "expected_blob": "0e9942f68f6d5d49d3479ed464eb1098a2f533c1",
+      "size": 3870
+    },
+    {
+      "path": "docs/testing/native-sdk/server-fixture/README.md",
+      "expected_blob": "95a5889dff0a48b3630751852175f31e85af8760",
+      "size": 2046
+    },
+    {
+      "path": "docs/testing/native-sdk/server-fixture/server.cpp",
+      "expected_blob": "fed97ec14f1d178234c29abac04a1ca0c01f3a8d",
+      "size": 4247
+    },
+    {
+      "path": "native/softing-da/runtime.cpp",
+      "expected_blob": "630d2a797ac5dc2a8c595996e438515897a77375",
+      "size": 16617
+    },
+    {
+      "path": "native/softing-da/runtime.h",
+      "expected_blob": "4faec22e52f297cd2f8da9f91db7a5fb57dcd7ce",
+      "size": 2512
+    }
+  ],
+  "verified": {
+    "sdk_mta_patch_run": 41087844902,
+    "actual_sdk_com_read_write_run": 41089436547,
+    "actual_sdk_com_job": 124179130741,
+    "local_rust_stand_tests": 4,
+    "local_gateway_scalar_mock_tests": 2
+  },
+  "not_verified": [
+    "Gateway live adapter",
+    "scalar Win32 bridge",
+    "Unicode/BSTR uncommitted changes",
+    "Browse/Discover/Subscription/arrays",
+    "production migration"
+  ],
+  "reason": "Managed environment became unavailable; exec-server transport disconnected. Partial GitHub blobs are exact committed file content uploaded before loss, not a complete application source snapshot."
+}
