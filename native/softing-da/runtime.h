@@ -83,6 +83,7 @@ int32_t opcl_da_take_push(OpclDaSession* session, OpclDaPush* out, char* payload
 #ifdef OPCL_DA_TESTING
 int32_t opcl_da_test_queue_bounds(void);
 int32_t opcl_da_test_codec_bounds(void);
+int32_t opcl_da_test_ephemeral_worker(uint32_t guarded);
 #endif
 int32_t opcl_da_read_i4(OpclDaSession* session, OpclDaItem* item, uint32_t max_age,
                         OpclDaReadI4* out);

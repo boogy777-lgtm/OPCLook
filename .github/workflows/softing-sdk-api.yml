@@ -101,6 +101,8 @@ jobs:
         run: |
           cmake --build softing-build --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python opclook/docs/testing/native-sdk/test-ephemeral-worker.py ./softing-build/Release/softing_core_probe.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python opclook/docs/testing/native-sdk/run-native-probe.py -- ./softing-build/Release/softing_expat_smoke.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python opclook/docs/testing/native-sdk/run-native-probe.py -- ./softing-build/Release/softing_core_probe.exe --expect-existing-defect

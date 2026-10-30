@@ -966,9 +966,107 @@ static bool local_node(const WCHAR* node) {
 }
 // Every discovery/resolve gets an independent SDK server worker. A hung
 // OPCEnum therefore cannot block a different session or discovery.
+// Keep the SDK worker owner alive until its thread has finished releasing the
+// completed task. Completion signalling happens before the worker's release.
+// SOCltServer is sufficient for task dispatch and does not create an unused
+// COM-server implementation or its shutdown sink.
+class EphemeralContext {
+public:
+    explicit EphemeralContext(SOCltServer* server) : server_(server) {}
+    ~EphemeralContext() { if (server_.isNotNull()) server_->getWorkerThread()->shutdown(); }
+    SOCltServer* get() { return server_; }
+    EphemeralContext(const EphemeralContext&) = delete;
+    EphemeralContext& operator=(const EphemeralContext&) = delete;
+private:
+    SOCmnPointer<SOCltServer> server_;
+};
+#ifdef OPCL_DA_TESTING
+class LifetimeProbeServer : public SOCltServer {
+public:
+    LifetimeProbeServer(std::atomic<DWORD>* destroyed, std::atomic<int>* running, HANDLE destructor_entered)
+        : destroyed_(destroyed), running_(running), destructor_entered_(destructor_entered) {}
+    ~LifetimeProbeServer() override {
+        *destroyed_ = GetCurrentThreadId();
+        *running_ = getWorkerThread()->isRunning() ? 1 : 0;
+        SetEvent(destructor_entered_);
+    }
+private:
+    std::atomic<DWORD>* destroyed_;
+    std::atomic<int>* running_;
+    HANDLE destructor_entered_;
+};
+class LifetimeProbeTask : public SOCltTask {
+public:
+    LifetimeProbeTask(SOCltServer* server, HANDLE entered, HANDLE resume, std::atomic<DWORD>* worker)
+        : SOCltTask(server), entered_(entered), resume_(resume), worker_(worker) {}
+    void execute() override { setResult(S_OK); }
+    void reportCompletion() override {
+        *worker_ = GetCurrentThreadId();
+        SetEvent(entered_);
+        SOCltTask::reportCompletion();
+        WaitForSingleObject(resume_, INFINITE);
+    }
+private:
+    HANDLE entered_, resume_;
+    std::atomic<DWORD>* worker_;
+};
+extern "C" int32_t opcl_da_test_ephemeral_worker(uint32_t guarded) {
+    HANDLE entered = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+    HANDLE resume = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+    HANDLE destructor_entered = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+    if (!entered || !resume || !destructor_entered) {
+        if (entered) CloseHandle(entered);
+        if (resume) CloseHandle(resume);
+        if (destructor_entered) CloseHandle(destructor_entered);
+        return E_OUTOFMEMORY;
+    }
+    std::atomic<DWORD> worker(0), destroyed(0);
+    std::atomic<int> running(-1);
+    const DWORD caller = GetCurrentThreadId();
+    LifetimeProbeServer* server = new LifetimeProbeServer(&destroyed, &running, destructor_entered);
+    LifetimeProbeTask* task = new LifetimeProbeTask(server, entered, resume, &worker);
+    HRESULT hr = E_FAIL;
+    if (guarded) {
+        {
+            EphemeralContext context(server);
+            hr = context.get()->executeTask(task);
+            const DWORD entered_result = WaitForSingleObject(entered, 5000);
+            task->release();
+            if (entered_result != WAIT_OBJECT_0) hr = E_FAIL;
+            SetEvent(resume);
+        }
+        CloseHandle(entered); CloseHandle(resume); CloseHandle(destructor_entered);
+        return SUCCEEDED(hr) && destroyed == caller && running == 0 ? S_OK : E_FAIL;
+    }
+    SOCmnPointer<SOCltServer> unguarded(server);
+    hr = unguarded->executeTask(task);
+    if (FAILED(hr) || WaitForSingleObject(entered, 5000) != WAIT_OBJECT_0) {
+        SetEvent(resume); task->release();
+        unguarded->getWorkerThread()->shutdown();
+        return E_FAIL;
+    }
+    HANDLE worker_handle = OpenThread(SYNCHRONIZE, FALSE, worker.load());
+    if (!worker_handle) {
+        SetEvent(resume); task->release();
+        unguarded->getWorkerThread()->shutdown();
+        return E_FAIL;
+    }
+    task->release();
+    unguarded.release();
+    SetEvent(resume);
+    if (WaitForSingleObject(destructor_entered, 2000) != WAIT_OBJECT_0 ||
+        destroyed != worker || running != 1) return E_FAIL;
+    std::fprintf(stderr, "lifetime baseline self-destructor reached\n"); std::fflush(stderr);
+    // The original ordering can destroy the worker on its own thread and
+    // self-wait; the parent process enforces a timeout for this baseline.
+    WaitForSingleObject(worker_handle, INFINITE);
+    CloseHandle(worker_handle); CloseHandle(entered); CloseHandle(resume); CloseHandle(destructor_entered);
+    return E_FAIL;
+}
+#endif
 class ResolveServerTask : public SOCltTask {
 public:
-    ResolveServerTask(SODaCServer* context, const WCHAR* node, const WCHAR* progid,
+    ResolveServerTask(SOCltServer* context, const WCHAR* node, const WCHAR* progid,
                       uint32_t kind, OpclDaGuid* out)
         : SOCltTask(context), node_(node), progid_(progid), kind_(kind), out_(out), ran_(false) {}
     void execute() override try {
@@ -994,7 +1092,7 @@ private:
 };
 class DiscoverServerTask : public SOCltTask {
 public:
-    DiscoverServerTask(SODaCServer* context, const WCHAR* node, OpclDaServerRecord* out,
+    DiscoverServerTask(SOCltServer* context, const WCHAR* node, OpclDaServerRecord* out,
                        uint32_t capacity, uint32_t* count, uint32_t* fallback)
         : SOCltTask(context), node_(node), out_(out), capacity_(capacity), count_(count),
           fallback_(fallback), ran_(false) {}
@@ -1061,11 +1159,11 @@ extern "C" int32_t opcl_da_resolve(OpclDaHost* host, const char* node, const cha
     std::vector<WCHAR> n, p;
     if (!to_wide(node, n) || !to_wide(progid, p)) return E_INVALIDARG;
     OPCL_DISCOVERY_TRACE("construct resolve context");
-    SOCmnPointer<SODaCComServerDefault> context = new SODaCComServerDefault();
-    ResolveServerTask* task = new (std::nothrow) ResolveServerTask(context, n.data(), p.data(), kind, out);
+    EphemeralContext context(new SOCltServer());
+    ResolveServerTask* task = new (std::nothrow) ResolveServerTask(context.get(), n.data(), p.data(), kind, out);
     if (!task) return E_OUTOFMEMORY;
     OPCL_DISCOVERY_TRACE("execute resolve task");
-    const HRESULT hr = context->executeTask(task); const bool ran = task->ran(); task->release();
+    const HRESULT hr = context.get()->executeTask(task); const bool ran = task->ran(); task->release();
     OPCL_DISCOVERY_TRACE("resolve task returned");
     return ran || FAILED(hr) ? hr : E_UNEXPECTED;
 } catch (...) { return E_UNEXPECTED; }
@@ -1078,11 +1176,11 @@ extern "C" int32_t opcl_da_discover(OpclDaHost* host, const char* node,
     std::vector<WCHAR> n;
     if (!to_wide(node, n)) return E_INVALIDARG;
     OPCL_DISCOVERY_TRACE("construct discovery context");
-    SOCmnPointer<SODaCComServerDefault> context = new SODaCComServerDefault();
-    DiscoverServerTask* task = new (std::nothrow) DiscoverServerTask(context, n.data(), out, capacity, count, fallback);
+    EphemeralContext context(new SOCltServer());
+    DiscoverServerTask* task = new (std::nothrow) DiscoverServerTask(context.get(), n.data(), out, capacity, count, fallback);
     if (!task) return E_OUTOFMEMORY;
     OPCL_DISCOVERY_TRACE("execute discovery task");
-    const HRESULT hr = context->executeTask(task); const bool ran = task->ran(); task->release();
+    const HRESULT hr = context.get()->executeTask(task); const bool ran = task->ran(); task->release();
     OPCL_DISCOVERY_TRACE("discovery task returned");
     return ran || FAILED(hr) ? hr : E_UNEXPECTED;
 } catch (...) { return E_UNEXPECTED; }

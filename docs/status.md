@@ -1,5 +1,19 @@
 # Текущий статус
 
+## 2026-10-31 — N3 SDK временный worker ownership (Windows CI ожидается)
+
+Pinned SDK source: `SOCltTask` держит ссылку на element до destructor, но
+worker сигнализирует completion до release своей task-ссылки. Временный
+resolve/discover context мог быть уничтожен на собственном worker и ждать
+самого себя; прежний direct `SODaCComServerDefault` дополнительно не получал
+обязательный `initClt`, оставляя COM shutdown sink неинициализированным.
+Оба вызова теперь используют общий scoped `SOCltServer` как готовый SDK task
+worker; caller удерживает его до штатного SDK shutdown/join. Он не добавляет
+OPC или COM data-plane. Реальный SDK barrier probe сравнивает unguarded
+interleaving в отдельном watchdog-процессе с guarded cleanup и проверяет поток
+destructor; Win32 build и запуск пока не измерены. Ни этот source defect, ни
+исправление ещё не доказаны причиной прошлых access violation.
+
 ## 2026-10-31 — N3 intermittent reconnect crash
 
 На `4d22079` [COM fixture](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41122495828)

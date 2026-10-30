@@ -1195,3 +1195,13 @@ strict Gateway процесс на `4d22079` прошёл, 2-й завершил
 3-й не запущен. Добавлены test-only фазовые markers и AV observer, который
 возвращает EXCEPTION_CONTINUE_SEARCH; runtime поведение не менялось, дальнейшая
 локализация требует Windows CI.
+
+2026-10-31 N3 ephemeral worker: Class = SDK task/context lifetime; Inv = SDK
+worker завершён до уничтожения context на caller; N+1 = resolve и discover,
+успех и исключение/ошибка; Defect подтверждён pinned source: completion signal
+предшествует последнему worker task release, а direct COM-server context не
+инициализировал shutdown sink. Использован общий scoped SOCltServer без COM
+server impl; SDK управляет своим потоком. Barrier fixture использует настоящий
+SDK task, unguarded baseline в subprocess с watchdog и guarded destructor/thread
+проверку. Пока это проект проверок, не измеренный Win32 результат и не доказанная
+причина AV; полная subscription/teardown/remote проверка остаётся открытой.

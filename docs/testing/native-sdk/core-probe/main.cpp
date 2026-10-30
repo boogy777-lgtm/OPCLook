@@ -237,6 +237,14 @@ static int run_callbacks() {
 }
 int main(int argc, char** argv) {
     phase("start");
+    if (argc == 2 && (std::strcmp(argv[1], "--lifetime-baseline") == 0 ||
+                      std::strcmp(argv[1], "--lifetime-fixed") == 0)) {
+        const bool guarded = std::strcmp(argv[1], "--lifetime-fixed") == 0;
+        initSOCmn();
+        const HRESULT hr = opcl_da_test_ephemeral_worker(guarded ? 1 : 0);
+        exitSOCmn();
+        return SUCCEEDED(hr) ? 0 : 25;
+    }
     if (FAILED(opcl_da_test_queue_bounds())) return 23;
     if (!::GetModuleHandle(nullptr)) return 9;
     if (argc == 2 && std::strcmp(argv[1], "--live") == 0) return live_fixture();
