@@ -1,5 +1,28 @@
 # Текущий статус
 
+## 2026-10-30 — N2 SDK C ABI runtime prototype (не production)
+
+Добавлены SDK host/session и I4 sync I/O C ABI и строгий `--live` fixture
+сценарий (connect, add, device read, write, remove/re-add и read). SDK владеет
+COM/VARIANT; sync I/O отправляется на SDK per-server worker, host destroy должен выполняться на той же thread и только после
+завершения сессий. Для Poll group активна с SDK drPolledRefresh, без SDK cyclic
+sync-read; остальные типы, Browse, Discover, подписка и Rust wiring ещё не
+реализованы. Этот прототип не имеет production callers; stale handles пока не
+защищены безопасной Rust-владельческой обёрткой. Windows сборка и live run
+этого HEAD не измерены. N2/N3/N4 открыты.
+
+## 2026-10-30 — N2 SDK MTA lifecycle defect (проверка Win32 ожидается)
+
+В pinned Softing SOCltEntry успешный `CoInitializeEx(COINIT_MULTITHREADED)`
+оставляет `m_coInit == 0`, а `terminate` проверяет это поле как признак
+инициализации и не вызывает `CoUninitialize`. Библиотечный patch отдельно считает
+успешные вызовы; инициализация и завершение должны выполняться на одной thread.
+Win32 probe теперь проверяет COM context после terminate как на оригинальном,
+так и на исправленном SDK. Локально измерено: patch применяется к двум точным
+blob, 3 Python tests прошли; Win32 компиляция и regression этого HEAD ещё не
+измерены. Runtime adapter, live interop и N2/N3/N4 остаются открытыми; production
+DA не переключён. Подробности — в devlog.
+
 ## 2026-10-30 — N2.1 offline callback fact adapter (частично)
 
 Добавлен ограниченный adapter direct Softing core: callback → C ABI snapshot →

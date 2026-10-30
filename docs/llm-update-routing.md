@@ -114,3 +114,14 @@ removed duplicate paths -> commit/CI`.
 > UA и DA должны использовать native SDK. Смена кандидата разрешена.
 > Расширяй продуктовые механизмы; не пиши собственный Publish/recovery/COM слой.
 > Отдельно сообщи, что не проверено на Windows/DA/live. Обнови документы и коммит.
+
+### N2 SDK MTA lifecycle
+
+SOCltEntry MTA balance defect и SDK-level patch описаны в status/devlog.
+До runtime применять оба SDK patch к проверенным pinned blobs и вызывать
+initialize/terminate на одной thread; Win32 regression этого HEAD ожидается.
+Per-server SDK worker подтверждён source audit; независимый live teardown и
+isolation не доказаны. N2/N3/N4 остаются открытыми.
+
+N2 direct C ABI prototype и strict `core-probe --live` добавлены; он ещё не
+подключён к Engine и не доказывает работу Win32/live, N2/N3/N4 открыты.

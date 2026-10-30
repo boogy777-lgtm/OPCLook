@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import subprocess
 import unittest
-from softing_patch import apply_patch, PATCH_PATH, SOURCE_PATH
+from softing_patch import apply_patch, apply_com_patch, COM_BLOBS, PATCH_PATH, SOURCE_PATH
 
 
 class PatchTests(unittest.TestCase):
@@ -51,6 +51,30 @@ class PatchTests(unittest.TestCase):
             with self.assertRaises(subprocess.CalledProcessError):
                 apply_patch(root, bad)
             self.assertEqual(target.read_bytes(), self.source)
+
+    def test_com_patch_checks_both_original_blobs_before_changing_either(self):
+        sdk = Path(os.environ["SOFTING_SDK_ROOT"])
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            for path, sha in COM_BLOBS.items():
+                target = root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if (sdk / ".git").exists():
+                    data = subprocess.run(["git", "-C", str(sdk), "cat-file", "blob", sha],
+                                          check=True, capture_output=True).stdout
+                else:
+                    data = (sdk / path).read_bytes()
+                target.write_bytes(data)
+            paths = list(COM_BLOBS)
+            original = [(root / path).read_bytes() for path in paths]
+            (root / paths[1]).write_bytes(original[1] + b"changed")
+            with self.assertRaises(ValueError):
+                apply_com_patch(root)
+            self.assertEqual((root / paths[0]).read_bytes(), original[0])
+            (root / paths[1]).write_bytes(original[1])
+            apply_com_patch(root)
+            self.assertTrue(all((root / path).read_bytes() != before
+                                for path, before in zip(paths, original)))
 
 
 if __name__ == "__main__":

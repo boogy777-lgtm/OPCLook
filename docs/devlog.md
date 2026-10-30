@@ -1037,3 +1037,38 @@ N2: разрабатывать тонкий адаптер на direct SODaC/SOC
 Измерено локально: 3 теста настоящих Rust файлов на Linux. Win32 SDK/ABI
 fixture и сквозная передача в Rust требуют проверки CI точного HEAD; живой
 сервер, подключение к Engine и полная миграция остаются открыты.
+
+### N2 SDK COM balance — source defect and regression (2026-10-30)
+
+Class R00/R03/R09/R13, O30–O35: SDK владеет COM lifecycle, сессии изолированы,
+старые регистрации не меняют новую эпоху. N+1: один зависший сервер не должен
+задерживать другой; неподдерживаемое не превращается в успех. Defect: pinned
+`SOCltEntry::initialize` сохраняет режим `COINIT_MULTITHREADED` (0), тогда как
+`terminate` использует `m_coInit != 0` для решения о `CoUninitialize`, и один
+успешный MTA init не балансируется. `softing-com-balance.patch` считает успешные
+инициализации отдельно от режима; source blobs проверяются перед применением.
+Windows probe ожидает обнаружить baseline leak и после patch отсутствие COM
+context на той же thread; baseline leak он балансирует при выходе. Это не live
+interop и не доказательство lifecycle произвольного host: Windows CI pending.
+Локально измерено: 3 Python patch tests прошли на точных SDK blobs.
+`SOCltServer::getWorkerThread` возвращает собственный `m_workThread` каждого
+server, а не общий entry worker; live isolation и shutdown остаются открыты.
+
+### N2 direct SDK runtime prototype (2026-10-30)
+
+`native/softing-da/runtime` создаёт SDK host, server, group и item и вызывает
+SODaC sync read/write, сохраняя service/item HRESULT, VARTYPE, quality и
+FILETIME. `core-probe --live` требует fixture `OPCLook.NativeDaFixture.1`,
+`Fixture.Value` начальное I4 42; проверяет device read, write 77, повторную
+регистрацию и read. Это пока только I4 prototype, не Rust runtime и не
+доказательство interop: Win32 compile и исполнение ожидаются. Для active group
+выбран SDK drPolledRefresh: исходный `SODaCComGroup` не создаёт при этом
+cyclic sync read (source inspection), Engine остаётся owner Poll. Production
+остается legacy до полноценного adapter и live gate.
+
+SDK syncRead/syncWrite непосредственно вызывают COM на вызывающей thread;
+вызов с session thread без COM init был бы неверен. Prototype теперь запускает
+I/O через SDK `SOCltTask` и `executeTask` на per-server SDK worker, который
+сам инициализирует и балансирует MTA. Строгий fixture вызывает I/O на thread
+без COM context и проверяет, что она остаётся без COM context. Win32 compile
+и live выполнение этого изменения ещё не измерены.

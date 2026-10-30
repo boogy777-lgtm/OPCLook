@@ -1,0 +1,37 @@
+name: Native DA local COM interop
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  local-com:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: opclook
+      - uses: actions/checkout@v4
+        with:
+          repository: SoftingIndustrial/OPC-Classic-SDK
+          ref: 5130e763998189c822882434c43e6be2eb0174cf
+          path: softing-sdk
+      - name: Build ready SDK server, client and original IDL RPC proxy
+        shell: cmd
+        run: |
+          @echo off
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSROOT=%%i"
+          if not defined VSROOT exit /b 1
+          call "%VSROOT%\VC\Auxiliary\Build\vcvarsall.bat" x86
+          if errorlevel 1 exit /b 1
+          cmake -S opclook/docs/testing/native-sdk/server-fixture -B fixture-build -A Win32 "-DSOFTING_SDK_ROOT=%CD%/softing-sdk"
+          if errorlevel 1 exit /b 1
+          cmake --build fixture-build --config Release --parallel 2
+          if errorlevel 1 exit /b 1
+      - name: Actual cross-process OPC DA Read and Write
+        shell: pwsh
+        run: |
+          python opclook/docs/testing/native-sdk/server-fixture/run-interop.py --server fixture-build/Release/opcl_da_server.exe --proxy fixture-build/Release/opcl_opcproxy.dll -- ./fixture-build/Release/opcl_da_sdk_client.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

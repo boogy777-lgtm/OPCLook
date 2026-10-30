@@ -395,3 +395,15 @@ transaction не превращать в unsolicited value ради прохож
 The 64-item limit applies after the SDK has received and prepared the callback; it does not bound SDK-side allocations. Buffer holds only the latest callback and requires external serialization; it is
 not a queue or history, is not wired to the production backend, and cannot prove
 live delivery, transaction correlation, teardown or two-session isolation.
+
+### N2 SDK initialization owner (Win32 CI pending)
+
+| ID | Условие | Ожидаемый результат | Проверка |
+| --- | --- | --- | --- |
+| N2L01 | Успешный MTA initialize и terminate на одной thread | COM initialization balanced; исходный SDK не балансирует | direct core probe проверяет CoGetContextToken для baseline и исправленного SDK; Windows CI pending |
+| N2L02 | Несовпадение любого из двух SDK source blobs | Patch не изменяет ни один исходный файл | Python test, локально прошёл |
+| N2L03 | Две независимые сессии, одна зависла | Вторая продолжает обслуживаться, teardown ограничен | source: per-server SDK worker; live interop pending |
+
+| N2L04 | Fixture connect, add I4, device read, write, remove/re-add, read | SDK ABI returns raw service/item result and original value/quality/time | `core-probe --live`; Windows fixture/CI pending |
+
+| N2L05 | Read/write с вызывающей thread без COM context | SDK выполняет I/O на своём per-server COM worker, caller context не создаётся | `core-probe --live`; Windows fixture/CI pending |

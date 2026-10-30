@@ -2,7 +2,9 @@
 #include <cstdio>
 #include <cstring>
 #include <type_traits>
+#include <thread>
 #include "adapter.hpp"
+#include "runtime.h"
 #include <cstddef>
 static_assert(sizeof(OpclDaFact) == 24 && offsetof(OpclDaFact, client_handle) == 0 &&
               offsetof(OpclDaFact, hresult) == 4 && offsetof(OpclDaFact, filetime_low) == 8 &&
@@ -116,6 +118,52 @@ static void phase(const char* name) {
     std::printf("phase: %s\n", name);
     std::fflush(stdout);
 }
+static int live_fixture() {
+    const OpclDaGuid clsid = {0x7d4bd1b1, 0x7422, 0x48c0,
+                              {0xad, 0x58, 0x60, 0x1b, 0x70, 0x14, 0x49, 0xc6}};
+    OpclDaHost* host = nullptr;
+    OpclDaSession* session = nullptr;
+    OpclDaItem* item = nullptr;
+    uint16_t type = 0; uint32_t rights = 0; int32_t write_result = E_FAIL;
+    OpclDaReadI4 value{};
+    HRESULT hr = opcl_da_host_create(&host);
+    if (FAILED(hr)) { std::printf("host %08lx\n", hr); return 31; }
+    hr = opcl_da_session_open(host, "OPCLook.NativeDaFixture.1", "localhost", &clsid, &session);
+    bool ok = SUCCEEDED(hr);
+    // This caller has no COM apartment. SDK task dispatch must perform all
+    // synchronous OPC I/O on the SDK's per-server worker.
+    if (ok) { std::thread caller([&] {
+    ULONG_PTR token = 0;
+    ok = CoGetContextToken(&token) == CO_E_NOTINITIALIZED;
+    if (ok) hr = opcl_da_item_add(session, "Fixture.Value", &item, &type, &rights);
+    if (SUCCEEDED(hr)) hr = opcl_da_read_i4(session, item, 0, &value);
+    ok = ok && SUCCEEDED(hr) && SUCCEEDED(value.service_result) && SUCCEEDED(value.item_result) &&
+              type == VT_I4 && (rights & OPC_WRITEABLE) && value.value == 42 &&
+              (value.quality & 0xc0) == 0xc0 && (value.filetime_low || value.filetime_high);
+    if (ok) {
+        hr = opcl_da_write_i4(session, item, 77, &write_result);
+        ok = SUCCEEDED(hr) && SUCCEEDED(write_result);
+    }
+    if (ok) {
+        hr = opcl_da_read_i4(session, item, 0, &value);
+        ok = SUCCEEDED(hr) && SUCCEEDED(value.service_result) && SUCCEEDED(value.item_result) && value.value == 77;
+    }
+    ok = ok && CoGetContextToken(&token) == CO_E_NOTINITIALIZED;
+    }); caller.join(); }
+    if (ok) {
+        hr = opcl_da_item_remove(session, item); item = nullptr;
+        ok = SUCCEEDED(hr);
+    }
+    if (ok) {
+        hr = opcl_da_item_add(session, "Fixture.Value", &item, &type, &rights);
+        if (SUCCEEDED(hr)) hr = opcl_da_read_i4(session, item, 0, &value);
+        ok = SUCCEEDED(hr) && SUCCEEDED(value.service_result) && SUCCEEDED(value.item_result) && value.value == 77;
+    }
+    if (session) { hr = opcl_da_session_close(session); ok = ok && SUCCEEDED(hr); }
+    hr = opcl_da_host_destroy(host); ok = ok && SUCCEEDED(hr);
+    std::printf("live SDK C ABI fixture %s (hr=%08lx item=%08lx)\n", ok ? "PASS" : "FAIL", hr, write_result);
+    return ok ? 0 : 32;
+}
 static int run_callbacks() {
     phase("create-group");
     CaptureGroup* group = new CaptureGroup;
@@ -171,6 +219,7 @@ static int run_callbacks() {
 int main(int argc, char** argv) {
     phase("start");
     if (!getInstanceHandle()) return 9;
+    if (argc == 2 && std::strcmp(argv[1], "--live") == 0) return live_fixture();
     const bool baseline = argc == 2 && std::strcmp(argv[1], "--expect-existing-defect") == 0;
     phase("common-init");
     initSOCmn();
@@ -190,6 +239,14 @@ int main(int argc, char** argv) {
             entry->disconnect();
             phase("terminate");
             if (!entry->terminate()) result = 14;
+            // initialize/terminate run on this same thread. With no prior COM
+            // initialization, the baseline leaks the MTA because its mode is 0.
+            ULONG_PTR token = 0;
+            const HRESULT apartment = CoGetContextToken(&token);
+            const bool balanced = apartment == CO_E_NOTINITIALIZED;
+            std::printf("MTA lifecycle balanced=%d\n", balanced);
+            if (baseline ? balanced : !balanced) result = 22;
+            if (!balanced) CoUninitialize(); // only balance the baseline leak
         }
         phase("entry-release");
         entry.release();

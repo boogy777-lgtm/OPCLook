@@ -1,0 +1,7 @@
+LIBRARY opcl_opcproxy
+EXPORTS
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE
+    DllRegisterServer PRIVATE
+    DllUnregisterServer PRIVATE
+    GetProxyDllInfo PRIVATE
