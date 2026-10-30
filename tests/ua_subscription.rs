@@ -351,7 +351,10 @@ fn write(gateway: &Gateway, session: u64, key: ItemKey, value: Value) {
     .expect("write timeout");
     match kind {
         EventKind::Wrote { key: k, result } if k == key => {
-            assert!(result.is_ok(), "write failed: {result:?}");
+            assert!(
+                result.as_ref().is_ok_and(|outcome| outcome.accepted()),
+                "write failed: {result:?}"
+            );
         }
         other => panic!("write returned unexpected event: {other:?}"),
     }

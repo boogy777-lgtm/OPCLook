@@ -382,7 +382,7 @@ pub(super) async fn read(session: &mut UaSession, keys: &[ItemKey]) -> Vec<(Item
 pub(super) async fn write(
     session: &mut UaSession,
     request: WriteRequest,
-) -> Result<(), BackendMsg> {
+) -> Result<crate::bff::model::WriteOutcome, BackendMsg> {
     let node_id = session
         .items
         .get(&request.key)
@@ -407,18 +407,49 @@ pub(super) async fn write(
     let write_result = timeout_drain(session.session.write(&[write]), IO_TIMEOUT).await;
     let Ok(write_result) = write_result else {
         session.timed_out = true;
-        return Err(BackendMsg::TimeoutWrite);
+        return Ok(crate::bff::model::WriteOutcome::unknown_because(
+            BackendMsg::TimeoutWrite,
+        ));
     };
-    let result = write_result.map_err(|e| BackendMsg::UaServiceError {
-        service: crate::bff::model::UaService::Write,
-        detail: e.to_string(),
-    })?;
+    let result = match write_result {
+        Ok(result) => result,
+        Err(error) => {
+            return Ok(crate::bff::model::WriteOutcome::unknown_with_status(
+                crate::bff::model::NativeWriteStatus::UaService(error.status().bits()),
+                error.to_string(),
+            ));
+        }
+    };
+    Ok(write_outcome(&result))
+}
+
+fn write_outcome(result: &[StatusCode]) -> crate::bff::model::WriteOutcome {
     match result.first() {
-        Some(status) if status.is_bad() => Err(BackendMsg::WriteRejected {
-            status: format!("{} (0x{:08X})", status.to_string(), status.bits()),
-        }),
-        Some(_) => Ok(()),
-        None => Err(BackendMsg::NoWriteResult),
+        Some(status) => crate::bff::model::WriteOutcome::from_ua(status.bits(), status.to_string()),
+        None => crate::bff::model::WriteOutcome::unknown(""),
+    }
+}
+
+#[cfg(test)]
+mod write_outcome_tests {
+    use super::*;
+    use crate::bff::model::{NativeWriteStatus, WriteDisposition};
+
+    #[test]
+    fn adapter_keeps_good_async_uncertain_bad_and_missing() {
+        for (raw, expected) in [
+            (0, WriteDisposition::Accepted),
+            (0x002e_0000, WriteDisposition::AcceptedAsynchronously),
+            (0x4000_0000, WriteDisposition::Uncertain),
+            (0x8000_0000, WriteDisposition::Rejected),
+        ] {
+            let outcome = write_outcome(&[StatusCode::from(raw)]);
+            assert_eq!(outcome.raw, Some(NativeWriteStatus::Ua(raw)));
+            assert_eq!(outcome.disposition, expected);
+        }
+        let missing = write_outcome(&[]);
+        assert_eq!(missing.disposition, WriteDisposition::Unknown);
+        assert_eq!(missing.raw, None);
     }
 }
 

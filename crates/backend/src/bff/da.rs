@@ -822,7 +822,10 @@ impl DaSession {
         out
     }
 
-    fn write(&mut self, request: super::model::WriteRequest) -> Result<(), BackendMsg> {
+    fn write(
+        &mut self,
+        request: super::model::WriteRequest,
+    ) -> Result<super::model::WriteOutcome, BackendMsg> {
         let slot = self
             .items
             .get(&request.key)
@@ -845,15 +848,24 @@ impl DaSession {
         // SAFETY: Write transfers its nullable errors allocation.
         let _errors = unsafe { CoAllocation::from_raw(errors) };
         match call {
-            Err(e) => Err(BackendMsg::Raw(self.error_text(e.code()))),
+            Err(e) => Ok(super::model::WriteOutcome::unknown_with_status(
+                super::model::NativeWriteStatus::DaService(e.code().0),
+                self.error_text(e.code()),
+            )),
             Ok(()) => {
+                if errors.is_null() {
+                    return Ok(super::model::WriteOutcome::unknown(""));
+                }
                 // SAFETY: a successful single-item Write supplies one error if non-null.
                 let err = unsafe { read_hresult(errors, 0) };
-                if err.is_err() {
-                    Err(BackendMsg::Raw(self.error_text(err)))
-                } else {
-                    Ok(())
-                }
+                Ok(super::model::WriteOutcome::from_da(
+                    err.0,
+                    if err.0 == 0 {
+                        String::new()
+                    } else {
+                        self.error_text(err)
+                    },
+                ))
             }
         }
     }

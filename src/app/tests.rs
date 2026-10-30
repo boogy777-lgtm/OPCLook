@@ -1791,6 +1791,96 @@ fn start_batch(app: &mut App, keys: &[ItemKey]) {
 }
 
 #[test]
+fn write_outcomes_keep_status_and_never_replace_observed_value() {
+    use crate::bff::model::WriteOutcome;
+    for (code, accepted) in [
+        (0x002e_0000, true),
+        (0x4000_1234, false),
+        (0x8000_0042, false),
+    ] {
+        let (_ctx, mut app) = tree_app();
+        let session = SessionId::FIRST;
+        let key = app.seed_row(session, "A", "A", Value::I64(9));
+        start_batch(&mut app, &[key]);
+        let id = app.pending_request_ids_for_test(session)[0];
+        app.on_event_for_test_with_request(
+            session,
+            id,
+            EventKind::Wrote {
+                key,
+                result: Ok(WriteOutcome::from_ua(code, "status")),
+            },
+        );
+        assert_eq!(app.rows[0].value, Value::I64(9));
+        assert_eq!(app.write_batch.ok, usize::from(accepted));
+        assert_eq!(app.dialogs.message.is_some(), code == 0x8000_0042);
+        assert!(
+            app.journal
+                .entries()
+                .iter()
+                .any(|entry| entry.render(app.lang()).contains(&format!("0x{code:08X}")))
+        );
+    }
+}
+
+#[test]
+fn write_timeout_is_reported_as_unknown_and_not_retried() {
+    let (_ctx, mut app) = tree_app();
+    let session = SessionId::FIRST;
+    let key = app.seed_row(session, "A", "A", Value::I64(9));
+    app.record_dispatches_for_test();
+    start_batch(&mut app, &[key]);
+    let id = app.pending_request_ids_for_test(session)[0];
+    app.on_event_for_test_with_request(
+        session,
+        id,
+        EventKind::Error {
+            operation: Operation::Write,
+            message: BackendMsg::RequestTimeout { seconds: 5 },
+        },
+    );
+    assert_eq!(app.rows[0].value, Value::I64(9));
+    assert_eq!(app.write_batch.ok, 0);
+    assert_eq!(
+        app.dispatched_for_test()
+            .into_iter()
+            .filter(|cmd| matches!(cmd.kind, CommandKind::Write { .. }))
+            .count(),
+        1
+    );
+    assert!(app.journal.entries().iter().any(|entry| {
+        entry
+            .render(app.lang())
+            .contains(tr(app.lang(), Tr::WriteUnknownStatus))
+    }));
+    assert!(app.dialogs.message.is_none());
+}
+
+#[test]
+fn preflight_write_error_is_not_submitted() {
+    let (_ctx, mut app) = tree_app();
+    let session = SessionId::FIRST;
+    let key = app.seed_row(session, "A", "A", Value::I64(9));
+    start_batch(&mut app, &[key]);
+    let id = app.pending_request_ids_for_test(session)[0];
+    app.on_event_for_test_with_request(
+        session,
+        id,
+        EventKind::Wrote {
+            key,
+            result: Err(BackendMsg::NodeNotSubscribed),
+        },
+    );
+    let dialog = app.dialogs.message.as_ref().unwrap();
+    assert!(
+        dialog
+            .details
+            .contains(tr(app.lang(), Tr::WriteNotSubmitted))
+    );
+    assert_eq!(app.rows[0].value, Value::I64(9));
+}
+
+#[test]
 fn a11_overlapping_write_batches_add_up() {
     let (_ctx, mut app) = tree_app();
     let a = app.seed_row(
@@ -1824,7 +1914,7 @@ fn a11_overlapping_write_batches_add_up() {
             *id,
             EventKind::Wrote {
                 key,
-                result: Ok(()),
+                result: Ok(crate::bff::model::WriteOutcome::from_ua(0, "Good")),
             },
         );
     }
@@ -1861,7 +1951,7 @@ fn a11_counters_restart_after_a_finished_batch() {
         id,
         EventKind::Wrote {
             key: a,
-            result: Ok(()),
+            result: Ok(crate::bff::model::WriteOutcome::from_ua(0, "Good")),
         },
     );
     start_batch(&mut app, &[a]);

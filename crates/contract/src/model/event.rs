@@ -105,7 +105,8 @@ pub enum EventKind {
     },
     Wrote {
         key: ItemKey,
-        result: Result<(), BackendMsg>,
+        /// `Err` means validation or routing failed before the native Write was submitted.
+        result: Result<super::WriteOutcome, BackendMsg>,
     },
     Disconnected {
         reason: BackendMsg,

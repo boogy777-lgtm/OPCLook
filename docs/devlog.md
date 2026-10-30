@@ -863,3 +863,20 @@ WriteReadback не подключён: UA write сводит Uncertain и Good �
 распознать принятый Good. Общий конфиг, Refresh и корректное завершение каждого
 ключа partial reply остаются открытыми, как и Browse fairness, полные таблицы,
 native DA, timestamps/gap. Статусы не объявляются сохранёнными этим срезом.
+
+## 2026-10-30 — R2.5/R2.1: Write outcome и наблюдение — до кода
+
+Class: статус операции записи и последующее наблюдение. Invariant: сохранять
+raw per-item статус, различать Good, Good_CompletesAsynchronously, Uncertain,
+Rejected и неизвестный исход; read-back не доказывает физического действия.
+N+1: использовать существующие SDK Write и Engine request/due/permit, без нового
+протокольного scheduler или COM слоя. Defect: UA not-Bad преобразован в Ok(()),
+DA HRESULT и отсутствие массива результата теряются; App и CLI интерпретируют
+Ok как подтверждённое выполнение. Места: contract/event, UA io/worker, DA write,
+Engine, App events и CLI. Проверки: O14–O16 и S01–S07, correlation/epoch,
+конкретные native статусы и timeout через реальные entry points.
+
+
+2026-10-30, результат: typed WriteOutcome передаёт raw UA/DA item или service статус и сохраняет Unknown на таймауте после отправки; preflight Err означает неотправленную запись. GUI и CLI используют общую нормализацию. Read-back не включён. Headless egui/wgpu отрисовал три синтетических сценария Rejected, NotSubmitted, Unknown; PNG визуально просмотрены. Первая попытка упала из-за отсутствующего CJK fallback; английские сцены проверены с установленным DejaVu Sans через штатный OPCLOOK_CJK_FONT.
+
+Полный Linux gate завершился exit 0 после `cargo clean --target x86_64-unknown-linux-gnu` и прогона без debug symbols/incremental. Ранее E0463 для opclook_locale при последовательной сборке, причина не установлена; отдельный запуск без явного Linux target не нашёл неустановленный i686 core. Один повтор gate остановлен при заполнении диска. CLI checked deadline защищает от переполнения, post-dispatch ошибка ожидания даёт Unknown.

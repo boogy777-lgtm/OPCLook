@@ -168,7 +168,7 @@ fn browse_read_write_push_forced_poll_and_idle_interrupt() {
     assert!(first["data"]["quality"]["kind"].is_string());
     assert!(first["data"]["timestamp"].is_string());
     assert_eq!(
-        server.execute(&["write", &server.node, "f64", "2.5"])["written"],
+        server.execute(&["write", &server.node, "f64", "2.5"])["accepted"],
         true
     );
     assert_eq!(

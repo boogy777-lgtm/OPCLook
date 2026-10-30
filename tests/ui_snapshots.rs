@@ -286,3 +286,45 @@ fn keyboard_unselected_focus_ru() {
         .save("docs/screenshots/keyboard-unselected-focus-ru.png")
         .unwrap();
 }
+
+#[test]
+#[ignore = "manual visual QA requiring a headless wgpu renderer"]
+fn write_outcomes_render() {
+    use egui::Key;
+    use opclook::bff::model::{BackendMsg, EventKind, WriteOutcome};
+    let output = std::env::var("OPCLOOK_WRITE_SCREENSHOTS").unwrap();
+    for scenario in ["rejected", "not-submitted", "unknown"] {
+        let session = SessionId::FIRST;
+        let mut app = base(Lang::En);
+        app.settings.view.options.confirm_write = false;
+        app.seed_session(session, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+        let key = app.seed_writable_row(session, "ns=2;i=1", "Pump", Value::I64(9));
+        let mut h = Harness::builder()
+            .with_size([1200.0, 900.0])
+            .with_accessibility_check(false)
+            .with_context_setup(|ctx| {
+                assert!(opclook::app::install_fonts(ctx).is_some());
+            })
+            .build_ui_state(|ui, app: &mut App| app.update(ui), app);
+        h.state_mut().select_only(0);
+        h.run_steps(2);
+        h.key_press(Key::Enter);
+        h.run_steps(3);
+        h.key_press(Key::Enter);
+        h.run_steps(3);
+        let id = h.state().pending_request_ids_for_test(session)[0];
+        let result = match scenario {
+            "rejected" => Ok(WriteOutcome::from_ua(0x8000_0042, "Bad")),
+            "not-submitted" => Err(BackendMsg::NodeNotSubscribed),
+            _ => Ok(WriteOutcome::unknown_because(BackendMsg::TimeoutWrite)),
+        };
+        h.state_mut()
+            .on_event_for_test_with_request(session, id, EventKind::Wrote { key, result });
+        h.run_steps(8);
+        assert_eq!(h.state().dialogs.message.is_some(), scenario != "unknown");
+        h.render()
+            .unwrap()
+            .save(format!("{output}/{scenario}.png"))
+            .unwrap();
+    }
+}

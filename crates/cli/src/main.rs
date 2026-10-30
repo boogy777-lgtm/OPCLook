@@ -384,6 +384,11 @@ fn next_event(
         }
     }
 }
+fn checked_deadline(now: Instant, timeout: Duration) -> Result<Instant, String> {
+    now.checked_add(timeout)
+        .ok_or_else(|| "operation timeout is too large".to_string())
+}
+
 fn response(
     engine: &mut Engine<()>,
     request: opclook_contract::model::RequestId,
@@ -391,7 +396,7 @@ fn response(
     stop: &Receiver<Result<(), String>>,
     endpoint: &EndpointSpec,
 ) -> Result<EventKind, String> {
-    let deadline = Instant::now() + timeout;
+    let deadline = checked_deadline(Instant::now(), timeout)?;
     loop {
         let event = next_event(engine, deadline, stop)?;
         if event.origin == opclook_contract::model::Origin::Reply(request) {
@@ -405,6 +410,35 @@ fn response(
         }
     }
 }
+fn write_response(
+    engine: &mut Engine<()>,
+    request: opclook_contract::model::RequestId,
+    timeout: Duration,
+    stop: &Receiver<Result<(), String>>,
+) -> Result<opclook_contract::model::WriteOutcome, opclook_contract::model::BackendMsg> {
+    use opclook_contract::model::{BackendMsg, Origin, WriteOutcome};
+    let deadline = match checked_deadline(Instant::now(), timeout) {
+        Ok(deadline) => deadline,
+        Err(error) => return Ok(WriteOutcome::unknown(error)),
+    };
+    loop {
+        let event = match next_event(engine, deadline, stop) {
+            Ok(event) => event,
+            Err(error) => return Ok(WriteOutcome::unknown(error)),
+        };
+        if event.origin == Origin::Reply(request) {
+            return match event.kind {
+                EventKind::Wrote { result, .. } => result,
+                EventKind::Error { message, .. } => WriteOutcome::from_dispatch_error(message),
+                _ => Ok(WriteOutcome::unknown("unexpected write response")),
+            };
+        }
+        if let EventKind::Disconnected { reason } = event.kind {
+            return Ok(WriteOutcome::unknown_because(reason));
+        }
+    }
+}
+
 fn encode(value: &Value, depth: usize, remaining: &mut usize) -> Result<Json, String> {
     if depth > MAX_DEPTH {
         return Err("value exceeds JSON output limit".into());
@@ -483,6 +517,32 @@ fn data_json(data: &DataValue, endpoint: &EndpointSpec) -> Result<Json, String> 
     Ok(
         json!({"value":encode(&data.value,0,&mut MAX_JSON_BUDGET.clone())?,"quality":{"code":data.quality.code,"kind":quality,"text":data.quality.text},"timestamp":data.timestamp.map(|v| v.to_rfc3339()),"reason":data.reason.as_ref().map(|reason| message(reason,endpoint))}),
     )
+}
+
+fn write_outcome_json(
+    node: &str,
+    outcome: &opclook_contract::model::WriteOutcome,
+    endpoint: &EndpointSpec,
+) -> Json {
+    use opclook_contract::model::{NativeWriteStatus, WriteDisposition};
+    let disposition = match outcome.disposition {
+        WriteDisposition::Accepted => "accepted",
+        WriteDisposition::AcceptedAsynchronously => "accepted_asynchronously",
+        WriteDisposition::Uncertain => "uncertain",
+        WriteDisposition::Rejected => "rejected",
+        WriteDisposition::Unknown => "unknown",
+    };
+    let raw = outcome.raw.map(|status| match status {
+        NativeWriteStatus::Ua(code) => json!({"protocol":"ua", "scope":"item", "code":code}),
+        NativeWriteStatus::Da(code) => json!({"protocol":"da", "scope":"item", "code":code as u32}),
+        NativeWriteStatus::UaService(code) => {
+            json!({"protocol":"ua", "scope":"service", "code":code})
+        }
+        NativeWriteStatus::DaService(code) => {
+            json!({"protocol":"da", "scope":"service", "code":code as u32})
+        }
+    });
+    json!({"node_id":node,"written":outcome.accepted(),"accepted":outcome.accepted(),"outcome":disposition,"raw_status":raw,"detail":redact(outcome.detail.clone(),endpoint),"reason":outcome.reason.as_ref().map(|reason| message(reason,endpoint))})
 }
 // Serialize into a bounded buffer before writing, so oversized output never emits a
 // partial JSON record and escaped strings count against the actual byte limit.
@@ -658,14 +718,23 @@ fn run_with_engine(
                 },
             },
         )?;
-        return match response(&mut engine, id, options.timeout, stop, &options.endpoint)? {
-            EventKind::Wrote { result: Ok(()), .. } => {
-                output(&json!({"node_id":node,"written":true}))
+        return match write_response(&mut engine, id, options.timeout, stop) {
+            Ok(outcome) => {
+                output(&write_outcome_json(&node, &outcome, &options.endpoint))?;
+                if outcome.accepted() {
+                    Ok(())
+                } else {
+                    Err(redact(
+                        opclook_locale::write_outcome_text(Lang::En, &outcome),
+                        &options.endpoint,
+                    ))
+                }
             }
-            EventKind::Wrote {
-                result: Err(error), ..
-            } => Err(message(&error, &options.endpoint)),
-            _ => Err("unexpected write response".into()),
+            Err(error) => Err(format!(
+                "{}: {}",
+                opclook_locale::tr(Lang::En, opclook_locale::Tr::WriteNotSubmitted),
+                message(&error, &options.endpoint)
+            )),
         };
     }
     if command == "read" {
@@ -892,6 +961,11 @@ mod tests {
         assert_eq!(output_to(&json!({}), Closed).unwrap_err(), OUTPUT_CLOSED);
     }
     #[test]
+    fn oversized_timeout_does_not_panic() {
+        assert!(checked_deadline(Instant::now(), Duration::MAX).is_err());
+        assert!(checked_deadline(Instant::now(), Duration::from_secs(1)).is_ok());
+    }
+    #[test]
     fn help_in_write_value_is_not_an_option() {
         let args = [
             "--ua",
@@ -929,5 +1003,29 @@ mod tests {
             encode(&Value::F64(f64::INFINITY), 0, &mut budget).unwrap()["value"],
             "Infinity"
         );
+    }
+
+    #[test]
+    fn write_json_distinguishes_uncertain_async_and_service_status() {
+        use opclook_contract::model::{NativeWriteStatus, WriteOutcome};
+        let endpoint = EndpointSpec::ua("opc.tcp://localhost:4840");
+        let uncertain = write_outcome_json(
+            "a",
+            &WriteOutcome::from_ua(0x4000_1234, "uncertain"),
+            &endpoint,
+        );
+        assert_eq!(uncertain["accepted"], false);
+        assert_eq!(uncertain["outcome"], "uncertain");
+        assert_eq!(uncertain["raw_status"]["code"], 0x4000_1234u32);
+        let async_result =
+            write_outcome_json("a", &WriteOutcome::from_ua(0x002e_0000, "async"), &endpoint);
+        assert_eq!(async_result["outcome"], "accepted_asynchronously");
+        let unknown = write_outcome_json(
+            "a",
+            &WriteOutcome::unknown_with_status(NativeWriteStatus::UaService(0x8000_0000), "error"),
+            &endpoint,
+        );
+        assert_eq!(unknown["accepted"], false);
+        assert_eq!(unknown["raw_status"]["scope"], "service");
     }
 }

@@ -1,5 +1,30 @@
 # Текущий статус
 
+## 2026-10-30 — результат записи (частичный R2)
+
+UA adapter сохраняет native status записи, включая Good_CompletesAsynchronously,
+Uncertain и Bad; DA legacy adapter сохраняет доступный per-item HRESULT. Err в
+Wrote означает установленный отказ до native Write; post-dispatch timeout или
+service failure дают Unknown с причиной и доступным raw service status. Общая
+нормализация используется GUI и CLI; принятая сервером запись не доказывает
+физического действия. GUI сохраняет прежний error dialog для Rejected; CLI
+возвращает исход и raw status в JSON и ненулевой код для неоднозначного или
+отклонённого результата. Текущее значение не заменяется оптимистически.
+
+Проверено: полный `scripts/check-linux.sh` завершился с кодом 0 на Linux
+x86_64 (CARGO_INCREMENTAL=0, debug symbols отключены); headless egui/wgpu
+сценарии Rejected, NotSubmitted и Unknown выполнены и PNG просмотрены. Это
+синтетические UI данные. Первый запуск без Linux target завершился E0463 из-за
+неустановленного default i686 target; другой запуск после check дал E0463 для
+opclook_locale, причина не установлена. Один повтор прерван из-за заполнения
+диска; последующий чистый gate прошёл. Windows x86 и физический DA ожидают CI
+и отдельной live проверки соответственно.
+
+Это не реализация WriteReadback/ExplicitRefresh: единая очередь этих целей,
+настройка AcquisitionConfig на соединение и миграция DA на полноценный native
+client SDK остаются открытыми. Существующий DA COM worker сохранён. Наличие
+native DA сервера и Windows/live не проверено локальным Linux прогоном.
+
 ## 2026-10-30 — R2.1: начальные снимки через Engine (частично)
 
 Подтверждённые AddItems создают в Engine одноразовую потребность снимка;

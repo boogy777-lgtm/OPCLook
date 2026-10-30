@@ -1042,7 +1042,10 @@ impl Actor {
                 let result = write(&mut self.session, request).await;
                 if self.session.timed_out {
                     let message = match &result {
-                        Ok(()) => BackendMsg::RequestTimedOutSessionClosed,
+                        Ok(outcome) => outcome
+                            .reason
+                            .clone()
+                            .unwrap_or(BackendMsg::RequestTimedOutSessionClosed),
                         Err(message) => message.clone(),
                     };
                     self.send_event(request_id, EventKind::Wrote { key, result });

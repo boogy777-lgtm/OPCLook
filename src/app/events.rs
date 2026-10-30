@@ -167,7 +167,7 @@ impl App {
                 PendingCtx::WriteKey(key),
             ) => EventKind::Wrote {
                 key: *key,
-                result: Err(message),
+                result: crate::bff::model::WriteOutcome::from_dispatch_error(message),
             },
             (kind, _) => kind,
         };
@@ -440,18 +440,40 @@ impl App {
                     .find(|r| r.key == key)
                     .map(|r| r.display_name.clone())
                     .unwrap_or_else(|| key.to_string());
-                self.write_batch.completed(result.is_ok());
+                self.write_batch
+                    .completed(result.as_ref().is_ok_and(|outcome| outcome.accepted()));
                 match result {
-                    Ok(()) => {
-                        self.journal.info_l(Tr::WrittenValue, &[&name]);
+                    Ok(outcome) => {
+                        let detail = self.session_backend_text(
+                            session,
+                            &crate::bff::model::BackendMsg::raw(
+                                opclook_locale::write_outcome_text(lang, &outcome),
+                            ),
+                        );
+                        let text = fmt(lang, Tr::WriteOutcomeForItem, &[&name, &detail]);
+                        if outcome.accepted() {
+                            self.journal.info(text);
+                        } else if outcome.disposition
+                            == crate::bff::model::WriteDisposition::Rejected
+                        {
+                            self.journal.error_l(Tr::WriteFailed, &[&name, &detail]);
+                            self.dialogs.message = Some(MessageDialog {
+                                title: tr(lang, Tr::WriteError).to_string(),
+                                text,
+                                details: detail,
+                            });
+                        } else {
+                            self.journal.warn(text);
+                        }
                     }
                     Err(message) => {
                         let message = self.session_backend_text(session, &message);
-                        self.journal.error_l(Tr::WriteFailed, &[&name, &message]);
+                        let detail = format!("{}: {}", tr(lang, Tr::WriteNotSubmitted), message);
+                        self.journal.error_l(Tr::WriteFailed, &[&name, &detail]);
                         self.dialogs.message = Some(MessageDialog {
                             title: tr(lang, Tr::WriteError).to_string(),
-                            text: fmt(lang, Tr::WriteFailedName, &[&name]),
-                            details: message,
+                            text: fmt(lang, Tr::WriteNotSubmittedName, &[&name]),
+                            details: detail,
                         });
                     }
                 }

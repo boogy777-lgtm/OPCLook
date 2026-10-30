@@ -502,6 +502,9 @@ translation_keys! {
     // ---- App-provided dialog content ----
     WriteError,
     WriteFailedName,
+    WriteUnknownName,
+    WriteNotSubmitted,
+    WriteNotSubmittedName,
     AddSignalTitle,
     AddSignalBadNode,
     ChangeValueTitle,
@@ -546,6 +549,12 @@ translation_keys! {
     AddFailedName,
     NoChildSignals,
     WrittenValue,
+    WriteAcceptedStatus,
+    WriteAsyncStatus,
+    WriteUncertainStatus,
+    WriteRejectedStatus,
+    WriteUnknownStatus,
+    WriteOutcomeForItem,
     WriteFailed,
     WriteDoneSummary,
     StaleData,
@@ -953,7 +962,7 @@ fn ru(key: Tr) -> &'static str {
         NoActiveServer => "нет активного сервера",
         SignalsCount => "Сигналов: {0} | Выбрано: {1}",
         Writing => "Запись...",
-        WrittenSummary => "Записано: {0} из {1}",
+        WrittenSummary => "Принято сервером: {0} из {1}",
         UpdatedAt => "Обновлено {0}",
         RowsHint => {
             "Таблица: ↑↓ Shift+PgUp/PgDn Home/End {0} {1} {3} {4} {5} · {6} — дерево · {2} — сервер"
@@ -1236,6 +1245,9 @@ fn ru(key: Tr) -> &'static str {
         // ---- App dialog content ----
         WriteError => "Ошибка записи",
         WriteFailedName => "Не удалось записать значение в сигнал \"{0}\".",
+        WriteUnknownName => "Результат записи в сигнал \"{0}\" неизвестен.",
+        WriteNotSubmitted => "Запись не отправлена",
+        WriteNotSubmittedName => "Запись в сигнал \"{0}\" не отправлена.",
         AddSignalTitle => "Добавление сигнала",
         AddSignalBadNode => {
             "Выбран узел-ветка. Выберите сигнал или используйте \"Добавить дочерние\"."
@@ -1288,8 +1300,14 @@ fn ru(key: Tr) -> &'static str {
         AddFailedName => "Не удалось добавить сигнал \"{0}\": {1}",
         NoChildSignals => "В выбранной ветке нет дочерних сигналов",
         WrittenValue => "Записано значение в \"{0}\"",
+        WriteAcceptedStatus => "Запись принята сервером; физическое действие не подтверждено",
+        WriteAsyncStatus => "Запись принята для асинхронного завершения; источник не проверен",
+        WriteUncertainStatus => "Результат записи неопределён",
+        WriteRejectedStatus => "Запись отклонена сервером",
+        WriteUnknownStatus => "Результат записи неизвестен; запись могла выполниться",
+        WriteOutcomeForItem => "\"{0}\": {1}",
         WriteFailed => "Не удалось записать \"{0}\": {1}",
-        WriteDoneSummary => "Запись завершена: {0} из {1} успешно",
+        WriteDoneSummary => "Сервер принял записи: {0} из {1}",
         StaleData => "устаревшие данные",
         NoData => "нет данных",
         WaitingValue => "ожидание значения",
@@ -1598,7 +1616,7 @@ fn en(key: Tr) -> &'static str {
         NoActiveServer => "no active server",
         SignalsCount => "Signals: {0} | Selected: {1}",
         Writing => "Writing...",
-        WrittenSummary => "Written: {0} of {1}",
+        WrittenSummary => "Accepted by server: {0} of {1}",
         UpdatedAt => "Updated {0}",
         RowsHint => {
             "Table: ↑↓ Shift+PgUp/PgDn Home/End {0} {1} {3} {4} {5} · {6} — tree · {2} — server"
@@ -1875,6 +1893,9 @@ fn en(key: Tr) -> &'static str {
         // ---- App dialog content ----
         WriteError => "Write error",
         WriteFailedName => "Failed to write a value to signal \"{0}\".",
+        WriteUnknownName => "The write outcome for signal \"{0}\" is unknown.",
+        WriteNotSubmitted => "Write not submitted",
+        WriteNotSubmittedName => "The write to signal \"{0}\" was not submitted.",
         AddSignalTitle => "Add signal",
         AddSignalBadNode => "A branch node is selected. Select a signal or use \"Add children\".",
         ChangeValueTitle => "Change value",
@@ -1923,8 +1944,14 @@ fn en(key: Tr) -> &'static str {
         AddFailedName => "Failed to add signal \"{0}\": {1}",
         NoChildSignals => "The selected branch has no child signals",
         WrittenValue => "Value written to \"{0}\"",
+        WriteAcceptedStatus => "Write accepted by the server; physical action is not confirmed",
+        WriteAsyncStatus => "Write accepted for asynchronous completion; source not verified",
+        WriteUncertainStatus => "Write result is uncertain",
+        WriteRejectedStatus => "Write rejected by the server",
+        WriteUnknownStatus => "Write outcome is unknown; the write may have occurred",
+        WriteOutcomeForItem => "\"{0}\": {1}",
         WriteFailed => "Failed to write \"{0}\": {1}",
-        WriteDoneSummary => "Write done: {0} of {1} successful",
+        WriteDoneSummary => "Server accepted writes: {0} of {1}",
         StaleData => "stale data",
         NoData => "no data",
         WaitingValue => "waiting for value",
@@ -2225,7 +2252,7 @@ fn zh(key: Tr) -> &'static str {
         NoActiveServer => "无活动服务器",
         SignalsCount => "信号: {0} | 已选: {1}",
         Writing => "写入中...",
-        WrittenSummary => "已写入: {0} / {1}",
+        WrittenSummary => "服务器已接受：{0} / {1}",
         UpdatedAt => "更新于 {0}",
         RowsHint => {
             "表格: ↑↓ Shift+PgUp/PgDn Home/End {0} {1} {3} {4} {5} · {6} — 树 · {2} — 服务器"
@@ -2492,6 +2519,9 @@ fn zh(key: Tr) -> &'static str {
         // ---- App dialog content ----
         WriteError => "写入错误",
         WriteFailedName => "无法将值写入信号 \"{0}\"。",
+        WriteUnknownName => "信号 \"{0}\" 的写入结果未知。",
+        WriteNotSubmitted => "写入未提交",
+        WriteNotSubmittedName => "信号 \"{0}\" 的写入未提交。",
         AddSignalTitle => "添加信号",
         AddSignalBadNode => "已选择分支节点。请选择信号或使用 \"添加子项\"。",
         ChangeValueTitle => "更改值",
@@ -2536,8 +2566,14 @@ fn zh(key: Tr) -> &'static str {
         AddFailedName => "无法添加信号 \"{0}\": {1}",
         NoChildSignals => "所选分支没有子信号",
         WrittenValue => "值已写入 \"{0}\"",
+        WriteAcceptedStatus => "服务器已接受写入；物理动作未确认",
+        WriteAsyncStatus => "写入已接受并将异步完成；尚未验证源设备",
+        WriteUncertainStatus => "写入结果不确定",
+        WriteRejectedStatus => "服务器拒绝了写入",
+        WriteUnknownStatus => "写入结果未知；写入可能已经发生",
+        WriteOutcomeForItem => "\"{0}\": {1}",
         WriteFailed => "无法写入 \"{0}\": {1}",
-        WriteDoneSummary => "写入完成: {0} / {1} 成功",
+        WriteDoneSummary => "服务器接受的写入：{0} / {1}",
         StaleData => "过期数据",
         NoData => "无数据",
         WaitingValue => "等待值",
@@ -2778,6 +2814,36 @@ pub fn send_error_text(lang: Lang, error: opclook_contract::model::SendError) ->
 }
 
 /// Render every backend message in the interface language.
+pub fn write_outcome_text(lang: Lang, outcome: &opclook_contract::model::WriteOutcome) -> String {
+    use opclook_contract::model::{NativeWriteStatus, WriteDisposition};
+    let key = match outcome.disposition {
+        WriteDisposition::Accepted => Tr::WriteAcceptedStatus,
+        WriteDisposition::AcceptedAsynchronously => Tr::WriteAsyncStatus,
+        WriteDisposition::Uncertain => Tr::WriteUncertainStatus,
+        WriteDisposition::Rejected => Tr::WriteRejectedStatus,
+        WriteDisposition::Unknown => Tr::WriteUnknownStatus,
+    };
+    let mut result = tr(lang, key).to_string();
+    if let Some(raw) = outcome.raw {
+        let (protocol, code) = match raw {
+            NativeWriteStatus::Ua(code) => ("UA", code),
+            NativeWriteStatus::Da(code) => ("DA", code as u32),
+            NativeWriteStatus::UaService(code) => ("UA service", code),
+            NativeWriteStatus::DaService(code) => ("DA service", code as u32),
+        };
+        result.push_str(&format!(" ({protocol} 0x{code:08X})"));
+    }
+    if let Some(reason) = &outcome.reason {
+        result.push_str(": ");
+        result.push_str(&backend_text(lang, reason));
+    }
+    if !outcome.detail.is_empty() {
+        result.push_str(": ");
+        result.push_str(&outcome.detail);
+    }
+    result
+}
+
 pub fn backend_text(lang: Lang, msg: &BackendMsg) -> String {
     use BackendMsg as M;
     match msg {

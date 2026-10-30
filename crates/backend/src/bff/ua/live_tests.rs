@@ -609,7 +609,7 @@ fn added_node_is_reused_for_reads_and_writes() {
     );
     let reply = app.reply(id, Duration::from_secs(10)).expect("write");
     assert!(
-        matches!(reply.kind, EventKind::Wrote { result: Ok(()), .. }),
+        matches!(reply.kind, EventKind::Wrote { result: Ok(ref outcome), .. } if outcome.accepted()),
         "{reply:?}"
     );
     let id = app.send(session.into(), CommandKind::Read { keys: vec![key] });
