@@ -1,11 +1,16 @@
 #include "stdafx.h"
+#include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <string>
 
 HINSTANCE getInstanceHandle() { return ::GetModuleHandle(nullptr); }
 static HANDLE isolation_entered = nullptr;
 static HANDLE isolation_release = nullptr;
+// SDK cache is owned until server stop; this counts writes on one fixture tag.
+static SOCmnPointer<SODaSCache> exception_count_cache;
+static std::atomic<unsigned> exception_write_count{0};
 
 static const CLSID fixture_clsid = {0x7d4bd1b1, 0x7422, 0x48c0, {0xad, 0x58, 0x60, 0x1b, 0x70, 0x14, 0x49, 0xc6}};
 
@@ -13,7 +18,7 @@ static const CLSID fixture_clsid = {0x7d4bd1b1, 0x7422, 0x48c0, {0xad, 0x58, 0x6
 // SDK complete() performs cache updates and OPC request completion.
 class FixtureTag : public SODaSTagDefault {
 public:
-    FixtureTag(LPCTSTR name, VARTYPE type, bool delayed = false, bool state = false) : SODaSTagDefault(name), delayed_(delayed), state_(state) {
+    FixtureTag(LPCTSTR name, VARTYPE type, bool delayed = false, bool state = false, bool counted = false) : SODaSTagDefault(name), delayed_(delayed), state_(state), counted_(counted) {
         setNativeDatatype(type);
         setAccessRights(OPC_READABLE | OPC_WRITEABLE);
         setDeviceIOMode(SODaSItemTag::direct);
@@ -32,6 +37,21 @@ public:
             if (!request->getWriteValue(&value)) {
                 request->complete(E_FAIL, FALSE, OPC_QUALITY_UNCERTAIN, FALSE, FALSE);
                 return;
+            }
+            if (counted_) {
+                unsigned before = exception_write_count.load();
+                do {
+                    if (before >= 1000 || !exception_count_cache.isNotNull()) {
+                        request->complete(E_FAIL, FALSE, OPC_QUALITY_UNCERTAIN, FALSE, FALSE);
+                        return;
+                    }
+                } while (!exception_write_count.compare_exchange_weak(before, before + 1));
+                SOCmnVariant count;
+                count.setI4(static_cast<LONG>(before + 1));
+                if (!exception_count_cache->setValue(count)) {
+                    request->complete(E_FAIL, FALSE, OPC_QUALITY_UNCERTAIN, FALSE, FALSE);
+                    return;
+                }
             }
             if (state_) {
                 SOCmnPointer<SODaSEntry> entry = getSODaSEntry();
@@ -55,12 +75,15 @@ public:
 private:
     bool delayed_;
     bool state_;
+    bool counted_;
 };
 
-static bool add_tag(SODaSNode* node, LPCTSTR name, SOCmnVariant& value, bool delayed = false, bool state = false) {
-    SOCmnPointer<SODaSTag> tag = new FixtureTag(name, value.vt, delayed, state);
+static bool add_tag(SODaSNode* node, LPCTSTR name, SOCmnVariant& value, bool delayed = false, bool state = false, bool counted = false,
+                    SOCmnPointer<SODaSCache>* saved_cache = nullptr) {
+    SOCmnPointer<SODaSTag> tag = new FixtureTag(name, value.vt, delayed, state, counted);
     if (!node->addLeaf(tag)) return false;
     SOCmnPointer<SODaSCache> cache = tag->getCache();
+    if (saved_cache) *saved_cache = cache;
     SOCmnDateTime now;
     now.now();
     return cache.isNotNull() && cache->setValue(value) &&
@@ -147,6 +170,10 @@ static int run(int argc, char** argv) {
             SOCmnVariant value;
             value.setI4(42);
             bool tags = add_tag(node, _T("Value"), value);
+            value.setI4(0);
+            tags = add_tag(node, _T("ExceptionCount"), value, false, false, false, std::addressof(exception_count_cache)) && tags;
+            value.setI4(42);
+            tags = add_tag(node, _T("ExceptionValue"), value, false, false, true) && tags;
             if (argc == 4) tags = add_tag(node, _T("Delayed"), value, true) && tags;
             value.setI4(1);
             tags = add_tag(node, _T("ServerState"), value, false, true) && tags;
@@ -183,6 +210,7 @@ static int run(int argc, char** argv) {
             }
         }
         entry->stop();
+        exception_count_cache.release();
         if (isolation_entered) CloseHandle(isolation_entered);
         if (isolation_release) CloseHandle(isolation_release);
     } else result = 19;

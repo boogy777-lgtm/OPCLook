@@ -14,6 +14,16 @@
 #include <cstring>
 #ifdef OPCL_DA_TESTING
 #include <cstdio>
+// Test process only: 0=idle, 1=armed, 2=consumed. The SDK worker executes
+// the throw after a real successful syncWrite; no item ID or retry is involved.
+static std::atomic<int32_t> test_write_exception{0};
+extern "C" int32_t opcl_da_test_arm_write_exception(void) {
+    int32_t expected = 0;
+    return test_write_exception.compare_exchange_strong(expected, 1) ? S_OK : E_UNEXPECTED;
+}
+extern "C" int32_t opcl_da_test_write_exception_state(void) {
+    return test_write_exception.load();
+}
 #define OPCL_DISCOVERY_TRACE(phase) do { std::fprintf(stderr, "SDK discovery: %s\n", phase); std::fflush(stderr); } while (0)
 static LONG CALLBACK trace_test_access_violation(EXCEPTION_POINTERS* exception) {
     if (!exception || !exception->ExceptionRecord ||
@@ -745,6 +755,12 @@ public:
         SODaCItem* items[] = {item_}; HRESULT error = E_FAIL;
         dispatched_ = true;
         const HRESULT service = group_->syncWrite(1, items, &value, nullptr, nullptr, &error);
+#ifdef OPCL_DA_TESTING
+        if (SUCCEEDED(service) && SUCCEEDED(error)) {
+            int32_t armed = 1;
+            if (test_write_exception.compare_exchange_strong(armed, 2)) throw 1;
+        }
+#endif
         *result_ = error; setResult(service);
     } catch (...) { setResult(E_UNEXPECTED); }
     bool dispatched() const { return dispatched_; }

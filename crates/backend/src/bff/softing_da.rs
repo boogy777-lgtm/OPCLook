@@ -37,6 +37,17 @@ pub fn test_host_acquisitions() -> (usize, bool) {
     (state.1, state.2)
 }
 
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_arm_write_exception() -> Result<(), String> {
+    super::softing_runtime::test_arm_write_exception().map_err(|e| format!("{e:?}"))
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_write_exception_state() -> i32 {
+    super::softing_runtime::test_write_exception_state()
+}
+
 static HOST_MANAGER: OnceLock<Result<Sender<HostRequest>, String>> = OnceLock::new();
 fn manager() -> Result<Sender<HostRequest>, String> {
     HOST_MANAGER
@@ -830,6 +841,15 @@ mod tests {
         drop(cmd);
         worker.join.take().unwrap().join().unwrap();
     }
+    #[test]
+    fn write_service_failure_is_unknown_with_raw_hresult() {
+        use super::super::model::{NativeWriteStatus, WriteDisposition};
+        let hr = 0x8000_ffffu32 as i32;
+        let outcome = write_outcome(Err(SdkError::Native(hr)));
+        assert_eq!(outcome.disposition, WriteDisposition::Unknown);
+        assert_eq!(outcome.raw, Some(NativeWriteStatus::DaService(hr)));
+    }
+
     #[test]
     fn preview_contract_connect_add_read_write_remove() {
         #[cfg(feature = "native-da-test-hooks")]

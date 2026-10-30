@@ -213,6 +213,10 @@ unsafe extern "C" {
         high: u32,
         result: *mut i32,
     ) -> i32;
+    #[cfg(feature = "native-da-test-hooks")]
+    fn opcl_da_test_arm_write_exception() -> i32;
+    #[cfg(feature = "native-da-test-hooks")]
+    fn opcl_da_test_write_exception_state() -> i32;
     fn opcl_da_write_i4(
         session: *mut c_void,
         item: *mut c_void,
@@ -220,6 +224,18 @@ unsafe extern "C" {
         result: *mut i32,
     ) -> i32;
 }
+#[cfg(feature = "native-da-test-hooks")]
+pub fn test_arm_write_exception() -> Result<(), Error> {
+    // SAFETY: test-only process-wide atomic hook takes no pointers.
+    check(unsafe { opcl_da_test_arm_write_exception() })
+}
+
+#[cfg(feature = "native-da-test-hooks")]
+pub fn test_write_exception_state() -> i32 {
+    // SAFETY: test-only process-wide atomic hook takes no pointers.
+    unsafe { opcl_da_test_write_exception_state() }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error {
     Native(i32),
@@ -960,6 +976,16 @@ mod tests {
         unsafe {
             *result = 0;
         }
+        0
+    }
+    #[cfg(feature = "native-da-test-hooks")]
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn opcl_da_test_arm_write_exception() -> i32 {
+        0
+    }
+    #[cfg(feature = "native-da-test-hooks")]
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn opcl_da_test_write_exception_state() -> i32 {
         0
     }
     #[unsafe(no_mangle)]
