@@ -1,3 +1,37 @@
+## 2026-10-30 — R2.ROUTE/R2.REUSE: источники OPC Foundation и вход LLM
+
+По запросу владельца исследованы публичные OPC UA Part 4/5 и официальный
+информационный обзор Classic DA. Подготовлен [routing table](llm-update-routing.md):
+триггер -> существующий механизм/владелец -> исходники -> тесты.
+Он связан из AGENTS.md; вход не требует восстанавливать обсуждение из чата.
+
+Уточнения перечислены в [OF01–OF12](opc-foundation-gap-review.md):
+requested/revised, trigger и смысл timestamps, latest queue/overflow,
+Session recovery/replay/gap, raw Write outcomes и unknown timeout, limits/aliases.
+Ранее предложенное ограничение DA Subscription + Sync Read снято как перенос
+частного UI Kepware: capability и постоянный канал проверяются раздельно.
+
+На вопрос о костыле поверх SDK добавлена [карта владельцев](backend-ownership.md).
+R2.0 проверяет locked библиотеку, реальное API/trace и недостающий invariant до
+написания кода. Publish/recovery и COM lifecycle нельзя реализовать повторно в
+Engine. Общая продуктовая очередь snapshot/read-back/Refresh/Poll остаётся в
+существующем scheduler, если SDK её не предоставляет.
+DA facade-кандидаты найдены, но не выбраны и не добавлены в зависимости.
+Владелец затем прямо потребовал native клиентские библиотеки для UA/DA и
+разрешил смену кандидата. [План native-миграции](native-backend-migration.md)
+исключает самостоятельное дописывание OPC data-plane; собственный DA слой
+подлежит замене, Engine сохраняет только продуктовые политики.
+
+Проверен Cargo.lock: async-opcua и async-opcua-client 0.19.0. Moving docs.rs дал
+смешанные версии source/API; точный auto-recovery охват 0.19 не объявлен
+проверенным. Полные DA 2.05a/3.00 помечены Foundation Paid Members и не получены;
+публичный DA 1.0 обзор не распространяется автоматически на все версии.
+
+Добавлены нормативные O01–O35; G/D CSV не менялись.
+Валидация документации: локальные ссылки, реальные пути маршрутов, стабильные
+ID, отсутствие прежнего запрета C06, whitespace и согласованность поправок.
+Новых продуктовых/live/Windows тестов нет, Cargo/rustfmt недоступны.
+
 ## 2026-10-30 — R2.TEST: передача агенту тестов и конфиг соединения
 
 Запрос владельца: таблица истинности для нового чата, push и общий механизм

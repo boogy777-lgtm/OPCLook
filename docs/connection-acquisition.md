@@ -4,6 +4,10 @@
 Статус: спецификация для реализации и тестов. Поля ниже ещё не добавлены в Rust/UI.
 Основание: [план R2](value-refresh-plan.md).
 Проверки: [таблицы решений](testing/acquisition-truth-tables.md).
+Вход обновления: [routing table](llm-update-routing.md).
+Обязательны [нативные клиентские библиотеки для UA/DA](native-backend-migration.md).
+Перед реализацией: [reuse/owner audit](backend-ownership.md) и
+[поправки OPC Foundation](opc-foundation-gap-review.md).
 
 ## 1. Термины и граница механизма
 
@@ -59,6 +63,10 @@ PTC не является доказательством соответстви�
 канала, не включает polling. Пересмотренный интервал хранится отдельно от
 запрошенного и показывается пользователю; его нельзя сохранять вместо пожелания.
 
+SDK session keepalive может использовать Read служебных узлов. Он не является
+циклическим чтением Value пользовательских тегов и не обновляет их received_at.
+Publish/ack/recovery остаются у SDK/протокольного владельца, не нового Engine loop.
+
 InitialSnapshot и восстановление — встроенные цели общего механизма, не новые
 независимые переключатели. Их разовая попытка не запускает периодический цикл.
 В Subscription без результата ждать один пересмотренный интервал; при отсутствии
@@ -76,7 +84,7 @@ endpoints может хранить последний выбранный про
 
 | Адаптер | Поля расширения | Проверка |
 | --- | --- | --- |
-| UA | sampling interval, absolute deadband | finite/range и поддержка сервера; поля не используются DA |
+| UA | sampling interval, trigger (Status / StatusValue / StatusValueTimestamp), deadband, requested queue/keepalive/lifetime | finite/range и поддержка сервера; negotiated сохраняется отдельно; поля не используются DA |
 | DA | read_method: Synchronous / Asynchronous; write_method с теми же значениями; percent_deadband: 0..100 finite | read/write capability отдельно; percent deadband применяется только к Subscription |
 
 Для нового DA-профиля текущей реализации read/write method = Synchronous.
@@ -85,9 +93,17 @@ endpoints может хранить последний выбранный про
 выбрать поддерживаемую версию DA 2.0/1.0 и показать effective method.
 Нельзя молча заменить явно выбранный Async на Sync либо Subscription на Poll.
 Точная версия COM интерфейса не является ещё одним режимом общего Engine.
-Следуя ограничению UI Kepware, DA Subscription + Sync read_method не предлагать
-как поддерживаемую комбинацию OPCLook; разовые Read этого профиля должны иметь
-реальную async-реализацию. Это ограничение продукта, не общий запрет OPC DA.
+DA Subscription + Sync read_method разрешены при наличии stream и sync-read
+capability: одноразовое чтение не создаёт второй постоянный канал. Ранее
+предложенное ограничение UI Kepware не переносится на общий механизм.
+Наличие одного SyncIO по-прежнему не доказывает stream capability.
+
+UA default trigger=StatusValue; queue_size=1 означает latest-value view,
+а не сохранение каждого перехода. Вести requested/revised queue/sampling/publish
+и revised keepalive/lifetime; lifetime не меньше 3 x keepalive, с checked arithmetic.
+Изменение ServerTimestamp само не является критерием timestamp trigger.
+При deadband учитывать протокольное изменение поведения timestamp trigger,
+показывать effective filter. Это не повод включить скрытый polling тегов.
 
 Абсолютный deadband UA и процентный DA не копировать друг в друга.
 При смене протокола валидировать его расширение заново.
@@ -160,8 +176,9 @@ read/write, если этого требует интерфейс. Глобал�
 
 Следовательно текущий DA — чтение кэша по расписанию, а не готовый Exception.
 Нельзя объявить его Subscription изменением названия или флагом настройки.
-Для FreshSource потребуется Device-путь; для Async/Subscription — реальная COM
-реализация, владение callback lifetime, transaction/epoch и проверки Windows.
+Для FreshSource/Async/Subscription выбрать native DA SDK с соответствующим API,
+callback lifetime и transaction semantics; подтвердить Windows проверками.
+Самостоятельная реализация клиентского COM слоя OPCLook исключена.
 До этого неподдержанные настройки видны, но недоступны с причиной.
 
 ## 6. Миграция и сохранение
@@ -184,10 +201,13 @@ read_after_write=false не меняет результат Write и не соз
 
 ## 7. Порядок реализации и состояние
 
+0. R2.0: locked SDK/API и DA facade audit по backend-ownership; выбрать reuse/config
+   до выбора/смены native SDK; собственные COM/recovery функции не дописывать.
 1. Contract/config/serde/capability validation и тесты C/U/M.
 2. Engine queue/read slot/demand correlation и тесты G/D/E.
 3. UA adapter и DA Device/Sync mapping; окна соединения и CLI общих настроек.
-4. DA Async/Subscription только с callback lifetime и Windows COM стендом.
+4. DA Async/Subscription через выбранный native SDK с тонким adapter mapping
+   и Windows COM стендом; удалить старый собственный OPC data-plane.
 5. Тесты перестановок S/T, UI/locale/headless и live UA/DA; status/devlog/audit.
 
 В этом коммите изменяется спецификация и данные таблиц. Реализация настроек в

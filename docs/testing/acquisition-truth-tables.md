@@ -5,6 +5,8 @@
 Статус: нормативные ожидаемые результаты; это не отчёт о пройденных тестах.
 Связанные документы: [R2](../value-refresh-plan.md),
 [конфиг соединения UA/DA](../connection-acquisition.md).
+Вход для нового чата: [routing table](../llm-update-routing.md).
+Сначала R2.0: [не дублировать готовые библиотеки](../backend-ownership.md).
 
 ## 1. Как использовать задание
 
@@ -91,7 +93,9 @@ G проверяет чистый допуск. E отдельно провер�
 | D-R7 | * | 0 | 0 | * | 1 | 1 | 0 | 1 |
 | D-R8 | * | * | * | * | * | * | 1 | 1 |
 
-W означает подтверждённый Write, а не нажатие кнопки и не Wrote Err.
+W означает принятый успешный Good-результат Write, а не нажатие кнопки,
+Wrote Err или Uncertain. Good_CompletesAsynchronously сохраняет отдельную
+степень подтверждения (O14); read-back не превращает её в доказанное действие.
 Read, уже отправленный до Wrote Ok, не удовлетворяет W.
 Конечный Bad-результат InitialSnapshot завершает попытку с ошибкой.
 UA Bad_WaitingForInitialData не является конечным снимком.
@@ -125,7 +129,7 @@ UA Bad_WaitingForInitialData не является конечным снимко
 | C03 | DA Subscription без callback реализации | UI disabled с причиной; Engine/API отклоняет конфиг |
 | C04 | DA Poll + Sync capability | Явный sync Poll; результат коррелирован с RequestId |
 | C05 | DA Poll + Async capability | Async Read + transaction mapping; нет постоянного data-change канала |
-| C06 | DA Subscription + Sync read method | Комбинация отклоняется правилом продукта; режим не меняется |
+| C06 | DA Subscription + Sync read method, обе capability есть | Комбинация разрешена; разовый Read не создаёт периодический Poll |
 | C07 | DA Asynchronous выбран, доступен только Sync | Unsupported; никаких тихих подмен |
 | C08 | interval_ms = 0 / 3600001 | Ошибка до side effects |
 | C09 | interval_ms = 1 / 3600000 | Принят requested interval; adapter/server вправе revise |
@@ -159,7 +163,7 @@ UA Bad_WaitingForInitialData не является конечным снимко
 | E06 | Due вернул Read, send ещё не выполнен, второй due | Второй Read=0 из-за reservation |
 | E07 | Dispatch failed для reservation | Слот освобождён; покрытая попытка Failed/видима; нет потери новых demands |
 | E08 | Reply R1 Values(A) полностью | Закрыть только R1; освободить слот; pending не очищать целиком |
-| E09 | Reply R1 Error | R1 Failed; слот свободен; новые pending сохранены |
+| E09 | Reply R1 Error, transport usable | R1 Failed; слот свободен; новые pending сохранены; quarantine отдельно O29 |
 | E10 | Timeout R1 | Один терминальный Failed; late R1 отклонён |
 | E11 | R1 requested A,B; ответ содержит только A | A обработан; B MissingResult/Failed, не общий успех |
 | E12 | R1 result A Bad/Uncertain | Сохранить статус и причину; Bad не считать пригодным значением; не retry-loop |
@@ -182,8 +186,8 @@ R1/R2 — Read; W1/W2 — Write; d1/d2 — различные потребнос
 | ID | Последовательность | Ожидаемый результат |
 | --- | --- | --- |
 | S01 | Read R1(A) -> W1 Ok(A)/d2 -> R1 Values | d2 остаётся; следующий свободный pass отправляет R2(A) |
-| S02 | Read R1(A) -> W1 Ok(A)/d2 -> R1 Error | d2 остаётся; R1 Failed; R2 разрешён |
-| S03 | Read R1(A) -> W1 Ok(A)/d2 -> R1 Timeout | То же, поздний R1 не закрывает R2 |
+| S02 | Read R1(A) -> W1 Ok(A)/d2 -> R1 Error, transport остаётся usable | d2 остаётся; R1 Failed; R2 разрешён |
+| S03 | Read R1(A) -> W1 Ok(A)/d2 -> R1 Timeout с UA quarantine | Старой эпохе R2 не отправлять; d2 отменить при закрытии, новый snapshot после регистрации; late R1 отвергнуть |
 | S04 | W1 Ok(A) -> W2 Ok(A) -> dispatch | Один Read A покрывает обе ещё не отправленные потребности |
 | S05 | W1 Ok(A) -> R1 dispatch -> W2 Ok(A) -> R1 Values | Вторая потребность не покрыта R1; нужен R2 |
 | S06 | W1 Err(A) -> несколько tick | Нет автоматического read-back, старое значение не заменено вводом |
@@ -274,11 +278,64 @@ Fake COM подтверждает обработку и владение, но �
 Live UA/DA write-тесты используют разрешённые тестовые теги и восстанавливают
 исходное значение guard-механизмом, включая ошибку/паническую раскрутку.
 
-## 11. Что передать из нового чата
+## 11. O — дополнения OPC Foundation и границы библиотек
 
-Агент начинает с G/D/C/M и маркирует отсутствующие возможности как open.
+Основание: [проверка FND](../opc-foundation-gap-review.md),
+[карта владельцев](../backend-ownership.md) и
+[обязательная native-миграция](../native-backend-migration.md).
+Ниже — ожидаемые результаты, не отчёт о реализации. SDK-тест вызывает реальный
+locked SDK API/loop либо доказанный adapter boundary; не копию recovery алгоритма.
+
+| ID | Сценарий | Ожидаемый результат |
+| --- | --- | --- |
+| O01 | requested publish=1000, revised=2000 | Хранить и показывать оба; initial grace использует effective=2000 |
+| O02 | Server пересмотрел sampling/queue/keepalive | Сохранить фактические значения отдельно; не подставлять requested |
+| O03 | UA STATUS_VALUE, изменился только ServerTimestamp | Отсутствие DataChange допустимо; локальное время тега не тикает само |
+| O04 | UA STATUS_VALUE_TIMESTAMP без deadband, SourceTimestamp изменился | Фильтр запрашивает timestamp notification; ServerTimestamp не критерий |
+| O05 | Timestamp trigger с deadband / изменение StatusCode | Учесть семантику фильтра; quality change не скрывается deadband |
+| O06 | Monitored queue=1, несколько sample до publish | Последний sample допустим; completeness истории не обещается |
+| O07 | Queue>1, Overflow bit получен | Бит и gap сохраняются; Good severity не стирает признак потери |
+| O08 | Revised lifetime <3*revised keepalive | Ошибка negotiated параметров; checked arithmetic, не wrap |
+| O09 | SDK keepalive/Read служебного узла без data change | Liveness обновляется; user-tag value/received_at не меняются |
+| O10 | Краткий transport разрыв, SDK восстанавливает Session | Нет второго Connect/recovery владельца; локальная epoch не меняется только из-за SecureChannel |
+| O11 | Пропущенное сообщение доступно в retransmission queue | Recovery владелец использует готовый Republish; не второй replay в Engine |
+| O12 | Gap не восстановить через Republish | Поддержанный ResendData либо один snapshot Read; history gap остаётся видимым |
+| O13 | SDK создал новую remote Session/Subscription внутри локальной epoch | Старые registrations/aliases исключены; новые negotiated/stream facts обновлены |
+| O14 | Write -> Good_CompletesAsynchronously | Сохранить raw status; «принято, источник не проверен», а не безусловное выполнение; read-back по конфигу |
+| O15 | Write -> Uncertain status | Не превращать в полный success; raw status и неопределённость видны; W таблицы D не устанавливается |
+| O16 | Timeout/Cancel Write без доказанного результата | Unknown/может быть выполнено; не автоматический повтор и не «точно не записано» |
+| O17 | В одной bulk Write пачке повторён Node+Attribute | Не обещать порядок; для требуемого порядка отдельные последовательные вызовы |
+| O18 | Server сообщает MaxNodesPerRead меньше локального chunk | Использовать меньший положительный предел и существующий bounded splitter |
+| O19 | OperationLimits отсутствует/сервис TooManyOperations | Bounded fallback chunk/adaptive path, не бесконечное дробление и не нулевой loop |
+| O20 | RegisterNodes вернул alias | Канонический NodeId/ItemKey не потерян; alias scoped к remote Session |
+| O21 | RegisterNodes вернул исходный неизвестный NodeId | Не считать его valid/readable только по регистрации |
+| O22 | CreateMonitoredItems Ok, первый sample Bad_NotReadable | Registration success и плохой data outcome различимы |
+| O23 | DA stream capability + Sync Read capability | Subscription + одноразовый Sync Read разрешены; второй постоянный Poll не появляется |
+| O24 | DA 1.0 Sync Cache при inactive group/item | Не выдавать invalid quality за Good; не переносить это правило вслепую на все DA методы/версии |
+| O25 | DA 1.0 Sync Device при inactive group/item | Не отвергать только из-за Active=false; результат/quality определяет сервер |
+| O26 | Общий DA callback получает stream и explicit result | Kind+transaction+epoch/registration маршрутизируют; имя OnDataChange не является достаточным признаком stream |
+| O27 | Старый callback/alias после SDK recreation при том же Connect epoch | Adapter registration guard отвергает; одного локального epoch сравнения недостаточно |
+| O28 | Готовый SDK/DA facade уже владеет recovery/callback lifecycle | Используется API/config/adapter mapping; не создаётся второй timer/worker/owner |
+| O29 | UA IO timeout пометил сессию quarantined | Старой сессии новый Read не отправляется; её demands отменяются; после восстановления новая регистрация получает snapshot |
+| O30 | Production UA и DA backend paths | Операции проходят через выбранные native client SDK, не windows-rs ABI-only обёртку |
+| O31 | Native SDK владеет protocol recovery/Publish/COM callback | В OPCLook нет второй реализации того же lifecycle |
+| O32 | Миграция DA завершена | Старые production IOPC calls/callback/memory owners удалены либо больше не являются runtime path; нет переименованной копии в «adapter» |
+| O33 | Native кандидат не поддерживает обязательную capability | Новый кандидат/библиотечное исправление; не эмуляция в App/Engine |
+| O34 | DA SDK заменён за общим contract | Те же GUI/CLI и контрактные тесты; нет library-name ветвлений в core |
+| O35 | Native SDK возвращает raw status/value/time | Adapter сохраняет информацию; не скрывает ограничения и не превращает async facade в доказанный native stream |
+
+O24/O25 опираются на официальный информационный обзор DA 1.0.
+DA 2.05a/3.00 Refresh/SetEnable/Cancel и точные методы требуют полного source/spec
+audit до реализации. В fixture O26 задавать operation kind явно; неизвестный
+transaction не превращать в unsolicited value ради прохождения теста.
+Факт наличия facade API не означает прохождение native Windows/DA interop.
+
+## 12. Что передать из нового чата
+
+После R2.0 агент начинает с выбранных маршрутом G/D/C/M и маркирует
+отсутствующие возможности как open. SDK/adapter ownership проверяется до кода.
 Не объявлять ignored/заглушенный тест пройденным доказательством.
-Затем E/S/T и adapter A, после них UI/CLI locale/headless/live.
+Затем E/S/T/O и adapter A, после них UI/CLI locale/headless/live.
 Для каждого теста: ID строки, файл/имя теста, воспроизведение до реализации,
 результат после, ограничения среды. Не менять ожидаемые результаты под старый код.
 Если противоречие требует изменения контракта, править R2 и эти таблицы вместе.

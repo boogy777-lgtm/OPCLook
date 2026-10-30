@@ -1,5 +1,13 @@
 # План следующей работы: тема, действия и интерфейс
 
+## Вход LLM для обновления получения данных
+
+Начать с [routing table](llm-update-routing.md), затем
+[R2.0 library owner/reuse audit](backend-ownership.md).
+[Проверка OPC Foundation](opc-foundation-gap-review.md) и O01–O29 уточняют
+семантику R2. Сначала использовать готовые библиотеки/API/config, затем
+реализовывать только доказанно недостающую способность.
+
 ## R2.TEST — тесты и единый конфиг соединения
 
 Для продолжения R2 начать с [таблиц истинности и переходов](testing/acquisition-truth-tables.md)

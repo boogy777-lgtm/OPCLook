@@ -1,5 +1,28 @@
 # Текущий статус
 
+## 2026-10-30 — R2.ROUTE: Foundation audit и границы готовых библиотек
+
+Добавлен [входной routing document для LLM](llm-update-routing.md), связанный из
+AGENTS.md. [Проверка Foundation](opc-foundation-gap-review.md) уточняет revised
+параметры, trigger/queue, recovery/gaps, raw Write statuses и DA semantics.
+[Карта владельцев](backend-ownership.md) требует сначала R2.0 use/configure/adapt:
+не дублировать Publish/recovery/COM lifecycle готовой библиотеки.
+
+Исправлен слишком широкий запрет DA Subscription + Sync Read из прошлого плана:
+при реальных capability разовое чтение разрешено, второй постоянный цикл — нет.
+Добавлены O01–O35 как ожидаемые проверки; уточнены UA quarantine и snapshot/gap.
+Cargo.lock проверен: async-opcua/client 0.19.0. Точный SDK source/recovery audit,
+полные DA 2.05a/3.00 и Windows/live остаются открытыми.
+
+Владелец уточнил обязательный результат: [native SDK UA/DA](native-backend-migration.md).
+Смена кандидата разрешена, собственный OPC data-plane DA подлежит замене;
+реализация миграции в этом коммите ещё не выполнена.
+
+Коммит только документационный. Проверены ссылки/пути/ID/согласованность и diff
+whitespace; формулы CSV G/D не менялись. Cargo/rustfmt недоступны, fmt, сборки
+и продуктовые тесты не запускались. Результаты исследований не являются
+доказательством runtime соответствия.
+
 ## 2026-10-30 — R2.TEST: тестовые таблицы и общий конфиг UA/DA
 
 Добавлены [таблицы R2.TEST](testing/acquisition-truth-tables.md) и два полных
