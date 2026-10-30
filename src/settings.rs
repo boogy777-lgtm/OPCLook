@@ -1599,6 +1599,29 @@ mod tests {
     }
 
     #[test]
+    fn invalid_acquisition_interval_is_reported_with_backup() {
+        let dir = fresh_dir("invalid-acquisition");
+        with_appdata(&dir, || {
+            let mut value = serde_json::to_value(Settings::default()).unwrap();
+            let mut endpoint =
+                serde_json::to_value(EndpointSpec::ua("opc.tcp://localhost:4840")).unwrap();
+            let mut profile =
+                serde_json::to_value(crate::bff::model::AcquisitionConfig::ua_default()).unwrap();
+            profile["interval_ms"] = serde_json::json!(0);
+            endpoint["acquisition"] = profile;
+            value["recent_endpoints"] = serde_json::json!([endpoint]);
+            let path = settings_path();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
+            let notices = Settings::load().notices;
+            assert!(matches!(
+                &notices[..],
+                [SettingsNotice::ParseFailed { backup: Ok(_), .. }]
+            ));
+        });
+    }
+
+    #[test]
     fn unknown_security_policy_is_reported_with_a_backup() {
         let dir = fresh_dir("unknown-policy");
         with_appdata(&dir, || {

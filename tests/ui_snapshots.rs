@@ -328,3 +328,53 @@ fn write_outcomes_render() {
             .unwrap();
     }
 }
+
+#[test]
+#[ignore = "manual visual QA requiring a headless wgpu renderer"]
+fn acquisition_dialog_scenes() {
+    let output = std::env::var("OPCLOOK_ACQUISITION_SCREENSHOTS").unwrap();
+    for (name, ua, height) in [
+        ("da", false, 900.0),
+        ("ua", true, 900.0),
+        ("ua-short", true, 720.0),
+    ] {
+        let mut app = base(Lang::En);
+        app.open_connect_dialog();
+        let mut h = Harness::builder()
+            .with_size([1200.0, height])
+            .with_accessibility_check(false)
+            .with_context_setup(|ctx| {
+                assert!(opclook::app::install_fonts(ctx).is_some());
+            })
+            .build_ui_state(|ui, app: &mut App| app.update(ui), app);
+        h.run_steps(3);
+        if ua {
+            h.get_by_label("OPC UA").click();
+            h.run_steps(3);
+        }
+        h.get_by_label("Data acquisition").click();
+        h.run_steps(8);
+        h.render()
+            .unwrap()
+            .save(format!("{output}/{name}.png"))
+            .unwrap();
+        if name == "ua-short" {
+            h.event(egui::Event::PointerMoved(egui::pos2(800.0, 500.0)));
+            h.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, -1500.0),
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.run_steps(8);
+            h.render()
+                .unwrap()
+                .save(format!("{output}/ua-short-scrolled.png"))
+                .unwrap();
+            h.get_by_label("Cancel").click();
+            h.run_steps(3);
+            assert!(!h.state().dialogs.connect.open);
+        }
+    }
+}

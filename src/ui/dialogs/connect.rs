@@ -67,6 +67,9 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
         egui::Window::new(tr(lang, Tr::ConnectToServer))
             .collapsible(false)
             .resizable(false)
+            .max_height((ctx.content_rect().height() - 32.0).max(200.0))
+            .default_height((ctx.content_rect().height() - 32.0).clamp(200.0, 820.0))
+            .vscroll(true)
             .default_width(560.0)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(&ctx, |ui| {
@@ -155,6 +158,16 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                         &mut quick_connect,
                     );
 
+                    acquisition_editor(
+                        ui,
+                        lang,
+                        if is_da {
+                            &mut dialog.da_acquisition
+                        } else {
+                            &mut dialog.ua_acquisition
+                        },
+                        is_da,
+                    );
                     ui.add_space(4.0);
 
                     // 2. Host + 3. UA port; one UA search action below.
@@ -381,11 +394,13 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                                 if ui.button(endpoint.display_name()).ime_safe_clicked() {
                                     match endpoint.protocol {
                                         Protocol::OpcDa => {
+                                            dialog.da_acquisition = endpoint.acquisition.clone();
                                             dialog.da_host = endpoint.host.clone();
                                             dialog.da_manual = endpoint.address.clone();
                                             dialog.da_selected = None;
                                         }
                                         Protocol::OpcUa => {
+                                            dialog.ua_acquisition = endpoint.acquisition.clone();
                                             dialog.ua_url = endpoint.address.clone();
                                             dialog.ua_security_policy = endpoint.ua_security_policy;
                                             dialog.ua_security_mode = endpoint.ua_security_mode;
@@ -553,6 +568,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                     .find(|hit| hit.server.id == address && hit.host == host)
                     .and_then(|hit| da_advertised_name(&hit.server));
                 let mut ep = crate::bff::model::EndpointSpec::da(host, address);
+                ep.acquisition = dialog.da_acquisition.clone();
                 ep = ep.with_advertised_name(advertised);
                 Some(ep)
             }
@@ -563,6 +579,7 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
                 } else {
                     let mut endpoint =
                         crate::bff::model::EndpointSpec::ua(dialog.ua_url.trim().to_string());
+                    endpoint.acquisition = dialog.ua_acquisition.clone();
                     // Advertised application name when a discovered endpoint was
                     // selected; None for a manually typed URL (host:port is used).
                     let parsed_url = endpoint.address.parse::<crate::bff::model::UaUrl>().ok();
@@ -642,6 +659,138 @@ pub(super) fn connect_dialog(app: &mut App, ui: &mut egui::Ui) {
         }
     }
 }
+fn unavailable_hint(
+    response: egui::Response,
+    available: bool,
+    lang: Lang,
+    reason: Tr,
+) -> egui::Response {
+    if available {
+        response
+    } else {
+        response.on_disabled_hover_text(tr(lang, reason))
+    }
+}
+fn acquisition_editor(
+    ui: &mut egui::Ui,
+    lang: Lang,
+    draft: &mut Option<crate::bff::model::AcquisitionConfig>,
+    is_da: bool,
+) {
+    use crate::bff::model::{AcquisitionConfig, PollFreshness, UpdateMode};
+    let protocol = if is_da {
+        Protocol::OpcDa
+    } else {
+        Protocol::OpcUa
+    };
+    let capabilities = opclook_engine::acquisition_capabilities(protocol);
+    ui.collapsing(tr(lang, Tr::AcquisitionTitle), |ui| {
+        let mut enabled = draft.is_some();
+        if ui
+            .checkbox(&mut enabled, tr(lang, Tr::AcquisitionExplicit))
+            .changed()
+        {
+            *draft = enabled.then(|| {
+                if is_da {
+                    AcquisitionConfig::da_available()
+                } else {
+                    AcquisitionConfig::ua_default()
+                }
+            });
+        }
+        if let Some(config) = draft {
+            ui.horizontal(|ui| {
+                ui.label(tr(lang, Tr::AcquisitionMode));
+                let response = ui.add_enabled(
+                    capabilities.subscription,
+                    egui::RadioButton::new(
+                        config.update_mode == UpdateMode::Subscription,
+                        tr(lang, Tr::AcquisitionSubscription),
+                    ),
+                );
+                if unavailable_hint(
+                    response,
+                    capabilities.subscription,
+                    lang,
+                    Tr::AcquisitionUnsupported,
+                )
+                .ime_safe_clicked()
+                {
+                    config.update_mode = UpdateMode::Subscription;
+                }
+                if ui
+                    .radio(
+                        config.update_mode == UpdateMode::Poll,
+                        tr(lang, Tr::AcquisitionPoll),
+                    )
+                    .ime_safe_clicked()
+                {
+                    config.update_mode = UpdateMode::Poll;
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(tr(lang, Tr::AcquisitionInterval));
+                ui.add(egui::DragValue::new(&mut config.interval_ms).range(
+                    crate::bff::model::ACQUISITION_INTERVAL_MIN_MS
+                        ..=crate::bff::model::ACQUISITION_INTERVAL_MAX_MS,
+                ));
+            });
+            let response = ui.add_enabled(
+                capabilities.read_after_write,
+                egui::Checkbox::new(
+                    &mut config.read_after_write,
+                    tr(lang, Tr::AcquisitionReadback),
+                ),
+            );
+            unavailable_hint(
+                response,
+                capabilities.read_after_write,
+                lang,
+                Tr::AcquisitionUnsupported,
+            );
+            ui.horizontal(|ui| {
+                ui.label(tr(lang, Tr::AcquisitionFreshness));
+                let cache = ui.add_enabled(
+                    capabilities.cache_allowed,
+                    egui::RadioButton::new(
+                        config.poll_freshness == PollFreshness::CacheAllowed,
+                        tr(lang, Tr::AcquisitionCache),
+                    ),
+                );
+                if unavailable_hint(
+                    cache,
+                    capabilities.cache_allowed,
+                    lang,
+                    Tr::AcquisitionCacheGap,
+                )
+                .ime_safe_clicked()
+                {
+                    config.poll_freshness = PollFreshness::CacheAllowed;
+                }
+                let source = ui.add_enabled(
+                    capabilities.fresh_source,
+                    egui::RadioButton::new(
+                        config.poll_freshness == PollFreshness::FreshSource,
+                        tr(lang, Tr::AcquisitionSource),
+                    ),
+                );
+                if unavailable_hint(
+                    source,
+                    capabilities.fresh_source,
+                    lang,
+                    Tr::AcquisitionUnsupported,
+                )
+                .ime_safe_clicked()
+                {
+                    config.poll_freshness = PollFreshness::FreshSource;
+                }
+            });
+        } else {
+            ui.label(tr(lang, Tr::AcquisitionLegacy));
+        }
+    });
+}
+
 /// Build a valid OPC UA URL from the search fields. An empty/invalid port
 /// falls back to 4840 (the same value the search command uses), and a bare
 /// IPv6 literal is bracketed.

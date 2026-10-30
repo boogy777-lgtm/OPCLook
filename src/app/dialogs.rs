@@ -103,6 +103,8 @@ pub struct DaHit {
 }
 
 pub struct ConnectDialog {
+    pub ua_acquisition: Option<crate::bff::model::AcquisitionConfig>,
+    pub da_acquisition: Option<crate::bff::model::AcquisitionConfig>,
     pub open: bool,
     pub pane: ConnectPane,
     pub da_host: String,
@@ -178,6 +180,8 @@ impl Default for ConnectDialog {
     fn default() -> Self {
         Self {
             open: false,
+            ua_acquisition: Some(crate::bff::model::AcquisitionConfig::ua_default()),
+            da_acquisition: Some(crate::bff::model::AcquisitionConfig::da_available()),
             pane: ConnectPane::Da,
             da_host: String::new(),
             da_servers: Vec::new(),

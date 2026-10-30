@@ -170,14 +170,15 @@ target\i686-pc-windows-msvc\release\opclook.exe
 
 ## Headless CLI
 
-Необязательный флаг `--read-after-write` включает наблюдение после принятой
-записи UA: JSON содержит отдельно исход записи и `readback` с данными и quality;
-ошибка или Bad/Uncertain результат чтения дают ненулевой exit, не повторяя Write.
-Отсутствие флага сохраняет прежнюю политику без read-back. Это временный
-boolean-флаг, а не запланированный синтаксис `--read-after-write true|false`;
-общий per-connection AcquisitionConfig ещё не реализован. DA opt-in отклоняется
-до записи: текущий адаптер читает Cache и не предоставляет FreshSource. Значение
-read-back не подтверждает физическое действие.
+CLI принимает `--update-mode subscription|poll`, `--interval-ms`,
+`--poll-freshness cache|source` и `--read-after-write true|false` (для
+совместимости допускается флаг без значения). `--poll` равнозначен
+`--update-mode poll`. Для CLI read-back по умолчанию выключен; явное `true`
+ожидает UA Read и возвращает отдельно исход Write и `readback` с данными и
+quality. Ошибка или Bad/Uncertain результата наблюдения дают ненулевой exit,
+не повторяя Write. DA пока поддерживает Poll/Cache и отклоняет read-back до
+записи. UA CacheAllowed пока не подключён в OPCLook. Read-back не доказывает
+физическое действие. Старые соединения без профиля сохраняют legacy fallback.
 
 ```sh
 cargo run -p opclook-cli --target x86_64-unknown-linux-gnu -- --help

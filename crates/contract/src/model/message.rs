@@ -408,6 +408,10 @@ pub enum BackendMsg {
     PollOnlyItems {
         count: usize,
     },
+    /// Explicit subscription cannot monitor these items; no polling fallback.
+    SubscriptionItemsUnavailable {
+        count: usize,
+    },
     StructTypesUnavailable {
         cause: Box<BackendMsg>,
     },

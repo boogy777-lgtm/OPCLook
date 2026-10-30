@@ -164,6 +164,10 @@ pub fn reconnect_delay(attempt: u32, base: Duration, max: Duration) -> Duration 
     delay
 }
 /// Current backend adapter capability, not a negotiated server guarantee.
+pub use opclook_backend::{AcquisitionCapabilities, AcquisitionError, acquisition_capabilities};
+pub fn validate_acquisition(endpoint: &EndpointSpec) -> Result<(), AcquisitionError> {
+    opclook_backend::validate_acquisition(endpoint)
+}
 pub fn supports_fresh_source(protocol: Protocol) -> bool {
     opclook_backend::supports_fresh_source(protocol)
 }
@@ -284,6 +288,7 @@ pub enum Due {
 }
 #[derive(Debug)]
 pub enum DispatchError {
+    InvalidAcquisition(AcquisitionError),
     Exhausted,
     ReadBusy,
     ReadEmpty,
@@ -382,6 +387,11 @@ impl<C> Engine<C> {
         options: RouteOptions,
     ) -> Result<RequestId, DaRouteError> {
         let owner = owner.into();
+        if let CommandKind::Connect { endpoint } = &kind {
+            validate_acquisition(endpoint).map_err(|e| {
+                DaRouteError::HelperUnavailable(format!("invalid acquisition: {e:?}"))
+            })?;
+        }
         let host = match (&kind, owner) {
             (CommandKind::Connect { endpoint }, Owner::Session(_))
                 if endpoint.protocol == Protocol::OpcDa =>
@@ -832,6 +842,9 @@ impl<C> Engine<C> {
         ctx: C,
         permit: Option<ReadPermit>,
     ) -> Result<RequestId, DispatchError> {
+        if let CommandKind::Connect { endpoint } = &kind {
+            validate_acquisition(endpoint).map_err(DispatchError::InvalidAcquisition)?;
+        }
         if matches!(&kind, CommandKind::Write { .. }) {
             let reason = match owner {
                 Owner::Session(session) => self.session_action_unavailable(session, protocol, true),
@@ -988,6 +1001,18 @@ impl<C> Engine<C> {
         }
         self.next = id.successor();
         let operation = kind.operation();
+        let profile_readback_key = match (&kind, session.and_then(|id| self.sessions.get(&id))) {
+            (CommandKind::Write { request }, Some(view))
+                if view
+                    .endpoint
+                    .acquisition
+                    .as_ref()
+                    .is_some_and(|c| c.read_after_write) =>
+            {
+                Some(request.key)
+            }
+            _ => None,
+        };
         if !matches!(
             &kind,
             CommandKind::ScanUaNetwork { .. } | CommandKind::CancelUaScan { .. }
@@ -998,7 +1023,7 @@ impl<C> Engine<C> {
                     operation,
                     sent: Instant::now(),
                     read_demands: covered_demands,
-                    write_readback_key: None,
+                    write_readback_key: profile_readback_key,
                     ctx,
                 },
             );
@@ -1114,6 +1139,19 @@ impl<C> Engine<C> {
         // Session state changes require the identity of the Connect that created
         // the producer. Untagged session diagnostics remain visible.
         let affects_session = !matches!(event.kind, EventKind::Log { .. });
+        if matches!(event.origin, Origin::Session(_))
+            && matches!(event.kind, EventKind::Values { .. })
+            && self
+                .sessions
+                .get(&session)
+                .and_then(|view| view.endpoint.acquisition.as_ref())
+                .is_some_and(|config| {
+                    config.update_mode == opclook_contract::model::UpdateMode::Poll
+                })
+        {
+            return Err(());
+        }
+
         match event.origin {
             Origin::Session(id) => {
                 if !self.sessions.get(&session).is_some_and(|view| {
@@ -1226,7 +1264,9 @@ impl<C> Engine<C> {
         if let Some(view) = self.sessions.get_mut(&session) {
             match &event.kind {
                 EventKind::Connected { endpoint, .. } => {
+                    let acquisition = view.endpoint.acquisition.clone();
                     view.endpoint = endpoint.clone();
+                    view.endpoint.acquisition = acquisition;
                     view.state = SessionState::Connected;
                     view.reconnect = ReconnectState::Idle;
                     view.subscription = SubscriptionState::Inactive;
@@ -1321,20 +1361,30 @@ impl<C> Engine<C> {
         for (&id, view) in &mut self.sessions {
             match view.state {
                 SessionState::Connected => {
+                    let profile = view.endpoint.acquisition.as_ref();
+                    let interval = profile
+                        .map(|c| Duration::from_millis(c.interval_ms))
+                        .unwrap_or(interval);
+                    let configured_poll =
+                        profile.map(|c| c.update_mode == opclook_contract::model::UpdateMode::Poll);
                     let busy = self.requests.iter().any(|(&(sid, _), p)| {
                         sid == Owner::Session(id) && p.operation == Operation::Browse
                     });
-                    let push = !view.force_poll
-                        && view.endpoint.protocol == Protocol::OpcUa
-                        && view.subscription == SubscriptionState::Active;
+                    let push = configured_poll.map(|poll| !poll).unwrap_or(
+                        !view.force_poll
+                            && view.endpoint.protocol == Protocol::OpcUa
+                            && view.subscription == SubscriptionState::Active,
+                    );
                     if !view.read_in_flight && !busy {
                         let mut keys: Vec<_> = view
                             .pending_initial
                             .iter()
                             .filter_map(|(&key, &since)| {
-                                let wait_for_push = !view.force_poll
-                                    && view.endpoint.protocol == Protocol::OpcUa
-                                    && !view.items.get(&key).copied().unwrap_or(false);
+                                let wait_for_push = configured_poll.map(|poll| !poll).unwrap_or(
+                                    !view.force_poll
+                                        && view.endpoint.protocol == Protocol::OpcUa
+                                        && !view.items.get(&key).copied().unwrap_or(false),
+                                );
                                 (!wait_for_push || now.saturating_duration_since(since) >= interval)
                                     .then_some(key)
                             })
@@ -1342,12 +1392,15 @@ impl<C> Engine<C> {
                         keys.extend(view.pending_demands.iter().map(|d| d.key));
                         if now.saturating_duration_since(view.last_poll) >= interval {
                             keys.extend(view.items.iter().filter_map(|(&key, &poll_only)| {
-                                let startup_wait = !view.force_poll
+                                let startup_wait = configured_poll.is_none()
+                                    && !view.force_poll
                                     && view.endpoint.protocol == Protocol::OpcUa
                                     && view.poll_defer_since.get(&key).is_some_and(|since| {
                                         now.saturating_duration_since(*since) < interval
                                     });
-                                ((!push || poll_only) && !startup_wait).then_some(key)
+                                ((!push || (configured_poll.is_none() && poll_only))
+                                    && !startup_wait)
+                                    .then_some(key)
                             }));
                         }
                         view.poll_defer_since
@@ -2370,6 +2423,226 @@ mod tests {
         );
         engine
     }
+    #[test]
+    fn c14_c22_connection_profiles_are_snapshotted_and_poll_independently() {
+        use opclook_contract::model::{AcquisitionConfig, ItemInfo, ItemSpec, UpdateMode};
+        let now = Instant::now();
+        let mut engine = Engine::<()>::default();
+        engine.test_skip_dispatch = true;
+        for (session, interval) in [(sid(1), 200), (sid(2), 1000)] {
+            let mut endpoint = EndpointSpec::ua("opc.tcp://localhost:4840");
+            let mut profile = AcquisitionConfig::ua_default();
+            profile.update_mode = UpdateMode::Poll;
+            profile.interval_ms = interval;
+            endpoint.acquisition = Some(profile.clone());
+            let connect = engine
+                .send(
+                    session,
+                    Protocol::OpcUa,
+                    CommandKind::Connect {
+                        endpoint: endpoint.clone(),
+                    },
+                    (),
+                )
+                .unwrap();
+            let mut echoed = endpoint.clone();
+            echoed.acquisition = None;
+            engine
+                .accept_at(
+                    &Event {
+                        owner: Owner::Session(session),
+                        origin: Origin::Reply(connect),
+                        kind: EventKind::Connected {
+                            endpoint: echoed,
+                            info: BackendMsg::raw("connected"),
+                        },
+                    },
+                    now,
+                )
+                .unwrap();
+            assert_eq!(
+                engine.session(session).unwrap().endpoint.acquisition,
+                Some(profile)
+            );
+            let add = engine
+                .send(
+                    session,
+                    Protocol::OpcUa,
+                    CommandKind::AddItems {
+                        items: vec![ItemSpec {
+                            key: key(1),
+                            item_id: "a".into(),
+                        }],
+                    },
+                    (),
+                )
+                .unwrap();
+            engine
+                .accept_at(
+                    &Event {
+                        owner: Owner::Session(session),
+                        origin: Origin::Reply(add),
+                        kind: EventKind::AddItems {
+                            results: vec![(
+                                key(1),
+                                Ok(ItemInfo {
+                                    data_type: None,
+                                    type_id: None,
+                                    writable: true,
+                                }),
+                            )],
+                        },
+                    },
+                    now,
+                )
+                .unwrap();
+        }
+        let epoch = engine.sessions[&sid(1)].connection_id.unwrap();
+        assert!(
+            engine
+                .accept_at(
+                    &Event {
+                        owner: owner(1),
+                        origin: Origin::Session(epoch),
+                        kind: EventKind::Values { values: vec![] }
+                    },
+                    now
+                )
+                .is_err()
+        );
+        let due = engine.due(now, Duration::from_secs(60), None);
+        assert_eq!(due.len(), 2);
+        for work in due {
+            let Due::Read {
+                session,
+                protocol,
+                keys,
+                permit,
+            } = work
+            else {
+                panic!("read")
+            };
+            let id = engine
+                .send_due_read(session, protocol, keys, permit, ())
+                .unwrap();
+            engine
+                .accept_at(
+                    &Event {
+                        owner: Owner::Session(session),
+                        origin: Origin::Reply(id),
+                        kind: EventKind::Values { values: vec![] },
+                    },
+                    now,
+                )
+                .unwrap();
+        }
+        let due = engine.due(
+            now + Duration::from_millis(500),
+            Duration::from_secs(500),
+            None,
+        );
+        assert!(matches!(due.as_slice(), [Due::Read { session, .. }] if *session == sid(1)));
+    }
+    #[test]
+    fn c23_c24_profile_write_and_invalid_connect_guard() {
+        use opclook_contract::model::{AcquisitionConfig, Value, WriteOutcome, WriteRequest};
+        let now = Instant::now();
+        let mut engine = Engine::<()>::default();
+        engine.test_skip_dispatch = true;
+        let mut endpoint = EndpointSpec::ua("opc.tcp://localhost:4840");
+        let profile = AcquisitionConfig::ua_default();
+        endpoint.acquisition = Some(profile.clone());
+        let mut view = SessionRuntime::new(endpoint.clone(), now);
+        view.state = SessionState::Connected;
+        view.connection_id = Some(rid(77));
+        view.subscription = SubscriptionState::Active;
+        view.last_poll = now;
+        view.items.insert(key(1), false);
+        engine.sessions.insert(sid(1), view);
+        let mut invalid = endpoint.clone();
+        invalid.acquisition.as_mut().unwrap().interval_ms = 0;
+        assert!(matches!(
+            engine.send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::Connect { endpoint: invalid },
+                ()
+            ),
+            Err(DispatchError::InvalidAcquisition(
+                AcquisitionError::Interval
+            ))
+        ));
+        assert_eq!(engine.session(sid(1)).unwrap().connection_id, Some(rid(77)));
+        for (enabled, accepted) in [(false, true), (true, false), (true, true)] {
+            engine
+                .sessions
+                .get_mut(&sid(1))
+                .unwrap()
+                .endpoint
+                .acquisition
+                .as_mut()
+                .unwrap()
+                .read_after_write = enabled;
+            let id = engine
+                .send(
+                    sid(1),
+                    Protocol::OpcUa,
+                    CommandKind::Write {
+                        request: WriteRequest {
+                            key: key(1),
+                            value: Value::I64(1),
+                            type_hint: None,
+                        },
+                    },
+                    (),
+                )
+                .unwrap();
+            engine
+                .accept_at(
+                    &Event {
+                        owner: owner(1),
+                        origin: Origin::Reply(id),
+                        kind: EventKind::Wrote {
+                            key: key(1),
+                            result: Ok(WriteOutcome::from_ua(
+                                if accepted { 0 } else { 0x80000000 },
+                                "status",
+                            )),
+                        },
+                    },
+                    now,
+                )
+                .unwrap();
+            let due = engine.due(now, Duration::from_secs(1), None);
+            assert_eq!(!due.is_empty(), enabled && accepted);
+        }
+    }
+    #[test]
+    fn explicit_failed_subscription_has_no_hidden_periodic_poll() {
+        use opclook_contract::model::AcquisitionConfig;
+        let now = Instant::now();
+        let mut engine = Engine::<()>::default();
+        engine.test_skip_dispatch = true;
+        let mut endpoint = EndpointSpec::ua("opc.tcp://localhost:4840");
+        endpoint.acquisition = Some(AcquisitionConfig::ua_default());
+        let mut view = SessionRuntime::new(endpoint, now);
+        view.state = SessionState::Connected;
+        view.connection_id = Some(rid(77));
+        view.subscription = SubscriptionState::Failed;
+        view.items.insert(key(1), true);
+        view.last_poll = now;
+        engine.sessions.insert(sid(1), view);
+        assert!(
+            engine
+                .due(
+                    now + Duration::from_secs(10),
+                    Duration::from_millis(1),
+                    None
+                )
+                .is_empty()
+        );
+    }
+
     #[test]
     fn old_read_reply_error_or_synthetic_timeout_does_not_cover_new_write() {
         use opclook_contract::model::{BackendMsg, DataValue, Value, WriteOutcome, WriteRequest};

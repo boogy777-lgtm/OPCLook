@@ -262,3 +262,8 @@ R2.1–R2.2 могут сначала сохранить существующи�
 ## Частичный runtime срез 2026-10-30
 
 Engine поддерживает явные UA ExplicitRefresh и opt-in WriteReadback через reservation и RequestId; CLI ожидает соответствующий Read. GUI профиль, per-item terminal API для объединённых потребителей, полная fairness и native DA SDK не завершены. Legacy DA Cache не объявляется FreshSource. Фактическая матрица проверок и открытые строки — в acquisition-truth-tables и status.
+
+
+### Частичный профиль соединения
+
+Явные AcquisitionConfig snapshot и GUI/CLI подключены к Engine/UA adapter; legacy None и старый fallback сохранены до явной миграции. DA native SDK, UA CacheAllowed maxAge mapping, revised interval, полные G/D/E/C/U/M и fairness остаются открыты.

@@ -214,6 +214,11 @@ pub(in crate::bff::ua) async fn connect(
         &discovered,
     );
     Ok(UaSession {
+        poll_mode: endpoint
+            .acquisition
+            .as_ref()
+            .is_some_and(|c| c.update_mode == crate::bff::model::UpdateMode::Poll),
+        explicit_acquisition: endpoint.acquisition.is_some(),
         session,
         event_loop,
         items: HashMap::new(),
@@ -222,7 +227,7 @@ pub(in crate::bff::ua) async fn connect(
         session_id,
         connection_id,
         subscriptions: Vec::new(),
-        publishing_interval_ms: 0,
+        publishing_interval_ms: endpoint.acquisition.as_ref().map_or(0, |c| c.interval_ms),
         deadband: 0.0,
         applied_interval_ms: 0,
         applied_deadband: 0.0,

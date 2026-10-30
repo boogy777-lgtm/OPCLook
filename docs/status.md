@@ -1,5 +1,37 @@
 # Текущий статус
 
+## 2026-10-30 — явный профиль соединения (частичный R2.3)
+
+EndpointSpec хранит явный AcquisitionConfig (mode, requested interval,
+read_after_write, freshness); Engine валидирует его до Connect и использует
+неизменяемый snapshot для расписания и ordinary Write. GUI предлагает отдельные
+черновики UA/DA и показывает requested mode/interval; CLI использует тот же
+контракт и `--poll` как alias Poll. UA Poll не создаёт MonitoredItems и не
+принимает поток значений, Subscription не включает скрытый периодический Poll.
+Старые endpoints без профиля пока остаются в legacy режиме с прежним fallback;
+автоматическая миграция глобального интервала и предупреждение ещё не сделаны.
+
+DA реализован только Poll/Cache/Sync, без read-back и без native SDK миграции.
+UA CacheAllowed отклонён как текущий пробел реализации OPCLook, а не ограничение
+SDK; заявлен только FreshSource. CLI default read_after_write=false для
+совместимости, GUI новый UA профиль — true. Revised interval и effective source
+пока не показаны; полный per-item terminal API/fairness и DA native SDK открыты.
+Некорректный явный интервал или неполный профиль отклоняются при загрузке
+настроек через стандартный backup/notice, а не исправляются UI.
+Ранние целевые проверки: contract 34+3, Engine 45+2, CLI unit 13;
+UA sample Poll live, App snapshot/dedup, Settings backup, GUI interaction и
+PNG 900/720 прошли. Профиль ранее не существовал, поэтому все его поля
+обязательны; отсутствие всего acquisition остаётся legacy, явный null — ошибка.
+CI 41014492173 на прежнем head: Windows success, Linux первый Browse timeout
+15s; первопричина не доказана. Тестовый timeout увеличен до 60s с общим 120s
+budget, без retries или ослабления проверки Browse.
+
+Финальный Linux gate на текущем code tree: backend 225, contract 34+3
+doctest, Engine 45+2, CLI 13+2 UA live, GUI library 236, UI interactions
+238 и 1 Windows-only ignored. Внешний Engine stand 45+2, backend stand UA
+Poll live прошёл. UI PNG 900/720 просмотрены; short viewport и Cancel проверены
+после прокрутки. Exact-head Windows/Linux CI нового коммита ещё не измерен.
+
 ## 2026-10-30 — явные Read intents (частичный R2)
 
 Engine резервирует ExplicitRefresh и opt-in WriteReadback вместе с текущими

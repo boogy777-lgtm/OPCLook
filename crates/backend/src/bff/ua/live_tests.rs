@@ -1683,6 +1683,44 @@ impl TestServer {
     }
 }
 
+#[test]
+fn explicit_poll_reads_without_monitored_value_stream() {
+    use crate::bff::model::{AcquisitionConfig, Origin, SubscriptionState, UpdateMode};
+    let server = TestServer::start(free_port());
+    let mut app = Harness::new();
+    let session = SessionId::new(1).unwrap();
+    let key = ItemKey::new(1).unwrap();
+    let mut endpoint = Harness::endpoint(&server.url);
+    let mut profile = AcquisitionConfig::ua_default();
+    profile.update_mode = UpdateMode::Poll;
+    endpoint.acquisition = Some(profile);
+    app.connect(session, endpoint).expect("connect");
+    assert!(
+        app.add_items(session, &[(key, server.node("Level"))])[0]
+            .1
+            .is_ok()
+    );
+    server.set("Level", Variant::Double(37.5));
+    let pushed = app.wait(Duration::from_secs(2), |event| match &event.kind {
+        EventKind::Values { values }
+            if matches!(event.origin, Origin::Session(_))
+                && values.iter().any(|(k, _)| *k == key) =>
+        {
+            Some(())
+        }
+        EventKind::SubscriptionState {
+            state: SubscriptionState::Active,
+        } => Some(()),
+        _ => None,
+    });
+    assert!(pushed.is_none(), "poll created a value stream");
+    let id = app.send(session.into(), CommandKind::Read { keys: vec![key] });
+    let reply = app.reply(id, Duration::from_secs(15)).expect("read");
+    assert!(
+        matches!(reply.kind, EventKind::Values { values } if values.iter().any(|(k, v)| *k == key && v.value == Value::F64(37.5)))
+    );
+}
+
 /// P1 scenario: `total` tags added in batches of 100 without waiting (like
 /// «add children»), then every tag must show its initial value and a change.
 /// Returns how many keys got each, plus the poll-only keys reported.

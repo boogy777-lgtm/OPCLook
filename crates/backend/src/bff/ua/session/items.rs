@@ -149,6 +149,10 @@ impl UaSession {
             return (merge_add_results(items, infos, &rejected), warning);
         }
 
+        if self.poll_mode {
+            return (merge_add_results(items, infos, &rejected), warning);
+        }
+
         // After items are successfully registered, (re-)establish the push
         // subscription for this session. The same DataChange callback pushes
         // values into the shared event channel so rows update without polling.
@@ -163,8 +167,14 @@ impl UaSession {
                     self.poll_only.extend(outcome.poll_only.iter().copied());
                     self.log(
                         tx,
-                        BackendMsg::PollOnlyItems {
-                            count: outcome.poll_only.len(),
+                        if self.explicit_acquisition {
+                            BackendMsg::SubscriptionItemsUnavailable {
+                                count: outcome.poll_only.len(),
+                            }
+                        } else {
+                            BackendMsg::PollOnlyItems {
+                                count: outcome.poll_only.len(),
+                            }
                         },
                     );
                     send(

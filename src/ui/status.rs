@@ -130,6 +130,21 @@ pub(super) fn status_bar(app: &mut App, ui: &mut egui::Ui) {
                         app.status_popup = !app.status_popup;
                         ui.ctx().request_repaint();
                     }
+                    if let Some(profile) = &session.endpoint().acquisition {
+                        ui.separator();
+                        let mode = match profile.update_mode {
+                            crate::bff::model::UpdateMode::Subscription => {
+                                Tr::AcquisitionSubscription
+                            }
+                            crate::bff::model::UpdateMode::Poll => Tr::AcquisitionPoll,
+                        };
+                        ui.label(format!(
+                            "{} · {}: {}",
+                            tr(lang, mode),
+                            tr(lang, Tr::AcquisitionRequestedInterval),
+                            profile.interval_ms
+                        ));
+                    }
                     if let Some(hint) = app.reconnect_hint() {
                         ui.separator();
                         ui.colored_label(yellow(), &hint);

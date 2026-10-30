@@ -10,13 +10,23 @@ impl App {
     /// on every connect so a recreated session re-creates the subscription with
     /// the current values.
     pub(super) fn configure_ua_subscription(&mut self, session: SessionId) {
-        let interval_ms = self
-            .settings
-            .view
-            .options
-            .update_interval_secs
-            .max(1)
-            .saturating_mul(1000);
+        let profile = self
+            .session(session)
+            .and_then(|view| view.endpoint().acquisition.clone());
+        if profile
+            .as_ref()
+            .is_some_and(|c| c.update_mode == crate::bff::model::UpdateMode::Poll)
+        {
+            return;
+        }
+        let interval_ms = profile.map(|c| c.interval_ms).unwrap_or_else(|| {
+            self.settings
+                .view
+                .options
+                .update_interval_secs
+                .max(1)
+                .saturating_mul(1000)
+        });
         let deadband = self.settings.view.options.ua_deadband;
         self.send(
             session,

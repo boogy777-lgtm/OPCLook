@@ -38,6 +38,8 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 pub(super) struct UaSession {
+    pub(super) poll_mode: bool,
+    pub(super) explicit_acquisition: bool,
     pub(super) session: Arc<Session>,
     pub(super) event_loop: JoinHandle<StatusCode>,
     pub(super) items: HashMap<ItemKey, NodeId>,

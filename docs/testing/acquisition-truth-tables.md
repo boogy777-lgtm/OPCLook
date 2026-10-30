@@ -36,6 +36,10 @@ ItemKey). Read хранит набор покрытых demand identities; HashS
 
 Текущий PR добавляет настоящие Engine тесты `old_read_reply_error_or_synthetic_timeout_does_not_cover_new_write` (покрытие старого Read, coalescing и push), `new_write_after_reservation_and_remove_are_distinct` (повторный demand после reservation и Remove), `e06_active_subscription_cannot_release_reservation`, `old_write_and_read_replies_do_not_cross_reconnect`, `write_opt_in_only_accepts_matching_good_replies` и `unsupported_da_readback_fails_before_write_and_uncertain_never_queues`. CLI `readback_failure_and_quality_preserve_accepted_write_record` проверяет сериализацию/quality; `wrong_key_write_reply_is_unknown_and_initial_read_is_not_readback` проверяет CLI event path и покрытие permit; `browse_read_write_push_forced_poll_and_idle_interrupt` также выполняет UA sample-server opt-in read-back. Они покрывают отдельные переходы E06/E08–E10/E13/E15–E16 и S01/S02/S04/S07/S17/S18, а не целиком соответствующие строки. Timeout тест — синтетический Engine timeout с работающим транспортом, не native UA IO quarantine S03. Общее per-key terminal API для многоключевого E11, fairness, полные G/D таблицы, физический DA/live, GUI настройки и остальные случаи остаются открытыми.
 
+### Частичный R2.3 профиль
+
+`legacy_none_roundtrip_and_unknown_or_partial_profiles_fail`, `invalid_acquisition_interval_is_reported_with_backup`, `validates_known_adapter_capabilities_and_interval_boundaries`, `c14_c22_connection_profiles_are_snapshotted_and_poll_independently`, `c23_c24_profile_write_and_invalid_connect_guard` и `explicit_failed_subscription_has_no_hidden_periodic_poll` проверяют части M/C/U через реальные contract/backend/Engine entry points. `explicit_cli_poll_alias_uses_same_profile_and_rejects_invalid_options`, `explicit_poll_reads_without_monitored_value_stream`, GUI `acquisition_*`, `explicit_profiles_do_not_reconfigure_when_global_options_change` и `same_endpoint_with_different_profiles_creates_distinct_sessions` проверяют части C/U/GUI; это не полное покрытие таблиц. Полноценная миграция M03/M04, reported revised interval, UA CacheAllowed, DA Subscription/Device/native SDK, GUI Apply/Reconnect и G/D/fairness остаются открыты.
+
 ## 2. G — полная таблица допуска Read
 
 Файл: [acquisition-read-gate.csv](acquisition-read-gate.csv).
@@ -256,7 +260,7 @@ T08/T09 применяются к выбору отображаемого экз
 | M07 | requested interval=1000, revised=2000 | Оба видны; сохраняется requested=1000 |
 | M08 | Профиль A сохранён, профиль B активен | B snapshot не меняется |
 | M09 | Legacy UA с неподдержанными monitored items | Видимое предупреждение; не скрытый переход Poll |
-| M10 | read_after_write отсутствует в новом совместимом config | true |
+| M10 | read_after_write отсутствует во впервые введённом явном config | Ошибка неполного профиля с backup/notice; legacy отсутствие всего acquisition отдельно |
 | M11 | Новый DA профиль без Device capability | FreshSource disabled; CacheAllowed виден, read_after_write=false либо конфиг отклонён |
 | M12 | Unknown enum/null/неверный тип | Для явно присутствующего невалидного acquisition ошибка; совместимость отсутствующего поля обрабатывается отдельно |
 

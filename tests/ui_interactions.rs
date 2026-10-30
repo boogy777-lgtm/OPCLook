@@ -5083,12 +5083,135 @@ fn da_results_with_same_progid_select_their_own_host() {
 }
 
 #[test]
+fn acquisition_editor_keeps_protocol_drafts_and_cancel_does_not_persist() {
+    use opclook::bff::model::UpdateMode;
+    with_settings_lock(|| {
+        let mut app = App::new_test(&egui::Context::default());
+        app.open_connect_dialog();
+        let before = serde_json::to_value(&app.settings).unwrap();
+        let mut h = harness(app);
+        h.get_by_label("Получение данных").click();
+        h.run_steps(3);
+        assert!(h.get_by_label("Подписка").accesskit_node().is_disabled());
+        h.get_by_label("OPC UA").click();
+        h.run_steps(3);
+        h.get_by_label("Опрос").click();
+        h.run_steps(3);
+        h.get_by_label("Читать после записи").click();
+        h.run_steps(2);
+        assert!(
+            !h.state()
+                .dialogs
+                .connect
+                .ua_acquisition
+                .as_ref()
+                .unwrap()
+                .read_after_write
+        );
+        h.get_by_label("Читать после записи").click();
+        h.run_steps(2);
+        assert!(
+            h.state()
+                .dialogs
+                .connect
+                .ua_acquisition
+                .as_ref()
+                .unwrap()
+                .read_after_write
+        );
+        assert!(
+            !h.state()
+                .dialogs
+                .connect
+                .da_acquisition
+                .as_ref()
+                .unwrap()
+                .read_after_write
+        );
+        assert_eq!(
+            h.state()
+                .dialogs
+                .connect
+                .ua_acquisition
+                .as_ref()
+                .unwrap()
+                .update_mode,
+            UpdateMode::Poll
+        );
+        assert_eq!(
+            h.state()
+                .dialogs
+                .connect
+                .da_acquisition
+                .as_ref()
+                .unwrap()
+                .update_mode,
+            UpdateMode::Poll
+        );
+        h.get_by_label("Отмена").click();
+        h.run_steps(3);
+        assert_eq!(serde_json::to_value(&h.state().settings).unwrap(), before);
+    });
+}
+
+#[test]
+fn acquisition_recent_profile_restores_without_changing_other_draft() {
+    use opclook::bff::model::{AcquisitionConfig, UpdateMode};
+    with_settings_lock(|| {
+        let mut app = App::new_test(&egui::Context::default());
+        let mut endpoint = EndpointSpec::ua("opc.tcp://plant.example:4840");
+        let mut profile = AcquisitionConfig::ua_default();
+        profile.update_mode = UpdateMode::Poll;
+        profile.interval_ms = 2345;
+        endpoint.acquisition = Some(profile.clone());
+        app.settings.remember(&endpoint);
+        app.open_connect_dialog();
+        let mut h = harness(app);
+        h.get_by_label("OPC UA").click();
+        h.run_steps(3);
+        h.get_by_label("Недавние").click();
+        h.run_steps(3);
+        h.get_by_label(&endpoint.display_name()).click();
+        h.run_steps(3);
+        assert_eq!(h.state().dialogs.connect.ua_acquisition, Some(profile));
+        assert_eq!(
+            h.state().dialogs.connect.da_acquisition,
+            Some(AcquisitionConfig::da_available())
+        );
+    });
+}
+
+#[test]
+fn acquisition_disabled_subscription_explains_capability() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.open_connect_dialog();
+    let mut h = harness(app);
+    h.get_by_label("Получение данных").click();
+    h.run_steps(3);
+    let subscription = h.get_by_label("Подписка");
+    assert!(subscription.accesskit_node().is_disabled());
+    subscription.hover();
+    h.run_steps(40);
+    assert!(
+        h.query_all_by_label_contains("Недоступно в текущем адаптере")
+            .next()
+            .is_some()
+    );
+}
+
+#[test]
 fn double_click_da_result_connects_to_its_host() {
     use opclook::app::DaHit;
     use opclook::bff::model::ServerEntry;
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.open_connect_dialog();
+    app.dialogs
+        .connect
+        .da_acquisition
+        .as_mut()
+        .unwrap()
+        .interval_ms = 2345;
     app.dialogs.connect.da_pending = false;
     app.dialogs.connect.da_servers.push(DaHit {
         server: ServerEntry {
@@ -5115,6 +5238,7 @@ fn double_click_da_result_connects_to_its_host() {
         (endpoint.host.as_str(), endpoint.address.as_str()),
         ("plant-b", "Vendor.OPC")
     );
+    assert_eq!(endpoint.acquisition.as_ref().unwrap().interval_ms, 2345);
 }
 
 #[test]

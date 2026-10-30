@@ -14,7 +14,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::task::Poll;
 use std::time::{Duration, Instant};
 
-const HELP: &str = "opclook-cli — headless OPC DA/UA client\n\nUsage: opclook-cli [options] COMMAND [arguments]\n\nEndpoints (choose one):\n  --ua URL                  OPC UA endpoint\n  --da HOST PROGID          OPC DA server (Windows)\n\nOptions:\n  --timeout SECONDS         Per-operation deadline (default 30)\n  --bind IP                 Local UA source address\n  --if-index INDEX          Interface index for the source address\n  --scope INDEX             IPv6 scope ID\n  --policy POLICY           UA policy (Auto, None, Basic256Sha256, etc.)\n  --mode MODE               UA mode (Auto, None, Sign, SignAndEncrypt)\n  --trust-server-cert       Trust the UA server certificate\n  --client-cert             Use the client certificate from the PKI store\n  --session-timeout-ms N    Requested UA session timeout in milliseconds\n  --user-env NAME           Read username from an environment variable\n  --password-env NAME       Read password from an environment variable\n  --interval SECONDS        Watch polling interval (default 1)\n  --count N                 Stop watch after N value records (default: Ctrl+C)\n  --poll                    Watch by periodic reads instead of UA subscription\n  --read-after-write        Observe after accepted UA write (maxAge=0)\n  --json                    Emit JSON or JSONL (the default)\n  --help                    Print this help\n\nCommands:\n  browse [NODE]             Browse a node (default: root)\n  read NODE                 Add and read a node\n  write NODE TYPE VALUE     Write bool, i64, u64, f64 or string\n  watch NODE                Subscribe/poll until count or Ctrl+C\n\n64-bit integers are decimal strings. Non-finite f64 values are strings NaN,\nInfinity and -Infinity. Credentials are read from the environment.\n";
+const HELP: &str = "opclook-cli — headless OPC DA/UA client\n\nUsage: opclook-cli [options] COMMAND [arguments]\n\nEndpoints (choose one):\n  --ua URL                  OPC UA endpoint\n  --da HOST PROGID          OPC DA server (Windows)\n\nOptions:\n  --timeout SECONDS         Per-operation deadline (default 30)\n  --bind IP                 Local UA source address\n  --if-index INDEX          Interface index for the source address\n  --scope INDEX             IPv6 scope ID\n  --policy POLICY           UA policy (Auto, None, Basic256Sha256, etc.)\n  --mode MODE               UA mode (Auto, None, Sign, SignAndEncrypt)\n  --trust-server-cert       Trust the UA server certificate\n  --client-cert             Use the client certificate from the PKI store\n  --session-timeout-ms N    Requested UA session timeout in milliseconds\n  --user-env NAME           Read username from an environment variable\n  --password-env NAME       Read password from an environment variable\n  --interval SECONDS        Watch polling interval (default 1)\n  --interval-ms N           Per-connection interval in milliseconds\n  --update-mode MODE        subscription or poll\n  --poll-freshness MODE     cache or source\n  --count N                 Stop watch after N value records (default: Ctrl+C)\n  --poll                    Watch by periodic reads instead of UA subscription\n  --read-after-write [true|false]  Observe after accepted UA write\n  --json                    Emit JSON or JSONL (the default)\n  --help                    Print this help\n\nCommands:\n  browse [NODE]             Browse a node (default: root)\n  read NODE                 Add and read a node\n  write NODE TYPE VALUE     Write bool, i64, u64, f64 or string\n  watch NODE                Subscribe/poll until count or Ctrl+C\n\n64-bit integers are decimal strings. Non-finite f64 values are strings NaN,\nInfinity and -Infinity. Credentials are read from the environment.\n";
 const MAX_ARG: usize = 4096;
 const MAX_JSON_BUDGET: usize = 1_000_000;
 const MAX_DEPTH: usize = 32;
@@ -50,7 +50,12 @@ fn parse(args: Vec<String>) -> Result<Option<Options>, String> {
     let mut interval = Duration::from_secs(1);
     let mut count = None;
     let mut poll = false;
-    let mut read_after_write = false;
+    let mut read_after_write: Option<bool> = None;
+    let mut update_mode = None;
+    let mut poll_freshness = None;
+    let mut acquisition_requested = false;
+    let mut interval_seconds_used = false;
+    let mut interval_ms_used = false;
     let mut policy = None;
     let mut mode = None;
     let mut trust = false;
@@ -91,6 +96,7 @@ fn parse(args: Vec<String>) -> Result<Option<Options>, String> {
                 )?)
             }
             "--interval" => {
+                interval_seconds_used = true;
                 interval = Duration::from_secs(positive(
                     &value_arg(&args, &mut i, key)?,
                     "interval",
@@ -146,14 +152,105 @@ fn parse(args: Vec<String>) -> Result<Option<Options>, String> {
                 )? as u32)
             }
             "--json" => {}
-            "--poll" => poll = true,
-            "--read-after-write" => read_after_write = true,
+            "--poll" => {
+                poll = true;
+                acquisition_requested = true;
+            }
+            "--update-mode" => {
+                update_mode = Some(match value_arg(&args, &mut i, key)?.as_str() {
+                    "subscription" => opclook_contract::model::UpdateMode::Subscription,
+                    "poll" => opclook_contract::model::UpdateMode::Poll,
+                    _ => return Err("unknown update mode".into()),
+                });
+                acquisition_requested = true;
+            }
+            "--interval-ms" => {
+                interval_ms_used = true;
+                interval = Duration::from_millis(positive(
+                    &value_arg(&args, &mut i, key)?,
+                    "interval-ms",
+                    opclook_contract::model::ACQUISITION_INTERVAL_MAX_MS,
+                )?);
+                acquisition_requested = true;
+            }
+            "--poll-freshness" => {
+                poll_freshness = Some(match value_arg(&args, &mut i, key)?.as_str() {
+                    "cache" => opclook_contract::model::PollFreshness::CacheAllowed,
+                    "source" => opclook_contract::model::PollFreshness::FreshSource,
+                    _ => return Err("unknown poll freshness".into()),
+                });
+                acquisition_requested = true;
+            }
+            "--read-after-write" => {
+                read_after_write = Some(match args.get(i + 1).map(String::as_str) {
+                    Some("true") => {
+                        i += 1;
+                        true
+                    }
+                    Some("false") => {
+                        i += 1;
+                        false
+                    }
+                    Some(next)
+                        if next.starts_with('-')
+                            || matches!(next, "browse" | "read" | "write" | "watch") =>
+                    {
+                        true
+                    }
+                    None => true,
+                    Some(_) => return Err("--read-after-write expects true or false".into()),
+                });
+                acquisition_requested = true;
+            }
             "--help" | "-h" => return Ok(None),
             _ => return Err("unknown option".into()),
         }
         i += 1;
     }
     let mut endpoint = endpoint.ok_or("an endpoint is required")?;
+    if interval_seconds_used && interval_ms_used {
+        return Err("--interval and --interval-ms conflict".into());
+    }
+    if poll && update_mode == Some(opclook_contract::model::UpdateMode::Subscription) {
+        return Err("--poll conflicts with subscription update mode".into());
+    }
+    if acquisition_requested {
+        let mut config = if endpoint.protocol == Protocol::OpcUa {
+            opclook_contract::model::AcquisitionConfig::ua_default()
+        } else {
+            opclook_contract::model::AcquisitionConfig::da_available()
+        };
+        // Preserve CLI's historic default; both Poll spellings use one policy.
+        config.read_after_write = false;
+        if poll {
+            config.update_mode = opclook_contract::model::UpdateMode::Poll;
+        }
+        if let Some(mode) = update_mode {
+            config.update_mode = mode;
+        }
+        if let Some(freshness) = poll_freshness {
+            config.poll_freshness = freshness;
+        }
+        if let Some(readback) = read_after_write {
+            config.read_after_write = readback;
+        }
+        config.interval_ms = interval
+            .as_millis()
+            .try_into()
+            .map_err(|_| "interval too large")?;
+        endpoint.acquisition = Some(config);
+        opclook_engine::validate_acquisition(&endpoint)
+            .map_err(|error| format!("invalid acquisition: {error:?}"))?;
+    }
+    let read_after_write = endpoint
+        .acquisition
+        .as_ref()
+        .is_some_and(|c| c.read_after_write);
+    poll = endpoint
+        .acquisition
+        .as_ref()
+        .is_some_and(|c| c.update_mode == opclook_contract::model::UpdateMode::Poll);
+
     if endpoint.protocol == Protocol::OpcDa
         && (bind.is_some()
             || if_index.is_some()
@@ -253,6 +350,7 @@ fn send(
 }
 fn dispatch_error(error: DispatchError) -> String {
     match error {
+        DispatchError::InvalidAcquisition(error) => format!("invalid acquisition: {error:?}"),
         DispatchError::Exhausted => "request identifiers exhausted".into(),
         DispatchError::ReadBusy => {
             opclook_locale::tr(Lang::En, opclook_locale::Tr::ReadBusy).into()
@@ -706,11 +804,6 @@ fn run_with_engine(
     if !expected.contains(&options.command.len()) {
         return Err("wrong number of command arguments".into());
     }
-    if options.read_after_write
-        && (command != "write" || !opclook_engine::supports_fresh_source(protocol))
-    {
-        return Err("--read-after-write requires a UA write with FreshSource capability".into());
-    }
     let id = send(
         &mut engine,
         protocol,
@@ -718,12 +811,11 @@ fn run_with_engine(
             endpoint: options.endpoint.clone(),
         },
     )?;
-    match response(&mut engine, id, options.timeout, stop, &options.endpoint)? {
+    match response(&mut engine, id, options.timeout, stop, &options.endpoint)
+        .map_err(|error| format!("connect: {error}"))?
+    {
         EventKind::Connected { .. } => {}
         _ => return Err("unexpected connect response".into()),
-    }
-    if options.poll {
-        engine.set_force_poll(SessionId::FIRST, true);
     }
     if command == "browse" {
         let node_id = options.command.get(1).cloned().unwrap_or_default();
@@ -736,7 +828,9 @@ fn run_with_engine(
                 view_id: None,
             },
         )?;
-        return match response(&mut engine, id, options.timeout, stop, &options.endpoint)? {
+        return match response(&mut engine, id, options.timeout, stop, &options.endpoint)
+            .map_err(|error| format!("browse: {error}"))?
+        {
             EventKind::Browse { node_id, children } => {
                 let nodes:Vec<Json>=children.iter().map(|n|json!({"node_id":n.node_id,"name":n.name,"kind":match n.kind { opclook_contract::model::NodeKind::Branch => "branch",opclook_contract::model::NodeKind::Item => "item" },"has_children":n.has_children})).collect();
                 output(&json!({"node_id":node_id,"children":nodes}))
@@ -785,13 +879,7 @@ fn run_with_engine(
             value,
             type_hint: None,
         };
-        let id = if options.read_after_write {
-            engine
-                .send_write_with_readback(SessionId::FIRST, protocol, request, ())
-                .map_err(|error| format!("read-back write unavailable: {error:?}"))?
-        } else {
-            send(&mut engine, protocol, CommandKind::Write { request })?
-        };
+        let id = send(&mut engine, protocol, CommandKind::Write { request })?;
 
         return match write_response(&mut engine, id, options.timeout, stop) {
             Ok(outcome) => {
@@ -896,9 +984,6 @@ fn run_with_engine(
         if engine.accept(&event).is_err() {
             continue;
         }
-        if discard_poll_push(options.poll, &event) {
-            continue;
-        }
         match event.kind {
             EventKind::Values { values } => {
                 for (key, data) in values {
@@ -946,31 +1031,8 @@ fn main() {
         }
     }
 }
-fn discard_poll_push(poll: bool, event: &Event) -> bool {
-    poll && matches!(
-        event.origin,
-        opclook_contract::model::Origin::Unsolicited | opclook_contract::model::Origin::Session(_)
-    ) && matches!(event.kind, EventKind::Values { .. })
-}
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn poll_discards_both_push_origins_but_keeps_read_reply() {
-        use opclook_contract::model::{Event, EventKind, Origin, Owner, RequestId, SessionId};
-        for (origin, discard) in [
-            (Origin::Unsolicited, true),
-            (Origin::Session(RequestId::FIRST), true),
-            (Origin::Reply(RequestId::FIRST), false),
-        ] {
-            let event = Event {
-                owner: Owner::Session(SessionId::FIRST),
-                origin,
-                kind: EventKind::Values { values: vec![] },
-            };
-            assert_eq!(super::discard_poll_push(true, &event), discard);
-            assert!(!super::discard_poll_push(false, &event));
-        }
-    }
     #[test]
     fn browse_reports_unavailable_session_before_dispatch() {
         let mut engine = opclook_engine::Engine::<()>::default();
@@ -1109,6 +1171,74 @@ mod tests {
         assert_eq!(
             encode(&Value::F64(f64::INFINITY), 0, &mut budget).unwrap()["value"],
             "Infinity"
+        );
+    }
+
+    #[test]
+    fn explicit_cli_poll_alias_uses_same_profile_and_rejects_invalid_options() {
+        fn args(words: &[&str]) -> Vec<String> {
+            words.iter().map(|s| s.to_string()).collect()
+        }
+        let alias = parse(args(&[
+            "--ua",
+            "opc.tcp://localhost:4840",
+            "--poll",
+            "watch",
+            "i=1",
+        ]))
+        .unwrap()
+        .unwrap();
+        let explicit = parse(args(&[
+            "--ua",
+            "opc.tcp://localhost:4840",
+            "--update-mode",
+            "poll",
+            "watch",
+            "i=1",
+        ]))
+        .unwrap()
+        .unwrap();
+        assert_eq!(alias.endpoint.acquisition, explicit.endpoint.acquisition);
+        assert!(!alias.read_after_write);
+        let enabled = parse(args(&[
+            "--ua",
+            "opc.tcp://localhost:4840",
+            "--read-after-write",
+            "true",
+            "write",
+            "i=1",
+            "i64",
+            "2",
+        ]))
+        .unwrap()
+        .unwrap();
+        assert!(enabled.read_after_write);
+        for bad in [
+            vec!["--interval", "1", "--interval-ms", "1000"],
+            vec!["--interval-ms", "0"],
+            vec!["--interval-ms", "3600001"],
+            vec!["--update-mode", "unknown"],
+            vec!["--poll-freshness", "other"],
+            vec!["--read-after-write", "truue"],
+        ] {
+            let mut all = vec!["--ua", "opc.tcp://localhost:4840"];
+            all.extend(bad);
+            all.extend(["watch", "i=1"]);
+            assert!(parse(args(&all)).is_err());
+        }
+        assert!(
+            parse(args(&[
+                "--da",
+                "",
+                "server",
+                "--read-after-write",
+                "true",
+                "write",
+                "x",
+                "i64",
+                "1"
+            ]))
+            .is_err()
         );
     }
 

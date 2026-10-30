@@ -25,7 +25,11 @@ impl UaSession {
     /// interval (default 1000 ms) and the DataChange callback forwards
     /// quality/timestamp-mapped values to the UI.
     async fn create_subscription(&mut self, tx: &Sender<Event>) -> Result<u32, BackendMsg> {
-        let interval_ms = self.publishing_interval_ms.clamp(100, 3600_000);
+        let interval_ms = if self.explicit_acquisition {
+            self.publishing_interval_ms.clamp(1, 3_600_000)
+        } else {
+            self.publishing_interval_ms.clamp(100, 3_600_000)
+        };
         let interval = Duration::from_millis(interval_ms);
         let session_id = self.session_id;
         let connection_id = self.connection_id;
@@ -94,7 +98,11 @@ impl UaSession {
         publishing_interval_ms: u64,
         deadband: f64,
     ) -> Vec<BackendMsg> {
-        let interval_ms = publishing_interval_ms.clamp(100, 3600_000);
+        let interval_ms = if self.explicit_acquisition {
+            self.publishing_interval_ms.clamp(1, 3_600_000)
+        } else {
+            publishing_interval_ms.clamp(100, 3_600_000)
+        };
         let deadband = if deadband.is_finite() {
             deadband.max(0.0)
         } else {

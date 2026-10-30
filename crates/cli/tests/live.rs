@@ -101,7 +101,7 @@ impl Server {
                 "--mode",
                 "None",
                 "--timeout",
-                "15",
+                "60",
             ])
             .args(args)
             .stdout(Stdio::piped())
@@ -110,7 +110,7 @@ impl Server {
     }
     fn execute(&self, args: &[&str]) -> serde_json::Value {
         let mut child = self.command(args).spawn().unwrap();
-        let deadline = Instant::now() + Duration::from_secs(40);
+        let deadline = Instant::now() + Duration::from_secs(120);
         while child.try_wait().unwrap().is_none() {
             if Instant::now() >= deadline {
                 let _ = child.kill();

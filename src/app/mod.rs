@@ -742,6 +742,11 @@ impl App {
         };
         let (request_id, failure) = match dispatch {
             Ok(id) => (id, None),
+            Err(DispatchError::InvalidAcquisition(_)) => {
+                self.journal.error_l(Tr::AcquisitionInvalid, &[]);
+                self.status = tr(self.lang(), Tr::AcquisitionInvalid).to_string();
+                return None;
+            }
             Err(DispatchError::Exhausted) => {
                 self.journal.error_l(Tr::RequestIdsExhausted, &[]);
                 self.status = tr(self.lang(), Tr::RequestIdsExhausted).to_string();
@@ -1158,6 +1163,8 @@ impl App {
         d.error = None;
         // Empty by design: no persistence restores host/port/URL into the
         // fields. The servers list is what the user picks from.
+        d.ua_acquisition = Some(crate::bff::model::AcquisitionConfig::ua_default());
+        d.da_acquisition = Some(crate::bff::model::AcquisitionConfig::da_available());
         d.da_host.clear();
         d.da_manual.clear();
         // Keep previously discovered DA results and their source hosts
@@ -1238,7 +1245,11 @@ impl App {
         let ua_session_ids: Vec<(SessionId, Protocol)> = self
             .sessions
             .iter()
-            .filter(|s| s.protocol() == Protocol::OpcUa && s.state == SessionState::Connected)
+            .filter(|s| {
+                s.protocol() == Protocol::OpcUa
+                    && s.state == SessionState::Connected
+                    && s.endpoint().acquisition.is_none()
+            })
             .map(|s| (s.id, s.protocol()))
             .collect();
         for (session, protocol) in ua_session_ids {

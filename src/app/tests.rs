@@ -3078,3 +3078,40 @@ fn visible_tree_cache_updates_on_toggle() {
     view.toggle_tree(root);
     assert_eq!(view.visible_tree_indices().as_slice(), &[0]);
 }
+
+#[test]
+fn explicit_profiles_do_not_reconfigure_when_global_options_change() {
+    use crate::bff::model::AcquisitionConfig;
+    let mut app = App::new_test(&egui::Context::default());
+    let mut endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+    endpoint.acquisition = Some(AcquisitionConfig::ua_default());
+    app.seed_session(SessionId::FIRST, endpoint.clone());
+    app.record_dispatches_for_test();
+    app.dialogs.options.draft.update_interval_secs = 9;
+    app.apply_options();
+    assert_eq!(app.sessions[0].endpoint().acquisition, endpoint.acquisition);
+    assert!(
+        app.dispatched_for_test()
+            .iter()
+            .all(|cmd| !matches!(cmd.kind, CommandKind::ConfigureUaSubscription { .. }))
+    );
+}
+
+#[test]
+fn same_endpoint_with_different_profiles_creates_distinct_sessions() {
+    use crate::bff::model::{AcquisitionConfig, UpdateMode};
+    let mut app = App::new_test(&egui::Context::default());
+    app.record_dispatches_for_test();
+    let mut subscription = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+    subscription.acquisition = Some(AcquisitionConfig::ua_default());
+    let mut poll = subscription.clone();
+    poll.acquisition.as_mut().unwrap().update_mode = UpdateMode::Poll;
+    assert!(app.open_tab_for_endpoint(subscription.clone()));
+    assert!(app.open_tab_for_endpoint(poll.clone()));
+    assert_eq!(app.sessions.len(), 2);
+    assert_eq!(
+        app.sessions[0].endpoint().acquisition,
+        subscription.acquisition
+    );
+    assert_eq!(app.sessions[1].endpoint().acquisition, poll.acquisition);
+}
