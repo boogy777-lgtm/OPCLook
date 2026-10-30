@@ -230,6 +230,8 @@ pub struct SessionRuntime {
     pub state: SessionState,
     pub reconnect: ReconnectState,
     pub subscription: SubscriptionState,
+    /// SDK-reported state for the current UA connection epoch.
+    pub ua_subscriptions: Vec<opclook_contract::model::UaSubscriptionParameters>,
     pub read_in_flight: bool,
     pub last_poll: Instant,
     pub last_test: Instant,
@@ -250,6 +252,7 @@ impl SessionRuntime {
             state: SessionState::Connecting,
             reconnect: ReconnectState::Idle,
             subscription: SubscriptionState::Inactive,
+            ua_subscriptions: Vec::new(),
             read_in_flight: false,
             last_poll: now.checked_sub(Duration::from_secs(10)).unwrap_or(now),
             last_test: now,
@@ -263,6 +266,17 @@ impl SessionRuntime {
             force_poll: false,
             connection_id: None,
         }
+    }
+}
+impl SessionRuntime {
+    fn revised_interval_for(&self, key: ItemKey) -> Option<u64> {
+        self.ua_subscriptions.iter().find_map(|sub| {
+            let revised = sub.revised.as_ref().filter(|r| r.valid)?;
+            sub.items
+                .iter()
+                .any(|item| item.key == key)
+                .then_some(revised.publishing_ms)
+        })
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -440,6 +454,7 @@ impl<C> Engine<C> {
             view.state = SessionState::Connecting;
             view.read_in_flight = false;
             view.subscription = SubscriptionState::Inactive;
+            view.ua_subscriptions.clear();
             view.items.clear();
             view.pending_initial.clear();
             view.pending_demands.clear();
@@ -1012,19 +1027,34 @@ impl<C> Engine<C> {
         self.next = id.successor();
         // Coalesced explicit refresh/read-back is stronger than the polling
         // profile, so any covered demand forces maxAge=0 for the whole Read.
-        // Subscription snapshots stay fresh until revised publishing rates
-        // are available; the Poll interval is its effective cadence here.
+        // Subscription snapshots use only valid SDK-reported per-item rates;
+        // when any rate is unknown, the whole batch stays fresh.
         let cached_age =
             if permit.is_some() && covered_demands.is_empty() && protocol == Protocol::OpcUa {
                 session
                     .and_then(|id| self.sessions.get(&id))
-                    .and_then(|view| view.endpoint.acquisition.as_ref())
-                    .filter(|config| {
-                        config.update_mode == opclook_contract::model::UpdateMode::Poll
-                            && config.poll_freshness
-                                == opclook_contract::model::PollFreshness::CacheAllowed
+                    .and_then(|view| {
+                        let config = view.endpoint.acquisition.as_ref()?;
+                        if config.poll_freshness
+                            != opclook_contract::model::PollFreshness::CacheAllowed
+                        {
+                            return None;
+                        }
+                        let age = match config.update_mode {
+                            opclook_contract::model::UpdateMode::Poll => config.interval_ms,
+                            opclook_contract::model::UpdateMode::Subscription => {
+                                let CommandKind::Read { keys } = &kind else {
+                                    return None;
+                                };
+                                keys.iter()
+                                    .map(|key| view.revised_interval_for(*key))
+                                    .collect::<Option<Vec<_>>>()?
+                                    .into_iter()
+                                    .min()?
+                            }
+                        };
+                        u32::try_from(age).ok()
                     })
-                    .and_then(|config| u32::try_from(config.interval_ms).ok())
             } else {
                 None
             };
@@ -1079,6 +1109,7 @@ impl<C> Engine<C> {
                 view.read_in_flight = false;
                 view.reserved_read = None;
                 view.subscription = SubscriptionState::Inactive;
+                view.ua_subscriptions.clear();
             }
             return Err(DispatchError::Closed {
                 request_id: id,
@@ -1106,6 +1137,7 @@ impl<C> Engine<C> {
             view.state = SessionState::Connecting;
             view.read_in_flight = false;
             view.subscription = SubscriptionState::Inactive;
+            view.ua_subscriptions.clear();
             view.items.clear();
             view.pending_initial.clear();
             view.pending_demands.clear();
@@ -1170,6 +1202,11 @@ impl<C> Engine<C> {
         let Owner::Session(session) = event.owner else {
             return Ok(pending);
         };
+        if matches!(event.kind, EventKind::UaSubscriptionParameters { .. })
+            && !matches!(event.origin, Origin::Session(_))
+        {
+            return Err(());
+        }
         // Session state changes require the identity of the Connect that created
         // the producer. Untagged session diagnostics remain visible.
         let affects_session = !matches!(event.kind, EventKind::Log { .. });
@@ -1304,6 +1341,7 @@ impl<C> Engine<C> {
                     view.state = SessionState::Connected;
                     view.reconnect = ReconnectState::Idle;
                     view.subscription = SubscriptionState::Inactive;
+                    view.ua_subscriptions.clear();
                     view.read_in_flight = false;
                     let now = Instant::now();
                     view.last_poll = now.checked_sub(Duration::from_secs(5)).unwrap_or(now);
@@ -1314,6 +1352,7 @@ impl<C> Engine<C> {
                     view.state = SessionState::Disconnected;
                     view.read_in_flight = false;
                     view.subscription = SubscriptionState::Inactive;
+                    view.ua_subscriptions.clear();
                     view.pending_initial.clear();
                     view.pending_demands.clear();
                     view.reserved_demands.clear();
@@ -1328,6 +1367,7 @@ impl<C> Engine<C> {
                     view.state = SessionState::Disconnected;
                     view.read_in_flight = false;
                     view.subscription = SubscriptionState::Inactive;
+                    view.ua_subscriptions.clear();
                     view.pending_initial.clear();
                     view.pending_demands.clear();
                     view.reserved_demands.clear();
@@ -1347,6 +1387,7 @@ impl<C> Engine<C> {
                     view.state = SessionState::Disconnected;
                     view.read_in_flight = false;
                     view.subscription = SubscriptionState::Inactive;
+                    view.ua_subscriptions.clear();
                     view.pending_initial.clear();
                     view.pending_demands.clear();
                     view.reserved_demands.clear();
@@ -1358,6 +1399,9 @@ impl<C> Engine<C> {
                     ..
                 } if correlated_read => view.read_in_flight = read_pending,
                 EventKind::Values { .. } if correlated_read => view.read_in_flight = read_pending,
+                EventKind::UaSubscriptionParameters { subscriptions } => {
+                    view.ua_subscriptions = subscriptions.clone();
+                }
                 EventKind::SubscriptionState { state } => {
                     view.subscription = *state;
                     if *state == SubscriptionState::Active
@@ -1419,7 +1463,13 @@ impl<C> Engine<C> {
                                         && view.endpoint.protocol == Protocol::OpcUa
                                         && !view.items.get(&key).copied().unwrap_or(false),
                                 );
-                                (!wait_for_push || now.saturating_duration_since(since) >= interval)
+                                // Unknown negotiation uses the existing fallback delay;
+                                // it is not recorded as a revised SDK value.
+                                let grace = view
+                                    .revised_interval_for(key)
+                                    .map(Duration::from_millis)
+                                    .unwrap_or(interval);
+                                (!wait_for_push || now.saturating_duration_since(since) >= grace)
                                     .then_some(key)
                             })
                             .collect();
@@ -1658,6 +1708,7 @@ impl<C> Engine<C> {
             view.reconnect = ReconnectState::Stopped;
             view.read_in_flight = false;
             view.subscription = SubscriptionState::Inactive;
+            view.ua_subscriptions.clear();
             view.pending_initial.clear();
             view.pending_demands.clear();
             view.reserved_demands.clear();
@@ -1773,6 +1824,7 @@ impl<C> Engine<C> {
     pub fn seed_session_for_test(&mut self, id: SessionId, mut session: SessionRuntime) {
         if let Some(old) = self.sessions.get(&id) {
             session.connection_id = old.connection_id;
+            session.ua_subscriptions = old.ua_subscriptions.clone();
             session.pending_initial = old.pending_initial.clone();
             session.pending_demands = old.pending_demands.clone();
             session.reserved_demands = old.reserved_demands.clone();
@@ -2000,6 +2052,129 @@ mod tests {
             &engine.test_commands.borrow().last().unwrap().kind,
             CommandKind::Read { .. }
         ));
+    }
+
+    fn negotiated_sub(
+        id: u32,
+        item: ItemKey,
+        ms: u64,
+        valid: bool,
+    ) -> opclook_contract::model::UaSubscriptionParameters {
+        use opclook_contract::model::{
+            UaMonitoredParameters, UaRevisedSubscription, UaSubscriptionParameters,
+        };
+        UaSubscriptionParameters {
+            subscription_id: id,
+            requested_publishing_ms: 1234,
+            requested_lifetime: 60,
+            requested_keepalive: 20,
+            revised: Some(UaRevisedSubscription {
+                publishing_ms: ms,
+                lifetime: 60,
+                keepalive: 20,
+                valid,
+            }),
+            items: vec![UaMonitoredParameters {
+                key: item,
+                requested_sampling_ms: -1.0,
+                requested_queue_size: 1,
+                revised_sampling_ms: ms as f64,
+                revised_queue_size: 2,
+            }],
+        }
+    }
+
+    fn negotiated_engine(now: Instant) -> Engine<()> {
+        use opclook_contract::model::UpdateMode;
+        let mut engine = cached_poll_engine(now);
+        let view = engine.sessions.get_mut(&sid(1)).unwrap();
+        view.endpoint.acquisition.as_mut().unwrap().update_mode = UpdateMode::Subscription;
+        view.pending_initial.insert(key(1), now);
+        view.pending_initial.insert(key(2), now);
+        let event = Event {
+            owner: owner(1),
+            origin: Origin::Session(rid(77)),
+            kind: EventKind::UaSubscriptionParameters {
+                subscriptions: vec![
+                    negotiated_sub(1, key(1), 2000, true),
+                    negotiated_sub(2, key(2), 3000, true),
+                ],
+            },
+        };
+        engine.accept_at(&event, now).unwrap();
+        engine
+    }
+
+    #[test]
+    fn sdk_revised_lifetime_ratio_checked_without_overflow() {
+        use opclook_contract::model::UaRevisedSubscription;
+        assert!(UaRevisedSubscription::from_sdk(2000, 60, 20).valid);
+        assert!(!UaRevisedSubscription::from_sdk(2000, 59, 20).valid);
+        assert!(!UaRevisedSubscription::from_sdk(2000, u32::MAX, u32::MAX).valid);
+        assert!(!UaRevisedSubscription::from_sdk(0, 60, 20).valid);
+        assert!(UaRevisedSubscription::from_sdk(3_600_000, 60, 20).valid);
+        let too_large = UaRevisedSubscription::from_sdk(u64::MAX, 60, 20);
+        assert!(!too_large.valid);
+        assert_eq!(too_large.publishing_ms, u64::MAX);
+        assert!(!UaRevisedSubscription::from_sdk(2000, 60, 0).valid);
+    }
+
+    #[test]
+    fn revised_subscription_grace_is_per_item_and_cached_batch_uses_minimum() {
+        let now = Instant::now();
+        let mut engine = negotiated_engine(now);
+        assert!(
+            engine
+                .due(now + Duration::from_millis(1999), Duration::ZERO, None)
+                .is_empty()
+        );
+        let due = engine.due(now + Duration::from_millis(2000), Duration::ZERO, None);
+        assert!(matches!(due.as_slice(), [Due::Read { keys, .. }] if keys == &vec![key(1)]));
+        let mut engine = negotiated_engine(now);
+        dispatch_due(&mut engine, now + Duration::from_millis(3000));
+        assert!(
+            matches!(&engine.test_commands.borrow().last().unwrap().kind,
+            CommandKind::ReadCached { keys, max_age_ms: 2000 } if keys == &vec![key(1), key(2)])
+        );
+    }
+
+    #[test]
+    fn revised_snapshot_stale_epoch_and_invalid_values_never_authorize_cache() {
+        let now = Instant::now();
+        let mut engine = negotiated_engine(now);
+        let stale = Event {
+            owner: owner(1),
+            origin: Origin::Session(rid(76)),
+            kind: EventKind::UaSubscriptionParameters {
+                subscriptions: vec![],
+            },
+        };
+        assert!(engine.accept_at(&stale, now).is_err());
+        assert_eq!(engine.sessions[&sid(1)].ua_subscriptions.len(), 2);
+        let invalid = Event {
+            owner: owner(1),
+            origin: Origin::Session(rid(77)),
+            kind: EventKind::UaSubscriptionParameters {
+                subscriptions: vec![negotiated_sub(1, key(1), 2000, false)],
+            },
+        };
+        engine.accept_at(&invalid, now).unwrap();
+        dispatch_due(&mut engine, now + Duration::from_millis(3000));
+        assert!(matches!(
+            &engine.test_commands.borrow().last().unwrap().kind,
+            CommandKind::Read { .. }
+        ));
+    }
+
+    #[test]
+    fn revised_subscription_mixed_explicit_refresh_forces_fresh() {
+        let now = Instant::now();
+        let mut engine = negotiated_engine(now);
+        engine.request_refresh(sid(1), key(1)).unwrap();
+        dispatch_due(&mut engine, now + Duration::from_millis(3000));
+        assert!(
+            matches!(&engine.test_commands.borrow().last().unwrap().kind, CommandKind::Read { keys } if keys == &vec![key(1), key(2)])
+        );
     }
 
     #[test]

@@ -60,8 +60,10 @@ pub(super) struct UaSession {
     /// Absolute deadband for DataChangeFilter (0 = off). Used for new items and
     /// pushed to the live ones by `apply_subscription_settings`.
     pub(super) deadband: f64,
-    /// Publishing interval (ms) the live subscription actually runs with.
-    pub(super) applied_interval_ms: u64,
+    /// Last interval request accepted by every live subscription, not revised.
+    pub(super) last_requested_interval_ms: u64,
+    /// Last accepted request for each SDK subscription (partial modify is possible).
+    pub(super) requested_intervals_ms: HashMap<u32, u64>,
     /// Deadband the live monitored items actually carry.
     pub(super) applied_deadband: f64,
     /// Server-assigned monitored item id of every item that is really monitored

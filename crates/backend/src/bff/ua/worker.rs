@@ -979,6 +979,7 @@ impl Actor {
                 for message in problems {
                     self.send_event(None, EventKind::Log { message });
                 }
+                self.session.report_negotiated(&tx);
                 if self.session.timed_out {
                     return self
                         .close_timed_out(
@@ -998,6 +999,7 @@ impl Actor {
                     // they cannot consume the AddItems reply's pending entry.
                     self.send_event(None, EventKind::Log { message });
                 }
+                self.session.report_negotiated(&tx);
                 self.send_event(request_id, EventKind::AddItems { results });
                 if self.session.timed_out {
                     return self
@@ -1014,6 +1016,7 @@ impl Actor {
                 for message in self.session.remove_items(&tx, &keys).await {
                     self.send_event(None, EventKind::Log { message });
                 }
+                self.session.report_negotiated(&tx);
                 self.send_event(request_id, EventKind::Removed { keys });
                 if self.session.timed_out {
                     return self

@@ -82,10 +82,11 @@ impl UaSession {
             detail: e.to_string(),
         })?;
         if self.subscriptions.is_empty() {
-            self.applied_interval_ms = interval_ms;
+            self.last_requested_interval_ms = interval_ms;
             self.applied_deadband = self.deadband;
         }
         self.subscriptions.push(sub_id);
+        self.requested_intervals_ms.insert(sub_id, interval_ms);
         Ok(sub_id)
     }
 
@@ -115,7 +116,7 @@ impl UaSession {
         }
         let mut problems = Vec::new();
 
-        if interval_ms != self.applied_interval_ms {
+        if interval_ms != self.last_requested_interval_ms {
             let mut all_applied = true;
             for sub_id in self.subscriptions.clone() {
                 let modified = timeout_drain(
@@ -138,7 +139,9 @@ impl UaSession {
                     return problems;
                 }
                 match modified {
-                    Ok(Ok(())) => {}
+                    Ok(Ok(())) => {
+                        self.requested_intervals_ms.insert(sub_id, interval_ms);
+                    }
                     Ok(Err(e)) => {
                         all_applied = false;
                         problems.push(BackendMsg::SubscriptionProblem {
@@ -151,7 +154,7 @@ impl UaSession {
                 }
             }
             if all_applied {
-                self.applied_interval_ms = interval_ms;
+                self.last_requested_interval_ms = interval_ms;
             }
         }
 
@@ -477,6 +480,79 @@ impl UaSession {
         overflow
     }
 
+    /// Publish only facts held by the SDK, scoped to this connection epoch.
+    pub(in crate::bff::ua) fn report_negotiated(&self, tx: &Sender<Event>) {
+        use crate::bff::model::{
+            UaMonitoredParameters, UaRevisedSubscription, UaSubscriptionParameters,
+        };
+        let state = self.session.subscription_state().lock();
+        let mut subscriptions = Vec::with_capacity(self.subscriptions.len());
+        for &id in &self.subscriptions {
+            let Some(&requested_publishing_ms) = self.requested_intervals_ms.get(&id) else {
+                continue;
+            };
+            let subscription = state.get(id);
+            let revised = subscription.map(|sub| {
+                let ms = u64::try_from(sub.publishing_interval().as_millis()).unwrap_or(u64::MAX);
+                let keepalive = sub.max_keep_alive_count();
+                let lifetime = sub.lifetime_count();
+                UaRevisedSubscription::from_sdk(ms, lifetime, keepalive)
+            });
+            let mut items = Vec::new();
+            if let Some(sub) = subscription {
+                for item in sub.monitored_items() {
+                    let Some(key) = ItemKey::new(item.client_handle()) else {
+                        continue;
+                    };
+                    if !self.monitored.get(&key).is_some_and(|(sub, _)| *sub == id) {
+                        continue;
+                    }
+                    items.push(UaMonitoredParameters {
+                        key,
+                        requested_sampling_ms: UA_SAMPLING_INTERVAL_MS,
+                        requested_queue_size: 1,
+                        revised_sampling_ms: item.sampling_interval(),
+                        revised_queue_size: item.queue_size(),
+                    });
+                }
+            }
+            items.sort_by_key(|item| item.key);
+            subscriptions.push(UaSubscriptionParameters {
+                subscription_id: id,
+                requested_publishing_ms,
+                requested_lifetime: UA_SUBSCRIPTION_LIFETIME_COUNT,
+                requested_keepalive: UA_SUBSCRIPTION_KEEPALIVE_COUNT,
+                revised,
+                items,
+            });
+        }
+        drop(state);
+        for sub in &subscriptions {
+            if sub.revised.as_ref().is_some_and(|r| !r.valid) {
+                self.log(
+                    tx,
+                    BackendMsg::SubscriptionProblem {
+                        cause: Box::new(BackendMsg::Raw(format!(
+                            "Invalid revised UA subscription parameters: id={}, {:?}",
+                            sub.subscription_id, sub.revised
+                        ))),
+                    },
+                );
+            }
+        }
+        send(
+            tx,
+            Event {
+                origin: self.connection_id.map_or(
+                    crate::bff::model::Origin::Unsolicited,
+                    crate::bff::model::Origin::Session,
+                ),
+                owner: self.session_id.into(),
+                kind: EventKind::UaSubscriptionParameters { subscriptions },
+            },
+        );
+    }
+
     /// Report the current subscription state so the app knows whether to poll.
     pub(in crate::bff::ua) fn report_subscription_state(
         &mut self,
@@ -523,6 +599,7 @@ impl UaSession {
             }
         }
         self.monitored.clear();
+        self.requested_intervals_ms.clear();
         self.unfiltered.clear();
         self.poll_only.clear();
         self.report_subscription_state(tx, SubscriptionState::Inactive);

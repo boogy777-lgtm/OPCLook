@@ -2235,3 +2235,49 @@ fn ua_live_read_sends_requested_max_age_and_direct_read_sends_zero() {
     }
     app.disconnect(session);
 }
+
+#[test]
+fn ua_live_reports_requested_and_server_revised_subscription_parameters() {
+    let server = TestServer::start_limited(free_port(), |limits| {
+        limits.subscriptions.min_publishing_interval_ms = 2000.0;
+        limits.subscriptions.min_sampling_interval_ms = 2000.0;
+    });
+    let mut app = Harness::new();
+    let session = SessionId::new(1).unwrap();
+    let key = ItemKey::new(1).unwrap();
+    let mut endpoint = Harness::endpoint(&server.url);
+    let mut profile = crate::bff::model::AcquisitionConfig::ua_default();
+    profile.interval_ms = 1000;
+    profile.update_mode = crate::bff::model::UpdateMode::Subscription;
+    endpoint.acquisition = Some(profile);
+    app.connect(session, endpoint).expect("connect");
+    let results = app.add_items(session, &[(key, server.node("Level"))]);
+    assert!(results[0].1.is_ok(), "{results:?}");
+    let subscriptions = app
+        .wait(Duration::from_secs(10), |event| match &event.kind {
+            EventKind::UaSubscriptionParameters { subscriptions }
+                if subscriptions
+                    .iter()
+                    .any(|s| s.items.iter().any(|i| i.key == key)) =>
+            {
+                Some(subscriptions.clone())
+            }
+            _ => None,
+        })
+        .expect("negotiated SDK snapshot");
+    let sub = subscriptions
+        .iter()
+        .find(|s| s.items.iter().any(|i| i.key == key))
+        .unwrap();
+    assert_eq!(sub.requested_publishing_ms, 1000);
+    let revised = sub.revised.as_ref().expect("SDK subscription state");
+    assert_eq!(revised.publishing_ms, 2000);
+    assert!(revised.valid, "{revised:?}");
+    let item = sub.items.iter().find(|item| item.key == key).unwrap();
+    assert_eq!(item.requested_sampling_ms, -1.0);
+    assert_eq!(item.requested_queue_size, 1);
+    // This sample server returns -1 for the subscription-default sentinel.
+    assert_eq!(item.revised_sampling_ms, -1.0);
+    assert!(item.revised_queue_size > 0);
+    app.disconnect(session);
+}
