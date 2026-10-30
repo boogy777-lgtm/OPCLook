@@ -3,6 +3,7 @@ extern crate self as tokio;
 pub use opclook_locale as i18n;
 pub mod sync {
     pub mod mpsc {
+        pub mod error { pub use std::sync::mpsc::TryRecvError; }
         use std::sync::{
             Arc,
             atomic::{AtomicBool, Ordering},

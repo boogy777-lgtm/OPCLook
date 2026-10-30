@@ -33,9 +33,9 @@ pub fn acquisition_capabilities(
             fresh_source: true,
             read_after_write: true,
         },
-        // Current DA worker is synchronous Cache-only, without stream callbacks.
+        // Preview exposes SDK advise; the default legacy adapter remains Cache-only.
         Protocol::OpcDa => AcquisitionCapabilities {
-            subscription: false,
+            subscription: cfg!(all(windows, feature = "native-da-preview")),
             cache_allowed: true,
             fresh_source: false,
             read_after_write: false,
@@ -120,7 +120,8 @@ mod acquisition_tests {
         da.acquisition = Some(config.clone());
         assert_eq!(
             validate_acquisition(&da),
-            Err(AcquisitionError::StreamUnsupported)
+            if cfg!(all(windows, feature = "native-da-preview")) { Ok(()) }
+            else { Err(AcquisitionError::StreamUnsupported) }
         );
         config.update_mode = UpdateMode::Poll;
         config.read_after_write = true;

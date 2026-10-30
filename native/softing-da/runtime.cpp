@@ -7,6 +7,11 @@
 #include <string>
 #include <vector>
 #include <cwchar>
+#include <deque>
+#include <memory>
+#include <mutex>
+#include <utility>
+#include <cstring>
 
 // The SDK asks its host for this module handle to load resources.
 HINSTANCE getInstanceHandle() { return ::GetModuleHandle(nullptr); }
@@ -18,6 +23,31 @@ struct OpclDaHost {
     SODaCEntry* entry;
     DWORD owner_thread;
     std::atomic<unsigned> sessions;
+};
+// The SDK remains the sole OPC callback owner. This object only receives
+// SDK onReadAdvise facts and publishes them to a bounded application queue.
+struct PendingPush { OpclDaPush fact; std::vector<char> payload; };
+struct PushState {
+    std::mutex mutex;
+    std::unordered_map<OPCHANDLE, uint64_t> registrations;
+    std::deque<PendingPush> pending;
+    size_t pending_bytes = 0;
+    bool overflow = false;
+};
+class RuntimeGroup : public SODaCComGroupDefault {
+public:
+    std::shared_ptr<PushState> push;
+    void onReadAdvise(BYTE mode, DWORD transaction, HRESULT master_quality,
+                      HRESULT master_error, DWORD n, SODaCItem** items,
+                      SOCmnVariant* values, WORD* qualities, SOCmnDateTime* times,
+                      HRESULT* errors) override;
+};
+class RuntimeCreator : public SODaCCreator {
+public:
+    SODaCGroup* createGroup(BYTE protocol, SODaCServer* parent) override {
+        if (protocol == SOCLT_PROTOCOL_DCOM) return new RuntimeGroup();
+        return SODaCCreator::createGroup(protocol, parent);
+    }
 };
 struct OpclDaItem { SODaCItem* sdk; };
 // A reference to an SDK browse object, never a COM interface or VARIANT.
@@ -38,6 +68,10 @@ struct OpclDaSession {
     SODaCGroup* group;
     std::unordered_set<OpclDaItem*> items;
     std::unordered_map<std::string, BrowseRef> branches;
+    bool subscription;
+    uint32_t registration_budget;
+    std::shared_ptr<PushState> push;
+    std::vector<SODaCItem*> retired;
 };
 static std::atomic<bool> host_exists(false);
 // ABI text is bounded UTF-8. SDK objects remain responsible for BSTR/VARIANT.
@@ -70,6 +104,12 @@ extern "C" int32_t opcl_da_host_create(OpclDaHost** out) try {
         if (entry) entry->release();
         exitSOCmn(); host_exists.store(false); return E_FAIL;
     }
+    RuntimeCreator* creator = new (std::nothrow) RuntimeCreator();
+    if (!creator) {
+        entry->terminate(); entry->release(); exitSOCmn(); host_exists.store(false);
+        return E_OUTOFMEMORY;
+    }
+    entry->setCreator(creator); creator->release();
     OpclDaHost* host = new (std::nothrow) OpclDaHost(entry);
     if (!host) {
         entry->terminate(); entry->release(); exitSOCmn(); host_exists.store(false);
@@ -85,10 +125,11 @@ extern "C" int32_t opcl_da_host_destroy(OpclDaHost* host) try {
     return ok ? S_OK : E_FAIL;
 } catch (...) { return E_UNEXPECTED; }
 extern "C" int32_t opcl_da_session_open(OpclDaHost* host, const char* name, const char* node,
-                                           const OpclDaGuid* id, OpclDaSession** out) try {
-    if (!out) return E_INVALIDARG;
-    *out = nullptr;
-    if (!host || !id) return E_INVALIDARG;
+                                           const OpclDaGuid* id, uint32_t subscription, uint32_t update_rate_ms,
+                                           uint32_t registration_budget, uint32_t* revised_rate_ms, OpclDaSession** out) try {
+    if (!out || !revised_rate_ms) return E_INVALIDARG;
+    *out = nullptr; *revised_rate_ms = 0;
+    if (!host || !id || subscription > 1 || !registration_budget || !update_rate_ms) return E_INVALIDARG;
     std::vector<WCHAR> wide_name, wide_node;
     if (!to_wide(name, wide_name) || !to_wide(node, wide_node)) return E_INVALIDARG;
     GUID clsid{id->data1, id->data2, id->data3, {}};
@@ -97,21 +138,30 @@ extern "C" int32_t opcl_da_session_open(OpclDaHost* host, const char* name, cons
     if (!server) return E_OUTOFMEMORY;
     HRESULT hr = server->connect(FALSE);
     if (SUCCEEDED(hr) && !server->isConnected()) hr = E_FAIL;
-    SODaCGroup* group = SUCCEEDED(hr) ? server->addGroup() : nullptr;
+    SODaCGroup* group = SUCCEEDED(hr) ? server->addGroup(nullptr, update_rate_ms) : nullptr;
+    std::shared_ptr<PushState> push;
+    if (SUCCEEDED(hr) && subscription) {
+        try { push = std::make_shared<PushState>(); }
+        catch (...) { hr = E_OUTOFMEMORY; }
+    }
     if (SUCCEEDED(hr) && !group) hr = E_OUTOFMEMORY;
     if (SUCCEEDED(hr)) {
-        // Keep the group active for cache reads while leaving scheduling to
-        // Engine: this SDK mode does not install its cyclic sync-read task.
-        group->setDataRetrieval(SODaCGroup::drPolledRefresh);
+        RuntimeGroup* runtime_group = static_cast<RuntimeGroup*>(group);
+        runtime_group->push = push;
+        group->setDataRetrieval(subscription ? SODaCGroup::drAsyncAdvise : SODaCGroup::drPolledRefresh);
         hr = group->start(FALSE);
         if (SUCCEEDED(hr) && !group->isStarted()) hr = E_FAIL;
+        // The SDK must actually retain advise mode; never silently turn the
+        // requested stream into its cyclic sync-read fallback.
+        if (SUCCEEDED(hr) && subscription && group->getDataRetrieval() != SODaCGroup::drAsyncAdvise) hr = E_NOINTERFACE;
+        if (SUCCEEDED(hr)) *revised_rate_ms = group->getUpdateRate();
     }
     if (FAILED(hr)) {
         if (group) { group->disconnect(); server->removeBranch(group); group->release(); }
         server->disconnect(); host->entry->removeBranch(server); server->release();
         return hr;
     }
-    OpclDaSession* session = new (std::nothrow) OpclDaSession{host, server, group, {}, {}};
+    OpclDaSession* session = new (std::nothrow) OpclDaSession{host, server, group, {}, {}, subscription != 0, registration_budget, push, {}};
     if (!session) {
         group->disconnect(); server->removeBranch(group); group->release();
         server->disconnect(); host->entry->removeBranch(server); server->release();
@@ -119,31 +169,71 @@ extern "C" int32_t opcl_da_session_open(OpclDaHost* host, const char* name, cons
     }
     ++host->sessions; *out = session; return S_OK;
 } catch (...) { return E_UNEXPECTED; }
-extern "C" int32_t opcl_da_item_add(OpclDaSession* s, const char* id, OpclDaItem** out,
+extern "C" int32_t opcl_da_item_add(OpclDaSession* s, const char* id, uint32_t registration_low,
+                                     uint32_t registration_high, OpclDaItem** out,
                                      uint16_t* type, uint32_t* rights) try {
     if (!out || !type || !rights) return E_INVALIDARG;
     *out = nullptr; *type = 0; *rights = 0;
-    if (!s) return E_INVALIDARG;
+    const uint64_t registration = (static_cast<uint64_t>(registration_high) << 32) | registration_low;
+    if (!s || !registration) return E_INVALIDARG;
+    if (s->subscription) {
+        if (s->retired.size() + s->items.size() >= s->registration_budget)
+            return HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_MEMORY);
+        // Every active item can later be retired without allocation failure.
+        const size_t needed = s->retired.size() + s->items.size() + 1;
+        if (s->retired.capacity() < needed) {
+            const size_t doubled = s->retired.capacity() ? s->retired.capacity() * 2 : 64;
+            const size_t desired = doubled > needed ? doubled : needed;
+            const size_t target = desired > s->registration_budget ? s->registration_budget : desired;
+            try { s->retired.reserve(target); }
+            catch (...) { return E_OUTOFMEMORY; }
+        }
+    }
     std::vector<WCHAR> wide_id;
     if (!to_wide(id, wide_id)) return E_INVALIDARG;
     SODaCItem* sdk = s->group->addItem(wide_id.data());
     if (!sdk) return E_OUTOFMEMORY;
+    OpclDaItem* item = new (std::nothrow) OpclDaItem{sdk};
+    if (!item) { s->group->removeLeaf(sdk); sdk->release(); return E_OUTOFMEMORY; }
+    if (s->subscription) {
+        bool inserted = false;
+        try {
+            std::lock_guard<std::mutex> lock(s->push->mutex);
+            inserted = sdk->getClientHandle() &&
+                s->push->registrations.emplace(sdk->getClientHandle(), registration).second;
+        } catch (...) {
+            s->group->removeLeaf(sdk); sdk->release(); delete item; return E_OUTOFMEMORY;
+        }
+        if (!inserted) { s->group->removeLeaf(sdk); sdk->release(); delete item; return E_FAIL; }
+    }
     HRESULT hr = sdk->start(FALSE);
     if (SUCCEEDED(hr) && !sdk->isStarted()) hr = E_FAIL;
-    if (FAILED(hr)) { s->group->removeLeaf(sdk); sdk->release(); return hr; }
-    OpclDaItem* item = new (std::nothrow) OpclDaItem{sdk};
-    if (!item) { sdk->disconnect(); s->group->removeLeaf(sdk); sdk->release(); return E_OUTOFMEMORY; }
-    try { s->items.insert(item); }
-    catch (...) { sdk->disconnect(); s->group->removeLeaf(sdk); sdk->release(); delete item; return E_OUTOFMEMORY; }
+    if (SUCCEEDED(hr)) {
+        try { s->items.insert(item); }
+        catch (...) { hr = E_OUTOFMEMORY; }
+    }
+    if (FAILED(hr)) {
+        if (s->subscription) { std::lock_guard<std::mutex> lock(s->push->mutex); s->push->registrations.erase(sdk->getClientHandle()); }
+        sdk->disconnect(); s->group->removeLeaf(sdk);
+        if (s->subscription) s->retired.push_back(sdk); else sdk->release();
+        delete item; return hr;
+    }
     *type = sdk->getNativeDatatype(); *rights = sdk->getAccessRights(); *out = item;
     return S_OK;
 } catch (...) { return E_UNEXPECTED; }
 extern "C" int32_t opcl_da_item_remove(OpclDaSession* s, OpclDaItem* item) try {
     if (!owns(s, item)) return E_INVALIDARG;
+    if (s->subscription) {
+        std::lock_guard<std::mutex> lock(s->push->mutex);
+        s->push->registrations.erase(item->sdk->getClientHandle());
+    }
     s->items.erase(item);
     const HRESULT hr = item->sdk->disconnect();
     const BOOL removed = s->group->removeLeaf(item->sdk);
-    item->sdk->release(); delete item;
+    // Retain the SDK object/handle until group close. A late callback cannot
+    // resolve an old server handle to a newly registered SDK object.
+    if (s->subscription) s->retired.push_back(item->sdk); else item->sdk->release();
+    delete item;
     return FAILED(hr) ? hr : (removed ? S_OK : E_FAIL);
 } catch (...) { return E_UNEXPECTED; }
 static HRESULT clear_browse(OpclDaSession* s);
@@ -159,6 +249,8 @@ extern "C" int32_t opcl_da_session_close(OpclDaSession* s) try {
     HRESULT hr = s->group->disconnect(); if (FAILED(hr)) result = hr;
     if (!s->server->removeBranch(s->group)) result = E_FAIL;
     s->group->release();
+    for (SODaCItem* retired : s->retired) retired->release();
+    s->retired.clear();
     hr = s->server->disconnect(); if (FAILED(hr)) result = hr;
     if (!s->host->entry->removeBranch(s->server)) result = E_FAIL;
     s->server->release(); --s->host->sessions; delete s;
@@ -247,13 +339,15 @@ static void put_bits(OpclDaScalar* out, uint64_t bits) {
     out->bits_low = static_cast<uint32_t>(bits);
     out->bits_high = static_cast<uint32_t>(bits >> 32);
 }
-static HRESULT scalar_copy(const SOCmnVariant& value, OpclDaScalar* out) {
+static HRESULT scalar_copy(const VARIANT& value, OpclDaScalar* out) {
     int64_t signed_value = 0; uint64_t unsigned_value = 0; double float_value = 0;
     switch (value.vt) {
-    case VT_EMPTY: put_bits(out, 0); return S_OK;
+    case VT_EMPTY: case VT_NULL: put_bits(out, 0); return S_OK;
     case VT_I1: signed_value = value.cVal; break;
     case VT_I2: signed_value = value.iVal; break;
     case VT_I4: signed_value = value.lVal; break;
+    case VT_ERROR: unsigned_value = static_cast<uint32_t>(value.scode); goto unsign;
+    case VT_FILETIME: unsigned_value = value.ullVal; goto unsign;
     case VT_INT: signed_value = value.intVal; break;
     case VT_I8: signed_value = value.llVal; break;
     case VT_CY: signed_value = value.cyVal.int64; break;
@@ -304,6 +398,247 @@ static HRESULT scalar_set(SOCmnVariant& value, uint16_t vt, uint32_t low, uint32
     }
     return S_OK;
 }
+// Primitive byte width agrees with SDK SAFEARRAY element layout on Win32.
+static uint32_t primitive_array_width(uint16_t vt) {
+    switch (vt) {
+    case VT_I1: case VT_UI1: return 1;
+    case VT_I2: case VT_UI2: case VT_BOOL: return 2;
+    case VT_I4: case VT_UI4: case VT_INT: case VT_UINT: case VT_R4: case VT_ERROR: return 4;
+    case VT_I8: case VT_UI8: case VT_R8: case VT_CY: case VT_DATE: case VT_FILETIME: return 8;
+    default: return 0;
+    }
+}
+static HRESULT copy_sdk_value(VARIANT& value, OpclDaScalar* out, char* text, uint32_t capacity, unsigned depth = 0) {
+    out->vartype = value.vt;
+    if (depth >= 32 || (value.vt & VT_BYREF)) return DISP_E_TYPEMISMATCH;
+    if (value.vt == (VT_ARRAY | VT_VARIANT)) {
+        if (!value.parray || SafeArrayGetDim(value.parray) != 1 || SafeArrayGetElemsize(value.parray) != sizeof(VARIANT)) return DISP_E_TYPEMISMATCH;
+        LONG lower = 0, upper = -1;
+        HRESULT hr = SafeArrayGetLBound(value.parray, 1, &lower);
+        if (FAILED(hr)) return hr;
+        hr = SafeArrayGetUBound(value.parray, 1, &upper);
+        if (FAILED(hr)) return hr;
+        const int64_t count = static_cast<int64_t>(upper) - lower + 1;
+        if (count < 0 || count > 256) return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+        void* borrowed = nullptr; hr = SafeArrayAccessData(value.parray, &borrowed);
+        if (FAILED(hr)) return hr;
+        VARIANT* values = static_cast<VARIANT*>(borrowed);
+        const uint32_t limit = capacity < 65536 ? capacity : 65536;
+        uint32_t used = 0;
+        for (int64_t i = 0; SUCCEEDED(hr) && i < count; ++i) {
+            if (!values || !text || used > limit || limit - used < 6) { hr = HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER); break; }
+            OpclDaScalar element{};
+            const uint32_t header = used; used += 6;
+            try { hr = copy_sdk_value(values[i], &element, text + used, limit - used, depth + 1); }
+            catch (...) { hr = E_UNEXPECTED; }
+            if (FAILED(hr)) break;
+            uint32_t length = element.text_len;
+            if (!(element.vartype & VT_ARRAY) && element.vartype != VT_BSTR) {
+                if (FAILED(scalar_copy(values[i], &element)) || limit - used < 8) { hr = DISP_E_TYPEMISMATCH; break; }
+                const uint64_t bits = scalar_bits(element);
+                std::memcpy(text + used, &bits, 8); length = 8;
+            }
+            if (length > limit - used) { hr = HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER); break; }
+            std::memcpy(text + header, &element.vartype, 2);
+            std::memcpy(text + header + 2, &length, 4); used += length;
+        }
+        const HRESULT unlocked = SafeArrayUnaccessData(value.parray);
+        if (FAILED(hr)) return hr;
+        if (FAILED(unlocked)) return unlocked;
+        out->text_len = used; return S_OK;
+    }
+    if (value.vt == (VT_ARRAY | VT_BSTR)) {
+        if (!value.parray || SafeArrayGetDim(value.parray) != 1 ||
+            SafeArrayGetElemsize(value.parray) != sizeof(BSTR)) return DISP_E_TYPEMISMATCH;
+        LONG lower = 0, upper = -1;
+        HRESULT hr = SafeArrayGetLBound(value.parray, 1, &lower);
+        if (FAILED(hr)) return hr;
+        hr = SafeArrayGetUBound(value.parray, 1, &upper);
+        if (FAILED(hr)) return hr;
+        const int64_t count = static_cast<int64_t>(upper) - lower + 1;
+        if (count < 0 || count > 256) return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+        void* borrowed = nullptr;
+        hr = SafeArrayAccessData(value.parray, &borrowed);
+        if (FAILED(hr)) return hr;
+        const BSTR* strings = static_cast<const BSTR*>(borrowed);
+        const uint32_t limit = capacity < 65536 ? capacity : 65536;
+        uint32_t used = 0;
+        for (int64_t i = 0; SUCCEEDED(hr) && i < count; ++i) {
+            if (!strings) { hr = E_UNEXPECTED; break; }
+            const BSTR v = strings[i];
+            const UINT length = v ? SysStringLen(v) : 0;
+            if (length > 65536 || (v && std::wcslen(v) != length)) { hr = DISP_E_TYPEMISMATCH; break; }
+            const int size = length ? WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, v,
+                static_cast<int>(length), nullptr, 0, nullptr, nullptr) : 0;
+            if (length && size <= 0) { hr = E_INVALIDARG; break; }
+            if (used > limit || limit - used < 4 || static_cast<uint32_t>(size) > limit - used - 4 || !text) {
+                hr = HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER); break;
+            }
+            const uint32_t bytes = static_cast<uint32_t>(size);
+            std::memcpy(text + used, &bytes, 4); used += 4;
+            if (bytes && WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, v,
+                static_cast<int>(length), text + used, size, nullptr, nullptr) != size) { hr = E_INVALIDARG; break; }
+            used += bytes;
+        }
+        const HRESULT unlocked = SafeArrayUnaccessData(value.parray);
+        if (FAILED(hr)) return hr;
+        if (FAILED(unlocked)) return unlocked;
+        out->text_len = used;
+        return S_OK;
+    }
+    if ((value.vt & VT_ARRAY) && primitive_array_width(value.vt & ~VT_ARRAY)) {
+        if (!value.parray || SafeArrayGetDim(value.parray) != 1) return DISP_E_TYPEMISMATCH;
+        const ULONG element_size = primitive_array_width(value.vt & ~VT_ARRAY);
+        if (SafeArrayGetElemsize(value.parray) != element_size) return DISP_E_TYPEMISMATCH;
+        LONG lower = 0, upper = -1;
+        HRESULT hr = SafeArrayGetLBound(value.parray, 1, &lower);
+        if (FAILED(hr)) return hr;
+        hr = SafeArrayGetUBound(value.parray, 1, &upper);
+        if (FAILED(hr)) return hr;
+        const int64_t elements = static_cast<int64_t>(upper) - lower + 1;
+        if (elements < 0 || elements > 256 || elements > static_cast<int64_t>((capacity < 65536 ? capacity : 65536) / element_size))
+            return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+        const uint32_t bytes = static_cast<uint32_t>(elements * element_size);
+        if (bytes && !text) return E_INVALIDARG;
+        void* borrowed = nullptr;
+        hr = SafeArrayAccessData(value.parray, &borrowed);
+        if (FAILED(hr)) return hr;
+        if (bytes && !borrowed) { SafeArrayUnaccessData(value.parray); return E_UNEXPECTED; }
+        if (bytes) std::memcpy(text, borrowed, bytes);
+        hr = SafeArrayUnaccessData(value.parray);
+        if (FAILED(hr)) return hr;
+        out->text_len = bytes;
+        return S_OK;
+    }
+    if (value.vt != VT_BSTR) {
+        // Unknown VARIANT tags are preserved for Rust's explicit Unsupported.
+        (void)scalar_copy(value, out);
+        return S_OK;
+    }
+    const UINT original = value.bstrVal ? SysStringLen(value.bstrVal) : 0;
+    if (original > 65536 || original > capacity) return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+    SOCmnVariant sdk_string;
+    if (!sdk_string.initFrom(&value)) return E_OUTOFMEMORY;
+    SOCmnString storage; LPCTSTR wide = sdk_string.getBSTR(storage);
+    const size_t length = wide ? std::wcslen(wide) : 0;
+    if (length != original) return DISP_E_TYPEMISMATCH;
+    if (!length) return S_OK;
+    const int needed = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide,
+                                           static_cast<int>(length), nullptr, 0, nullptr, nullptr);
+    if (needed <= 0) return E_INVALIDARG;
+    if (static_cast<uint32_t>(needed) > capacity || !text) return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, static_cast<int>(length),
+                            text, needed, nullptr, nullptr) != needed) return E_INVALIDARG;
+    out->text_len = static_cast<uint32_t>(needed);
+    return S_OK;
+}
+#ifdef OPCL_DA_TESTING
+extern "C" int32_t opcl_da_test_codec_bounds(void) try {
+    std::wstring large(65536, L'x'); std::vector<char> bytes(65536);
+    SOCmnVariant text; text.setBSTR(large.c_str()); if (!text.bstrVal) return E_OUTOFMEMORY;
+    OpclDaScalar out{};
+    if (FAILED(copy_sdk_value(text, &out, bytes.data(), static_cast<uint32_t>(bytes.size()))) || out.text_len != 65536) return E_FAIL;
+    out = {};
+    if (SUCCEEDED(copy_sdk_value(text, &out, bytes.data(), 65535))) return E_FAIL;
+    std::wstring too_large(65537, L'x'); SOCmnVariant oversized; oversized.setBSTR(too_large.c_str());
+    if (!oversized.bstrVal) return E_OUTOFMEMORY;
+    if (SUCCEEDED(copy_sdk_value(oversized, &out, bytes.data(), 65536))) return E_FAIL;
+    for (ULONG count = 256; count <= 257; ++count) {
+        SOCmnVariant array;
+        SAFEARRAY* storage = SOCmnVariant::safeArrayCreateVector(VT_UI1, 0, count);
+        if (!storage) return E_OUTOFMEMORY;
+        array.vt = VT_ARRAY | VT_UI1; array.parray = storage; out = {};
+        const HRESULT hr = copy_sdk_value(array, &out, bytes.data(), static_cast<uint32_t>(bytes.size()));
+        if (count == 256 ? (FAILED(hr) || out.text_len != 256) : SUCCEEDED(hr)) return E_FAIL;
+    }
+    return S_OK;
+} catch (...) { return E_UNEXPECTED; }
+#endif
+static void queue_push(PushState& state, const OpclDaPush& fact, const char* data, uint32_t length) {
+    if (state.pending.size() >= 256) { state.overflow = true; return; }
+    try {
+        PendingPush event{}; event.fact = fact;
+        if (length) event.payload.assign(data, data + length);
+        const size_t charge = sizeof(PendingPush) + event.payload.capacity();
+        if (charge > 1048576u - state.pending_bytes) { state.overflow = true; return; }
+        state.pending.push_back(std::move(event)); state.pending_bytes += charge;
+    } catch (...) { state.overflow = true; }
+}
+#ifdef OPCL_DA_TESTING
+extern "C" int32_t opcl_da_test_queue_bounds(void) try {
+    PushState small; OpclDaPush fact{};
+    for (unsigned i = 0; i < 257; ++i) queue_push(small, fact, nullptr, 0);
+    if (small.pending.size() != 256 || !small.overflow || small.pending_bytes != 256 * sizeof(PendingPush)) return E_FAIL;
+    PushState large; std::vector<char> payload(OPCL_DA_VALUE_BYTES, 'x');
+    for (unsigned i = 0; i < 16; ++i) queue_push(large, fact, payload.data(), OPCL_DA_VALUE_BYTES);
+    if (large.pending.empty() || !large.overflow || large.pending_bytes > 1048576) return E_FAIL;
+    const size_t charge = sizeof(PendingPush) + large.pending.front().payload.capacity();
+    if (large.pending.size() != 1048576 / charge) return E_FAIL;
+    return S_OK;
+} catch (...) { return E_UNEXPECTED; }
+#endif
+void RuntimeGroup::onReadAdvise(BYTE mode, DWORD transaction, HRESULT master_quality,
+                                HRESULT master_error, DWORD n, SODaCItem** items,
+                                SOCmnVariant* values, WORD* qualities, SOCmnDateTime* times,
+                                HRESULT* errors) {
+    std::shared_ptr<PushState> state = push;
+    if (!state || mode == 0) return; // ReadComplete is not a stream update.
+    try {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        if (mode != 1 || transaction != 0 || n > 256 ||
+            (n && (!items || !values || !qualities || !times || !errors))) {
+            state->overflow = true; return;
+        }
+        std::vector<char> scratch(OPCL_DA_VALUE_BYTES);
+        if (FAILED(master_error) || (!n && master_quality != S_OK)) {
+            OpclDaPush envelope{};
+            envelope.master_quality = master_quality;
+            envelope.value.service_result = master_error;
+            queue_push(*state, envelope, nullptr, 0);
+        }
+        for (DWORD i = 0; i < n; ++i) {
+            if (!items[i]) { state->overflow = true; continue; }
+            const auto found = state->registrations.find(items[i]->getClientHandle());
+            if (found == state->registrations.end()) continue; // retired registration
+            OpclDaPush event{};
+            event.registration_low = static_cast<uint32_t>(found->second);
+            event.registration_high = static_cast<uint32_t>(found->second >> 32);
+            event.master_quality = master_quality;
+            event.value.service_result = master_error;
+            event.value.item_result = errors[i];
+            event.value.quality = qualities[i];
+            FILETIME ft{}; times[i].get(&ft);
+            event.value.filetime_low = ft.dwLowDateTime;
+            event.value.filetime_high = ft.dwHighDateTime;
+            event.value.vartype = values[i].vt;
+            if (SUCCEEDED(master_error) && SUCCEEDED(errors[i])) {
+                const HRESULT hr = copy_sdk_value(values[i], &event.value, scratch.data(), OPCL_DA_VALUE_BYTES);
+                if (FAILED(hr)) event.adapter_result = hr;
+            }
+            queue_push(*state, event, scratch.data(), event.adapter_result < 0 ? 0 : event.value.text_len);
+        }
+    } catch (...) {
+        try { std::lock_guard<std::mutex> lock(state->mutex); state->overflow = true; } catch (...) {}
+    }
+}
+extern "C" int32_t opcl_da_take_push(OpclDaSession* session, OpclDaPush* out, char* payload,
+                                       uint32_t capacity, uint32_t* count, uint32_t* overflow) try {
+    if (!session || !out || !count || !overflow || (capacity && !payload)) return E_INVALIDARG;
+    *count = 0; *overflow = 0;
+    if (!session->subscription || !session->push) return E_NOINTERFACE;
+    std::lock_guard<std::mutex> lock(session->push->mutex);
+    *overflow = session->push->overflow ? 1 : 0;
+    session->push->overflow = false;
+    if (!session->push->pending.empty()) {
+        const PendingPush& front = session->push->pending.front();
+        if (front.payload.size() > capacity) return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+        *out = front.fact;
+        if (!front.payload.empty()) std::memcpy(payload, front.payload.data(), front.payload.size());
+        session->push->pending_bytes -= sizeof(PendingPush) + front.payload.capacity();
+        session->push->pending.pop_front(); *count = 1;
+    }
+    return S_OK;
+} catch (...) { return E_UNEXPECTED; }
 class ReadScalarTask : public SOCltTask {
 public:
     ReadScalarTask(SODaCGroup* group, SODaCItem* item, DWORD age, OpclDaScalar* out, char* text, uint32_t capacity)
@@ -316,27 +651,9 @@ public:
         out_->service_result = service; out_->item_result = item_result;
         out_->filetime_low = ft.dwLowDateTime; out_->filetime_high = ft.dwHighDateTime;
         out_->quality = quality; out_->vartype = value.vt;
-        if (SUCCEEDED(service) && SUCCEEDED(item_result) && value.vt == VT_BSTR) {
-            // SDK helper owns its copy. The original BSTR is only borrowed to
-            // reject embedded NUL before it could be silently truncated.
-            const UINT original = value.bstrVal ? SysStringLen(value.bstrVal) : 0;
-            if (original > 65536) { setResult(HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER)); return; }
-            SOCmnString storage; LPCTSTR wide = value.getBSTR(storage);
-            const size_t length = wide ? std::wcslen(wide) : 0;
-            if (length != original) { setResult(DISP_E_TYPEMISMATCH); return; }
-            if (length) {
-                const int needed = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide,
-                    static_cast<int>(length), nullptr, 0, nullptr, nullptr);
-                if (needed <= 0) { setResult(E_INVALIDARG); return; }
-                if (static_cast<uint32_t>(needed) > capacity_ || !text_) { setResult(HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER)); return; }
-                if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, static_cast<int>(length),
-                    text_, needed, nullptr, nullptr) != needed) { setResult(E_INVALIDARG); return; }
-                out_->text_len = static_cast<uint32_t>(needed);
-            }
-        } else if (SUCCEEDED(service) && SUCCEEDED(item_result)) (void)scalar_copy(value, out_);
-        // The raw VARTYPE crosses the ABI even when no scalar conversion is
-        // supported; Rust maps it to the common explicit Unsupported error.
-        setResult(S_OK);
+        if (SUCCEEDED(service) && SUCCEEDED(item_result)) {
+            setResult(copy_sdk_value(value, out_, text_, capacity_));
+        } else setResult(S_OK);
     } catch (...) { setResult(E_UNEXPECTED); }
 private:
     SODaCGroup* group_; SODaCItem* item_; DWORD age_; OpclDaScalar* out_; char* text_; uint32_t capacity_;
@@ -377,6 +694,178 @@ extern "C" int32_t opcl_da_write_scalar(OpclDaSession* s, OpclDaItem* item, uint
     if (!task) return E_OUTOFMEMORY;
     const HRESULT hr = s->group->executeTask(task); const bool sent = task->dispatched(); task->release();
     return sent || FAILED(hr) ? hr : E_UNEXPECTED;
+} catch (...) { return E_UNEXPECTED; }
+
+// Recursively construct SDK-owned values from bounded, validated wire records.
+static HRESULT build_variant_wire(SOCmnVariant& output, uint16_t vt, const uint8_t* data, uint32_t bytes, unsigned depth) {
+    if (depth >= 32 || bytes > 65536 || (bytes && !data)) return E_INVALIDARG;
+    if (vt == VT_BSTR) {
+        const char* input = reinterpret_cast<const char*>(data);
+        const int size = bytes ? MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input, static_cast<int>(bytes), nullptr, 0) : 0;
+        if (bytes && size <= 0) return E_INVALIDARG;
+        std::vector<WCHAR> wide(static_cast<size_t>(size) + 1, 0);
+        if (bytes && MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input, static_cast<int>(bytes), wide.data(), size) != size) return E_INVALIDARG;
+        if (std::wcslen(wide.data()) != static_cast<size_t>(size)) return E_INVALIDARG;
+        output.setBSTR(wide.data()); return output.bstrVal ? S_OK : E_OUTOFMEMORY;
+    }
+    if (!(vt & VT_ARRAY)) {
+        if (bytes != 8) return E_INVALIDARG;
+        uint64_t bits = 0; std::memcpy(&bits, data, 8);
+        return scalar_set(output, vt, static_cast<uint32_t>(bits), static_cast<uint32_t>(bits >> 32));
+    }
+    const uint16_t element = vt & ~VT_ARRAY;
+    if (element != VT_VARIANT && element != VT_BSTR) {
+        const uint32_t width = primitive_array_width(element);
+        if (!width || bytes % width || bytes / width > 256) return E_INVALIDARG;
+        SAFEARRAY* array = SOCmnVariant::safeArrayCreateVector(static_cast<VARTYPE>(element), 0, bytes / width);
+        if (!array) return E_OUTOFMEMORY;
+        output.vt = vt; output.parray = array;
+        void* borrowed = nullptr; HRESULT hr = SafeArrayAccessData(array, &borrowed);
+        if (FAILED(hr)) return hr;
+        if (bytes && !borrowed) { SafeArrayUnaccessData(array); return E_UNEXPECTED; }
+        if (bytes) std::memcpy(borrowed, data, bytes);
+        return SafeArrayUnaccessData(array);
+    }
+    const uint32_t header = element == VT_VARIANT ? 6u : 4u;
+    uint32_t offset = 0, count = 0;
+    while (offset < bytes) {
+        if (bytes - offset < header || count >= 256) return E_INVALIDARG;
+        uint32_t length = 0;
+        std::memcpy(&length, data + offset + (element == VT_VARIANT ? 2 : 0), 4);
+        offset += header;
+        if (length > bytes - offset) return E_INVALIDARG;
+        offset += length; ++count;
+    }
+    SAFEARRAY* array = SOCmnVariant::safeArrayCreateVector(static_cast<VARTYPE>(element), 0, count);
+    if (!array) return E_OUTOFMEMORY;
+    output.vt = vt; output.parray = array; offset = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        uint16_t child_vt = VT_BSTR; uint32_t length = 0;
+        if (element == VT_VARIANT) std::memcpy(&child_vt, data + offset, 2);
+        std::memcpy(&length, data + offset + (element == VT_VARIANT ? 2 : 0), 4);
+        offset += header;
+        SOCmnVariant child;
+        HRESULT hr = build_variant_wire(child, child_vt, data + offset, length, depth + 1);
+        if (FAILED(hr)) return hr;
+        LONG index = static_cast<LONG>(i);
+        hr = SafeArrayPutElement(array, &index, element == VT_BSTR ? static_cast<void*>(child.bstrVal) : static_cast<void*>(static_cast<VARIANT*>(&child)));
+        if (FAILED(hr)) return hr;
+        offset += length;
+    }
+    return S_OK;
+}
+class WriteVariantArrayTask : public SOCltTask {
+public:
+    WriteVariantArrayTask(SODaCGroup* group, SODaCItem* item, const uint8_t* data, uint32_t bytes, int32_t* result)
+        : SOCltTask(group), group_(group), item_(item), data_(data), bytes_(bytes), result_(result) {}
+    void execute() override try {
+        SOCmnVariant value;
+        HRESULT hr = build_variant_wire(value, VT_ARRAY | VT_VARIANT, data_, bytes_, 0);
+        if (FAILED(hr)) { setResult(hr); return; }
+        SODaCItem* items[] = {item_}; HRESULT item_result = E_FAIL;
+        hr = group_->syncWrite(1, items, &value, nullptr, nullptr, &item_result);
+        *result_ = item_result; setResult(hr);
+    } catch (...) { setResult(E_UNEXPECTED); }
+private:
+    SODaCGroup* group_; SODaCItem* item_; const uint8_t* data_; uint32_t bytes_; int32_t* result_;
+};
+// BSTR allocation remains inside SDK variant and system SAFEARRAY copy.
+class WriteStringArrayTask : public SOCltTask {
+public:
+    WriteStringArrayTask(SODaCGroup* group, SODaCItem* item, const uint8_t* data,
+                         uint32_t bytes, uint32_t count, int32_t* result)
+        : SOCltTask(group), group_(group), item_(item), data_(data), bytes_(bytes), count_(count), result_(result) {}
+    void execute() override try {
+        SOCmnVariant value;
+        SAFEARRAY* array = SOCmnVariant::safeArrayCreateVector(VT_BSTR, 0, count_);
+        if (!array) { setResult(E_OUTOFMEMORY); return; }
+        value.vt = VT_ARRAY | VT_BSTR; value.parray = array;
+        uint32_t offset = 0;
+        for (uint32_t i = 0; i < count_; ++i) {
+            uint32_t length = 0; std::memcpy(&length, data_ + offset, 4); offset += 4;
+            const char* text = reinterpret_cast<const char*>(data_ + offset);
+            const int wide_size = length ? MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text,
+                static_cast<int>(length), nullptr, 0) : 0;
+            if (length && wide_size <= 0) { setResult(E_INVALIDARG); return; }
+            std::vector<WCHAR> wide(static_cast<size_t>(wide_size) + 1, 0);
+            if (length && MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text,
+                static_cast<int>(length), wide.data(), wide_size) != wide_size) { setResult(E_INVALIDARG); return; }
+            if (std::wcslen(wide.data()) != static_cast<size_t>(wide_size)) { setResult(E_INVALIDARG); return; }
+            SOCmnVariant sdk_string; sdk_string.setBSTR(wide.data());
+            if (!sdk_string.bstrVal) { setResult(E_OUTOFMEMORY); return; }
+            LONG index = static_cast<LONG>(i);
+            const HRESULT hr = SafeArrayPutElement(array, &index, sdk_string.bstrVal);
+            if (FAILED(hr)) { setResult(hr); return; }
+            offset += length;
+        }
+        SODaCItem* items[] = {item_}; HRESULT item_result = E_FAIL;
+        const HRESULT hr = group_->syncWrite(1, items, &value, nullptr, nullptr, &item_result);
+        *result_ = item_result; setResult(hr);
+    } catch (...) { setResult(E_UNEXPECTED); }
+private:
+    SODaCGroup* group_; SODaCItem* item_; const uint8_t* data_;
+    uint32_t bytes_, count_; int32_t* result_;
+};
+// SDK owns the array through SOCmnVariant; this ABI only copies POD bytes.
+class WriteArrayTask : public SOCltTask {
+public:
+    WriteArrayTask(SODaCGroup* group, SODaCItem* item, uint16_t vt,
+                   const uint8_t* data, uint32_t bytes, int32_t* result)
+        : SOCltTask(group), group_(group), item_(item), vt_(vt), data_(data), bytes_(bytes), result_(result) {}
+    void execute() override try {
+        const VARTYPE element = static_cast<VARTYPE>(vt_ & ~VT_ARRAY);
+        const uint32_t size = primitive_array_width(element);
+        SOCmnVariant value;
+        SAFEARRAY* array = SOCmnVariant::safeArrayCreateVector(element, 0, bytes_ / size);
+        if (!array) { setResult(E_OUTOFMEMORY); return; }
+        value.vt = vt_;
+        value.parray = array;
+        void* data = nullptr;
+        HRESULT hr = SafeArrayAccessData(array, &data);
+        if (FAILED(hr)) { setResult(hr); return; }
+        if (bytes_ && !data) { SafeArrayUnaccessData(array); setResult(E_UNEXPECTED); return; }
+        if (bytes_) std::memcpy(data, data_, bytes_);
+        hr = SafeArrayUnaccessData(array);
+        if (FAILED(hr)) { setResult(hr); return; }
+        SODaCItem* items[] = {item_}; HRESULT item_result = E_FAIL;
+        hr = group_->syncWrite(1, items, &value, nullptr, nullptr, &item_result);
+        *result_ = item_result; setResult(hr);
+    } catch (...) { setResult(E_UNEXPECTED); }
+private:
+    SODaCGroup* group_; SODaCItem* item_; uint16_t vt_; const uint8_t* data_;
+    uint32_t bytes_; int32_t* result_;
+};
+extern "C" int32_t opcl_da_write_array(OpclDaSession* s, OpclDaItem* item, uint16_t vt,
+                                         const uint8_t* data, uint32_t bytes, int32_t* result) try {
+    if (!result || !owns(s, item) || (bytes && !data)) return E_INVALIDARG;
+    if (bytes > 65536) return E_INVALIDARG;
+    if (vt == (VT_ARRAY | VT_VARIANT)) {
+        *result = E_FAIL;
+        WriteVariantArrayTask* task = new (std::nothrow) WriteVariantArrayTask(s->group, item->sdk, data, bytes, result);
+        if (!task) return E_OUTOFMEMORY;
+        const HRESULT hr = s->group->executeTask(task); task->release(); return hr;
+    }
+    if (vt == (VT_ARRAY | VT_BSTR)) {
+        uint32_t count = 0, offset = 0;
+        while (offset < bytes) {
+            if (bytes - offset < 4 || count >= 256) return E_INVALIDARG;
+            uint32_t length = 0; std::memcpy(&length, data + offset, 4); offset += 4;
+            if (length > bytes - offset) return E_INVALIDARG;
+            offset += length; ++count;
+        }
+        *result = E_FAIL;
+        WriteStringArrayTask* task = new (std::nothrow) WriteStringArrayTask(s->group, item->sdk, data, bytes, count, result);
+        if (!task) return E_OUTOFMEMORY;
+        const HRESULT hr = s->group->executeTask(task); task->release(); return hr;
+    }
+    const uint32_t size = (vt & VT_ARRAY) ? primitive_array_width(vt & ~VT_ARRAY) : 0;
+    if (!size) return DISP_E_TYPEMISMATCH;
+    if (bytes > 65536 || (bytes % size) || bytes / size > 256) return E_INVALIDARG;
+    *result = E_FAIL;
+    WriteArrayTask* task = new (std::nothrow) WriteArrayTask(s->group, item->sdk, vt, data, bytes, result);
+    if (!task) return E_OUTOFMEMORY;
+    const HRESULT hr = s->group->executeTask(task);
+    task->release(); return hr;
 } catch (...) { return E_UNEXPECTED; }
 
 class WriteTextTask : public SOCltTask {
@@ -613,7 +1102,7 @@ public:
         browser->setMaxElements(OPCL_DA_MAX_BROWSE);
         browser->setContinuationPoint(_T(""));
         SOCmnList<SOCltBrowseObject> children;
-        if (!parent->expand(SOCMNOBJECT_TYPE_NODE | SOCMNOBJECT_TYPE_LEAF, children)) {
+        if (!parent->expand(SOCMNOBJECT_TYPE_NODE | SOCMNOBJECT_TYPE_TAG | SOCMNOBJECT_TYPE_ITEM, children)) {
             setResult(E_FAIL); return;
         }
         LPCTSTR continuation = browser->getContinuationPoint();

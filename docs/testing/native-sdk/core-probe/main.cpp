@@ -18,6 +18,7 @@ static_assert(sizeof(OpclDaServerRecord) == 3100 && offsetof(OpclDaServerRecord,
               offsetof(OpclDaServerRecord, description) == 1052, "discovery ABI layout");
 static_assert(sizeof(OpclDaBrowseRecord) == 5132 && offsetof(OpclDaBrowseRecord, name) == 12 &&
               offsetof(OpclDaBrowseRecord, node_id) == 1036, "browse ABI layout");
+static_assert(sizeof(OpclDaPush) == 48 && offsetof(OpclDaPush, value) == 16, "subscription ABI layout");
 
 
 static_assert(std::is_same<XML_Char, char>::value, "SDK expects narrow Expat strings");
@@ -132,7 +133,8 @@ static int live_fixture() {
     OpclDaReadI4 value{};
     HRESULT hr = opcl_da_host_create(&host);
     if (FAILED(hr)) { std::printf("host %08lx\n", hr); return 31; }
-    hr = opcl_da_session_open(host, "OPCLook.NativeDaFixture.1", "localhost", &clsid, &session);
+    uint32_t revised_rate = 0;
+    hr = opcl_da_session_open(host, "OPCLook.NativeDaFixture.1", "localhost", &clsid, 0, 1000, 100000, &revised_rate, &session);
     std::printf("live connect hr=%08lx\n", static_cast<unsigned long>(hr));
     bool ok = SUCCEEDED(hr);
     // SDK task dispatch performs synchronous OPC I/O on its per-server
@@ -143,7 +145,7 @@ static int live_fixture() {
     std::printf("live caller before=%08lx\n", static_cast<unsigned long>(caller_before));
     const ULONG_PTR token_before = token;
     ok = true;
-    if (ok) hr = opcl_da_item_add(session, "Fixture.Value", &item, &type, &rights);
+    if (ok) hr = opcl_da_item_add(session, "Fixture.Value", 1, 0, &item, &type, &rights);
     std::printf("live add hr=%08lx type=%u rights=%lu item=%p\n",
                 static_cast<unsigned long>(hr), type, static_cast<unsigned long>(rights), static_cast<void*>(item));
     if (SUCCEEDED(hr)) hr = opcl_da_read_i4(session, item, 0, &value);
@@ -172,7 +174,7 @@ static int live_fixture() {
         ok = SUCCEEDED(hr);
     }
     if (ok) {
-        hr = opcl_da_item_add(session, "Fixture.Value", &item, &type, &rights);
+        hr = opcl_da_item_add(session, "Fixture.Value", 2, 0, &item, &type, &rights);
         if (SUCCEEDED(hr)) hr = opcl_da_read_i4(session, item, 0, &value);
         ok = SUCCEEDED(hr) && SUCCEEDED(value.service_result) && SUCCEEDED(value.item_result) && value.value == 77;
     }
@@ -235,12 +237,14 @@ static int run_callbacks() {
 }
 int main(int argc, char** argv) {
     phase("start");
+    if (FAILED(opcl_da_test_queue_bounds())) return 23;
     if (!::GetModuleHandle(nullptr)) return 9;
     if (argc == 2 && std::strcmp(argv[1], "--live") == 0) return live_fixture();
     const bool baseline = argc == 2 && std::strcmp(argv[1], "--expect-existing-defect") == 0;
     phase("common-init");
     initSOCmn();
     phase("common-init-complete");
+    if (FAILED(opcl_da_test_codec_bounds())) { exitSOCmn(); return 24; }
     int result = 10;
     {
         phase("get-entry");

@@ -14,6 +14,8 @@ pub mod da;
 #[cfg(windows)]
 pub mod da_variant;
 mod filetime;
+pub mod ole_time;
+pub mod da_convert;
 pub mod softing_facts;
 #[cfg(feature = "native-da-preview")]
 mod softing_runtime;

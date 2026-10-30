@@ -32,3 +32,10 @@ Integers deliberately exceed the exact integer range of IEEE double.
 This fixture can prove local Windows COM interop. It cannot prove remote DCOM,
 Kepware-specific interoperability, physical I/O or every native value type.
 The production adapter must additionally be tested through its real Gateway.
+
+Array/date fixtures use checked SDK safeArrayCreateVector and SDK-owned SOCmnVariant,
+with temporary borrowed access only. Bytes: UI1 [0,127,255]; Ints: I4 [-2,0,42]
+with lower bound 5; Strings: BSTR ["РУГ 中文", ""]; Mixed: VARIANT
+[I4(-42), BSTR("РУГ 中文"), UI8-array([2,255])]. DateBeforeEpoch is DATE -1.25,
+which denotes 1899-12-29 06:00 under OPCLook's existing UTC interpretation.
+The unsafe SDK initArray helper is not used. New fixtures need exact-head Windows proof.

@@ -29,6 +29,57 @@ static bool add_tag(SODaSNode* node, LPCTSTR name, SOCmnVariant& value) {
            cache->setQuality(OPC_QUALITY_GOOD) && cache->setTimeStamp(now);
 }
 
+static bool make_array(SOCmnVariant& value, VARTYPE type, LONG lower, ULONG count) {
+    SAFEARRAY* array = SOCmnVariant::safeArrayCreateVector(type, lower, count);
+    if (!array) return false;
+    value.clear();
+    value.vt = static_cast<VARTYPE>(VT_ARRAY | type);
+    value.parray = array;
+    return true;
+}
+
+static bool fill_array(SOCmnVariant& value, const void* input, size_t bytes) {
+    void* data = nullptr;
+    const HRESULT access = SafeArrayAccessData(value.parray, &data);
+    if (FAILED(access)) return false;
+    if (!data && bytes) { SafeArrayUnaccessData(value.parray); return false; }
+    if (bytes) std::memcpy(data, input, bytes);
+    return SUCCEEDED(SafeArrayUnaccessData(value.parray));
+}
+
+static bool add_array_fixtures(SODaSNode* node) {
+    SOCmnVariant value;
+    const BYTE bytes[] = {0, 127, 255};
+    if (!make_array(value, VT_UI1, 0, 3) || SafeArrayGetElemsize(value.parray) != sizeof(BYTE) ||
+        !fill_array(value, bytes, sizeof(bytes)) || !add_tag(node, _T("Bytes"), value)) return false;
+    const LONG ints[] = {-2, 0, 42};
+    if (!make_array(value, VT_I4, 5, 3) || SafeArrayGetElemsize(value.parray) != sizeof(LONG) ||
+        !fill_array(value, ints, sizeof(ints)) || !add_tag(node, _T("Ints"), value)) return false;
+    if (!make_array(value, VT_BSTR, 0, 2)) return false;
+    SOCmnVariant element;
+    element.setBSTR(_T("\u0420\u0423\u0413 \u4e2d\u6587"));
+    LONG index = 0;
+    if (FAILED(SafeArrayPutElement(value.parray, &index, element.bstrVal))) return false;
+    element.setBSTR(_T(""));
+    index = 1;
+    if (FAILED(SafeArrayPutElement(value.parray, &index, element.bstrVal)) ||
+        !add_tag(node, _T("Strings"), value)) return false;
+    if (!make_array(value, VT_VARIANT, 0, 3)) return false;
+    element.setI4(-42);
+    index = 0;
+    if (FAILED(SafeArrayPutElement(value.parray, &index, static_cast<LPVARIANT>(element)))) return false;
+    element.setBSTR(_T("\u0420\u0423\u0413 \u4e2d\u6587"));
+    index = 1;
+    if (FAILED(SafeArrayPutElement(value.parray, &index, static_cast<LPVARIANT>(element)))) return false;
+    const ULONGLONG inner[] = {2, 255};
+    if (!make_array(element, VT_UI8, 0, 2) ||
+        SafeArrayGetElemsize(element.parray) != sizeof(ULONGLONG) ||
+        !fill_array(element, inner, sizeof(inner))) return false;
+    index = 2;
+    return SUCCEEDED(SafeArrayPutElement(value.parray, &index, static_cast<LPVARIANT>(element))) &&
+           add_tag(node, _T("Mixed"), value);
+}
+
 static int run(int argc, char** argv) {
     SOCmnPointer<SODaSEntry> entry = getSODaSEntry();
     if (!entry.isNotNull()) return 10;
@@ -65,6 +116,10 @@ static int run(int argc, char** argv) {
             tags = add_tag(node, _T("Unicode"), value) && tags;
             value.setI4(314);
             tags = add_tag(node, _T("\u0422\u0435\u0433"), value) && tags;
+            value.setR8(-1.25);
+            value.vt = VT_DATE;
+            tags = add_tag(node, _T("DateBeforeEpoch"), value) && tags;
+            tags = add_array_fixtures(node) && tags;
             if (!tags) result = 15;
         }
         if (result == 0 && !entry->start()) result = 16;

@@ -75,7 +75,7 @@ pub struct ReadI4 {
     pub vartype: u16,
 }
 #[repr(C)]
-#[derive(Default, Debug)]
+#[derive(Clone, Copy, Default, Debug)]
 pub struct ReadScalar {
     pub service_result: i32,
     pub item_result: i32,
@@ -86,6 +86,28 @@ pub struct ReadScalar {
     pub quality: u16,
     pub vartype: u16,
     pub text_len: u32,
+}
+#[repr(C)]
+#[derive(Clone)]
+struct PushRecord {
+    registration_low: u32,
+    registration_high: u32,
+    master_quality: i32,
+    adapter_result: i32,
+    value: ReadScalar,
+}
+impl Default for PushRecord {
+    fn default() -> Self {
+        Self { registration_low: 0, registration_high: 0, master_quality: 0, adapter_result: 0,
+               value: ReadScalar::default() }
+    }
+}
+pub struct PushValue {
+    pub registration: u64,
+    pub master_quality: i32,
+    pub adapter_result: i32,
+    pub value: ReadScalar,
+    pub text: Option<Vec<u8>>,
 }
 unsafe extern "C" {
     fn opcl_da_browse(session: *mut c_void, node_id: *const c_char, out: *mut BrowseRecord, capacity: u32, count: *mut u32) -> i32;
@@ -98,17 +120,24 @@ unsafe extern "C" {
         name: *const c_char,
         node: *const c_char,
         clsid: *const Guid,
+        subscription: u32,
+        update_rate_ms: u32,
+        registration_budget: u32,
+        revised_rate_ms: *mut u32,
         out: *mut *mut c_void,
     ) -> i32;
     fn opcl_da_session_close(session: *mut c_void) -> i32;
     fn opcl_da_item_add(
         session: *mut c_void,
         id: *const c_char,
+        registration_low: u32,
+        registration_high: u32,
         out: *mut *mut c_void,
         canonical_type: *mut u16,
         rights: *mut u32,
     ) -> i32;
     fn opcl_da_item_remove(session: *mut c_void, item: *mut c_void) -> i32;
+    fn opcl_da_take_push(session: *mut c_void, out: *mut PushRecord, payload: *mut u8, capacity: u32, count: *mut u32, overflow: *mut u32) -> i32;
     fn opcl_da_read_i4(session: *mut c_void, item: *mut c_void, age: u32, out: *mut ReadI4) -> i32;
     fn opcl_da_read_scalar(
         session: *mut c_void,
@@ -118,6 +147,8 @@ unsafe extern "C" {
         text: *mut c_char,
         text_capacity: u32,
     ) -> i32;
+    fn opcl_da_write_array(session: *mut c_void, item: *mut c_void, vartype: u16,
+                           data: *const u8, bytes: u32, result: *mut i32) -> i32;
     fn opcl_da_write_text(session: *mut c_void, item: *mut c_void, text: *const c_char, result: *mut i32) -> i32;
     fn opcl_da_write_scalar(
         session: *mut c_void,
@@ -250,36 +281,63 @@ impl SharedHost {
         Ok((found, fallback != 0))
     }
     pub fn open(&self, name: &str, node: &str, clsid: &Guid) -> Result<Session, Error> {
+        self.open_config(name, node, clsid, false, 1000).map(|(session, _)| session)
+    }
+    pub fn open_config(&self, name: &str, node: &str, clsid: &Guid, subscription: bool,
+                       interval_ms: u32) -> Result<(Session, u32), Error> {
         let name = string(name)?;
         let node = string(node)?;
-        let mut ptr = std::ptr::null_mut();
+        let mut ptr = std::ptr::null_mut(); let mut revised = 0;
+        let budget = u32::try_from(opclook_contract::model::MAX_ITEM_KEYS_PER_CONNECTION).map_err(|_| Error::Exhausted)?;
         // SAFETY: self retains the live host, C strings and outputs live through the call.
         check(unsafe {
-            opcl_da_session_open(
-                self.core.ptr.as_ptr(),
-                name.as_ptr(),
-                node.as_ptr(),
-                clsid,
-                &mut ptr,
-            )
+            opcl_da_session_open(self.core.ptr.as_ptr(), name.as_ptr(), node.as_ptr(), clsid,
+                                 u32::from(subscription), interval_ms, budget, &mut revised, &mut ptr)
         })?;
-        Ok(Session {
+        Ok((Session {
             ptr: NonNull::new(ptr).ok_or(Error::NullHandle)?,
             _host: self.clone(),
             items: HashMap::new(),
-            closed: false,
-            _thread: PhantomData,
-        })
+            push_buffer: if subscription { vec![0; 65_536] } else { Vec::new() },
+            closed: false, _thread: PhantomData,
+        }, revised))
     }
 }
 pub struct Session {
     ptr: NonNull<c_void>,
     _host: SharedHost,
     items: HashMap<u64, NonNull<c_void>>,
+    push_buffer: Vec<u8>,
     closed: bool,
     _thread: PhantomData<Rc<()>>,
 }
 impl Session {
+    #[cfg(test)]
+    pub(crate) fn inject_mock_push(&self, registration: u64, value: i32, overflow: bool) {
+        tests::inject(self.ptr.as_ptr() as usize, registration, value, overflow);
+    }
+    pub fn take_push(&mut self) -> Result<(Vec<PushValue>, bool), Error> {
+        if self.push_buffer.is_empty() { return Err(Error::InvalidHandle); }
+        let mut values = Vec::new(); let mut any_overflow = false;
+        for _ in 0..64 {
+            let mut raw = PushRecord::default(); let mut count = 0; let mut overflow = 0;
+            // SAFETY: session is unique and the reusable payload and all outputs remain live.
+            check(unsafe { opcl_da_take_push(self.ptr.as_ptr(), &mut raw, self.push_buffer.as_mut_ptr(),
+                self.push_buffer.len() as u32, &mut count, &mut overflow) })?;
+            if count > 1 || overflow > 1 { return Err(Error::InvalidString); }
+            any_overflow |= overflow != 0;
+            if count == 0 { break; }
+            let registration = (u64::from(raw.registration_high) << 32) | u64::from(raw.registration_low);
+            let text = if raw.adapter_result >= 0 && (raw.value.vartype == 8 || raw.value.vartype & 0x2000 != 0)
+                && raw.value.service_result >= 0 && raw.value.item_result >= 0 {
+                let count = usize::try_from(raw.value.text_len).map_err(|_| Error::InvalidString)?;
+                Some(self.push_buffer.get(..count).ok_or(Error::InvalidString)?.to_vec())
+            } else { None };
+            values.push(PushValue { registration, master_quality: raw.master_quality,
+                                    adapter_result: raw.adapter_result, value: raw.value, text });
+        }
+        Ok((values, any_overflow))
+    }
     pub fn browse(&mut self, node_id: &str) -> Result<Vec<BrowseEntry>, Error> {
         let node_id = string(node_id)?;
         let mut records = vec![BrowseRecord::default(); 256]; let mut count = 0;
@@ -311,6 +369,8 @@ impl Session {
             opcl_da_item_add(
                 self.ptr.as_ptr(),
                 id.as_ptr(),
+                key as u32,
+                (key >> 32) as u32,
                 &mut item,
                 &mut kind,
                 &mut rights,
@@ -332,19 +392,27 @@ impl Session {
         check(unsafe { opcl_da_read_i4(self.ptr.as_ptr(), item.as_ptr(), max_age, &mut out) })?;
         Ok(out)
     }
-    pub fn read_scalar(&mut self, key: u64, max_age: u32) -> Result<(ReadScalar, Option<String>), Error> {
+    pub fn read_scalar(&mut self, key: u64, max_age: u32) -> Result<(ReadScalar, Option<Vec<u8>>), Error> {
         let item = self.items.get(&key).ok_or(Error::InvalidHandle)?;
         let mut out = ReadScalar::default();
         let mut text = vec![0u8; 65_536];
         // SAFETY: the map owns the registration and both buffers remain valid for the call.
         check(unsafe { opcl_da_read_scalar(self.ptr.as_ptr(), item.as_ptr(), max_age, &mut out, text.as_mut_ptr().cast(), text.len() as u32) })?;
-        let text = if out.vartype == 8 {
+        let text = if out.vartype == 8 || out.vartype & 0x2000 != 0 {
             let count = usize::try_from(out.text_len).map_err(|_| Error::InvalidString)?;
             if count > text.len() { return Err(Error::InvalidString); }
             text.truncate(count);
-            Some(String::from_utf8(text).map_err(|_| Error::InvalidString)?)
+            Some(text)
         } else { None };
         Ok((out, text))
+    }
+    pub fn write_array(&mut self, key: u64, vt: u16, bytes: &[u8]) -> Result<i32, Error> {
+        let item = self.items.get(&key).ok_or(Error::InvalidHandle)?;
+        let size = u32::try_from(bytes.len()).map_err(|_| Error::Exhausted)?;
+        let mut result = 0;
+        // SAFETY: item and borrowed byte slice remain live through the synchronous SDK task.
+        check(unsafe { opcl_da_write_array(self.ptr.as_ptr(), item.as_ptr(), vt, bytes.as_ptr(), size, &mut result) })?;
+        Ok(result)
     }
     pub fn write_text(&mut self, key: u64, value: &str) -> Result<i32, Error> {
         let item = self.items.get(&key).ok_or(Error::InvalidHandle)?;
@@ -396,6 +464,24 @@ impl Drop for Session {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::collections::VecDeque;
+    use std::sync::{Mutex, OnceLock};
+    type MockQueues = HashMap<usize, (VecDeque<PushRecord>, bool)>;
+    static QUEUES: OnceLock<Mutex<MockQueues>> = OnceLock::new();
+    fn queues() -> &'static Mutex<MockQueues> { QUEUES.get_or_init(|| Mutex::new(HashMap::new())) }
+    pub(super) fn inject(session: usize, registration: u64, value: i32, overflow: bool) {
+        let mut queue = queues().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = queue.entry(session).or_default();
+        let mut record = PushRecord::default();
+        record.registration_low = registration as u32;
+        record.registration_high = (registration >> 32) as u32;
+        record.value.vartype = 3;
+        record.value.quality = 0xc0;
+        record.value.bits_low = value as u32;
+        record.value.bits_high = if value < 0 { u32::MAX } else { 0 };
+        entry.0.push_back(record);
+        entry.1 |= overflow;
+    }
     static HANDLE: AtomicUsize = AtomicUsize::new(100);
     fn handle() -> *mut c_void {
         HANDLE.fetch_add(1, Ordering::Relaxed) as *mut c_void
@@ -451,10 +537,11 @@ mod tests {
         _: *const c_char,
         _: *const c_char,
         _: *const Guid,
+        _: u32, _: u32, _: u32, revised: *mut u32,
         out: *mut *mut c_void,
     ) -> i32 {
-        // SAFETY: the wrapper passes a valid out pointer.
-        unsafe { *out = handle() };
+        // SAFETY: the wrapper passes valid output pointers.
+        unsafe { *out = handle(); *revised = 1000; };
         0
     }
     #[unsafe(no_mangle)]
@@ -465,6 +552,7 @@ mod tests {
     unsafe extern "C" fn opcl_da_item_add(
         _: *mut c_void,
         _: *const c_char,
+        _: u32, _: u32,
         out: *mut *mut c_void,
         kind: *mut u16,
         rights: *mut u32,
@@ -480,6 +568,15 @@ mod tests {
     #[unsafe(no_mangle)]
     unsafe extern "C" fn opcl_da_item_remove(_: *mut c_void, _: *mut c_void) -> i32 {
         0
+    }
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn opcl_da_take_push(session: *mut c_void, out: *mut PushRecord, _: *mut u8, _: u32, count: *mut u32, overflow: *mut u32) -> i32 {
+        let mut queues = queues().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = queues.entry(session as usize).or_default();
+        let record = entry.0.pop_front();
+        // SAFETY: the wrapper supplies valid output pointers.
+        unsafe { *count = u32::from(record.is_some()); *overflow = u32::from(entry.1); if let Some(record) = record { *out = record; } }
+        entry.1 = false; 0
     }
     #[unsafe(no_mangle)]
     unsafe extern "C" fn opcl_da_read_i4(
@@ -524,6 +621,12 @@ mod tests {
         0
     }
     #[unsafe(no_mangle)]
+    unsafe extern "C" fn opcl_da_write_array(_: *mut c_void, _: *mut c_void, _: u16, _: *const u8, _: u32, result: *mut i32) -> i32 {
+        // SAFETY: the wrapper passes a valid result pointer.
+        unsafe { *result = 0; }
+        0
+    }
+    #[unsafe(no_mangle)]
     unsafe extern "C" fn opcl_da_write_text(
         _: *mut c_void, _: *mut c_void, _: *const c_char, result: *mut i32,
     ) -> i32 {
@@ -549,6 +652,8 @@ mod tests {
     #[test]
     fn stale_and_foreign_registrations_do_not_reach_native_read() {
         assert_eq!(std::mem::size_of::<ReadScalar>(), 32);
+        assert_eq!(std::mem::size_of::<PushRecord>(), 48);
+        assert_eq!(std::mem::offset_of!(PushRecord, value), 16);
         assert_eq!(std::mem::size_of::<BrowseRecord>(), 5132);
         assert_eq!(std::mem::offset_of!(BrowseRecord, name), 12);
         assert_eq!(std::mem::offset_of!(BrowseRecord, node_id), 1036);
