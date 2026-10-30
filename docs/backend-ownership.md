@@ -116,5 +116,9 @@ OPC COM data-plane. Если кандидат не покрывает обяза
 Public SODaC/SOClt/SOCmn остаются владельцем DA protocol lifecycle.
 Проверка исходников v4.47.1 выявила неправильное сопоставление HRESULT
 в SDK callback; детали, source-method reproducer и проект upstream patch —
-[здесь](testing/native-sdk/softing-4.47.1.md). Link/init/cleanup, callback
-teardown и типы на Windows x86 ещё не доказаны; production owner не изменён.
+[здесь](testing/native-sdk/softing-4.47.1.md). Win32 direct core link, common/entry init/cleanup и offline callback до/после
+patch проверены в [run 41067236324](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41067236324)
+на head `d375f15f4b57837baeec75d1cf3a7c9b843cb96e`. N2 должен использовать
+этот direct core; DaSession/TBC имеет только header probe, OTB не подключён.
+Real COM advise, late teardown, live I/O, типы, isolation и полная лицензия
+closure ещё не доказаны; production owner не изменён.

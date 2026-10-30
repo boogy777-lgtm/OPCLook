@@ -77,7 +77,16 @@ SOFTING_SDK_ROOT=/path/to/exact/sdk python3 docs/testing/native-sdk/reproduce-so
 SOFTING_SDK_ROOT=/path/to/exact/sdk python3 docs/testing/native-sdk/reproduce-softing-status.py --patched
 ```
 
-Следующий обязательный gate: собрать настоящий SODaC/SOClt/SOCmn Win32,
-вызвать реальный SDK callback на same-class наборах до/после patch, проверить
-init/cleanup и raw status, затем физический DA/live, лицензии всего closure,
-late callback/epoch и регрессии совместимости. Внешний issue/PR не отправлен.
+[Run 41067236324](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41067236324)
+на head `d375f15f4b57837baeec75d1cf3a7c9b843cb96e`: все три native jobs
+успешны. Win32 direct SODaC/SOClt/SOCmn core слинкован; Expat narrow
+namespace/DTD smoke прошёл. В offline callback probe исходный SDK дал
+`read_setup=1 read_correct=0 write_setup=1 write_correct=0 unchanged=1`,
+с patch — `1/1/1/1/1`. Оба процесса вернули 0 по ожидаемому результату и
+прошли common/entry init и cleanup. Это отдельная проверка от source-method
+matrix и не подтверждает настоящий COM advise или server lifecycle.
+
+Следующий N2 путь — тонкий адаптер direct core, не DaSession/TBC facade
+(только header probe; OTB не подключён). Открыты реальный DA/live и remote I/O,
+типы, session isolation, COM advise/late callback/epoch, license closure и
+регрессии совместимости. Production DA остаётся legacy. Внешний issue/PR не отправлен.

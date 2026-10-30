@@ -1010,3 +1010,19 @@ Defect: run 41066061516 скомпилировал и слинковал core, W
 прошёл, но core probe завершился до итогов callback; фактический код был
 скрыт оболочкой CI. Пример SDK требует initSOCmn/exitSOCmn при SOFLAG_NO_DLLS,
 а probe их не вызывал. Добавлены SDK lifecycle и flush фаз; без изменения SDK.
+
+## N1: Win32 direct core — измеренный offline callback
+
+[Run 41067236324](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41067236324),
+head `d375f15f4b57837baeec75d1cf3a7c9b843cb96e`: все три native jobs
+успешны. Реальный direct SDK core собран и слинкован на Win32; Expat narrow
+namespace/DTD smoke прошёл. Исходный SDK offline callback: read setup=1,
+correct=0; write setup=1, correct=0; input unchanged=1. С предлагаемым SDK
+patch все пять признаков равны 1. Каждый процесс exit 0 и выполнил common/entry
+init и cleanup. Это не физический DA или доказательство COM advise/late teardown.
+
+N2: разрабатывать тонкий адаптер на direct SODaC/SOClt/SOCmn; DaSession/TBC
+имел только header probe, OTB не подключён. Открыты live/remote I/O, типы,
+изоляция сессий, late callback/teardown и лицензия полного closure. Patch
+остаётся предложением библиотеки, старый production DA не заменён. Результат
+этого исторического head не переносится автоматически на новый docs-only head.

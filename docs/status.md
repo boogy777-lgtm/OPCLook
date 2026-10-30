@@ -2,6 +2,10 @@
 
 ## 2026-10-30 — N1 Softing native DA feasibility (не миграция)
 
+**Измеренный Win32 SDK gate:** на head `d375f15f4b57837baeec75d1cf3a7c9b843cb96e` [run 41067236324](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41067236324) прошёл все три native jobs. Реальный direct SODaC/SOClt/SOCmn core слинкован; offline callback до patch: `read_setup=1 read_correct=0 write_setup=1 write_correct=0 unchanged=1`; после patch: `1/1/1/1/1`. Оба процесса exit 0 с ожидаемыми результатами и завершили common/entry lifecycle. Win32 Expat namespace/DTD smoke также прошёл. Это не COM advise, late teardown или live DA.
+
+Для N2 предпочтителен проверенный direct core, не DaSession/TBC facade: последний имеет только header probe, OTB не подключён. Реальные серверные I/O, удалённые серверы, типы, изоляция сессий, teardown и полная лицензия build closure остаются открытыми. Production DA по-прежнему legacy; patch — предложение на уровне SDK, не обход приложения. Результаты относятся к указанному head, CI этого документационного head проверяется отдельно.
+
 Исследован Softing OPC Classic SDK v4.47.1, commit `5130e763998189c822882434c43e6be2eb0174cf`.
 Публичные C++ API предоставляют DA browse, sync/async, maxAge,
 subscription и raw per-item результаты; Linux compile-only probe заголовков
@@ -29,7 +33,7 @@ SDK host hook `getInstanceHandle` не был предоставлен. Probe т
 реальный Win32 module handle; в нём нет таблицы сообщений SDK. Run 41066061516 собрал и слинковал Win32 core, а Expat namespace/DTD smoke
 прошёл. Core probe завершился до итогов callback, исходный exit code не был
 виден. SDK common lifecycle и диагностический runner добавлены для следующего
-CI; init/cleanup и callback пока не доказаны. Системный Windows/DA
+CI; последующий run 41067236324 проверил init/cleanup и offline callback, как указано выше. Системный Windows/DA
 сервер здесь недоступен. UA SDK не менялся; старый production DA worker
 сохранён, native DA migration и полная проверка лицензий SDK closure открыты.
 Предыдущий published head 2335b8e прошёл Linux/Windows x86 CI run 41051563765;

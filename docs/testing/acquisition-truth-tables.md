@@ -61,8 +61,12 @@ ItemKey). Read хранит набор покрытых demand identities; HashS
 14 read-прогонов (два режима × семь наборов handle), те же семь write наборов
 повторяются в двух режимах. Он обнаруживает несоответствие HRESULT до patch,
 после patch проверяет identity/value/quality/time/status и неизменность входа.
-Это не закрывает O23–O26/A04–A10: реальный Win32 SDK callback/lifecycle и
-физический DA сервер отдельно обязательны. Подробности —
+[Run 41067236324](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41067236324)
+на head `d375f15f4b57837baeec75d1cf3a7c9b843cb96e` дополнительно вызывает
+реальный слинкованный Win32 SDK callback offline до/после patch, проверяя
+identity, raw status и неизменность input, а также common/entry lifecycle.
+Это не закрывает O23–O26/A04–A10: COM advise, late teardown и физический DA
+сервер отдельно обязательны. Подробности —
 [Softing N1](native-sdk/softing-4.47.1.md).
 
 ## 2. G — полная таблица допуска Read

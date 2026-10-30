@@ -65,13 +65,18 @@ upstream/replacement путь. Новая зависимость не счита
 
 ## 4.1. N1 Softing public-source probe
 
-Дополнительный native C++ кандидат Softing v4.47.1 разобран по точному
-commit; API probe и подготовленный patch находятся в
-[softing-4.47.1](testing/native-sdk/softing-4.47.1.md). Обнаружена ошибка
-сопоставления item/HRESULT в SDK callback. Метод-level reproducer и patch
-не заменяют полноценную Win32 сборку, lifecycle и live DA проверки; SDK не
-принят и production DA не заменён. SDK использует готовый client lifecycle;
-никакой новый COM data-plane в OPCLook не добавлен.
+Предпочтительный N2 кандидат — direct SODaC/SOClt/SOCmn core Softing
+v4.47.1, закреплённый commit `5130e763998189c822882434c43e6be2eb0174cf`.
+[Run 41067236324](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41067236324)
+на head `d375f15f4b57837baeec75d1cf3a7c9b843cb96e` собрал и слинковал
+Win32 core, проверил SDK common/entry lifecycle и offline callback до/после
+library patch. Оригинал воспроизводит оба дефекта status alignment; patch
+исправляет их при сохранении input. Детали в [N1 audit](testing/native-sdk/softing-4.47.1.md).
+Это не live I/O или COM advise/late teardown. Следующий тонкий адаптер должен
+использовать direct core; DaSession/TBC проверен только по заголовкам, OTB не
+подключён. Реальный сервер, remote, типы, session isolation, teardown и полный
+license closure ещё требуют проверки. Production DA не заменён; SDK patch
+остаётся отдельным предложением, не App/Engine workaround.
 
 ## 5. Кандидаты и текущая позиция
 
