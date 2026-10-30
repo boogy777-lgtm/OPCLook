@@ -63,6 +63,16 @@ ABI-инструменты, а не завершённая OPC DA клиентс
 является разрешением писать vendor-specific обходы и должен иметь ясный
 upstream/replacement путь. Новая зависимость не считается доказательством качества.
 
+## 4.1. N1 Softing public-source probe
+
+Дополнительный native C++ кандидат Softing v4.47.1 разобран по точному
+commit; API probe и подготовленный patch находятся в
+[softing-4.47.1](testing/native-sdk/softing-4.47.1.md). Обнаружена ошибка
+сопоставления item/HRESULT в SDK callback. Метод-level reproducer и patch
+не заменяют полноценную Win32 сборку, lifecycle и live DA проверки; SDK не
+принят и production DA не заменён. SDK использует готовый client lifecycle;
+никакой новый COM data-plane в OPCLook не добавлен.
+
 ## 5. Кандидаты и текущая позиция
 
 | Протокол/кандидат | Позиция | Недостающие доказательства |

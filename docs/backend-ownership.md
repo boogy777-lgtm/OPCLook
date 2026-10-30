@@ -110,3 +110,11 @@ R2.3 описывает wiring/config выбранного native backend и у�
 OPC COM data-plane. Если кандидат не покрывает обязательную способность, кандидат
 меняется. Список мест изменения не разрешает писать свой аналог библиотеки.
 Разрешено расширение продуктовой политики Engine, когда это не функция SDK.
+
+### N1: дополнительный Softing SDK
+
+Public SODaC/SOClt/SOCmn остаются владельцем DA protocol lifecycle.
+Проверка исходников v4.47.1 выявила неправильное сопоставление HRESULT
+в SDK callback; детали, source-method reproducer и проект upstream patch —
+[здесь](testing/native-sdk/softing-4.47.1.md). Link/init/cleanup, callback
+teardown и типы на Windows x86 ещё не доказаны; production owner не изменён.

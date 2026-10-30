@@ -55,6 +55,16 @@ ItemKey). Read хранит набор покрытых demand identities; HashS
 клавиатуру, приоритет сообщения и видимое отсутствие цели. Остальные требования
 таблиц, включая native UA timeout quarantine S03, DA live и fairness, не закрыты.
 
+### N1: проверка кандидата SDK
+
+`reproduce-softing-status.py` использует точный исходник SDK и fake зависимости:
+14 read-прогонов (два режима × семь наборов handle), те же семь write наборов
+повторяются в двух режимах. Он обнаруживает несоответствие HRESULT до patch,
+после patch проверяет identity/value/quality/time/status и неизменность входа.
+Это не закрывает O23–O26/A04–A10: реальный Win32 SDK callback/lifecycle и
+физический DA сервер отдельно обязательны. Подробности —
+[Softing N1](native-sdk/softing-4.47.1.md).
+
 ## 2. G — полная таблица допуска Read
 
 Файл: [acquisition-read-gate.csv](acquisition-read-gate.csv).

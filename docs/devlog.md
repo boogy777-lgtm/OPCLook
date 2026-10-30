@@ -916,3 +916,22 @@ gate запускается с реальным CJK шрифтом без overri
 UI interactions 240 и один Windows-only ignored. Font tests 2/2, PNG 900/720
 перерендерены и просмотрены. Физический DA и Windows локально не проверялись;
 Windows x86 остаётся за CI нового commit.
+
+## N1 — проверка публичного API Softing до кода
+
+Class: готовый native DA SDK и граница адаптера (R00/N0/N1).
+Inv: SDK владеет COM/data-plane и callback lifecycle; значения, quality,
+timestamps и raw per-item статусы не теряются, x86 и закрытие проверяются.
+N+1: Browse, Sync/Async, Cache/Device, subscription, session isolation и
+соседние callback/cleanup пути рассматриваются вместе; declarations и demo
+не являются доказательством рабочего runtime.
+Defect: текущий production DA остаётся собственным Sync/Cache worker; готовая
+замена пока не доказана. Проверка обращается к публичным исходникам и сборке
+SDK без изменения частных механизмов активации.
+
+N1 Softing: публичные headers v4.47.1 проверены Linux g++ syntax-only.
+Source-method harness: 14 случаев двух read режимов / семи шаблонов,
+исходный SDK 6 read и 6 write-cache mismatches; подготовленный patch 0/0.
+Исходный SDK body/fragment компилировались с fake dependencies, а не полным SDK.
+Физические Windows/DA, транзитивные лицензии и lifecycle не проверены.
+Финальный Win32 core probe подготовлен; его результат необходимо получить в CI.

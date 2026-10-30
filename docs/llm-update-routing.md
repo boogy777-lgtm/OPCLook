@@ -10,7 +10,7 @@ ExplicitRefresh и CLI opt-in WriteReadback описан в status.md. Полн�
 1. Прочитай [AGENTS](../AGENTS.md), [status](status.md) и актуальный HEAD.
 2. Прочитай [обязательную native-миграцию](native-backend-migration.md) и
    [карту владельцев библиотек](backend-ownership.md).
-   Начни с R2.0 — use/configure/adapt audit. Не начинай с переписывания SDK.
+   Начни с R2.0 — use/configure/adapt audit и [Softing N1](testing/native-sdk/softing-4.47.1.md). Не начинай с переписывания SDK.
 3. По запросу пользователя выбери все подходящие route IDs из таблицы ниже.
    Новая ошибка одного класса идёт в существующий маршрут, а не в новый сервис.
 4. Открой документы и реальные символы маршрута. Пути относятся к базе;

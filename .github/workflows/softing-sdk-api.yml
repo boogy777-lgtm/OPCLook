@@ -1,0 +1,98 @@
+name: Softing SDK source probe
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  source-probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: opclook
+      - uses: actions/checkout@v4
+        with:
+          repository: SoftingIndustrial/OPC-Classic-SDK
+          ref: 5130e763998189c822882434c43e6be2eb0174cf
+          path: softing-sdk
+      - name: Compile public API and exercise exact SDK method (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        working-directory: opclook
+        env:
+          SOFTING_SDK_ROOT: ${{ github.workspace }}/softing-sdk
+        run: |
+          set -euo pipefail
+          docs/testing/native-sdk/check-softing-api.sh
+          python3 docs/testing/native-sdk/reproduce-softing-status.py --expect-existing-defect
+          python3 docs/testing/native-sdk/reproduce-softing-status.py --patched
+      - name: Compile public API and exercise exact SDK method (Windows x86)
+        if: runner.os == 'Windows'
+        shell: cmd
+        working-directory: opclook
+        env:
+          SOFTING_SDK_ROOT: ${{ github.workspace }}\softing-sdk
+          SDK_CXX_STYLE: msvc
+        run: |
+          @echo off
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSROOT=%%i"
+          if not defined VSROOT exit /b 1
+          call "%VSROOT%\VC\Auxiliary\Build\vcvarsall.bat" x86
+          if errorlevel 1 exit /b 1
+          python docs\testing\native-sdk\verify-softing-sdk.py
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++14 /EHsc /Zs /D_WINDOWS /DWIN32 /DTBC_USING_LIB /I "%SOFTING_SDK_ROOT%\development\C++\src" /I "%SOFTING_SDK_ROOT%\development\core\include" docs\testing\native-sdk\softing-public-api-probe.cpp
+          if errorlevel 1 exit /b 1
+          python docs\testing\native-sdk\reproduce-softing-status.py --expect-existing-defect
+          if errorlevel 1 exit /b 1
+          python docs\testing\native-sdk\reproduce-softing-status.py --patched
+          if errorlevel 1 exit /b 1
+
+  core-win32:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: opclook
+      - uses: actions/checkout@v4
+        with:
+          repository: SoftingIndustrial/OPC-Classic-SDK
+          ref: 5130e763998189c822882434c43e6be2eb0174cf
+          path: softing-sdk
+      - name: Configure public DA core test (Windows x86)
+        shell: pwsh
+        run: |
+          $env:SOFTING_SDK_ROOT = "${{ github.workspace }}/softing-sdk"
+          python opclook/docs/testing/native-sdk/verify-softing-sdk.py --core-clean
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake -S opclook/docs/testing/native-sdk/core-probe -B softing-build -A Win32 "-DSOFTING_SDK_ROOT=${{ github.workspace }}/softing-sdk"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build and reproduce with original SDK core
+        shell: pwsh
+        run: |
+          cmake --build softing-build --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./softing-build/Release/softing_core_probe.exe --expect-existing-defect
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build and check proposed library patch
+        shell: pwsh
+        run: |
+          python -c "import pathlib,subprocess; pathlib.Path('softing-sdk/development/core/src/SODaC/SODaCCallback.cpp').write_bytes(subprocess.check_output(['git','-C','softing-sdk','cat-file','blob','59205bb9b6e32641c966d334589fe355bafe273f']))"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C softing-sdk apply --whitespace=nowarn ../opclook/docs/testing/native-sdk/softing-status-alignment.patch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build softing-build --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./softing-build/Release/softing_core_probe.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

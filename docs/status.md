@@ -1,5 +1,23 @@
 # Текущий статус
 
+## 2026-10-30 — N1 Softing native DA feasibility (не миграция)
+
+Исследован Softing OPC Classic SDK v4.47.1, commit `5130e763998189c822882434c43e6be2eb0174cf`.
+Публичные C++ API предоставляют DA browse, sync/async, maxAge,
+subscription и raw per-item результаты; Linux compile-only probe заголовков
+прошёл. В SDK обнаружен риск неверного сопоставления HRESULT после неизвестного
+item handle. Пinned source-method harness показал 6 read + 6 write-cache
+несовпадений на 14 read режим/шаблон прогонах; предлагаемый библиотечный patch
+устранил их в том же изолированном harness. Это не linked SDK или live proof.
+См. [полный N1 audit](testing/native-sdk/softing-4.47.1.md).
+
+Подготовлен Win32 SDK core build/probe без OTB/MFC; до результата CI его сборка,
+link, init/cleanup и callback остаются непроверенными. Системный Windows/DA
+сервер здесь недоступен. UA SDK не менялся; старый production DA worker
+сохранён, native DA migration и полная проверка лицензий SDK closure открыты.
+Предыдущий published head 2335b8e прошёл Linux/Windows x86 CI run 41051563765;
+результат нового head нельзя выводить из предыдущего.
+
 ## 2026-10-30 — редактирование профиля активной сессии (частичный R2.3)
 
 Активный профиль остаётся snapshot текущего Connect; сохранение черновика
