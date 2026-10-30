@@ -1,5 +1,19 @@
 # Текущий статус
 
+Режим продолжения по поручению владельца: все оставшиеся задачи выполнять
+парами Terra High; [очередь и зависимости](remaining-work.md).
+
+## 2026-10-31 — начальное состояние fixture для N2.TEST (CI ожидается)
+
+COM run [41136545085](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41136545085)
+на `a004b226` измерил NOCONFIG=3 в первом Test. Native verdict корректно дал
+DaNotReady, strict Gateway остановился: 0/1 выполненных процессов, следующие
+два и isolation не запускались. SDK client/C ABI/Rust owner прошли, cleanup
+после ошибки прошёл. Fixture после успешного start теперь явно задаёт Running
+через SDK API до ready-файла; backend/assertions не ослаблены. Новый Win32/live
+результат пока не измерен. SDK jobs этого старого head прошли; app результат
+фиксировать отдельно, не выводить его из COM failure.
+
 ## 2026-10-31 — N2.TEST и N3.ISOLATION (Win32/live CI ожидается)
 
 Две отдельные задачи интегрированы в native preview. Test активной DA-сессии

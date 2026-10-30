@@ -1230,3 +1230,9 @@ Event action assert-unset только проверяет отсутствие r
 Measured локально агентами: 41 mock stand test, launcher success/failure,
 fmt/diff; Windows/live пока pending. HRESULT failure mock, Running/Failed
 должен проверить реальный SDK fixture; production DA остаётся legacy.
+
+2026-10-31 N2.TEST fixture precondition: реальный a004b226 status вернул
+NOCONFIG=3; API/mapping не объявили его успехом. Fixture получил явный SDK
+Running после start до ready; новый CI pending. Владелец поручил далее
+выполнять весь оставшийся план парами Terra High. Очередь remaining-work.md
+объединяет прежние R2/N/P планы, различает выполненное, pending и внешние гейты.
