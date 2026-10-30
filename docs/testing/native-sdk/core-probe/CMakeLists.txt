@@ -19,6 +19,19 @@ set(core "${SOFTING_SDK_ROOT_NORMALIZED}/development/core")
 file(GLOB core_sources CONFIGURE_DEPENDS
   "${core}/src/SOCmn/*.cpp" "${core}/src/SOClt/*.cpp" "${core}/src/SODaC/*.cpp"
   "${core}/src/opc/*_i.c")
+# SDK embeds Expat sources into one C++ TU. Build the same pinned C sources
+# as separate C translation units so winconfig.h controls its own Windows
+# includes and its private types do not collide with the SDK headers.
+include("${CMAKE_CURRENT_SOURCE_DIR}/filter-embedded-expat.cmake")
+filter_embedded_expat(core_sources)
+set(expat "${core}/src/SOCmn/expat")
+add_library(softing_expat STATIC "${expat}/xmlrole.c" "${expat}/xmltok.c" "${expat}/xmlparse.c")
+target_include_directories(softing_expat PRIVATE "${core}/src/include" "${expat}")
+target_compile_definitions(softing_expat PRIVATE XML_STATIC COMPILED_FROM_DSP)
+add_executable(softing_expat_smoke expat-smoke.c)
+target_include_directories(softing_expat_smoke PRIVATE "${core}/src/include")
+target_compile_definitions(softing_expat_smoke PRIVATE XML_STATIC)
+target_link_libraries(softing_expat_smoke PRIVATE softing_expat)
 add_executable(softing_core_probe main.cpp ${core_sources})
 target_include_directories(softing_core_probe PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}" "${core}/src/include" "${core}/src/opc"
@@ -26,4 +39,4 @@ target_include_directories(softing_core_probe PRIVATE
 target_compile_definitions(softing_core_probe PRIVATE
   _WINDOWS WIN32 _WIN32_DCOM _CRT_SECURE_NO_WARNINGS _CRT_NON_CONFORMING_SWPRINTFS)
 target_compile_options(softing_core_probe PRIVATE /W3 /Zc:wchar_t- /EHsc)
-target_link_libraries(softing_core_probe PRIVATE ole32 oleaut32 uuid advapi32 ws2_32 mpr rpcrt4)
+target_link_libraries(softing_core_probe PRIVATE softing_expat ole32 oleaut32 uuid advapi32 ws2_32 mpr rpcrt4)

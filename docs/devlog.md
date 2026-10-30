@@ -968,3 +968,22 @@ Expat — `SOFEATURE_CMN_XML`. Изолированный native DA/DCOM probe �
 только Watch/XML в test stdafx после SDK config. Pinned config preprocessor
 check подтверждает DCOM/DA1 и отсутствие SOAP/Watch/XML; полноценная Win32
 сборка и классификация остальных ошибок ещё ожидаются в CI.
+
+## N1: SDK common XML и Expat — анализ до исправления
+
+Class: test-only native build closure и совместимость старого Expat с WinSDK.
+Inv: DA Browse сохраняет настоящий SDK `getVARTYPE`; Expat компилируется из
+точного upstream source с согласованным SDK ABI, без подмены protocol кода.
+N+1: символы и calling convention, char width, DTD/namespace, source patch и
+оба read/write callback теста; никакое отключение функциональности не считать
+доказательством работающего SDK.
+Defect: 41063686408 показал зависимость DA Browse от common XML, поэтому
+предыдущий DCOM-only config без CMN_XML неверен; Expat/WinSDK конфликт ещё
+нужно проверить на реальной Windows сборке.
+
+CI 41063686408 подтвердил зависимость DA Browse от CMN_XML (`getVARTYPE`):
+предыдущее отключение common XML было слишком широким и отменено.
+Точный SDK Expat собран на Linux тремя C translation units; narrow XML_Char,
+namespace, DTD и C-to-C++ linkage прошли. SDK исходники не менялись. Первый
+локальный запуск использовал усечённый header, после восстановления blob SHA
+повтор прошёл. WinSDK compatibility и оставшиеся ошибки проверит новый CI.

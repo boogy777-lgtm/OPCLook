@@ -16,6 +16,9 @@ if (root / ".git").exists():
     checked = ["development/C++/src", "development/core/include"]
     if "--core-clean" in sys.argv[1:]:
         checked.append("development/core/src")
+    elif "--expat" in sys.argv[1:]:
+        checked.extend(["development/core/src/SOCmn/expat", "development/core/src/include/expat.h",
+                        "development/core/src/include/expat_external.h"])
     subprocess.run(["git", "-C", str(root), "diff", "--quiet", "HEAD", "--", *checked], check=True)
     extra = subprocess.run(["git", "-C", str(root), "ls-files", "--others",
                             "--exclude-standard", "--", *checked], check=True,
@@ -25,11 +28,15 @@ if (root / ".git").exists():
 else:
     if "--core-clean" in sys.argv[1:]:
         raise SystemExit("core build requires an unmodified pinned Git checkout")
-    manifest = Path(__file__).with_name("softing-headers.gitsha")
-    for line in manifest.read_text().splitlines():
-        expected, name = line.split("  ", 1)
-        content = (root / name).read_bytes()
-        actual = hashlib.sha1(b"blob " + str(len(content)).encode() + b"\0" + content).hexdigest()
-        if actual != expected:
-            raise SystemExit(f"SDK header mismatch: {name} expected {expected}, got {actual}")
+    manifests = ["softing-headers.gitsha"]
+    if "--expat" in sys.argv[1:]:
+        manifests.append("softing-expat.gitsha")
+    for manifest_name in manifests:
+        manifest = Path(__file__).with_name(manifest_name)
+        for line in manifest.read_text().splitlines():
+            expected, name = line.split("  ", 1)
+            content = (root / name).read_bytes()
+            actual = hashlib.sha1(b"blob " + str(len(content)).encode() + b"\0" + content).hexdigest()
+            if actual != expected:
+                raise SystemExit(f"SDK source mismatch: {name} expected {expected}, got {actual}")
 print(f"SDK public headers verified against {expected_commit}")

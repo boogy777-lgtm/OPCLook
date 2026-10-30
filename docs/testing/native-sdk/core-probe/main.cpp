@@ -1,6 +1,12 @@
 #include "stdafx.h"
 #include <cstdio>
 #include <cstring>
+#include <type_traits>
+
+static_assert(std::is_same<XML_Char, char>::value, "SDK expects narrow Expat strings");
+using ExpectedExpatStart = void (XMLCALL *)(void*, const char*, const char**);
+static_assert(std::is_same<XML_StartElementHandler, ExpectedExpatStart>::value,
+              "SDK Expat callback ABI changed");
 
 class CaptureGroup : public SODaCComGroupDefault {
 public:

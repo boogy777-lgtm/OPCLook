@@ -35,6 +35,7 @@ jobs:
           set -euo pipefail
           docs/testing/native-sdk/check-softing-api.sh
           python3 docs/testing/native-sdk/test-core-features.py
+          docs/testing/native-sdk/test-expat-link.sh
           cmake -P docs/testing/native-sdk/core-probe/test-normalize-sdk-path.cmake
           python3 docs/testing/native-sdk/test_softing_patch.py
           python3 docs/testing/native-sdk/reproduce-softing-status.py --expect-existing-defect
@@ -89,6 +90,8 @@ jobs:
         shell: pwsh
         run: |
           cmake --build softing-build --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./softing-build/Release/softing_expat_smoke.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & ./softing-build/Release/softing_core_probe.exe --expect-existing-defect
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

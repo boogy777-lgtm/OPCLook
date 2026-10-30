@@ -22,7 +22,7 @@ actual = hashlib.sha1(b"blob " + str(len(source)).encode() + b"\0" + source).hex
 if actual != expected:
     raise SystemExit(f"SDK config mismatch: {actual}")
 header = Path(__file__).with_name("core-probe").joinpath("stdafx.h").read_text()
-prefix = header[:header.index('#include <windows.h>')]
+prefix = header[:header.index('#include <windows.h>')].replace("#pragma once\n", "")
 start = header.index('// BEGIN N1 DCOM-ONLY FEATURES')
 end = header.index('// END N1 DCOM-ONLY FEATURES', start)
 feature_block = header[start:end]
@@ -33,8 +33,8 @@ program = "\n".join([
     feature_block, '#include "SOCmnCfg.h"',
     "#if !defined(SOFEATURE_DCOM) || !defined(SOFEATURE_DA10)",
     '#error "DA/DCOM unexpectedly disabled"', "#endif",
-    "#if defined(SOFEATURE_SOAP) || defined(SOFEATURE_WATCH) || defined(SOFEATURE_XML_METHOD) || defined(SOFEATURE_CMN_XML)",
-    '#error "SDK config reenabled excluded features"', "#endif", ""
+    "#if defined(SOFEATURE_SOAP) || defined(SOFEATURE_WATCH) || defined(SOFEATURE_XML_METHOD) || !defined(SOFEATURE_CMN_XML) || defined(XML_UNICODE) || defined(XML_UNICODE_WCHAR_T)",
+    '#error "SDK common XML or excluded features mismatch"', "#endif", ""
 ])
 with tempfile.TemporaryDirectory(prefix="softing-features-") as temp:
     Path(temp, "SOCmnCfg.h").write_bytes(source)

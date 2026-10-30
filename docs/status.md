@@ -19,10 +19,12 @@ VerifyGlobs из-за обратных слешей пути. Это ошибк�
 исходный blob; CMake нормализует путь до генерации и проверяется отдельно.
 Следующий run 41062539737 прошёл оба source-probe и Win32 configure/ZeroCheck;
 в core C++ получены `isNull` C2039 и Expat/WinSDK `ELEMENT_TYPE` C2371,
-а также ещё не классифицированные ошибки компилятора Expat. Probe исправлен
-на публичный `isNotNull` и DCOM-only test configuration без Watch/XML;
-preprocessor test сохраняет DA/DCOM/DA1. Реальный Win32 link, init/cleanup
-и callback остаются непроверенными до результата нового CI. Системный Windows/DA
+а также ещё не классифицированные ошибки компилятора Expat. Следующий run
+41063686408 подтвердил, что предыдущий выбор без common XML неверен: DA Browse
+использует `SOCmnVariant::getVARTYPE`, доступный при CMN_XML. Common XML
+возвращён; Watch и XML-DA остаются вне test profile. Точные Expat C файлы
+собраны раздельно на Linux: namespace/DTD и C-to-C++ linkage прошли; Windows
+build, link, init/cleanup и callback ещё ожидают нового CI. Системный Windows/DA
 сервер здесь недоступен. UA SDK не менялся; старый production DA worker
 сохранён, native DA migration и полная проверка лицензий SDK closure открыты.
 Предыдущий published head 2335b8e прошёл Linux/Windows x86 CI run 41051563765;

@@ -28,13 +28,16 @@
 
 CI run 41062539737 дошёл до Win32 C++ и показал несовместимость probe с API
 `SOCmnPointer::isNull` и конфликт имён встроенного Expat и текущего WinSDK.
-Проба использует публичный `isNotNull`; её DCOM-only config исключает Watch и
-XML после `SOCmnCfg.h`, оставаясь с DA/DCOM. В рассмотренных core исходниках
-XML-DA ограждён `SOFEATURE_SOAP`, Expat — `SOFEATURE_CMN_XML`; такой профиль
-не проверяет и не заявляет поддержку XML-DA/Watch. `test-core-features.py`
-проверяет макросы точного SDK config на препроцессоре; он не заменяет Windows
-compile/link. Остальные compiler ошибки могут быть зависимыми — это ещё не
-доказано и они должны быть повторно измерены в CI.
+Проба использует публичный `isNotNull`. Следующий run 41063686408 показал,
+что DA Browse вызывает `SOCmnVariant::getVARTYPE`, требующий CMN_XML;
+предыдущее отключение common XML было ошибочным и отменено. Watch и SOAP
+остаются выключены только в тестовом profile. Точный embedded Expat теперь
+компилируется как три отдельных C translation units вместо SDK C++ TU: SDK
+`winconfig.h` задаёт XML_NS/XML_DTD и narrow ABI с `XML_STATIC`; на Linux
+реальный C parser/link smoke проверил namespace, DTD и C-to-C++ callback ABI.
+Windows компиляция и устранение WinSDK conflict ещё не подтверждены. Первое
+локальное воспроизведение ошибочно использовало неполный заголовок; он был
+восстановлен и проверен по Git blob перед успешным smoke.
 
 ## SDK defect: неверное сопоставление HRESULT после неизвестного handle
 
@@ -59,6 +62,8 @@ upstream, **не** принятие библиотеки или модифика
 
 ```sh
 SOFTING_SDK_ROOT=/path/to/exact/sdk docs/testing/native-sdk/check-softing-api.sh
+SOFTING_SDK_ROOT=/path/to/exact/sdk python3 docs/testing/native-sdk/test-core-features.py
+SOFTING_SDK_ROOT=/path/to/exact/sdk docs/testing/native-sdk/test-expat-link.sh
 SOFTING_SDK_ROOT=/path/to/exact/sdk python3 docs/testing/native-sdk/reproduce-softing-status.py --expect-existing-defect
 SOFTING_SDK_ROOT=/path/to/exact/sdk python3 docs/testing/native-sdk/reproduce-softing-status.py --patched
 ```

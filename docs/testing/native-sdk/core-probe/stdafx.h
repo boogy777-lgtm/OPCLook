@@ -16,10 +16,10 @@
 // BEGIN N1 DCOM-ONLY FEATURES
 #undef SOFEATURE_WATCH
 #undef SOFEATURE_XML_METHOD
-#undef SOFEATURE_CMN_XML
 // END N1 DCOM-ONLY FEATURES
 #if !defined(SOFEATURE_DCOM) || defined(SOFEATURE_SOAP) || \
-    defined(SOFEATURE_WATCH) || defined(SOFEATURE_XML_METHOD) || defined(SOFEATURE_CMN_XML)
+    defined(SOFEATURE_WATCH) || defined(SOFEATURE_XML_METHOD) || !defined(SOFEATURE_CMN_XML) || \
+    defined(XML_UNICODE) || defined(XML_UNICODE_WCHAR_T)
 #error Invalid feature set for the DA/DCOM-only core probe
 #endif
 #include "SOCmnOsCompat.h"
