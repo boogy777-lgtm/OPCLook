@@ -27,9 +27,7 @@ pub fn from_ole_date(serial: f64) -> Option<DateTime<Utc>> {
 }
 
 pub fn to_ole_date(value: &DateTime<Utc>) -> Option<f64> {
-    if !(100..=9999).contains(&value.year())
-        || value.timestamp_subsec_nanos() >= 1_000_000_000
-    {
+    if !(100..=9999).contains(&value.year()) || value.timestamp_subsec_nanos() >= 1_000_000_000 {
         return None;
     }
     let delta = value.timestamp().checked_sub(EPOCH_UNIX_SECONDS)?;
@@ -83,14 +81,24 @@ mod tests {
             .checked_add_signed(chrono::Duration::nanoseconds(123_456_700))
             .unwrap();
         let decoded = from_ole_date(to_ole_date(&value).unwrap()).unwrap();
-        let error = decoded.signed_duration_since(value).num_nanoseconds().unwrap();
+        let error = decoded
+            .signed_duration_since(value)
+            .num_nanoseconds()
+            .unwrap();
         assert!(error.abs() <= 1_000, "error={error}ns");
     }
 
     #[test]
     fn invalid_values_and_automation_range_are_checked() {
-        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY,
-                      f64::MAX, -f64::MAX, MIN_DATE, MAX_DATE] {
+        for value in [
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::MAX,
+            -f64::MAX,
+            MIN_DATE,
+            MAX_DATE,
+        ] {
             assert!(from_ole_date(value).is_none());
         }
         assert!(to_ole_date(&at(99, 12, 31, 0)).is_none());

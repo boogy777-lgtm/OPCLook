@@ -4181,28 +4181,64 @@ mod tests {
         view.connection_id = Some(rid(77));
         engine.sessions.insert(sid(1), view);
         let make_browse = || CommandKind::Browse {
-            node_id: "Fixture".into(), filter: NodeClassFilter::All, view_id: None,
+            node_id: "Fixture".into(),
+            filter: NodeClassFilter::All,
+            view_id: None,
         };
-        let old = engine.send(sid(1), Protocol::OpcDa, make_browse(), ()).unwrap();
-        let disconnect = engine.send(sid(1), Protocol::OpcDa, CommandKind::Disconnect, ()).unwrap();
-        engine.accept_at(&Event {
-            owner: owner(1), origin: Origin::Reply(disconnect),
-            kind: EventKind::Disconnected { reason: BackendMsg::ConnectionClosed },
-        }, now).unwrap();
-        let connect = engine.send(sid(1), Protocol::OpcDa,
-            CommandKind::Connect { endpoint: endpoint.clone() }, ()).unwrap();
-        engine.accept_at(&Event {
-            owner: owner(1), origin: Origin::Reply(connect),
-            kind: EventKind::Connected { endpoint, info: BackendMsg::raw("connected") },
-        }, now).unwrap();
-        let current = engine.send(sid(1), Protocol::OpcDa, make_browse(), ()).unwrap();
+        let old = engine
+            .send(sid(1), Protocol::OpcDa, make_browse(), ())
+            .unwrap();
+        let disconnect = engine
+            .send(sid(1), Protocol::OpcDa, CommandKind::Disconnect, ())
+            .unwrap();
+        engine
+            .accept_at(
+                &Event {
+                    owner: owner(1),
+                    origin: Origin::Reply(disconnect),
+                    kind: EventKind::Disconnected {
+                        reason: BackendMsg::ConnectionClosed,
+                    },
+                },
+                now,
+            )
+            .unwrap();
+        let connect = engine
+            .send(
+                sid(1),
+                Protocol::OpcDa,
+                CommandKind::Connect {
+                    endpoint: endpoint.clone(),
+                },
+                (),
+            )
+            .unwrap();
+        engine
+            .accept_at(
+                &Event {
+                    owner: owner(1),
+                    origin: Origin::Reply(connect),
+                    kind: EventKind::Connected {
+                        endpoint,
+                        info: BackendMsg::raw("connected"),
+                    },
+                },
+                now,
+            )
+            .unwrap();
+        let current = engine
+            .send(sid(1), Protocol::OpcDa, make_browse(), ())
+            .unwrap();
         let response = |id| Event {
-            owner: owner(1), origin: Origin::Reply(id),
-            kind: EventKind::Browse { node_id: "Fixture".into(), children: vec![] },
+            owner: owner(1),
+            origin: Origin::Reply(id),
+            kind: EventKind::Browse {
+                node_id: "Fixture".into(),
+                children: vec![],
+            },
         };
         assert!(engine.accept_at(&response(old), now).is_err());
         assert!(engine.accept_at(&response(current), now).is_ok());
         assert_eq!(engine.connection_id(sid(1)), Some(connect));
     }
-
 }

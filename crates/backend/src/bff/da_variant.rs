@@ -653,6 +653,13 @@ pub fn default_vt(value: &Value) -> u16 {
 
 use super::da_convert::{convert_float, convert_int, convert_uint, da_range};
 
+pub fn clear_variant(variant: &mut VARIANT) {
+    // SAFETY: the caller supplies a valid initialized VARIANT to clear in place.
+    unsafe {
+        let _ = windows::Win32::System::Variant::VariantClear(variant);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

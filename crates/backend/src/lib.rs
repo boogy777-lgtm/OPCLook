@@ -120,8 +120,11 @@ mod acquisition_tests {
         da.acquisition = Some(config.clone());
         assert_eq!(
             validate_acquisition(&da),
-            if cfg!(all(windows, feature = "native-da-preview")) { Ok(()) }
-            else { Err(AcquisitionError::StreamUnsupported) }
+            if cfg!(all(windows, feature = "native-da-preview")) {
+                Ok(())
+            } else {
+                Err(AcquisitionError::StreamUnsupported)
+            }
         );
         config.update_mode = UpdateMode::Poll;
         config.read_after_write = true;

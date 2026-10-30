@@ -64,14 +64,26 @@ mod tests {
 
     #[test]
     fn invalid_numeric_input_retains_typed_diagnostics() {
-        assert!(matches!(convert_int(&Value::Str("bad".into())),
-            Err(BackendMsg::DaNotInteger { .. })));
-        assert!(matches!(convert_int(&Value::Empty), Err(BackendMsg::DaNotIntegerAny)));
-        assert!(matches!(convert_uint(&Value::Str("-1".into())),
-            Err(BackendMsg::DaNotUnsigned { .. })));
-        assert!(matches!(convert_uint(&Value::I64(-1)),
-            Err(BackendMsg::DaNegativeValue { .. })));
-        assert!(matches!(convert_float(&Value::Empty), Err(BackendMsg::DaNotNumberAny)));
+        assert!(matches!(
+            convert_int(&Value::Str("bad".into())),
+            Err(BackendMsg::DaNotInteger { .. })
+        ));
+        assert!(matches!(
+            convert_int(&Value::Empty),
+            Err(BackendMsg::DaNotIntegerAny)
+        ));
+        assert!(matches!(
+            convert_uint(&Value::Str("-1".into())),
+            Err(BackendMsg::DaNotUnsigned { .. })
+        ));
+        assert!(matches!(
+            convert_uint(&Value::I64(-1)),
+            Err(BackendMsg::DaNegativeValue { .. })
+        ));
+        assert!(matches!(
+            convert_float(&Value::Empty),
+            Err(BackendMsg::DaNotNumberAny)
+        ));
     }
 
     #[test]

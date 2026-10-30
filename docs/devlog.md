@@ -1143,3 +1143,23 @@ service/item HRESULT, quality/time сохраняются; ARRAY/BSTR и про�
 явный Unsupported. Linux stand: scalar boundary test и Gateway mock command
 test по 1/1. Strict Gateway fixture расширен bool/i64/u64/f64 read/write,
 SDK C++ Win32 compile и реальные значения ещё не измерены.
+
+# 2026-10-31 — N2/N3 восстановление сборочных гейтов
+
+Class: совместимость собственных мостов с платформенными заголовками и
+сохранение существующего API при выносе общей конверсии. Inv: Win32 SDK
+fixture компилируется с исходными заголовками, а legacy DA по-прежнему может
+очистить каждый инициализированный VARIANT. N+1: любые WinSDK macro имена в
+тестовых локальных переменных и все существующие вызовы общего cleanup.
+Defect измерен в CI head `41a5f007`: C++ `small` раскрывается в `char`;
+Rust потерял `clear_variant`; rustfmt также отклонил этот head. Изменено имя
+тестовой переменной и восстановлена прежняя функция очистки. Существующий
+Win32 core build/queue boundary fixture и DA Rust build/variant tests —
+регрессионные проверки, которые на дефектном head не компилировались.
+
+Локально: 37/37 Linux stand тестов с mock ABI и реальными адаптерными Rust
+файлами; fmt и diff-check прошли. Это не компиляция Win32, не live COM и не
+доказательство нового subscription/array/Unicode кода. Подробности и ссылки
+на failed runs — в status; N2/N3/N4 остаются открыты.
+Полный Linux gate после fmt остановлен отсутствующим в offline cache
+`serde_json`; приложение этим прогоном не проверено.

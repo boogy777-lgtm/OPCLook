@@ -11,11 +11,11 @@ pub mod da;
 #[cfg(all(not(windows), not(feature = "native-da-preview")))]
 #[path = "da_unsupported.rs"]
 pub mod da;
+pub mod da_convert;
 #[cfg(windows)]
 pub mod da_variant;
 mod filetime;
 pub mod ole_time;
-pub mod da_convert;
 pub mod softing_facts;
 #[cfg(feature = "native-da-preview")]
 mod softing_runtime;

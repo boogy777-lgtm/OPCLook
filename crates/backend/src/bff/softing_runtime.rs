@@ -31,7 +31,13 @@ struct BrowseRecord {
 }
 impl Default for BrowseRecord {
     fn default() -> Self {
-        Self { is_branch: 0, name_len: 0, node_id_len: 0, name: [0; 1024], node_id: [0; 4096] }
+        Self {
+            is_branch: 0,
+            name_len: 0,
+            node_id_len: 0,
+            name: [0; 1024],
+            node_id: [0; 4096],
+        }
     }
 }
 #[derive(Debug)]
@@ -52,8 +58,14 @@ struct ServerRecord {
 }
 impl Default for ServerRecord {
     fn default() -> Self {
-        Self { clsid: Guid::default(), progid_len: 0, description_len: 0, flags: 0,
-               progid: [0; 1024], description: [0; 2048] }
+        Self {
+            clsid: Guid::default(),
+            progid_len: 0,
+            description_len: 0,
+            flags: 0,
+            progid: [0; 1024],
+            description: [0; 2048],
+        }
     }
 }
 #[derive(Debug)]
@@ -98,8 +110,13 @@ struct PushRecord {
 }
 impl Default for PushRecord {
     fn default() -> Self {
-        Self { registration_low: 0, registration_high: 0, master_quality: 0, adapter_result: 0,
-               value: ReadScalar::default() }
+        Self {
+            registration_low: 0,
+            registration_high: 0,
+            master_quality: 0,
+            adapter_result: 0,
+            value: ReadScalar::default(),
+        }
     }
 }
 pub struct PushValue {
@@ -110,9 +127,28 @@ pub struct PushValue {
     pub text: Option<Vec<u8>>,
 }
 unsafe extern "C" {
-    fn opcl_da_browse(session: *mut c_void, node_id: *const c_char, out: *mut BrowseRecord, capacity: u32, count: *mut u32) -> i32;
-    fn opcl_da_resolve(host: *mut c_void, node: *const c_char, progid: *const c_char, kind: u32, out: *mut Guid) -> i32;
-    fn opcl_da_discover(host: *mut c_void, node: *const c_char, out: *mut ServerRecord, capacity: u32, count: *mut u32, fallback: *mut u32) -> i32;
+    fn opcl_da_browse(
+        session: *mut c_void,
+        node_id: *const c_char,
+        out: *mut BrowseRecord,
+        capacity: u32,
+        count: *mut u32,
+    ) -> i32;
+    fn opcl_da_resolve(
+        host: *mut c_void,
+        node: *const c_char,
+        progid: *const c_char,
+        kind: u32,
+        out: *mut Guid,
+    ) -> i32;
+    fn opcl_da_discover(
+        host: *mut c_void,
+        node: *const c_char,
+        out: *mut ServerRecord,
+        capacity: u32,
+        count: *mut u32,
+        fallback: *mut u32,
+    ) -> i32;
     fn opcl_da_host_create(out: *mut *mut c_void) -> i32;
     fn opcl_da_host_destroy(host: *mut c_void) -> i32;
     fn opcl_da_session_open(
@@ -137,7 +173,14 @@ unsafe extern "C" {
         rights: *mut u32,
     ) -> i32;
     fn opcl_da_item_remove(session: *mut c_void, item: *mut c_void) -> i32;
-    fn opcl_da_take_push(session: *mut c_void, out: *mut PushRecord, payload: *mut u8, capacity: u32, count: *mut u32, overflow: *mut u32) -> i32;
+    fn opcl_da_take_push(
+        session: *mut c_void,
+        out: *mut PushRecord,
+        payload: *mut u8,
+        capacity: u32,
+        count: *mut u32,
+        overflow: *mut u32,
+    ) -> i32;
     fn opcl_da_read_i4(session: *mut c_void, item: *mut c_void, age: u32, out: *mut ReadI4) -> i32;
     fn opcl_da_read_scalar(
         session: *mut c_void,
@@ -147,9 +190,20 @@ unsafe extern "C" {
         text: *mut c_char,
         text_capacity: u32,
     ) -> i32;
-    fn opcl_da_write_array(session: *mut c_void, item: *mut c_void, vartype: u16,
-                           data: *const u8, bytes: u32, result: *mut i32) -> i32;
-    fn opcl_da_write_text(session: *mut c_void, item: *mut c_void, text: *const c_char, result: *mut i32) -> i32;
+    fn opcl_da_write_array(
+        session: *mut c_void,
+        item: *mut c_void,
+        vartype: u16,
+        data: *const u8,
+        bytes: u32,
+        result: *mut i32,
+    ) -> i32;
+    fn opcl_da_write_text(
+        session: *mut c_void,
+        item: *mut c_void,
+        text: *const c_char,
+        result: *mut i32,
+    ) -> i32;
     fn opcl_da_write_scalar(
         session: *mut c_void,
         item: *mut c_void,
@@ -254,53 +308,108 @@ impl SharedHost {
         Arc::ptr_eq(&self.core, &other.core)
     }
     pub fn resolve(&self, node: &str, progid: &str, remote: bool) -> Result<Guid, Error> {
-        let node = string(node)?; let progid = string(progid)?; let mut out = Guid::default();
+        let node = string(node)?;
+        let progid = string(progid)?;
+        let mut out = Guid::default();
         // SAFETY: the shared host remains live and the inputs and output live through this synchronous call.
-        check(unsafe { opcl_da_resolve(self.core.ptr.as_ptr(), node.as_ptr(), progid.as_ptr(), u32::from(remote), &mut out) })?;
+        check(unsafe {
+            opcl_da_resolve(
+                self.core.ptr.as_ptr(),
+                node.as_ptr(),
+                progid.as_ptr(),
+                u32::from(remote),
+                &mut out,
+            )
+        })?;
         Ok(out)
     }
     pub fn discover(&self, node: &str) -> Result<(Vec<DiscoveredServer>, bool), Error> {
         let node = string(node)?;
         let mut records = vec![ServerRecord::default(); 256];
-        let mut count = 0; let mut fallback = 0;
+        let mut count = 0;
+        let mut fallback = 0;
         // SAFETY: the host is live, records owns capacity entries, and every output remains valid for the call.
-        check(unsafe { opcl_da_discover(self.core.ptr.as_ptr(), node.as_ptr(), records.as_mut_ptr(), 256, &mut count, &mut fallback) })?;
+        check(unsafe {
+            opcl_da_discover(
+                self.core.ptr.as_ptr(),
+                node.as_ptr(),
+                records.as_mut_ptr(),
+                256,
+                &mut count,
+                &mut fallback,
+            )
+        })?;
         let count = usize::try_from(count).map_err(|_| Error::InvalidString)?;
-        if count > records.len() || fallback > 1 { return Err(Error::InvalidString); }
+        if count > records.len() || fallback > 1 {
+            return Err(Error::InvalidString);
+        }
         let mut found = Vec::with_capacity(count);
         for record in records.into_iter().take(count) {
-            let progid = record.progid.get(..record.progid_len as usize).ok_or(Error::InvalidString)?;
-            let description = record.description.get(..record.description_len as usize).ok_or(Error::InvalidString)?;
+            let progid = record
+                .progid
+                .get(..record.progid_len as usize)
+                .ok_or(Error::InvalidString)?;
+            let description = record
+                .description
+                .get(..record.description_len as usize)
+                .ok_or(Error::InvalidString)?;
             found.push(DiscoveredServer {
                 clsid: record.clsid,
                 progid: String::from_utf8(progid.to_vec()).map_err(|_| Error::InvalidString)?,
-                description: String::from_utf8(description.to_vec()).map_err(|_| Error::InvalidString)?,
+                description: String::from_utf8(description.to_vec())
+                    .map_err(|_| Error::InvalidString)?,
                 description_missing: record.flags & 1 != 0,
             });
         }
         Ok((found, fallback != 0))
     }
     pub fn open(&self, name: &str, node: &str, clsid: &Guid) -> Result<Session, Error> {
-        self.open_config(name, node, clsid, false, 1000).map(|(session, _)| session)
+        self.open_config(name, node, clsid, false, 1000)
+            .map(|(session, _)| session)
     }
-    pub fn open_config(&self, name: &str, node: &str, clsid: &Guid, subscription: bool,
-                       interval_ms: u32) -> Result<(Session, u32), Error> {
+    pub fn open_config(
+        &self,
+        name: &str,
+        node: &str,
+        clsid: &Guid,
+        subscription: bool,
+        interval_ms: u32,
+    ) -> Result<(Session, u32), Error> {
         let name = string(name)?;
         let node = string(node)?;
-        let mut ptr = std::ptr::null_mut(); let mut revised = 0;
-        let budget = u32::try_from(opclook_contract::model::MAX_ITEM_KEYS_PER_CONNECTION).map_err(|_| Error::Exhausted)?;
+        let mut ptr = std::ptr::null_mut();
+        let mut revised = 0;
+        let budget = u32::try_from(opclook_contract::model::MAX_ITEM_KEYS_PER_CONNECTION)
+            .map_err(|_| Error::Exhausted)?;
         // SAFETY: self retains the live host, C strings and outputs live through the call.
         check(unsafe {
-            opcl_da_session_open(self.core.ptr.as_ptr(), name.as_ptr(), node.as_ptr(), clsid,
-                                 u32::from(subscription), interval_ms, budget, &mut revised, &mut ptr)
+            opcl_da_session_open(
+                self.core.ptr.as_ptr(),
+                name.as_ptr(),
+                node.as_ptr(),
+                clsid,
+                u32::from(subscription),
+                interval_ms,
+                budget,
+                &mut revised,
+                &mut ptr,
+            )
         })?;
-        Ok((Session {
-            ptr: NonNull::new(ptr).ok_or(Error::NullHandle)?,
-            _host: self.clone(),
-            items: HashMap::new(),
-            push_buffer: if subscription { vec![0; 65_536] } else { Vec::new() },
-            closed: false, _thread: PhantomData,
-        }, revised))
+        Ok((
+            Session {
+                ptr: NonNull::new(ptr).ok_or(Error::NullHandle)?,
+                _host: self.clone(),
+                items: HashMap::new(),
+                push_buffer: if subscription {
+                    vec![0; 65_536]
+                } else {
+                    Vec::new()
+                },
+                closed: false,
+                _thread: PhantomData,
+            },
+            revised,
+        ))
     }
 }
 pub struct Session {
@@ -317,42 +426,97 @@ impl Session {
         tests::inject(self.ptr.as_ptr() as usize, registration, value, overflow);
     }
     pub fn take_push(&mut self) -> Result<(Vec<PushValue>, bool), Error> {
-        if self.push_buffer.is_empty() { return Err(Error::InvalidHandle); }
-        let mut values = Vec::new(); let mut any_overflow = false;
+        if self.push_buffer.is_empty() {
+            return Err(Error::InvalidHandle);
+        }
+        let mut values = Vec::new();
+        let mut any_overflow = false;
         for _ in 0..64 {
-            let mut raw = PushRecord::default(); let mut count = 0; let mut overflow = 0;
+            let mut raw = PushRecord::default();
+            let mut count = 0;
+            let mut overflow = 0;
             // SAFETY: session is unique and the reusable payload and all outputs remain live.
-            check(unsafe { opcl_da_take_push(self.ptr.as_ptr(), &mut raw, self.push_buffer.as_mut_ptr(),
-                self.push_buffer.len() as u32, &mut count, &mut overflow) })?;
-            if count > 1 || overflow > 1 { return Err(Error::InvalidString); }
+            check(unsafe {
+                opcl_da_take_push(
+                    self.ptr.as_ptr(),
+                    &mut raw,
+                    self.push_buffer.as_mut_ptr(),
+                    self.push_buffer.len() as u32,
+                    &mut count,
+                    &mut overflow,
+                )
+            })?;
+            if count > 1 || overflow > 1 {
+                return Err(Error::InvalidString);
+            }
             any_overflow |= overflow != 0;
-            if count == 0 { break; }
-            let registration = (u64::from(raw.registration_high) << 32) | u64::from(raw.registration_low);
-            let text = if raw.adapter_result >= 0 && (raw.value.vartype == 8 || raw.value.vartype & 0x2000 != 0)
-                && raw.value.service_result >= 0 && raw.value.item_result >= 0 {
-                let count = usize::try_from(raw.value.text_len).map_err(|_| Error::InvalidString)?;
-                Some(self.push_buffer.get(..count).ok_or(Error::InvalidString)?.to_vec())
-            } else { None };
-            values.push(PushValue { registration, master_quality: raw.master_quality,
-                                    adapter_result: raw.adapter_result, value: raw.value, text });
+            if count == 0 {
+                break;
+            }
+            let registration =
+                (u64::from(raw.registration_high) << 32) | u64::from(raw.registration_low);
+            let text = if raw.adapter_result >= 0
+                && (raw.value.vartype == 8 || raw.value.vartype & 0x2000 != 0)
+                && raw.value.service_result >= 0
+                && raw.value.item_result >= 0
+            {
+                let count =
+                    usize::try_from(raw.value.text_len).map_err(|_| Error::InvalidString)?;
+                Some(
+                    self.push_buffer
+                        .get(..count)
+                        .ok_or(Error::InvalidString)?
+                        .to_vec(),
+                )
+            } else {
+                None
+            };
+            values.push(PushValue {
+                registration,
+                master_quality: raw.master_quality,
+                adapter_result: raw.adapter_result,
+                value: raw.value,
+                text,
+            });
         }
         Ok((values, any_overflow))
     }
     pub fn browse(&mut self, node_id: &str) -> Result<Vec<BrowseEntry>, Error> {
         let node_id = string(node_id)?;
-        let mut records = vec![BrowseRecord::default(); 256]; let mut count = 0;
+        let mut records = vec![BrowseRecord::default(); 256];
+        let mut count = 0;
         // SAFETY: the session is uniquely owned and the input/output buffers live until this synchronous call returns.
-        check(unsafe { opcl_da_browse(self.ptr.as_ptr(), node_id.as_ptr(), records.as_mut_ptr(), 256, &mut count) })?;
+        check(unsafe {
+            opcl_da_browse(
+                self.ptr.as_ptr(),
+                node_id.as_ptr(),
+                records.as_mut_ptr(),
+                256,
+                &mut count,
+            )
+        })?;
         let count = usize::try_from(count).map_err(|_| Error::InvalidString)?;
-        if count > records.len() { return Err(Error::InvalidString); }
+        if count > records.len() {
+            return Err(Error::InvalidString);
+        }
         let mut result = Vec::with_capacity(count);
         for record in records.into_iter().take(count) {
-            if record.is_branch > 1 { return Err(Error::InvalidString); }
-            let name = record.name.get(..record.name_len as usize).ok_or(Error::InvalidString)?;
-            let id = record.node_id.get(..record.node_id_len as usize).ok_or(Error::InvalidString)?;
-            result.push(BrowseEntry { name: String::from_utf8(name.to_vec()).map_err(|_| Error::InvalidString)?,
+            if record.is_branch > 1 {
+                return Err(Error::InvalidString);
+            }
+            let name = record
+                .name
+                .get(..record.name_len as usize)
+                .ok_or(Error::InvalidString)?;
+            let id = record
+                .node_id
+                .get(..record.node_id_len as usize)
+                .ok_or(Error::InvalidString)?;
+            result.push(BrowseEntry {
+                name: String::from_utf8(name.to_vec()).map_err(|_| Error::InvalidString)?,
                 node_id: String::from_utf8(id.to_vec()).map_err(|_| Error::InvalidString)?,
-                is_branch: record.is_branch == 1 });
+                is_branch: record.is_branch == 1,
+            });
         }
         Ok(result)
     }
@@ -392,18 +556,35 @@ impl Session {
         check(unsafe { opcl_da_read_i4(self.ptr.as_ptr(), item.as_ptr(), max_age, &mut out) })?;
         Ok(out)
     }
-    pub fn read_scalar(&mut self, key: u64, max_age: u32) -> Result<(ReadScalar, Option<Vec<u8>>), Error> {
+    pub fn read_scalar(
+        &mut self,
+        key: u64,
+        max_age: u32,
+    ) -> Result<(ReadScalar, Option<Vec<u8>>), Error> {
         let item = self.items.get(&key).ok_or(Error::InvalidHandle)?;
         let mut out = ReadScalar::default();
         let mut text = vec![0u8; 65_536];
         // SAFETY: the map owns the registration and both buffers remain valid for the call.
-        check(unsafe { opcl_da_read_scalar(self.ptr.as_ptr(), item.as_ptr(), max_age, &mut out, text.as_mut_ptr().cast(), text.len() as u32) })?;
+        check(unsafe {
+            opcl_da_read_scalar(
+                self.ptr.as_ptr(),
+                item.as_ptr(),
+                max_age,
+                &mut out,
+                text.as_mut_ptr().cast(),
+                text.len() as u32,
+            )
+        })?;
         let text = if out.vartype == 8 || out.vartype & 0x2000 != 0 {
             let count = usize::try_from(out.text_len).map_err(|_| Error::InvalidString)?;
-            if count > text.len() { return Err(Error::InvalidString); }
+            if count > text.len() {
+                return Err(Error::InvalidString);
+            }
             text.truncate(count);
             Some(text)
-        } else { None };
+        } else {
+            None
+        };
         Ok((out, text))
     }
     pub fn write_array(&mut self, key: u64, vt: u16, bytes: &[u8]) -> Result<i32, Error> {
@@ -411,7 +592,16 @@ impl Session {
         let size = u32::try_from(bytes.len()).map_err(|_| Error::Exhausted)?;
         let mut result = 0;
         // SAFETY: item and borrowed byte slice remain live through the synchronous SDK task.
-        check(unsafe { opcl_da_write_array(self.ptr.as_ptr(), item.as_ptr(), vt, bytes.as_ptr(), size, &mut result) })?;
+        check(unsafe {
+            opcl_da_write_array(
+                self.ptr.as_ptr(),
+                item.as_ptr(),
+                vt,
+                bytes.as_ptr(),
+                size,
+                &mut result,
+            )
+        })?;
         Ok(result)
     }
     pub fn write_text(&mut self, key: u64, value: &str) -> Result<i32, Error> {
@@ -419,7 +609,9 @@ impl Session {
         let text = string(value)?;
         let mut result = 0;
         // SAFETY: the registration and the C string and output outlive the call.
-        check(unsafe { opcl_da_write_text(self.ptr.as_ptr(), item.as_ptr(), text.as_ptr(), &mut result) })?;
+        check(unsafe {
+            opcl_da_write_text(self.ptr.as_ptr(), item.as_ptr(), text.as_ptr(), &mut result)
+        })?;
         Ok(result)
     }
     pub fn write_scalar(&mut self, key: u64, vt: u16, bits: u64) -> Result<i32, Error> {
@@ -463,14 +655,18 @@ impl Drop for Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Mutex, OnceLock};
     type MockQueues = HashMap<usize, (VecDeque<PushRecord>, bool)>;
     static QUEUES: OnceLock<Mutex<MockQueues>> = OnceLock::new();
-    fn queues() -> &'static Mutex<MockQueues> { QUEUES.get_or_init(|| Mutex::new(HashMap::new())) }
+    fn queues() -> &'static Mutex<MockQueues> {
+        QUEUES.get_or_init(|| Mutex::new(HashMap::new()))
+    }
     pub(super) fn inject(session: usize, registration: u64, value: i32, overflow: bool) {
-        let mut queue = queues().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut queue = queues()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = queue.entry(session).or_default();
         let mut record = PushRecord::default();
         record.registration_low = registration as u32;
@@ -487,37 +683,79 @@ mod tests {
         HANDLE.fetch_add(1, Ordering::Relaxed) as *mut c_void
     }
     #[unsafe(no_mangle)]
-    unsafe extern "C" fn opcl_da_browse(_: *mut c_void, path: *const c_char, out: *mut BrowseRecord, capacity: u32, count: *mut u32) -> i32 {
+    unsafe extern "C" fn opcl_da_browse(
+        _: *mut c_void,
+        path: *const c_char,
+        out: *mut BrowseRecord,
+        capacity: u32,
+        count: *mut u32,
+    ) -> i32 {
         // SAFETY: the wrapper supplies a valid NUL-terminated string and writable output pointers.
         unsafe {
-            if capacity == 0 { return -1; }
-            let name = if std::ffi::CStr::from_ptr(path).to_bytes().is_empty() { b"Fixture".as_slice() } else { b"Value".as_slice() };
-            let id = if name == b"Fixture" { b"Fixture".as_slice() } else { b"Fixture.Value".as_slice() };
+            if capacity == 0 {
+                return -1;
+            }
+            let name = if std::ffi::CStr::from_ptr(path).to_bytes().is_empty() {
+                b"Fixture".as_slice()
+            } else {
+                b"Value".as_slice()
+            };
+            let id = if name == b"Fixture" {
+                b"Fixture".as_slice()
+            } else {
+                b"Fixture.Value".as_slice()
+            };
             let record = &mut *out;
             record.name[..name.len()].copy_from_slice(name);
             record.node_id[..id.len()].copy_from_slice(id);
-            record.name_len = name.len() as u32; record.node_id_len = id.len() as u32;
-            record.is_branch = u32::from(name == b"Fixture"); *count = 1;
+            record.name_len = name.len() as u32;
+            record.node_id_len = id.len() as u32;
+            record.is_branch = u32::from(name == b"Fixture");
+            *count = 1;
         }
         0
     }
     #[unsafe(no_mangle)]
-    unsafe extern "C" fn opcl_da_resolve(_: *mut c_void, _: *const c_char, _: *const c_char, _: u32, out: *mut Guid) -> i32 {
+    unsafe extern "C" fn opcl_da_resolve(
+        _: *mut c_void,
+        _: *const c_char,
+        _: *const c_char,
+        _: u32,
+        out: *mut Guid,
+    ) -> i32 {
         // SAFETY: the wrapper supplies a valid output pointer.
-        unsafe { *out = Guid { data1: 1, ..Guid::default() }; }
+        unsafe {
+            *out = Guid {
+                data1: 1,
+                ..Guid::default()
+            };
+        }
         0
     }
     #[unsafe(no_mangle)]
-    unsafe extern "C" fn opcl_da_discover(_: *mut c_void, _: *const c_char, out: *mut ServerRecord, capacity: u32, count: *mut u32, fallback: *mut u32) -> i32 {
+    unsafe extern "C" fn opcl_da_discover(
+        _: *mut c_void,
+        _: *const c_char,
+        out: *mut ServerRecord,
+        capacity: u32,
+        count: *mut u32,
+        fallback: *mut u32,
+    ) -> i32 {
         // SAFETY: the wrapper supplies at least one record and valid output pointers.
         unsafe {
-            if capacity == 0 { return -1; }
+            if capacity == 0 {
+                return -1;
+            }
             let record = &mut *out;
             let id = b"OPCLook.NativeDaFixture.1";
             record.progid[..id.len()].copy_from_slice(id);
             record.progid_len = id.len() as u32;
-            record.clsid = Guid { data1: 1, ..Guid::default() };
-            *count = 1; *fallback = 1;
+            record.clsid = Guid {
+                data1: 1,
+                ..Guid::default()
+            };
+            *count = 1;
+            *fallback = 1;
         }
         0
     }
@@ -537,11 +775,17 @@ mod tests {
         _: *const c_char,
         _: *const c_char,
         _: *const Guid,
-        _: u32, _: u32, _: u32, revised: *mut u32,
+        _: u32,
+        _: u32,
+        _: u32,
+        revised: *mut u32,
         out: *mut *mut c_void,
     ) -> i32 {
         // SAFETY: the wrapper passes valid output pointers.
-        unsafe { *out = handle(); *revised = 1000; };
+        unsafe {
+            *out = handle();
+            *revised = 1000;
+        };
         0
     }
     #[unsafe(no_mangle)]
@@ -552,7 +796,8 @@ mod tests {
     unsafe extern "C" fn opcl_da_item_add(
         _: *mut c_void,
         _: *const c_char,
-        _: u32, _: u32,
+        _: u32,
+        _: u32,
         out: *mut *mut c_void,
         kind: *mut u16,
         rights: *mut u32,
@@ -570,13 +815,29 @@ mod tests {
         0
     }
     #[unsafe(no_mangle)]
-    unsafe extern "C" fn opcl_da_take_push(session: *mut c_void, out: *mut PushRecord, _: *mut u8, _: u32, count: *mut u32, overflow: *mut u32) -> i32 {
-        let mut queues = queues().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    unsafe extern "C" fn opcl_da_take_push(
+        session: *mut c_void,
+        out: *mut PushRecord,
+        _: *mut u8,
+        _: u32,
+        count: *mut u32,
+        overflow: *mut u32,
+    ) -> i32 {
+        let mut queues = queues()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = queues.entry(session as usize).or_default();
         let record = entry.0.pop_front();
         // SAFETY: the wrapper supplies valid output pointers.
-        unsafe { *count = u32::from(record.is_some()); *overflow = u32::from(entry.1); if let Some(record) = record { *out = record; } }
-        entry.1 = false; 0
+        unsafe {
+            *count = u32::from(record.is_some());
+            *overflow = u32::from(entry.1);
+            if let Some(record) = record {
+                *out = record;
+            }
+        }
+        entry.1 = false;
+        0
     }
     #[unsafe(no_mangle)]
     unsafe extern "C" fn opcl_da_read_i4(
@@ -621,17 +882,31 @@ mod tests {
         0
     }
     #[unsafe(no_mangle)]
-    unsafe extern "C" fn opcl_da_write_array(_: *mut c_void, _: *mut c_void, _: u16, _: *const u8, _: u32, result: *mut i32) -> i32 {
+    unsafe extern "C" fn opcl_da_write_array(
+        _: *mut c_void,
+        _: *mut c_void,
+        _: u16,
+        _: *const u8,
+        _: u32,
+        result: *mut i32,
+    ) -> i32 {
         // SAFETY: the wrapper passes a valid result pointer.
-        unsafe { *result = 0; }
+        unsafe {
+            *result = 0;
+        }
         0
     }
     #[unsafe(no_mangle)]
     unsafe extern "C" fn opcl_da_write_text(
-        _: *mut c_void, _: *mut c_void, _: *const c_char, result: *mut i32,
+        _: *mut c_void,
+        _: *mut c_void,
+        _: *const c_char,
+        result: *mut i32,
     ) -> i32 {
         // SAFETY: the wrapper passes a valid output pointer.
-        unsafe { *result = 0; }
+        unsafe {
+            *result = 0;
+        }
         0
     }
     #[unsafe(no_mangle)]
@@ -686,7 +961,10 @@ mod tests {
         assert_eq!(a.write_i4(fresh, 7).unwrap(), 0);
         let unicode = a.add("Fixture.Тег").unwrap().0;
         assert_eq!(a.write_text(unicode, "РУГ 中文").unwrap(), 0);
-        assert_eq!(a.write_text(unicode, "bad\0string"), Err(Error::InvalidString));
+        assert_eq!(
+            a.write_text(unicode, "bad\0string"),
+            Err(Error::InvalidString)
+        );
         a.close().unwrap();
         b.close().unwrap();
         drop(shared);

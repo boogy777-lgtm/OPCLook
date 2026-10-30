@@ -566,9 +566,9 @@ static void queue_push(PushState& state, const OpclDaPush& fact, const char* dat
 }
 #ifdef OPCL_DA_TESTING
 extern "C" int32_t opcl_da_test_queue_bounds(void) try {
-    PushState small; OpclDaPush fact{};
-    for (unsigned i = 0; i < 257; ++i) queue_push(small, fact, nullptr, 0);
-    if (small.pending.size() != 256 || !small.overflow || small.pending_bytes != 256 * sizeof(PendingPush)) return E_FAIL;
+    PushState count_state; OpclDaPush fact{};
+    for (unsigned i = 0; i < 257; ++i) queue_push(count_state, fact, nullptr, 0);
+    if (count_state.pending.size() != 256 || !count_state.overflow || count_state.pending_bytes != 256 * sizeof(PendingPush)) return E_FAIL;
     PushState large; std::vector<char> payload(OPCL_DA_VALUE_BYTES, 'x');
     for (unsigned i = 0; i < 16; ++i) queue_push(large, fact, payload.data(), OPCL_DA_VALUE_BYTES);
     if (large.pending.empty() || !large.overflow || large.pending_bytes > 1048576) return E_FAIL;

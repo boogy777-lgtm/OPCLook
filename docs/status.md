@@ -1,5 +1,27 @@
 # Текущий статус
 
+## 2026-10-31 — N2/N3 восстановление CI после 41a5f007 (проверка Win32 ожидается)
+
+Candidate `41a5f007` добавил preview Browse/Discover, Unicode, подписку и
+массивы, но это ещё не подтверждённые capabilities. Измерено на этом head:
+SDK source-probe Linux и Windows прошли; Win32 core и local COM bridge не
+собрались на `PushState small` (коллизия с Windows `small` macro); Linux и
+Windows fmt не прошли; Windows Rust также не собрался из-за удалённой
+`clear_variant`. Live шаги этих запусков не выполнялись. Runs:
+[SDK](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41103146266),
+[application](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41103146409),
+[local COM](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41103146352).
+
+Имя переменной изменено, существующая WinAPI очистка VARIANT восстановлена,
+Rust отформатирован. Локально измерено: `cargo fmt --all -- --check`,
+`git diff --check` и 37 тестов Linux stand с реальными Rust-файлами и mock
+ABI прошли. Win32 C++/COM и Windows Rust здесь не скомпилированы; точный новый
+head проверит CI. Старые результаты live не распространяются на этот код.
+Полный `scripts/check-linux.sh` остановился после fmt до компиляции: в offline
+Cargo cache отсутствует `serde_json`; это не результат проверки приложения.
+N2/N3 остаются открытыми, production DA остаётся legacy; Unicode, browse,
+подписка, массивы, поздний callback/teardown и remote требуют live proof.
+
 ## 2026-10-30 — N2 SDK Gateway preview (не production)
 
 Опциональный `native-da-preview` включает существующий Gateway/router с SDK

@@ -1,7 +1,7 @@
 //! Experimental Gateway integration for the direct SDK ABI. This feature is
 //! intentionally opt-in until the live gate and missing capabilities are done.
+use super::da_clsid::{ClsidLookup, DiscoveredClsids, resolve_clsid};
 use super::da_router::{DaHost, SESSION_JOIN_BUDGET, no_connection_reply, run_router};
-use super::da_clsid::{resolve_clsid, ClsidLookup, DiscoveredClsids};
 use super::model::{
     BackendMsg, Command, CommandKind, DataValue, Event, EventKind, ItemInfo, ItemKey, Operation,
     Owner, SessionId, WriteOutcome,
@@ -98,25 +98,49 @@ struct NativeHost {
     discovered: Mutex<DiscoveredClsids>,
 }
 fn guid_to_u128(g: Guid) -> u128 {
-    (u128::from(g.data1) << 96) | (u128::from(g.data2) << 80) |
-        (u128::from(g.data3) << 64) | u128::from(u64::from_be_bytes(g.data4))
+    (u128::from(g.data1) << 96)
+        | (u128::from(g.data2) << 80)
+        | (u128::from(g.data3) << 64)
+        | u128::from(u64::from_be_bytes(g.data4))
 }
 fn guid_from_u128(v: u128) -> Guid {
-    Guid { data1: (v >> 96) as u32, data2: (v >> 80) as u16,
-        data3: (v >> 64) as u16, data4: (v as u64).to_be_bytes() }
+    Guid {
+        data1: (v >> 96) as u32,
+        data2: (v >> 80) as u16,
+        data3: (v >> 64) as u16,
+        data4: (v as u64).to_be_bytes(),
+    }
 }
-struct NativeClsidLookup<'a> { host: &'a NativeHost }
+struct NativeClsidLookup<'a> {
+    host: &'a NativeHost,
+}
 impl ClsidLookup for NativeClsidLookup<'_> {
     fn remote_enum(&mut self, node: &str, progid: &str) -> Result<u128, BackendMsg> {
-        self.host.sdk.resolve(node, progid, true).map(guid_to_u128).map_err(|e|
-            BackendMsg::DaOpcEnumUnavailable { host: node.to_string(), cause: Box::new(message(format!("{e:?}"))) })
+        self.host
+            .sdk
+            .resolve(node, progid, true)
+            .map(guid_to_u128)
+            .map_err(|e| BackendMsg::DaOpcEnumUnavailable {
+                host: node.to_string(),
+                cause: Box::new(message(format!("{e:?}"))),
+            })
     }
     fn discovered(&self, node: &str, progid: &str) -> Option<u128> {
-        self.host.discovered.lock().unwrap_or_else(PoisonError::into_inner).get(node, progid)
+        self.host
+            .discovered
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(node, progid)
     }
     fn local_registry(&mut self, progid: &str) -> Result<u128, BackendMsg> {
-        self.host.sdk.resolve("", progid, false).map(guid_to_u128).map_err(|e|
-            BackendMsg::DaProgIdLookupFailed { prog_id: progid.to_string(), detail: format!("{e:?}") })
+        self.host
+            .sdk
+            .resolve("", progid, false)
+            .map(guid_to_u128)
+            .map_err(|e| BackendMsg::DaProgIdLookupFailed {
+                prog_id: progid.to_string(),
+                detail: format!("{e:?}"),
+            })
     }
 }
 fn message(s: impl std::fmt::Display) -> BackendMsg {
@@ -176,39 +200,78 @@ fn guid(input: &str) -> Option<Guid> {
         data4,
     })
 }
-fn drain_push(session: &mut Session, registrations: &HashMap<u64, ItemKey>, owner: Owner,
-              epoch: super::model::RequestId, events: &Sender<Event>) -> Result<(), SdkError> {
+fn drain_push(
+    session: &mut Session,
+    registrations: &HashMap<u64, ItemKey>,
+    owner: Owner,
+    epoch: super::model::RequestId,
+    events: &Sender<Event>,
+) -> Result<(), SdkError> {
     let (facts, overflow) = session.take_push()?;
     if overflow {
-        send(events, owner, None, EventKind::Log { message: message("DA subscription queue overflow or invalid callback; updates were lost") });
+        send(
+            events,
+            owner,
+            None,
+            EventKind::Log {
+                message: message(
+                    "DA subscription queue overflow or invalid callback; updates were lost",
+                ),
+            },
+        );
     }
     let mut values = Vec::new();
     for fact in facts {
         if fact.registration == 0 || fact.master_quality != 0 {
-            send(events, owner, None, EventKind::Log { message: message(format!(
-                "DA callback master quality HRESULT {:#x}, master error HRESULT {:#x}",
-                fact.master_quality, fact.value.service_result)) });
+            send(
+                events,
+                owner,
+                None,
+                EventKind::Log {
+                    message: message(format!(
+                        "DA callback master quality HRESULT {:#x}, master error HRESULT {:#x}",
+                        fact.master_quality, fact.value.service_result
+                    )),
+                },
+            );
         }
-        let Some(key) = registrations.get(&fact.registration) else { continue; };
+        let Some(key) = registrations.get(&fact.registration) else {
+            continue;
+        };
         let value = if fact.adapter_result < 0 {
-            DataValue::bad(message(format!("DA callback adapter HRESULT {:#x}, service {:#x}, item {:#x}, quality {:#x}, FILETIME {:08x}:{:08x}, VT {:#x}",
-                fact.adapter_result, fact.value.service_result, fact.value.item_result, fact.value.quality,
-                fact.value.filetime_high, fact.value.filetime_low, fact.value.vartype)))
+            DataValue::bad(message(format!(
+                "DA callback adapter HRESULT {:#x}, service {:#x}, item {:#x}, quality {:#x}, FILETIME {:08x}:{:08x}, VT {:#x}",
+                fact.adapter_result,
+                fact.value.service_result,
+                fact.value.item_result,
+                fact.value.quality,
+                fact.value.filetime_high,
+                fact.value.filetime_low,
+                fact.value.vartype
+            )))
         } else {
             super::softing_scalar::decode((fact.value, fact.text)).unwrap_or_else(DataValue::bad)
         };
         values.push((*key, value));
     }
     if !values.is_empty() {
-        let _ = events.send(Event { origin: super::model::Origin::Session(epoch), owner,
-                                    kind: EventKind::Values { values } });
+        let _ = events.send(Event {
+            origin: super::model::Origin::Session(epoch),
+            owner,
+            kind: EventKind::Values { values },
+        });
     }
     Ok(())
 }
 impl DaHost for NativeHost {
     fn run_discovery(&self, command: Command, events: &Sender<Event>) {
         let CommandKind::Discover { host } = &command.kind else {
-            failure(events, &command, command.kind.operation(), BackendMsg::NoConnection);
+            failure(
+                events,
+                &command,
+                command.kind.operation(),
+                BackendMsg::NoConnection,
+            );
             return;
         };
         match self.sdk.discover(host) {
@@ -216,26 +279,62 @@ impl DaHost for NativeHost {
                 let mut servers = Vec::with_capacity(records.len());
                 let mut missing_description = false;
                 {
-                    let mut cache = self.discovered.lock().unwrap_or_else(PoisonError::into_inner);
+                    let mut cache = self
+                        .discovered
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
                     for record in records {
                         cache.remember(host, &record.progid, guid_to_u128(record.clsid));
                         missing_description |= record.description_missing;
-                        servers.push(super::model::ServerEntry { id: record.progid, description: record.description });
+                        servers.push(super::model::ServerEntry {
+                            id: record.progid,
+                            description: record.description,
+                        });
                     }
                 }
-                send(events, command.owner, command.request_id, EventKind::Servers { host: host.clone(), servers });
+                send(
+                    events,
+                    command.owner,
+                    command.request_id,
+                    EventKind::Servers {
+                        host: host.clone(),
+                        servers,
+                    },
+                );
                 if fallback {
-                    send(events, command.owner, None, EventKind::Log { message: message(
-                        "DA discovery used the SDK's local DA 1 registry fallback; newer-only servers may be absent") });
+                    send(
+                        events,
+                        command.owner,
+                        None,
+                        EventKind::Log {
+                            message: message(
+                                "DA discovery used the SDK's local DA 1 registry fallback; newer-only servers may be absent",
+                            ),
+                        },
+                    );
                 }
                 if missing_description {
-                    send(events, command.owner, None, EventKind::Log { message: message(
-                        "DA discovery returned one or more servers without a description") });
+                    send(
+                        events,
+                        command.owner,
+                        None,
+                        EventKind::Log {
+                            message: message(
+                                "DA discovery returned one or more servers without a description",
+                            ),
+                        },
+                    );
                 }
             }
-            Err(error) => failure(events, &command, Operation::Discover, BackendMsg::DaServerListHostUnavailable {
-                host: host.clone(), detail: format!("{error:?}"),
-            }),
+            Err(error) => failure(
+                events,
+                &command,
+                Operation::Discover,
+                BackendMsg::DaServerListHostUnavailable {
+                    host: host.clone(),
+                    detail: format!("{error:?}"),
+                },
+            ),
         }
     }
     fn run_session(
@@ -251,20 +350,37 @@ impl DaHost for NativeHost {
         loop {
             if let (Some(epoch), Some(s)) = (subscription_epoch, session.as_mut()) {
                 if let Err(error) = drain_push(s, &registrations, id.into(), epoch, events) {
-                    send(events, id.into(), None, EventKind::Log { message: message(format!("DA callback queue: {error:?}")) });
-                    let _ = events.send(Event { origin: super::model::Origin::Session(epoch), owner: id.into(),
-                        kind: EventKind::SubscriptionState { state: super::model::SubscriptionState::Failed } });
+                    send(
+                        events,
+                        id.into(),
+                        None,
+                        EventKind::Log {
+                            message: message(format!("DA callback queue: {error:?}")),
+                        },
+                    );
+                    let _ = events.send(Event {
+                        origin: super::model::Origin::Session(epoch),
+                        owner: id.into(),
+                        kind: EventKind::SubscriptionState {
+                            state: super::model::SubscriptionState::Failed,
+                        },
+                    });
                     subscription_epoch = None;
                 }
             }
             let command = if subscription_epoch.is_some() {
                 match commands.try_recv() {
                     Ok(command) => command,
-                    Err(TryRecvError::Empty) => { std::thread::sleep(Duration::from_millis(20)); continue; }
+                    Err(TryRecvError::Empty) => {
+                        std::thread::sleep(Duration::from_millis(20));
+                        continue;
+                    }
                     Err(TryRecvError::Disconnected) => break,
                 }
             } else {
-                let Some(command) = commands.blocking_recv() else { break; };
+                let Some(command) = commands.blocking_recv() else {
+                    break;
+                };
                 command
             };
             if command.owner != id.into() {
@@ -279,32 +395,64 @@ impl DaHost for NativeHost {
             match &command.kind {
                 CommandKind::Connect { endpoint } => {
                     let profile = endpoint.acquisition.as_ref();
-                    let subscription = profile.is_some_and(|p| p.update_mode == super::model::UpdateMode::Subscription);
+                    let subscription = profile
+                        .is_some_and(|p| p.update_mode == super::model::UpdateMode::Subscription);
                     let interval = profile.map(|p| p.interval_ms).unwrap_or(1000);
                     let epoch = if subscription { request_id } else { None };
                     let result = if subscription && epoch.is_none() {
-                        Err(message("DA subscription requires a Connect request identity"))
+                        Err(message(
+                            "DA subscription requires a Connect request identity",
+                        ))
                     } else {
-                        u32::try_from(interval).map_err(|_| message("DA update interval out of range"))
-                            .and_then(|interval_ms| guid(&endpoint.address)
-                                .map(Ok)
-                                .unwrap_or_else(|| resolve_clsid(&endpoint.host, &endpoint.address,
-                                    &mut NativeClsidLookup { host: self }).map(guid_from_u128))
-                                .and_then(|clsid| self.sdk.open_config("", &endpoint.host, &clsid,
-                                    subscription, interval_ms)
-                                    .map_err(|e| message(format!("DA connect: {e:?}")))))
+                        u32::try_from(interval)
+                            .map_err(|_| message("DA update interval out of range"))
+                            .and_then(|interval_ms| {
+                                guid(&endpoint.address)
+                                    .map(Ok)
+                                    .unwrap_or_else(|| {
+                                        resolve_clsid(
+                                            &endpoint.host,
+                                            &endpoint.address,
+                                            &mut NativeClsidLookup { host: self },
+                                        )
+                                        .map(guid_from_u128)
+                                    })
+                                    .and_then(|clsid| {
+                                        self.sdk
+                                            .open_config(
+                                                "",
+                                                &endpoint.host,
+                                                &clsid,
+                                                subscription,
+                                                interval_ms,
+                                            )
+                                            .map_err(|e| message(format!("DA connect: {e:?}")))
+                                    })
+                            })
                     };
                     match result {
                         Ok((open, revised)) => {
                             session = Some(open);
-                            send(events, owner, request_id, EventKind::Connected {
-                                endpoint: endpoint.clone(),
-                                info: message(format!("DA connected; revised update rate {revised} ms")),
-                            });
+                            send(
+                                events,
+                                owner,
+                                request_id,
+                                EventKind::Connected {
+                                    endpoint: endpoint.clone(),
+                                    info: message(format!(
+                                        "DA connected; revised update rate {revised} ms"
+                                    )),
+                                },
+                            );
                             if let Some(epoch) = epoch {
                                 subscription_epoch = Some(epoch);
-                                let _ = events.send(Event { origin: super::model::Origin::Session(epoch), owner,
-                                    kind: EventKind::SubscriptionState { state: super::model::SubscriptionState::Active } });
+                                let _ = events.send(Event {
+                                    origin: super::model::Origin::Session(epoch),
+                                    owner,
+                                    kind: EventKind::SubscriptionState {
+                                        state: super::model::SubscriptionState::Active,
+                                    },
+                                });
                             }
                         }
                         Err(error) => {
@@ -401,40 +549,81 @@ impl DaHost for NativeHost {
                         (None, _) => Err(BackendMsg::NoConnection),
                         (_, None) => Err(BackendMsg::SignalNotSubscribed),
                         (Some(s), Some(reg)) => match (&request.value, request.type_hint) {
-                            (super::model::Value::Bytes(_) | super::model::Value::Array(_), hint) =>
-                                super::softing_scalar::encode_array(&request.value, hint.map(|v| v.0))
-                                    .map(|(vt, bytes)| write_outcome(s.write_array(*reg, vt, &bytes))),
-                            (value, Some(hint)) if hint.0 & 0x2000 != 0 =>
-                                super::softing_scalar::encode_array(value, Some(hint.0))
-                                    .map(|(vt, bytes)| write_outcome(s.write_array(*reg, vt, &bytes))),
-                            (value, hint) if hint.is_some_and(|v| v.0 == 8) ||
-                                (hint.is_none() && matches!(value, super::model::Value::Str(_) | super::model::Value::NodeId(_) |
-                                    super::model::Value::QualifiedName { .. } | super::model::Value::LocalizedText { .. })) => {
-                                let text = match value { super::model::Value::Str(text) => text.clone(), other => other.to_string() };
+                            (
+                                super::model::Value::Bytes(_) | super::model::Value::Array(_),
+                                hint,
+                            ) => super::softing_scalar::encode_array(
+                                &request.value,
+                                hint.map(|v| v.0),
+                            )
+                            .map(|(vt, bytes)| write_outcome(s.write_array(*reg, vt, &bytes))),
+                            (value, Some(hint)) if hint.0 & 0x2000 != 0 => {
+                                super::softing_scalar::encode_array(value, Some(hint.0)).map(
+                                    |(vt, bytes)| write_outcome(s.write_array(*reg, vt, &bytes)),
+                                )
+                            }
+                            (value, hint)
+                                if hint.is_some_and(|v| v.0 == 8)
+                                    || (hint.is_none()
+                                        && matches!(
+                                            value,
+                                            super::model::Value::Str(_)
+                                                | super::model::Value::NodeId(_)
+                                                | super::model::Value::QualifiedName { .. }
+                                                | super::model::Value::LocalizedText { .. }
+                                        )) =>
+                            {
+                                let text = match value {
+                                    super::model::Value::Str(text) => text.clone(),
+                                    other => other.to_string(),
+                                };
                                 if text.contains('\0') || text.len() > 65_536 {
                                     Err(message("DA string contains NUL or exceeds the SDK limit"))
                                 } else {
                                     Ok(write_outcome(s.write_text(*reg, &text)))
                                 }
                             }
-                            _ => super::softing_scalar::encode(&request.value, request.type_hint.map(|v| v.0))
-                                .map(|(vt, bits)| write_outcome(s.write_scalar(*reg, vt, bits))),
+                            _ => super::softing_scalar::encode(
+                                &request.value,
+                                request.type_hint.map(|v| v.0),
+                            )
+                            .map(|(vt, bits)| write_outcome(s.write_scalar(*reg, vt, bits))),
                         },
                     };
                     send(events, owner, request_id, EventKind::Wrote { key, result });
                 }
                 CommandKind::Browse { node_id, .. } => {
-                    let result = session.as_mut().ok_or(BackendMsg::NoConnection).and_then(|s| {
-                        s.browse(node_id).map_err(|e| message(format!("DA browse: {e:?}")))
-                    });
+                    let result = session
+                        .as_mut()
+                        .ok_or(BackendMsg::NoConnection)
+                        .and_then(|s| {
+                            s.browse(node_id)
+                                .map_err(|e| message(format!("DA browse: {e:?}")))
+                        });
                     match result {
                         Ok(entries) => {
-                            let children = entries.into_iter().map(|entry| super::model::BrowseNode {
-                                node_id: entry.node_id, name: entry.name,
-                                kind: if entry.is_branch { super::model::NodeKind::Branch } else { super::model::NodeKind::Item },
-                                has_children: entry.is_branch,
-                            }).collect();
-                            send(events, owner, request_id, EventKind::Browse { node_id: node_id.clone(), children });
+                            let children = entries
+                                .into_iter()
+                                .map(|entry| super::model::BrowseNode {
+                                    node_id: entry.node_id,
+                                    name: entry.name,
+                                    kind: if entry.is_branch {
+                                        super::model::NodeKind::Branch
+                                    } else {
+                                        super::model::NodeKind::Item
+                                    },
+                                    has_children: entry.is_branch,
+                                })
+                                .collect();
+                            send(
+                                events,
+                                owner,
+                                request_id,
+                                EventKind::Browse {
+                                    node_id: node_id.clone(),
+                                    children,
+                                },
+                            );
                         }
                         Err(error) => failure(events, &command, Operation::Browse, error),
                     }
@@ -478,7 +667,10 @@ pub(crate) fn spawn(events: Sender<Event>) -> super::WorkerHandle {
         .spawn(move || {
             let outcome = match acquire_host() {
                 Ok(sdk) => run_router(
-                    Arc::new(NativeHost { sdk, discovered: Mutex::new(DiscoveredClsids::default()) }),
+                    Arc::new(NativeHost {
+                        sdk,
+                        discovered: Mutex::new(DiscoveredClsids::default()),
+                    }),
                     rx,
                     events.clone(),
                     SESSION_JOIN_BUDGET,
@@ -539,16 +731,31 @@ mod tests {
         };
         let recv = || loop {
             let event = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-            if matches!(event.origin, super::super::model::Origin::Reply(_)) { break event.kind; }
+            if matches!(event.origin, super::super::model::Origin::Reply(_)) {
+                break event.kind;
+            }
         };
-        cmd.send(Command { protocol: Protocol::OpcDa, owner: Owner::Discovery,
-            request_id: Some(RequestId::FIRST), kind: CommandKind::Discover { host: "localhost".into() } }).unwrap();
-        assert!(matches!(recv(), EventKind::Servers { servers, .. } if servers.len() == 1 && servers[0].id == "OPCLook.NativeDaFixture.1"));
+        cmd.send(Command {
+            protocol: Protocol::OpcDa,
+            owner: Owner::Discovery,
+            request_id: Some(RequestId::FIRST),
+            kind: CommandKind::Discover {
+                host: "localhost".into(),
+            },
+        })
+        .unwrap();
+        assert!(
+            matches!(recv(), EventKind::Servers { servers, .. } if servers.len() == 1 && servers[0].id == "OPCLook.NativeDaFixture.1")
+        );
         send(CommandKind::Connect {
             endpoint: EndpointSpec::da("localhost", "OPCLook.NativeDaFixture.1"),
         });
         assert!(matches!(recv(), EventKind::Connected { .. }));
-        send(CommandKind::Browse { node_id: String::new(), filter: super::super::model::NodeClassFilter::All, view_id: None });
+        send(CommandKind::Browse {
+            node_id: String::new(),
+            filter: super::super::model::NodeClassFilter::All,
+            view_id: None,
+        });
         let branch = match recv() {
             EventKind::Browse { children, .. } => {
                 assert_eq!(children.len(), 1);
@@ -557,8 +764,14 @@ mod tests {
             }
             other => panic!("unexpected browse: {other:?}"),
         };
-        send(CommandKind::Browse { node_id: branch, filter: super::super::model::NodeClassFilter::All, view_id: None });
-        assert!(matches!(recv(), EventKind::Browse { children, .. } if children.len() == 1 && children[0].node_id == "Fixture.Value"));
+        send(CommandKind::Browse {
+            node_id: branch,
+            filter: super::super::model::NodeClassFilter::All,
+            view_id: None,
+        });
+        assert!(
+            matches!(recv(), EventKind::Browse { children, .. } if children.len() == 1 && children[0].node_id == "Fixture.Value")
+        );
         send(CommandKind::AddItems {
             items: vec![ItemSpec {
                 key: ItemKey::FIRST,
@@ -599,10 +812,17 @@ mod tests {
     }
     #[test]
     fn subscription_discards_retired_registration_and_reports_overflow() {
-        let guid = Guid { data1: 1, data2: 2, data3: 3, data4: [0; 8] };
+        let guid = Guid {
+            data1: 1,
+            data2: 2,
+            data3: 3,
+            data4: [0; 8],
+        };
         let host = Host::new().unwrap();
         let shared = host.shared();
-        let (mut session, _) = shared.open_config("server", "localhost", &guid, true, 100).unwrap();
+        let (mut session, _) = shared
+            .open_config("server", "localhost", &guid, true, 100)
+            .unwrap();
         let old = session.add("Fixture.Value").unwrap().0;
         session.inject_mock_push(old, 10, false);
         session.remove(old).unwrap();
@@ -612,14 +832,24 @@ mod tests {
         registrations.insert(fresh, ItemKey::FIRST);
         let (tx, rx) = std::sync::mpsc::channel();
         let epoch = RequestId::new(7).unwrap();
-        drain_push(&mut session, &registrations, Owner::Session(SessionId::FIRST), epoch, &tx).unwrap();
+        drain_push(
+            &mut session,
+            &registrations,
+            Owner::Session(SessionId::FIRST),
+            epoch,
+            &tx,
+        )
+        .unwrap();
         assert!(matches!(rx.recv().unwrap().kind, EventKind::Log { .. }));
         let event = rx.recv().unwrap();
         assert_eq!(event.origin, super::super::model::Origin::Session(epoch));
-        assert!(matches!(event.kind, EventKind::Values { values } if values.len() == 1 &&
-            values[0].0 == ItemKey::FIRST && values[0].1.value == Value::I64(20)));
+        assert!(
+            matches!(event.kind, EventKind::Values { values } if values.len() == 1 &&
+            values[0].0 == ItemKey::FIRST && values[0].1.value == Value::I64(20))
+        );
         assert!(rx.try_recv().is_err());
-        session.close().unwrap(); drop(shared); host.close().unwrap();
+        session.close().unwrap();
+        drop(shared);
+        host.close().unwrap();
     }
-
 }
