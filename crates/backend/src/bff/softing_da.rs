@@ -23,6 +23,20 @@ enum HostRequest {
     Acquire(AcquireReply),
     Finish(Sender<Result<(), String>>),
 }
+// Feature-gated observations only; this does not retain a host or create sessions.
+#[cfg(feature = "native-da-test-hooks")]
+static HOST_ACQUISITIONS: Mutex<(Option<usize>, usize, bool)> = Mutex::new((None, 0, true));
+
+/// Snapshot actual manager acquisitions in this test process, in manager order.
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_host_acquisitions() -> (usize, bool) {
+    let state = HOST_ACQUISITIONS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    (state.1, state.2)
+}
+
 static HOST_MANAGER: OnceLock<Result<Sender<HostRequest>, String>> = OnceLock::new();
 fn manager() -> Result<Sender<HostRequest>, String> {
     HOST_MANAGER
@@ -48,6 +62,19 @@ fn manager() -> Result<Sender<HostRequest>, String> {
                                     .as_ref()
                                     .map(Host::shared)
                                     .ok_or_else(|| "SDK owner unavailable".to_string());
+                                #[cfg(feature = "native-da-test-hooks")]
+                                if let Ok(ref shared) = result {
+                                    let mut state = HOST_ACQUISITIONS
+                                        .lock()
+                                        .unwrap_or_else(PoisonError::into_inner);
+                                    let identity = shared.test_identity();
+                                    if let Some(first) = state.0 {
+                                        state.2 &= first == identity;
+                                    } else {
+                                        state.0 = Some(identity);
+                                    }
+                                    state.1 = state.1.saturating_add(1);
+                                }
                                 let _ = reply.send(result);
                             }
                             HostRequest::Finish(reply) => {
@@ -805,11 +832,18 @@ mod tests {
     }
     #[test]
     fn preview_contract_connect_add_read_write_remove() {
+        #[cfg(feature = "native-da-test-hooks")]
+        let before = test_host_acquisitions().0;
         let first_host = acquire_host().unwrap();
         let retained = first_host.clone();
         drop(first_host);
         let reused = acquire_host().unwrap();
         assert!(retained.same_host(&reused));
+        #[cfg(feature = "native-da-test-hooks")]
+        {
+            let (count, all_same) = test_host_acquisitions();
+            assert!(count >= before + 2 && all_same);
+        }
         drop(retained);
         drop(reused);
         let (tx, rx) = std::sync::mpsc::channel();

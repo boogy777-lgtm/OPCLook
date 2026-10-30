@@ -304,6 +304,11 @@ impl Drop for Host {
     }
 }
 impl SharedHost {
+    /// Test instrumentation: identity of the Arc actually handed to a Gateway.
+    #[cfg(feature = "native-da-test-hooks")]
+    pub fn test_identity(&self) -> usize {
+        Arc::as_ptr(&self.core) as usize
+    }
     #[cfg(test)]
     pub fn same_host(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.core, &other.core)

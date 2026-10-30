@@ -7,6 +7,7 @@ license = "MIT"
 
 [features]
 native-da-preview = []
+native-da-test-hooks = ["native-da-preview"]
 
 [dependencies]
 opclook-contract = { path = "../contract" }
