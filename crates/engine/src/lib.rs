@@ -915,8 +915,8 @@ impl<C> Engine<C> {
                 EventKind::Error {
                     operation: Operation::Read,
                     ..
-                } if correlated_read => view.read_in_flight = false,
-                EventKind::Values { .. } if correlated_read => view.read_in_flight = false,
+                } if correlated_read => view.read_in_flight = read_pending,
+                EventKind::Values { .. } if correlated_read => view.read_in_flight = read_pending,
                 EventKind::SubscriptionState { state } => {
                     view.subscription = *state;
                     if *state == SubscriptionState::Active && !read_pending {
@@ -2266,6 +2266,72 @@ mod tests {
                 })
                 .is_ok()
         );
+    }
+    #[test]
+    fn completing_one_of_two_reads_keeps_poll_blocked() {
+        for first_is_error in [false, true] {
+            let now = Instant::now();
+            let mut engine = Engine::<()>::default();
+            engine.test_skip_dispatch = true;
+            let mut view = SessionRuntime::new(EndpointSpec::ua("opc.tcp://127.0.0.1:4840"), now);
+            view.state = SessionState::Connected;
+            view.items.insert(ItemKey::FIRST, false);
+            engine.sessions.insert(sid(1), view);
+            let first = engine
+                .send(
+                    sid(1),
+                    Protocol::OpcUa,
+                    CommandKind::Read {
+                        keys: vec![ItemKey::FIRST],
+                    },
+                    (),
+                )
+                .unwrap();
+            let second = engine
+                .send(
+                    sid(1),
+                    Protocol::OpcUa,
+                    CommandKind::Read {
+                        keys: vec![ItemKey::FIRST],
+                    },
+                    (),
+                )
+                .unwrap();
+            let kind = if first_is_error {
+                EventKind::Error {
+                    operation: Operation::Read,
+                    message: BackendMsg::raw("read failed"),
+                }
+            } else {
+                EventKind::Values { values: vec![] }
+            };
+            engine
+                .accept(&Event {
+                    owner: owner(1),
+                    origin: Origin::Reply(first),
+                    kind,
+                })
+                .unwrap();
+            assert!(engine.has_pending(sid(1), second));
+            assert!(
+                engine
+                    .due(now + Duration::from_secs(10), Duration::from_secs(1), None)
+                    .is_empty()
+            );
+            engine
+                .accept(&Event {
+                    owner: owner(1),
+                    origin: Origin::Reply(second),
+                    kind: EventKind::Values { values: vec![] },
+                })
+                .unwrap();
+            assert!(matches!(
+                engine
+                    .due(now + Duration::from_secs(10), Duration::from_secs(1), None)
+                    .as_slice(),
+                [Due::Read { .. }]
+            ));
+        }
     }
     #[test]
     fn unsolicited_push_does_not_release_pending_read() {
