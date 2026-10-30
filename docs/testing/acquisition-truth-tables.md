@@ -379,3 +379,19 @@ transaction не превращать в unsolicited value ради прохож
 
 Проверка исходного документационного коммита была ограничена данными CSV и документацией.
 128+128 — число строк данных, не число пройденных тестов продукта.
+
+### N2.1 offline Softing fact boundary (partial; CI pending)
+
+| ID | Case | Adapter expectation | Evidence / limit |
+| --- | --- | --- | --- |
+| N2F01 | Callback containing invalid SDK handle before valid item | Patched SDK supplies aligned per-item HRESULT; C ABI copies valid client handle, mode, transaction, master statuses, quality and FILETIME | Win32 fixture calls real SDK callback, C ABI, then Rust `adapt` via serialized test output; exact-head CI pending |
+| N2F02 | Failed item HRESULT with Good quality | `Failed`, raw HRESULT/quality retained separately; never a usable value | Rust actual adapter test; not yet an Engine terminal event |
+| N2F03 | Unknown VT including ARRAY/BYREF | `UnsupportedType`, raw VT retained; no Empty/Good value | Rust actual adapter test |
+| N2F04 | Zero FILETIME, one tick, max | Raw ticks retained; zero maps to no timestamp, one tick converts with 100 ns precision, max is representable by chrono | Rust actual adapter and existing time tests |
+| N2F05 | Empty callback with failed master status | Empty batch and envelope retained; previous facts are inaccessible | Win32 fixture calls group adapter directly for this edge; exact-head CI pending |
+| N2F06 | 64 accepted; too many entries, null required arrays or invalid identity | 64 facts accepted; explicit overflow/invalid, no partial batch or stale facts; Rust handle/mode errors are typed | Win32 fixture / Rust actual adapter test; SDK callback inputs beyond SDK validation remain untrusted |
+| N2F07 | Failed master error with positive item HRESULT and Good quality | `BatchFailed`, both raw statuses and quality retained; no usable value | Rust actual adapter test |
+
+The 64-item limit applies after the SDK has received and prepared the callback; it does not bound SDK-side allocations. Buffer holds only the latest callback and requires external serialization; it is
+not a queue or history, is not wired to the production backend, and cannot prove
+live delivery, transaction correlation, teardown or two-session isolation.

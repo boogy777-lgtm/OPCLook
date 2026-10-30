@@ -2,6 +2,13 @@
 #include <cstdio>
 #include <cstring>
 #include <type_traits>
+#include "adapter.hpp"
+#include <cstddef>
+static_assert(sizeof(OpclDaFact) == 24 && offsetof(OpclDaFact, client_handle) == 0 &&
+              offsetof(OpclDaFact, hresult) == 4 && offsetof(OpclDaFact, filetime_low) == 8 &&
+              offsetof(OpclDaFact, filetime_high) == 12 && offsetof(OpclDaFact, i4) == 16 &&
+              offsetof(OpclDaFact, quality) == 20 && offsetof(OpclDaFact, vartype) == 22 &&
+              sizeof(OpclDaEnvelope) == 16 && offsetof(OpclDaEnvelope, master_error) == 12, "ABI layout");
 
 // SDK's sample host supplies this C++ hook for Win32 resource lookup.
 // The probe executable does not include the sample's message resource table.
@@ -41,6 +48,70 @@ public:
     ~ProbeCallback() override { m_established = FALSE; }
     using SODaCDataCallback::handleReadAdvise;
 };
+static int adapter_test() {
+    OpclDaGroup* group = new OpclDaGroup;
+    SODaCItem* item = group->addItem(_T("N2.offline"));
+    if (!item) { group->release(); return 20; }
+    const OPCHANDLE valid = item->getClientHandle();
+    OPCHANDLE handles[] = {0, valid};
+    VARIANT values[2]; VariantInit(&values[0]); VariantInit(&values[1]);
+    values[1].vt = VT_I4; values[1].lVal = -42;
+    WORD qualities[] = {0, 0xc0};
+    FILETIME times[] = {{0, 0}, {1, 0}};
+    HRESULT errors[] = {E_INVALIDARG, static_cast<HRESULT>(7)};
+    bool ok = valid != 0;
+    {
+        ProbeCallback callback(group);
+        ok = ok && SUCCEEDED(callback.handleReadAdvise(0, 42, group->getOpcHandle(), S_OK, S_OK,
+                                                       2, handles, values, qualities, times, errors));
+        OpclDaFact fact{}; OpclDaEnvelope envelope{}; uint32_t count = 99;
+        ok = ok && opcl_da_copy_facts(group, &envelope, &fact, 1, &count) == OPCL_DA_OK && count == 1 &&
+             envelope.mode == 0 && envelope.transaction == 42 && envelope.master_quality == S_OK && envelope.master_error == S_OK &&
+             fact.client_handle == valid && fact.hresult == 7 && fact.quality == 0xc0 &&
+             fact.filetime_low == 1 && fact.filetime_high == 0 && fact.vartype == VT_I4 && fact.i4 == -42;
+        std::printf("N2_FACT %u %u %d %d %u %d %u %u %d %u %u\n", envelope.mode, envelope.transaction, envelope.master_quality, envelope.master_error, fact.client_handle, fact.hresult, fact.filetime_low, fact.filetime_high, fact.i4, fact.quality, fact.vartype);
+        count = 99;
+        ok = ok && opcl_da_copy_facts(group, &envelope, &fact, 0, &count) == OPCL_DA_OVERFLOW && count == 0;
+        count = 99;
+        ok = ok && opcl_da_copy_facts(group, &envelope, nullptr, 1, &count) == OPCL_DA_INVALID && count == 0;
+        ok = ok && opcl_da_copy_facts(nullptr, &envelope, &fact, 1, &count) == OPCL_DA_INVALID;
+        ok = ok && opcl_da_copy_facts(group, &envelope, &fact, 1, nullptr) == OPCL_DA_INVALID;
+        values[1].vt = VT_EMPTY;
+        errors[1] = E_FAIL;
+        ok = ok && SUCCEEDED(callback.handleReadAdvise(1, 42, group->getOpcHandle(), S_OK, S_OK,
+                                                       2, handles, values, qualities, times, errors));
+        ok = ok && opcl_da_copy_facts(group, &envelope, &fact, 1, &count) == OPCL_DA_OK && count == 1 &&
+             fact.hresult == E_FAIL && fact.vartype == VT_EMPTY && fact.quality == 0xc0;
+        SODaCItem* batch_items[OPCL_DA_MAX_FACTS]{};
+        SOCmnVariant batch_values[OPCL_DA_MAX_FACTS];
+        WORD batch_qualities[OPCL_DA_MAX_FACTS]{};
+        SOCmnDateTime batch_times[OPCL_DA_MAX_FACTS];
+        HRESULT batch_errors[OPCL_DA_MAX_FACTS]{};
+        for (uint32_t i = 0; i < OPCL_DA_MAX_FACTS; ++i) {
+            batch_items[i] = item;
+            batch_values[i].vt = VT_I4;
+            batch_values[i].lVal = static_cast<LONG>(i);
+        }
+        group->onReadAdvise(0, 77, S_OK, S_OK, OPCL_DA_MAX_FACTS, batch_items, batch_values,
+                            batch_qualities, batch_times, batch_errors);
+        OpclDaFact batch[OPCL_DA_MAX_FACTS]{};
+        ok = ok && opcl_da_copy_facts(group, &envelope, batch, OPCL_DA_MAX_FACTS, &count) == OPCL_DA_OK &&
+             count == OPCL_DA_MAX_FACTS && envelope.transaction == 77 && batch[63].i4 == 63;
+        group->onReadAdvise(1, 99, E_FAIL, E_INVALIDARG, 0, nullptr, nullptr, nullptr, nullptr, nullptr);
+        ok = ok && opcl_da_copy_facts(group, &envelope, nullptr, 0, &count) == OPCL_DA_OK && count == 0 &&
+             envelope.mode == 1 && envelope.transaction == 99 && envelope.master_quality == E_FAIL && envelope.master_error == E_INVALIDARG;
+        group->onReadAdvise(0, 0, S_OK, S_OK, OPCL_DA_MAX_FACTS + 1, nullptr, nullptr, nullptr, nullptr, nullptr);
+        ok = ok && opcl_da_copy_facts(group, &envelope, &fact, 1, &count) == OPCL_DA_OVERFLOW && count == 0;
+        group->onReadAdvise(0, 77, S_OK, S_OK, OPCL_DA_MAX_FACTS, batch_items, batch_values,
+                            batch_qualities, batch_times, batch_errors);
+        group->onReadAdvise(0, 0, S_OK, S_OK, 1, nullptr, nullptr, nullptr, nullptr, nullptr);
+        ok = ok && opcl_da_copy_facts(group, &envelope, &fact, 1, &count) == OPCL_DA_INVALID && count == 0;
+    }
+    VariantClear(&values[0]); VariantClear(&values[1]);
+    item->release(); group->release();
+    std::printf("N2 adapter callback/ABI: %s\n", ok ? "PASS" : "FAIL");
+    return ok ? 0 : 21;
+}
 static void phase(const char* name) {
     std::printf("phase: %s\n", name);
     std::fflush(stdout);
@@ -70,7 +141,7 @@ static int run_callbacks() {
         for (HRESULT valid_status : valid_statuses) {
             HRESULT errors[] = {E_INVALIDARG, valid_status};
             for (BYTE mode = 0; mode < 2; ++mode) {
-                phase(mode == 0 ? "read-data-change" : "read-complete");
+                phase(mode == 0 ? "read-complete" : "read-data-change");
                 HRESULT call = callback.handleReadAdvise(mode, 42, group->getOpcHandle(), S_OK, S_OK,
                                                          2, handles, values, qualities, times, errors);
                 read_setup = read_setup && SUCCEEDED(call) && group->read_count == 1 && group->read_item == item &&
@@ -113,6 +184,7 @@ int main(int argc, char** argv) {
             if (entry->initialize(COINIT_MULTITHREADED)) {
                 phase("callbacks");
                 result = run_callbacks();
+                if (!baseline && result == 3 && adapter_test() != 0) result = 21;
             }
             phase("disconnect");
             entry->disconnect();

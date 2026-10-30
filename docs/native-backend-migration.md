@@ -129,3 +129,10 @@ Production paths UA и DA используют native SDK. В OPCLook не ос�
 Общие политики и контракт не разветвлены по именам библиотек.
 Проверки O30–O35 и остальные затронутые строки пройдены на реальных entry points;
 физические Windows/DA ограничения перечислены честно.
+
+### N2.1 частичный offline срез
+
+Добавлена граница SDK callback → ограниченный C ABI snapshot → Rust contract
+mapping VT_I4. Empty callback сохраняет envelope; сырой per-item HRESULT ещё
+не связан с terminal Event. Последний callback не является очередью. Реальное
+FFI wiring, session identity и live interop не доказаны; N2/N3/N4 открыты.

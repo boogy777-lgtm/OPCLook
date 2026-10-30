@@ -1,5 +1,23 @@
 # Текущий статус
 
+## 2026-10-30 — N2.1 offline callback fact adapter (частично)
+
+Добавлен ограниченный adapter direct Softing core: callback → C ABI snapshot →
+Rust mapping в существующий `DataValue` для VT_I4. Envelope сохраняет mode,
+transaction и оба master HRESULT даже для пустого callback; per-item HRESULT,
+quality, FILETIME и VT сохраняются отдельно. Failed master/item HRESULT и неизвестный тип
+не становятся значением; неверная identity даёт типизированную ошибку. Последний
+callback перезаписывается; snapshot требует внешней сериализации и не является
+очередью. Результаты не подключены к Engine/production DA; read HRESULT пока
+не передаётся в общий Event. Session/registration identity, live I/O, callbacks
+при teardown, полное покрытие типов и license closure остаются открыты.
+
+Локально измерено: Linux stand компилирует реальные Rust файлы и проходит 3 теста;
+`cargo fmt --all -- --check` проверяется перед коммитом. Windows C++/SDK и
+сквозной fixture не скомпилированы локально, строгий Win32 CI должен проверить
+точный новый HEAD. Успехи N1 CI к нему не переносятся. N3 live proof обязателен
+до N4; capability production не менялась.
+
 ## 2026-10-30 — N1 Softing native DA feasibility (не миграция)
 
 **Измеренный Win32 SDK gate:** на head `d375f15f4b57837baeec75d1cf3a7c9b843cb96e` [run 41067236324](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41067236324) прошёл все три native jobs. Реальный direct SODaC/SOClt/SOCmn core слинкован; offline callback до patch: `read_setup=1 read_correct=0 write_setup=1 write_correct=0 unchanged=1`; после patch: `1/1/1/1/1`. Оба процесса exit 0 с ожидаемыми результатами и завершили common/entry lifecycle. Win32 Expat namespace/DTD smoke также прошёл. Это не COM advise, late teardown или live DA.

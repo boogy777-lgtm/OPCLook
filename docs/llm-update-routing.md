@@ -5,6 +5,8 @@
 Это входное задание для нового чата. Маршруты направляют к существующим механизмам; текущий частичный runtime срез
 ExplicitRefresh и CLI opt-in WriteReadback описан в status.md. Полный R2 не завершён.
 
+N2.1 добавил offline bounded callback fact adapter (`native/softing-da`, `bff/softing_facts.rs`); это не production backend и не live proof. См. status и N2F01–N2F07 в truth tables (R00/R03/R13). Продолжать с session/registration identity, реального ABI wiring и N3 interop, сохраняя SDK lifecycle owner.
+
 ## 1. Начало работы
 
 1. Прочитай [AGENTS](../AGENTS.md), [status](status.md) и актуальный HEAD.

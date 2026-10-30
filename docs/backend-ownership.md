@@ -122,3 +122,11 @@ patch проверены в [run 41067236324](https://github.com/boogy777-lgtm/O
 этот direct core; DaSession/TBC имеет только header probe, OTB не подключён.
 Real COM advise, late teardown, live I/O, типы, isolation и полная лицензия
 closure ещё не доказаны; production owner не изменён.
+
+### N2.1 offline boundary
+
+SDK по-прежнему владеет callback/VARIANT; `native/softing-da` копирует только
+ограниченный последний callback. Rust адаптер отображает VT_I4 и сохраняет
+raw факты отдельно от DataValue. Это не очередь, runtime binding или второй
+backend; serialization вызывает хост. Identity session/registration и lifecycle
+требуют N3, production ownership не изменён.
