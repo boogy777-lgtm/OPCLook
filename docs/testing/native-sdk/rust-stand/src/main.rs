@@ -3,6 +3,9 @@
 mod filetime;
 #[path = "../../../../../crates/backend/src/bff/softing_facts.rs"]
 mod softing_facts;
+#[cfg(test)]
+#[path = "../../../../../crates/backend/src/bff/softing_runtime.rs"]
+mod softing_runtime;
 use softing_facts::{Envelope, FactValue, RawFact, adapt};
 use std::{error::Error, fs::File, io::Read};
 

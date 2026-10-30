@@ -125,3 +125,6 @@ isolation не доказаны. N2/N3/N4 остаются открытыми.
 
 N2 direct C ABI prototype и strict `core-probe --live` добавлены; он ещё не
 подключён к Engine и не доказывает работу Win32/live, N2/N3/N4 открыты.
+
+SDK C ABI теперь имеет Rust-владельческую обёртку для I4 и strict sdk-live
+fixture executable; они не подключены к Gateway, Win32 link/live pending.

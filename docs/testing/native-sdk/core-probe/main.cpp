@@ -12,9 +12,6 @@ static_assert(sizeof(OpclDaFact) == 24 && offsetof(OpclDaFact, client_handle) ==
               offsetof(OpclDaFact, quality) == 20 && offsetof(OpclDaFact, vartype) == 22 &&
               sizeof(OpclDaEnvelope) == 16 && offsetof(OpclDaEnvelope, master_error) == 12, "ABI layout");
 
-// SDK's sample host supplies this C++ hook for Win32 resource lookup.
-// The probe executable does not include the sample's message resource table.
-HINSTANCE getInstanceHandle() { return ::GetModuleHandle(nullptr); }
 
 static_assert(std::is_same<XML_Char, char>::value, "SDK expects narrow Expat strings");
 using ExpectedExpatStart = void (XMLCALL *)(void*, const char*, const char**);
@@ -218,7 +215,7 @@ static int run_callbacks() {
 }
 int main(int argc, char** argv) {
     phase("start");
-    if (!getInstanceHandle()) return 9;
+    if (!::GetModuleHandle(nullptr)) return 9;
     if (argc == 2 && std::strcmp(argv[1], "--live") == 0) return live_fixture();
     const bool baseline = argc == 2 && std::strcmp(argv[1], "--expect-existing-defect") == 0;
     phase("common-init");

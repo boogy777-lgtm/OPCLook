@@ -28,17 +28,18 @@ file(GLOB client_sources CONFIGURE_DEPENDS "${core}/src/SOClt/*.cpp" "${core}/sr
 add_executable(opcl_da_server server.cpp ${common_sources} ${server_sources}
   "${core}/src/demo/SOServer/SOSAllocHelpers.cpp")
 target_compile_definitions(opcl_da_server PRIVATE SODMS_DA)
+set_source_files_properties("${core}/src/demo/SOServer/SOSAllocHelpers.cpp" PROPERTIES
+  COMPILE_OPTIONS "/FI${CMAKE_CURRENT_SOURCE_DIR}/stdafx.h")
 add_executable(opcl_da_sdk_client client-smoke.cpp ${common_sources} ${client_sources})
 target_compile_definitions(opcl_da_sdk_client PRIVATE OPCL_FIXTURE_CLIENT)
 foreach(target opcl_da_server opcl_da_sdk_client)
   target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
     "${core}/src/include" "${core}/src/opc" "${core}/src/common" "${core}/common"
-    "${core}/src/demo/SOServer")
+    "${core}/src/demo/SOServer" "${core}/src/SOSrv" "${core}/src/SODaS")
   target_compile_definitions(${target} PRIVATE _WINDOWS WIN32 _WIN32_DCOM
     _CRT_SECURE_NO_WARNINGS _CRT_NON_CONFORMING_SWPRINTFS)
   target_compile_options(${target} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W3>
-    $<$<COMPILE_LANGUAGE:CXX>:/Zc:wchar_t-> $<$<COMPILE_LANGUAGE:CXX>:/EHsc>
-    "$<$<COMPILE_LANGUAGE:CXX>:/FI${CMAKE_CURRENT_SOURCE_DIR}/stdafx.h>")
+    $<$<COMPILE_LANGUAGE:CXX>:/Zc:wchar_t-> $<$<COMPILE_LANGUAGE:CXX>:/EHsc>)
   target_link_libraries(${target} PRIVATE fixture_expat ole32 oleaut32 uuid advapi32 ws2_32 mpr rpcrt4)
 endforeach()
 

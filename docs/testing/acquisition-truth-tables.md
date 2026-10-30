@@ -407,3 +407,7 @@ live delivery, transaction correlation, teardown or two-session isolation.
 | N2L04 | Fixture connect, add I4, device read, write, remove/re-add, read | SDK ABI returns raw service/item result and original value/quality/time | `core-probe --live`; Windows fixture/CI pending |
 
 | N2L05 | Read/write с вызывающей thread без COM context | SDK выполняет I/O на своём per-server COM worker, caller context не создаётся | `core-probe --live`; Windows fixture/CI pending |
+
+| N2L06 | Remove/re-add и чужая session registration в Rust ABI wrapper | Старый/чужой ключ отклоняется до native call | Реальный wrapper + mock ABI: Linux stand прошёл; `sdk-live` Win32 pending |
+
+| N2L07 | Owner закрывает host при живой session thread | Busy; native host остаётся живым для завершения зависшей операции | Реальный Rust wrapper + mock ABI, Linux stand прошёл; Windows live pending |

@@ -8,7 +8,7 @@ permissions:
 jobs:
   local-com:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -18,6 +18,9 @@ jobs:
           repository: SoftingIndustrial/OPC-Classic-SDK
           ref: 5130e763998189c822882434c43e6be2eb0174cf
           path: softing-sdk
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: i686-pc-windows-msvc
       - name: Build ready SDK server, client and original IDL RPC proxy
         shell: cmd
         run: |
@@ -30,8 +33,36 @@ jobs:
           if errorlevel 1 exit /b 1
           cmake --build fixture-build --config Release --parallel 2
           if errorlevel 1 exit /b 1
+      - name: Build the reviewed SDK bridge for actual client interop
+        shell: pwsh
+        run: |
+          $env:SOFTING_SDK_ROOT = "${{ github.workspace }}/softing-sdk"
+          cmake -S opclook/docs/testing/native-sdk/core-probe -B softing-build -A Win32 "-DSOFTING_SDK_ROOT=${{ github.workspace }}/softing-sdk"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -c "import pathlib,subprocess; r=pathlib.Path('softing-sdk'); [(r / p).write_bytes(subprocess.check_output(['git','-C',str(r),'cat-file','blob',sha])) for p,sha in [('development/core/src/SODaC/SODaCCallback.cpp','59205bb9b6e32641c966d334589fe355bafe273f'),('development/core/src/SOClt/SOCltEntry.cpp','9e5304ddd9dd7d1131ebdcf5b05c88a0bac6b8ff'),('development/core/src/include/SOCltEntry.h','c2470da726a608e6242285b97d9156bc2885cecc')]]"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python opclook/docs/testing/native-sdk/softing_patch.py softing-sdk
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build softing-build --config Release --target softing_da_bridge softing_core_probe --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Actual cross-process OPC DA Read and Write
         shell: pwsh
         run: |
           python opclook/docs/testing/native-sdk/server-fixture/run-interop.py --server fixture-build/Release/opcl_da_server.exe --proxy fixture-build/Release/opcl_opcproxy.dll -- ./fixture-build/Release/opcl_da_sdk_client.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Actual C ABI client through SDK worker and remove/re-add
+        shell: pwsh
+        run: |
+          python opclook/docs/testing/native-sdk/server-fixture/run-interop.py --server fixture-build/Release/opcl_da_server.exe --proxy fixture-build/Release/opcl_opcproxy.dll -- ./softing-build/Release/softing_core_probe.exe --live
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Actual Rust owner through the linked SDK bridge
+        shell: pwsh
+        working-directory: opclook
+        env:
+          SOFTING_RUNTIME_LIB_DIR: ${{ github.workspace }}/softing-build/Release
+          CARGO_BUILD_JOBS: 1
+          CARGO_PROFILE_DEV_DEBUG: 0
+          CARGO_INCREMENTAL: 0
+        run: |
+          python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- cargo run --locked --manifest-path docs/testing/native-sdk/rust-stand/Cargo.toml --target i686-pc-windows-msvc --features native-live --bin sdk-live
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

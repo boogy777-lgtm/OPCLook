@@ -1072,3 +1072,24 @@ I/O через SDK `SOCltTask` и `executeTask` на per-server SDK worker, ко
 сам инициализирует и балансирует MTA. Строгий fixture вызывает I/O на thread
 без COM context и проверяет, что она остаётся без COM context. Win32 compile
 и live выполнение этого изменения ещё не измерены.
+
+CMake создаёт статическую SDK bridge library; `softing_runtime.rs` оборачивает
+I4 ABI с thread-affine Host, явным close и уникальными регистрациями.
+`rust-stand` компилирует настоящий файл и проверяет с mock ABI отклонение
+удалённой и чужой регистрации; 4 stand tests прошли локально. Отдельный
+`sdk-live` executable предназначен для cross-process fixture и проверяет две
+сессии, повторную регистрацию, read/write и cleanup. Win32 link/run pending;
+обёртка не подключена к Gateway. До N4 нужны реальные типы, Browse/Discover, Subscription и live proof.
+
+Rust host владеется потоком инициализации, `SharedHost` удерживает entry в
+независимых session threads. Entry branch list синхронизирован в SDK; каждая
+Session имеет одного caller. При ещё живых ссылках `close` возвращает Busy и
+не освобождает SDK под зависшей операцией: это намеренная утечка до выхода
+процесса при timeout, а не подтверждённое ограниченное завершение SDK. Локальный
+stand проверяет поток с удерживаемым host после Busy через mock ABI; Windows
+live isolation/teardown остаются открыты.
+
+SDK `executeTask` может вернуть S_FALSE, если task не поставлена; read output
+до dispatch заполняется failed service/item sentinel, поэтому неисполненная
+операция не превращается в успешный ноль. I4 write создаётся через SDK
+SOCmnVariant::setI4. Проверка Windows compile/live ожидается.

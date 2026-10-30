@@ -32,11 +32,13 @@ add_executable(softing_expat_smoke expat-smoke.c)
 target_include_directories(softing_expat_smoke PRIVATE "${core}/src/include")
 target_compile_definitions(softing_expat_smoke PRIVATE XML_STATIC)
 target_link_libraries(softing_expat_smoke PRIVATE softing_expat)
-add_executable(softing_core_probe main.cpp ../../../../native/softing-da/adapter.cpp ../../../../native/softing-da/runtime.cpp ${core_sources})
-target_include_directories(softing_core_probe PRIVATE
+add_library(softing_da_bridge STATIC ../../../../native/softing-da/adapter.cpp ../../../../native/softing-da/runtime.cpp ${core_sources})
+add_executable(softing_core_probe main.cpp)
+target_link_libraries(softing_core_probe PRIVATE softing_da_bridge)
+target_include_directories(softing_da_bridge PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/../../../../native/softing-da" "${core}/src/include" "${core}/src/opc"
   "${core}/src/common" "${core}/common")
-target_compile_definitions(softing_core_probe PRIVATE
+target_compile_definitions(softing_da_bridge PUBLIC
   _WINDOWS WIN32 _WIN32_DCOM _CRT_SECURE_NO_WARNINGS _CRT_NON_CONFORMING_SWPRINTFS)
-target_compile_options(softing_core_probe PRIVATE /W3 /Zc:wchar_t- /EHsc)
-target_link_libraries(softing_core_probe PRIVATE softing_expat ole32 oleaut32 uuid advapi32 ws2_32 mpr rpcrt4)
+target_compile_options(softing_da_bridge PUBLIC /W3 /Zc:wchar_t- /EHsc)
+target_link_libraries(softing_da_bridge PUBLIC softing_expat ole32 oleaut32 uuid advapi32 ws2_32 mpr rpcrt4)

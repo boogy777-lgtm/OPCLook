@@ -6,9 +6,11 @@
 сценарий (connect, add, device read, write, remove/re-add и read). SDK владеет
 COM/VARIANT; sync I/O отправляется на SDK per-server worker, host destroy должен выполняться на той же thread и только после
 завершения сессий. Для Poll group активна с SDK drPolledRefresh, без SDK cyclic
-sync-read; остальные типы, Browse, Discover, подписка и Rust wiring ещё не
-реализованы. Этот прототип не имеет production callers; stale handles пока не
-защищены безопасной Rust-владельческой обёрткой. Windows сборка и live run
+sync-read; остальные типы, Browse, Discover, подписка и production wiring ещё не
+реализованы. Прототип имеет Rust-владельческую обёртку с уникальными регистрациями,
+разделяемым host для session threads и отдельный live binary, но не имеет
+production callers. Локально
+измерено 4 stand tests, включая stale/foreign registration с mock ABI; Windows сборка и live run
 этого HEAD не измерены. N2/N3/N4 открыты.
 
 ## 2026-10-30 — N2 SDK MTA lifecycle defect (проверка Win32 ожидается)

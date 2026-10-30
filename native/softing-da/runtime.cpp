@@ -4,6 +4,9 @@
 #include <new>
 #include <unordered_set>
 
+// The SDK asks its host for this module handle to load resources.
+HINSTANCE getInstanceHandle() { return ::GetModuleHandle(nullptr); }
+
 // All calls to OPC and all VARIANT ownership stay inside the SDK. The ABI
 // initially exposes I4 explicitly; other types must fail, never coerce to I4.
 struct OpclDaHost {
@@ -157,7 +160,7 @@ public:
     WriteI4Task(SODaCGroup* group, SODaCItem* item, int32_t v, int32_t* result)
         : SOCltTask(group), group_(group), item_(item), value_(v), result_(result) {}
     void execute() override {
-        SOCmnVariant value; value.vt = VT_I4; value.lVal = value_;
+        SOCmnVariant value; value.setI4(static_cast<LONG>(value_));
         SODaCItem* items[] = {item_}; HRESULT error = E_FAIL;
         const HRESULT hr = group_->syncWrite(1, items, &value, nullptr, nullptr, &error);
         *result_ = error; setResult(hr);
@@ -172,6 +175,10 @@ extern "C" int32_t opcl_da_read_i4(OpclDaSession* s, OpclDaItem* item, uint32_t 
                                     OpclDaReadI4* out) {
     if (!out) return E_INVALIDARG;
     *out = {};
+    // The SDK can return S_FALSE if a task was not queued. Never let the
+    // untouched output look like a successful zero-valued read.
+    out->service_result = E_FAIL;
+    out->item_result = E_FAIL;
     if (!owns(s, item)) return E_INVALIDARG;
     ReadI4Task* task = new (std::nothrow) ReadI4Task(s->group, item->sdk, max_age, out);
     if (!task) return E_OUTOFMEMORY;
