@@ -7,8 +7,7 @@
 //! This binary contains one test on purpose: it sets `APPDATA` to a sentinel
 //! directory before any other thread exists.
 
-use opclook::app::App;
-use opclook::bff::model::{CommandKind, Owner, Protocol};
+use opclook::app::{App, UaSearch};
 use opclook::i18n::Lang;
 use opclook::settings::{Settings, settings_path};
 use std::path::PathBuf;
@@ -47,18 +46,13 @@ fn headless_tests_use_private_settings_and_pki() {
     let loopback = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("loopback port");
     let port = loopback.local_addr().expect("loopback address").port();
     drop(loopback);
+    app.dialogs.connect.ua_search_host = "127.0.0.1".into();
+    app.dialogs.connect.ua_search_port = port.to_string();
+    app.search_ua_servers();
     assert!(
-        app.send(
-            Owner::Discovery,
-            Protocol::OpcUa,
-            CommandKind::SearchUaServers {
-                host: "127.0.0.1".into(),
-                port,
-                bind: None,
-            },
-        )
-        .is_some(),
-        "loopback discovery command dispatched"
+        matches!(app.dialogs.connect.ua_search, UaSearch::SingleHost { .. }),
+        "loopback discovery command dispatched: {:?}",
+        app.dialogs.connect.error
     );
     let pki = opclook::bff::ua::pki_dir_public();
     assert!(pki.starts_with(std::env::temp_dir()), "{pki:?}");
