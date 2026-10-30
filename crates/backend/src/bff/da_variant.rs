@@ -1051,10 +1051,22 @@ mod tests {
 
     #[test]
     fn roundtrip_vt_date() {
-        let dt = Utc.with_ymd_and_hms(2026, 1, 31, 12, 30, 45).unwrap();
-        roundtrip(7, &Value::DateTime(dt));
-        let dt0 = Utc.timestamp_opt(0, 0).unwrap();
-        roundtrip(7, &Value::DateTime(dt0));
+        for dt in [
+            Utc.with_ymd_and_hms(2026, 1, 31, 12, 30, 45).unwrap(),
+            Utc.timestamp_opt(0, 0).unwrap(),
+        ] {
+            let mut variant = variant_from_value(&Value::DateTime(dt), Some(7)).unwrap();
+            // SAFETY: the test just built this initialized VARIANT.
+            let decoded = unsafe { variant_to_value(&variant) };
+            clear_variant(&mut variant);
+            let Value::DateTime(decoded) = decoded else {
+                panic!("VT_DATE did not decode as a DateTime");
+            };
+            // The binary64 DATE fraction cannot represent every whole second
+            // exactly; at these dates its resolution is below one microsecond.
+            let error = decoded.signed_duration_since(dt).num_nanoseconds().unwrap();
+            assert!(error.abs() <= 1_000, "VT_DATE error: {error} ns");
+        }
     }
 
     #[test]

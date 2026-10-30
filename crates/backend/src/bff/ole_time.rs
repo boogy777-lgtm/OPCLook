@@ -76,6 +76,17 @@ mod tests {
     }
 
     #[test]
+    fn whole_seconds_roundtrip_to_date_precision() {
+        let value = Utc.with_ymd_and_hms(2026, 1, 31, 12, 30, 45).unwrap();
+        let decoded = from_ole_date(to_ole_date(&value).unwrap()).unwrap();
+        let error = decoded
+            .signed_duration_since(value)
+            .num_nanoseconds()
+            .unwrap();
+        assert!(error.abs() <= 1_000, "error={error}ns");
+    }
+
+    #[test]
     fn subsecond_precision_survives_floating_date_resolution() {
         let value = at(2026, 10, 30, 6)
             .checked_add_signed(chrono::Duration::nanoseconds(123_456_700))
