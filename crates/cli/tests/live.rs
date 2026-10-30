@@ -220,9 +220,19 @@ fn browse_read_write_push_forced_poll_and_idle_interrupt() {
     std::thread::sleep(Duration::from_secs(3));
     assert!(watch.0.try_wait().unwrap().is_none(), "idle watch exited");
     server.set(3.5);
-    let pushed: serde_json::Value =
-        serde_json::from_str(&rx.recv_timeout(Duration::from_secs(10)).unwrap().unwrap()).unwrap();
-    assert_eq!(pushed["data"]["value"]["value"], 3.5);
+    // A one-shot initial snapshot can race with the first subscription push.
+    // Both are legitimate observations; continue until the change arrives.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let observed: serde_json::Value =
+            serde_json::from_str(&rx.recv_timeout(remaining).unwrap().unwrap()).unwrap();
+        let value = &observed["data"]["value"]["value"];
+        if *value == 3.5 {
+            break;
+        }
+        assert_eq!(*value, 2.5);
+    }
     assert!(
         Command::new("kill")
             .args(["-INT", &watch.0.id().to_string()])

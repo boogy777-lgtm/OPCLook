@@ -3,7 +3,8 @@ use super::sessions::reconnect_delay;
 use super::table::infer_kind;
 use super::*;
 use crate::bff::model::{
-    BackendMsg, BrowseNode, EndpointSpec, EventKind, NodeKind, Operation, WriteRequest,
+    BackendMsg, BrowseNode, EndpointSpec, Event, EventKind, NodeKind, Operation, Origin,
+    WriteRequest,
 };
 use crate::constants::{RECONNECT_MAX_ATTEMPTS, RECONNECT_MAX_DELAY};
 use crate::i18n::Lang;
@@ -497,8 +498,7 @@ fn add_children_disconnect_cancels_job() {
 /// OPC UA Part 4 requires the initial value notification for a new monitored
 /// item, but some stacks report only on change and a slow first publish can
 /// delay the snapshot. With an active push subscription the periodic Read is
-/// suppressed, so the app must read the confirmed keys once after AddItems or
-/// the row stays empty until the value changes.
+/// suppressed, so Engine schedules a one-shot read for confirmed keys.
 #[test]
 fn add_items_reply_reads_confirmed_keys_once() {
     let ctx = egui::Context::default();
@@ -515,9 +515,19 @@ fn add_items_reply_reads_confirmed_keys_once() {
     ));
     let keys: Vec<ItemKey> = app.rows.iter().map(|row| row.key).collect();
     assert_eq!(keys.len(), 2);
-    app.on_event_for_test_at(
-        session,
-        EventKind::AddItems {
+    let add_request = app
+        .dispatched_for_test()
+        .into_iter()
+        .find_map(|command| {
+            matches!(command.kind, CommandKind::AddItems { .. })
+                .then_some(command.request_id)
+                .flatten()
+        })
+        .unwrap();
+    app.on_event(Event {
+        owner: session.into(),
+        origin: Origin::Reply(add_request),
+        kind: EventKind::AddItems {
             results: vec![
                 (
                     keys[0],
@@ -530,7 +540,8 @@ fn add_items_reply_reads_confirmed_keys_once() {
                 (keys[1], Err(BackendMsg::NoConnection)),
             ],
         },
-    );
+    });
+    app.tick_at(Instant::now() + Duration::from_secs(2));
     let reads: Vec<Vec<ItemKey>> = app
         .dispatched_for_test()
         .into_iter()
@@ -2547,7 +2558,9 @@ fn exhausted_reconnect_preserves_pending_and_existing_state() {
         .send(
             crate::bff::model::SessionId::new(1).unwrap(),
             Protocol::OpcUa,
-            CommandKind::Read { keys: vec![] },
+            CommandKind::Read {
+                keys: vec![ItemKey::FIRST],
+            },
         )
         .unwrap();
     app.engine.exhaust_requests_for_test();
@@ -2567,7 +2580,13 @@ fn unsolicited_values_and_read_error_do_not_clear_pending_read_in_ui() {
     app.sync_fixture_sessions();
     app.engine.limit_dispatch_for_test(1);
     let request = app
-        .send(session, Protocol::OpcUa, CommandKind::Read { keys: vec![] })
+        .send(
+            session,
+            Protocol::OpcUa,
+            CommandKind::Read {
+                keys: vec![ItemKey::FIRST],
+            },
+        )
         .unwrap();
     app.project_session(session);
     app.on_event_for_test_at(session, EventKind::Values { values: vec![] });

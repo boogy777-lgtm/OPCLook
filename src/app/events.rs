@@ -264,12 +264,10 @@ impl App {
         let lang = self.lang();
         match kind {
             EventKind::AddItems { results } => {
-                let mut confirmed: Vec<ItemKey> = Vec::with_capacity(results.len());
                 for (key, result) in results {
                     match result {
                         Ok(info) => {
                             self.apply_item_info(key, info);
-                            confirmed.push(key);
                         }
                         Err(message) => {
                             let message = self.session_backend_text(session, &message);
@@ -283,18 +281,6 @@ impl App {
                             }
                         }
                     }
-                }
-                // OPC UA Part 4 requires the initial value in the first
-                // DataChange notification, but some stacks report only on
-                // change, and a slow first publish can delay the snapshot.
-                // While the push subscription is active the periodic Read is
-                // suppressed, so such a row would stay empty until its value
-                // changes. Read the confirmed keys once so the table is filled
-                // on change-only servers too.
-                if !confirmed.is_empty()
-                    && let Some(protocol) = self.session_protocol(session)
-                {
-                    self.send(session, protocol, CommandKind::Read { keys: confirmed });
                 }
             }
             EventKind::Removed { keys } => {
@@ -441,7 +427,6 @@ impl App {
                     }
                 }
                 if let Some(view) = self.session_mut(session) {
-                    // Read them right away, not one interval later.
                     view.last_poll = Instant::now()
                         .checked_sub(Duration::from_secs(3600))
                         .unwrap_or_else(Instant::now);

@@ -245,8 +245,23 @@ fn send(
         ),
         kind => engine.send(SessionId::FIRST, protocol, kind, ()),
     };
-    dispatch.map_err(|error| match error {
+    dispatch.map_err(dispatch_error)
+}
+fn dispatch_error(error: DispatchError) -> String {
+    match error {
         DispatchError::Exhausted => "request identifiers exhausted".into(),
+        DispatchError::ReadBusy => {
+            opclook_locale::tr(Lang::En, opclook_locale::Tr::ReadBusy).into()
+        }
+        DispatchError::ReadEmpty => {
+            opclook_locale::tr(Lang::En, opclook_locale::Tr::ReadEmpty).into()
+        }
+        DispatchError::ItemKeyReused => {
+            opclook_locale::tr(Lang::En, opclook_locale::Tr::ItemKeyReused).into()
+        }
+        DispatchError::ItemKeyLimit => {
+            opclook_locale::tr(Lang::En, opclook_locale::Tr::ItemKeyLimit).into()
+        }
         DispatchError::SessionLimit => "UA session limit reached".into(),
         DispatchError::ActionUnavailable(reason) => {
             let key = match reason {
@@ -268,7 +283,31 @@ fn send(
         DispatchError::Closed { cause, .. } => {
             opclook_locale::send_error_text(Lang::En, cause).into()
         }
-    })
+    }
+}
+fn dispatch_due(engine: &mut Engine<()>, interval: Duration) -> Result<(), String> {
+    for due in engine.due(Instant::now(), interval, Some(Duration::from_secs(30))) {
+        match due {
+            Due::Read {
+                session,
+                protocol,
+                keys,
+                permit,
+            } if session == SessionId::FIRST => {
+                engine
+                    .send_due_read(session, protocol, keys, permit, ())
+                    .map_err(dispatch_error)?;
+            }
+            Due::ReadUnavailable { session } if session == SessionId::FIRST => {
+                return Err("request identifiers exhausted".into());
+            }
+            Due::Test { session, protocol } if session == SessionId::FIRST => {
+                send(engine, protocol, CommandKind::Test)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 fn interrupt_receiver() -> Result<Receiver<Result<(), String>>, String> {
     let (tx, rx) = mpsc::channel();
@@ -654,25 +693,11 @@ fn run_with_engine(
         };
     }
     let mut count = 0usize;
+    let mut event_batch = 0usize;
     while options.count.is_none_or(|limit| count < limit) {
-        for due in engine.due(
-            Instant::now(),
-            options.interval,
-            Some(Duration::from_secs(30)),
-        ) {
-            match due {
-                Due::Read {
-                    session,
-                    protocol,
-                    keys,
-                } if session == SessionId::FIRST => {
-                    send(&mut engine, protocol, CommandKind::Read { keys })?;
-                }
-                Due::Test { session, protocol } if session == SessionId::FIRST => {
-                    send(&mut engine, protocol, CommandKind::Test)?;
-                }
-                _ => {}
-            }
+        if event_batch >= 64 {
+            dispatch_due(&mut engine, options.interval)?;
+            event_batch = 0;
         }
         if stopped(stop)? {
             break;
@@ -686,9 +711,12 @@ fn run_with_engine(
             return Err("operation timed out".into());
         }
         let Some(event) = engine.try_recv() else {
+            dispatch_due(&mut engine, options.interval)?;
+            event_batch = 0;
             std::thread::sleep(Duration::from_millis(10));
             continue;
         };
+        event_batch += 1;
         if engine.accept(&event).is_err() {
             continue;
         }

@@ -189,6 +189,10 @@ pub struct SessionRuntime {
     pub last_poll: Instant,
     pub last_test: Instant,
     pub items: HashMap<ItemKey, bool>,
+    pending_initial: HashMap<ItemKey, Instant>,
+    poll_defer_since: HashMap<ItemKey, Instant>,
+    used_keys: HashSet<ItemKey>,
+    reserved_read: Option<(ReadPermit, Vec<ItemKey>)>,
     force_poll: bool,
     connection_id: Option<RequestId>,
 }
@@ -203,16 +207,27 @@ impl SessionRuntime {
             last_poll: now.checked_sub(Duration::from_secs(10)).unwrap_or(now),
             last_test: now,
             items: HashMap::new(),
+            pending_initial: HashMap::new(),
+            poll_defer_since: HashMap::new(),
+            used_keys: HashSet::new(),
+            reserved_read: None,
             force_poll: false,
             connection_id: None,
         }
     }
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReadPermit(u64);
+
 pub enum Due {
     Read {
         session: SessionId,
         protocol: Protocol,
         keys: Vec<ItemKey>,
+        permit: ReadPermit,
+    },
+    ReadUnavailable {
+        session: SessionId,
     },
     Test {
         session: SessionId,
@@ -225,6 +240,10 @@ pub enum Due {
 #[derive(Debug)]
 pub enum DispatchError {
     Exhausted,
+    ReadBusy,
+    ReadEmpty,
+    ItemKeyReused,
+    ItemKeyLimit,
     SessionLimit,
     ActionUnavailable(ActionUnavailable),
     Closed {
@@ -252,11 +271,17 @@ struct DeferredRoute {
     kind: CommandKind,
     ticket: RouteTicket,
 }
+#[derive(Clone, Copy, Default)]
+struct PendingAdd {
+    poll_only: bool,
+    initial_seen: bool,
+}
 pub struct Engine<C> {
     gateway: Gateway,
     next: Option<RequestId>,
+    next_permit: Option<u64>,
     requests: HashMap<(Owner, RequestId), PendingRequest<C>>,
-    pending_adds: HashMap<(Owner, RequestId), HashMap<ItemKey, bool>>,
+    pending_adds: HashMap<(Owner, RequestId), HashMap<ItemKey, PendingAdd>>,
     sessions: HashMap<SessionId, SessionRuntime>,
     auto_reconnect: bool,
     route_service: Option<RouteService>,
@@ -280,6 +305,7 @@ impl<C> Default for Engine<C> {
         Self {
             gateway: Gateway::new(),
             next: Some(RequestId::FIRST),
+            next_permit: Some(1),
             requests: HashMap::new(),
             pending_adds: HashMap::new(),
             sessions: HashMap::new(),
@@ -356,6 +382,10 @@ impl<C> Engine<C> {
             view.read_in_flight = false;
             view.subscription = SubscriptionState::Inactive;
             view.items.clear();
+            view.pending_initial.clear();
+            view.poll_defer_since.clear();
+            view.reserved_read = None;
+            view.used_keys.clear();
         }
         self.requests.insert(
             (owner, id),
@@ -652,7 +682,34 @@ impl<C> Engine<C> {
         kind: CommandKind,
         ctx: C,
     ) -> Result<RequestId, DispatchError> {
-        let owner = owner.into();
+        self.send_inner(owner.into(), protocol, kind, ctx, None)
+    }
+
+    pub fn send_due_read(
+        &mut self,
+        session: SessionId,
+        protocol: Protocol,
+        keys: Vec<ItemKey>,
+        permit: ReadPermit,
+        ctx: C,
+    ) -> Result<RequestId, DispatchError> {
+        self.send_inner(
+            session.into(),
+            protocol,
+            CommandKind::Read { keys },
+            ctx,
+            Some(permit),
+        )
+    }
+
+    fn send_inner(
+        &mut self,
+        owner: Owner,
+        protocol: Protocol,
+        kind: CommandKind,
+        ctx: C,
+        permit: Option<ReadPermit>,
+    ) -> Result<RequestId, DispatchError> {
         if matches!(&kind, CommandKind::Write { .. }) {
             let reason = match owner {
                 Owner::Session(session) => self.session_action_unavailable(session, protocol, true),
@@ -693,17 +750,106 @@ impl<C> Engine<C> {
             CommandKind::RemoveItems { keys } => keys.clone(),
             _ => Vec::new(),
         };
+        if let Some(view) = session.and_then(|session| self.sessions.get(&session))
+            && !added.is_empty()
+        {
+            if added.len()
+                > constants::MAX_ITEM_KEYS_PER_CONNECTION.saturating_sub(view.used_keys.len())
+            {
+                return Err(DispatchError::ItemKeyLimit);
+            }
+            let unique: HashSet<_> = added.iter().copied().collect();
+            if unique.len() != added.len()
+                || added
+                    .iter()
+                    .any(|key| view.used_keys.contains(key) || view.items.contains_key(key))
+            {
+                return Err(DispatchError::ItemKeyReused);
+            }
+        }
+        if let Some(permit) = permit {
+            let valid = match (&kind, session.and_then(|id| self.sessions.get(&id))) {
+                (CommandKind::Read { keys }, Some(view)) => {
+                    let mut keys = keys.clone();
+                    keys.sort_unstable();
+                    keys.dedup();
+                    view.state == SessionState::Connected
+                        && view.endpoint.protocol == protocol
+                        && view.reserved_read.as_ref() == Some(&(permit, keys))
+                }
+                _ => false,
+            };
+            if !valid {
+                return Err(DispatchError::ReadBusy);
+            }
+        }
         let Some(id) = self.next else {
             if matches!(&kind, CommandKind::Read { .. }) {
                 let pending_read = self.requests.iter().any(|(&(sid, _), pending)| {
                     sid == owner && pending.operation == Operation::Read
                 });
                 if let Some(view) = session.and_then(|session| self.sessions.get_mut(&session)) {
-                    view.read_in_flight = pending_read;
+                    if permit.is_some() {
+                        view.reserved_read = None;
+                    }
+                    view.read_in_flight = pending_read || view.reserved_read.is_some();
                 }
             }
             return Err(DispatchError::Exhausted);
         };
+        if let CommandKind::Read { keys } = &kind {
+            if keys.is_empty() {
+                return Err(DispatchError::ReadEmpty);
+            }
+            let Some(view) = session.and_then(|id| self.sessions.get(&id)) else {
+                return Err(DispatchError::ActionUnavailable(
+                    ActionUnavailable::SessionMissing,
+                ));
+            };
+            if view.endpoint.protocol != protocol {
+                return Err(DispatchError::ActionUnavailable(
+                    ActionUnavailable::ProtocolMismatch,
+                ));
+            }
+            if view.state != SessionState::Connected {
+                return Err(DispatchError::ActionUnavailable(
+                    ActionUnavailable::SessionNotConnected,
+                ));
+            }
+        }
+        if let (Some(session), CommandKind::Read { keys }) = (session, &kind)
+            && let Some(view) = self.sessions.get_mut(&session)
+        {
+            if let Some(permit) = permit {
+                let mut requested = keys.clone();
+                requested.sort_unstable();
+                requested.dedup();
+                if view.reserved_read.as_ref() != Some(&(permit, requested.clone())) {
+                    return Err(DispatchError::ReadBusy);
+                }
+                if requested.iter().any(|key| !view.items.contains_key(key)) {
+                    for key in &requested {
+                        if view.items.contains_key(key) {
+                            view.pending_initial
+                                .entry(*key)
+                                .or_insert_with(Instant::now);
+                        }
+                    }
+                    view.read_in_flight = false;
+                    view.reserved_read = None;
+                    return Err(DispatchError::ReadBusy);
+                }
+                view.reserved_read = None;
+            } else if view.read_in_flight {
+                return Err(DispatchError::ReadBusy);
+            } else {
+                for key in keys {
+                    view.pending_initial.remove(key);
+                }
+            }
+        } else if permit.is_some() {
+            return Err(DispatchError::ReadBusy);
+        }
         if matches!(&kind, CommandKind::Connect { .. } | CommandKind::Disconnect) {
             self.cancel_da_routes(owner);
             self.timeout_queued.retain(|(id, _)| *id != owner);
@@ -740,6 +886,7 @@ impl<C> Engine<C> {
                 view.state = SessionState::Disconnected;
                 view.reconnect = ReconnectState::Stopped;
                 view.read_in_flight = false;
+                view.reserved_read = None;
                 view.subscription = SubscriptionState::Inactive;
             }
             return Err(DispatchError::Closed {
@@ -750,6 +897,10 @@ impl<C> Engine<C> {
         if operation == Operation::Disconnect {
             if let Some(view) = session.and_then(|id| self.sessions.get_mut(&id)) {
                 view.connection_id = None;
+                view.pending_initial.clear();
+                view.poll_defer_since.clear();
+                view.reserved_read = None;
+                view.read_in_flight = false;
             }
         }
         if let (Some(endpoint), Some(session)) = (endpoint, session) {
@@ -763,11 +914,21 @@ impl<C> Engine<C> {
             view.read_in_flight = false;
             view.subscription = SubscriptionState::Inactive;
             view.items.clear();
+            view.pending_initial.clear();
+            view.poll_defer_since.clear();
+            view.reserved_read = None;
+            view.used_keys.clear();
         }
         if !added.is_empty() {
+            if let Some(view) = session.and_then(|session| self.sessions.get_mut(&session)) {
+                view.used_keys.extend(added.iter().copied());
+            }
             self.pending_adds.insert(
                 (owner, id),
-                added.into_iter().map(|key| (key, false)).collect(),
+                added
+                    .into_iter()
+                    .map(|key| (key, PendingAdd::default()))
+                    .collect(),
             );
         }
         for (&(sid, _), pending) in &mut self.pending_adds {
@@ -780,6 +941,8 @@ impl<C> Engine<C> {
         if let Some(view) = session.and_then(|session| self.sessions.get_mut(&session)) {
             for key in removed {
                 view.items.remove(&key);
+                view.pending_initial.remove(&key);
+                view.poll_defer_since.remove(&key);
             }
             if operation == Operation::Read {
                 view.read_in_flight = true;
@@ -789,6 +952,13 @@ impl<C> Engine<C> {
         Ok(id)
     }
     pub fn accept(&mut self, event: &Event) -> Result<Option<PendingRequest<C>>, ()> {
+        self.accept_at(event, Instant::now())
+    }
+    pub fn accept_at(
+        &mut self,
+        event: &Event,
+        now: Instant,
+    ) -> Result<Option<PendingRequest<C>>, ()> {
         let pending = match event.origin {
             Origin::Unsolicited | Origin::Session(_) => None,
             Origin::Reply(id) => {
@@ -843,7 +1013,7 @@ impl<C> Engine<C> {
                 if sid == event.owner {
                     for key in keys {
                         if let Some(flag) = additions.get_mut(key) {
-                            *flag = true;
+                            flag.poll_only = true;
                         }
                     }
                 }
@@ -854,13 +1024,38 @@ impl<C> Engine<C> {
         {
             for (key, result) in results {
                 if result.is_ok()
-                    && let Some(&poll_only) = additions.get(key)
+                    && let Some(addition) = additions.get(key)
                 {
                     view.items
                         .entry(*key)
-                        .and_modify(|flag| *flag |= poll_only)
-                        .or_insert(poll_only);
+                        .and_modify(|flag| *flag |= addition.poll_only)
+                        .or_insert(addition.poll_only);
+                    if !addition.initial_seen {
+                        view.pending_initial.insert(*key, now);
+                    }
+                    view.poll_defer_since.insert(*key, now);
                 }
+            }
+        }
+        if matches!(event.origin, Origin::Session(_))
+            && let EventKind::Values { values } = &event.kind
+            && let Some(view) = self.sessions.get_mut(&session)
+        {
+            for (key, value) in values {
+                let waiting = value
+                    .quality
+                    .waiting_for_initial_data(view.endpoint.protocol);
+                if waiting {
+                    continue;
+                }
+                for (&(sid, _), additions) in &mut self.pending_adds {
+                    if sid == event.owner
+                        && let Some(addition) = additions.get_mut(key)
+                    {
+                        addition.initial_seen = true;
+                    }
+                }
+                view.pending_initial.remove(key);
             }
         }
         let correlated_read = pending
@@ -888,6 +1083,9 @@ impl<C> Engine<C> {
                     view.state = SessionState::Disconnected;
                     view.read_in_flight = false;
                     view.subscription = SubscriptionState::Inactive;
+                    view.pending_initial.clear();
+                    view.poll_defer_since.clear();
+                    view.reserved_read = None;
                 }
                 EventKind::Error {
                     operation: Operation::Connect,
@@ -897,6 +1095,9 @@ impl<C> Engine<C> {
                     view.state = SessionState::Disconnected;
                     view.read_in_flight = false;
                     view.subscription = SubscriptionState::Inactive;
+                    view.pending_initial.clear();
+                    view.poll_defer_since.clear();
+                    view.reserved_read = None;
                     if was_connecting && matches!(view.reconnect, ReconnectState::Waiting { .. }) {
                         schedule = true;
                     } else if was_connecting {
@@ -911,6 +1112,9 @@ impl<C> Engine<C> {
                     view.state = SessionState::Disconnected;
                     view.read_in_flight = false;
                     view.subscription = SubscriptionState::Inactive;
+                    view.pending_initial.clear();
+                    view.poll_defer_since.clear();
+                    view.reserved_read = None;
                 }
                 EventKind::Error {
                     operation: Operation::Read,
@@ -957,22 +1161,54 @@ impl<C> Engine<C> {
                     let push = !view.force_poll
                         && view.endpoint.protocol == Protocol::OpcUa
                         && view.subscription == SubscriptionState::Active;
-                    if !view.read_in_flight
-                        && !busy
-                        && now.saturating_duration_since(view.last_poll) >= interval
-                    {
-                        let keys: Vec<_> = view
-                            .items
+                    if !view.read_in_flight && !busy {
+                        let mut keys: Vec<_> = view
+                            .pending_initial
                             .iter()
-                            .filter_map(|(&key, &poll_only)| (!push || poll_only).then_some(key))
+                            .filter_map(|(&key, &since)| {
+                                let wait_for_push = !view.force_poll
+                                    && view.endpoint.protocol == Protocol::OpcUa
+                                    && !view.items.get(&key).copied().unwrap_or(false);
+                                (!wait_for_push || now.saturating_duration_since(since) >= interval)
+                                    .then_some(key)
+                            })
                             .collect();
+                        if now.saturating_duration_since(view.last_poll) >= interval {
+                            keys.extend(view.items.iter().filter_map(|(&key, &poll_only)| {
+                                let startup_wait = !view.force_poll
+                                    && view.endpoint.protocol == Protocol::OpcUa
+                                    && view.poll_defer_since.get(&key).is_some_and(|since| {
+                                        now.saturating_duration_since(*since) < interval
+                                    });
+                                ((!push || poll_only) && !startup_wait).then_some(key)
+                            }));
+                        }
+                        view.poll_defer_since
+                            .retain(|_, since| now.saturating_duration_since(*since) < interval);
+                        keys.sort_unstable();
+                        keys.dedup();
                         if !keys.is_empty() {
+                            let Some(raw_permit) = self.next_permit else {
+                                for key in &keys {
+                                    view.pending_initial.remove(key);
+                                }
+                                view.last_poll = now;
+                                work.push(Due::ReadUnavailable { session: id });
+                                continue;
+                            };
+                            self.next_permit = raw_permit.checked_add(1);
+                            let permit = ReadPermit(raw_permit);
+                            for key in &keys {
+                                view.pending_initial.remove(key);
+                            }
                             view.read_in_flight = true;
+                            view.reserved_read = Some((permit, keys.clone()));
                             view.last_poll = now;
                             work.push(Due::Read {
                                 session: id,
                                 protocol: view.endpoint.protocol,
                                 keys,
+                                permit,
                             });
                         }
                     }
@@ -1160,6 +1396,9 @@ impl<C> Engine<C> {
             view.reconnect = ReconnectState::Stopped;
             view.read_in_flight = false;
             view.subscription = SubscriptionState::Inactive;
+            view.pending_initial.clear();
+            view.poll_defer_since.clear();
+            view.reserved_read = None;
         }
     }
     pub fn stop_reconnect(&mut self, id: SessionId) {
@@ -1268,10 +1507,15 @@ impl<C> Engine<C> {
     }
     #[cfg(feature = "test-support")]
     pub fn seed_session_for_test(&mut self, id: SessionId, mut session: SessionRuntime) {
-        session.connection_id = self
-            .sessions
-            .get(&id)
-            .map_or(Some(RequestId::FIRST), |old| old.connection_id);
+        if let Some(old) = self.sessions.get(&id) {
+            session.connection_id = old.connection_id;
+            session.pending_initial = old.pending_initial.clone();
+            session.poll_defer_since = old.poll_defer_since.clone();
+            session.reserved_read = old.reserved_read.clone();
+            session.used_keys = old.used_keys.clone();
+        } else {
+            session.connection_id = Some(RequestId::FIRST);
+        }
         self.sessions.insert(id, session);
     }
     #[cfg(feature = "test-support")]
@@ -1613,12 +1857,18 @@ mod tests {
     fn request_exhaustion_keeps_pending_work_and_reports_da_error() {
         let mut engine = Engine::<()>::default();
         engine.test_skip_dispatch = true;
+        let mut view =
+            SessionRuntime::new(EndpointSpec::ua("opc.tcp://localhost:4840"), Instant::now());
+        view.state = SessionState::Connected;
+        engine.sessions.insert(sid(1), view);
         engine.next = RequestId::new(u64::MAX);
         let id = engine
             .send(
                 sid(1),
                 Protocol::OpcUa,
-                CommandKind::Read { keys: vec![] },
+                CommandKind::Read {
+                    keys: vec![ItemKey::FIRST],
+                },
                 (),
             )
             .unwrap();
@@ -1920,9 +2170,488 @@ mod tests {
         );
         engine.pending_adds.insert(
             (owner(1), rid(9)),
-            [(key(2), false), (key(3), false)].into_iter().collect(),
+            [
+                (key(2), PendingAdd::default()),
+                (key(3), PendingAdd::default()),
+            ]
+            .into_iter()
+            .collect(),
         );
         engine
+    }
+    #[test]
+    fn initial_snapshot_waits_for_inflight_read_and_coalesces() {
+        use opclook_contract::model::{ItemInfo, ItemSpec};
+        let now = Instant::now();
+        let mut engine = Engine::<()>::default();
+        engine.test_skip_dispatch = true;
+        let mut view = SessionRuntime::new(EndpointSpec::ua("opc.tcp://localhost:4840"), now);
+        view.state = SessionState::Connected;
+        view.connection_id = Some(rid(77));
+        view.subscription = SubscriptionState::Active;
+        view.items.insert(key(1), false);
+        engine.sessions.insert(sid(1), view);
+        let read = engine
+            .send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::Read { keys: vec![key(1)] },
+                (),
+            )
+            .unwrap();
+        let add = engine
+            .send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::AddItems {
+                    items: vec![
+                        ItemSpec {
+                            key: key(2),
+                            item_id: "a".into(),
+                        },
+                        ItemSpec {
+                            key: key(3),
+                            item_id: "b".into(),
+                        },
+                    ],
+                },
+                (),
+            )
+            .unwrap();
+        let info = ItemInfo {
+            data_type: None,
+            type_id: None,
+            writable: false,
+        };
+        engine
+            .accept(&Event {
+                owner: owner(1),
+                origin: Origin::Reply(add),
+                kind: EventKind::AddItems {
+                    results: vec![(key(2), Ok(info.clone())), (key(3), Ok(info))],
+                },
+            })
+            .unwrap();
+        assert!(engine.due(now, Duration::from_secs(60), None).is_empty());
+        engine
+            .accept(&Event {
+                owner: owner(1),
+                origin: Origin::Reply(read),
+                kind: EventKind::Values { values: vec![] },
+            })
+            .unwrap();
+        let due = engine.due(now + Duration::from_secs(61), Duration::from_secs(60), None);
+        assert!(
+            matches!(due.as_slice(), [Due::Read { keys, .. }] if keys == &vec![key(2), key(3)])
+        );
+        assert!(engine.due(now, Duration::from_secs(60), None).is_empty());
+        assert!(matches!(
+            engine.send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::Read { keys: vec![key(1)] },
+                ()
+            ),
+            Err(DispatchError::ReadBusy)
+        ));
+        let Due::Read { keys, permit, .. } = due.into_iter().next().unwrap() else {
+            panic!("read due")
+        };
+        assert!(matches!(
+            engine.send_due_read(sid(1), Protocol::OpcDa, keys.clone(), permit, ()),
+            Err(DispatchError::ReadBusy)
+        ));
+        engine
+            .send_due_read(sid(1), Protocol::OpcUa, keys, permit, ())
+            .unwrap();
+    }
+    #[test]
+    fn early_terminal_push_covers_initial_but_waiting_does_not() {
+        use opclook_contract::model::{DataValue, ItemInfo, ItemSpec, Quality, Value};
+        for (status, waiting) in [(0, false), (0x8000_0000, false), (0x8032_0000, true)] {
+            let now = Instant::now();
+            let mut engine = Engine::<()>::default();
+            engine.test_skip_dispatch = true;
+            let mut view = SessionRuntime::new(EndpointSpec::ua("opc.tcp://localhost:4840"), now);
+            view.state = SessionState::Connected;
+            view.connection_id = Some(rid(77));
+            view.subscription = SubscriptionState::Active;
+            engine.sessions.insert(sid(1), view);
+            let add = engine
+                .send(
+                    sid(1),
+                    Protocol::OpcUa,
+                    CommandKind::AddItems {
+                        items: vec![ItemSpec {
+                            key: key(2),
+                            item_id: "a".into(),
+                        }],
+                    },
+                    (),
+                )
+                .unwrap();
+            engine
+                .accept(&Event {
+                    owner: owner(1),
+                    origin: Origin::Session(rid(77)),
+                    kind: EventKind::Values {
+                        values: vec![(
+                            key(2),
+                            DataValue {
+                                value: Value::Empty,
+                                quality: Quality::from_ua(status, "status"),
+                                timestamp: None,
+                                reason: None,
+                            },
+                        )],
+                    },
+                })
+                .unwrap();
+            engine
+                .accept(&Event {
+                    owner: owner(1),
+                    origin: Origin::Reply(add),
+                    kind: EventKind::AddItems {
+                        results: vec![(
+                            key(2),
+                            Ok(ItemInfo {
+                                data_type: None,
+                                type_id: None,
+                                writable: false,
+                            }),
+                        )],
+                    },
+                })
+                .unwrap();
+            assert!(engine.due(now, Duration::from_secs(1), None).is_empty());
+            let due = engine.due(now + Duration::from_secs(2), Duration::from_secs(1), None);
+            assert_eq!(!due.is_empty(), waiting);
+            assert!(matches!(
+                engine.send(
+                    sid(1),
+                    Protocol::OpcUa,
+                    CommandKind::AddItems {
+                        items: vec![ItemSpec {
+                            key: key(2),
+                            item_id: "new".into()
+                        }]
+                    },
+                    ()
+                ),
+                Err(DispatchError::ItemKeyReused)
+            ));
+        }
+    }
+    #[test]
+    fn removed_item_invalidates_reserved_read_before_dispatch() {
+        let now = Instant::now();
+        let mut engine = Engine::<()>::default();
+        engine.test_skip_dispatch = true;
+        let mut view = SessionRuntime::new(EndpointSpec::ua("opc.tcp://localhost:4840"), now);
+        view.state = SessionState::Connected;
+        view.force_poll = true;
+        view.items.insert(key(1), false);
+        view.pending_initial.insert(key(1), now);
+        engine.sessions.insert(sid(1), view);
+        let due = engine.due(now, Duration::from_secs(60), None);
+        let Due::Read { keys, permit, .. } = due.into_iter().next().unwrap() else {
+            panic!("read due")
+        };
+        engine
+            .send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::RemoveItems { keys: vec![key(1)] },
+                (),
+            )
+            .unwrap();
+        assert!(matches!(
+            engine.send_due_read(sid(1), Protocol::OpcUa, keys, permit, ()),
+            Err(DispatchError::ReadBusy)
+        ));
+        assert!(!engine.session(sid(1)).unwrap().read_in_flight);
+        assert!(engine.due(now, Duration::from_secs(60), None).is_empty());
+    }
+    #[test]
+    fn old_read_permit_cannot_claim_new_epoch_reservation() {
+        use opclook_contract::model::{ItemInfo, ItemSpec};
+        let now = Instant::now();
+        let endpoint = EndpointSpec::ua("opc.tcp://localhost:4840");
+        let mut engine = Engine::<()>::default();
+        engine.test_skip_dispatch = true;
+        let mut view = SessionRuntime::new(endpoint.clone(), now);
+        view.state = SessionState::Connected;
+        view.force_poll = true;
+        view.items.insert(key(1), false);
+        engine.sessions.insert(sid(1), view);
+        let Due::Read {
+            keys: old_keys,
+            permit: old_permit,
+            ..
+        } = engine
+            .due(now, Duration::ZERO, None)
+            .into_iter()
+            .next()
+            .unwrap()
+        else {
+            panic!("read due")
+        };
+        let connect = engine
+            .send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::Connect {
+                    endpoint: endpoint.clone(),
+                },
+                (),
+            )
+            .unwrap();
+        engine
+            .accept(&Event {
+                owner: owner(1),
+                origin: Origin::Reply(connect),
+                kind: EventKind::Connected {
+                    endpoint,
+                    info: BackendMsg::raw("connected"),
+                },
+            })
+            .unwrap();
+        let add = engine
+            .send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::AddItems {
+                    items: vec![ItemSpec {
+                        key: key(1),
+                        item_id: "a".into(),
+                    }],
+                },
+                (),
+            )
+            .unwrap();
+        engine
+            .accept(&Event {
+                owner: owner(1),
+                origin: Origin::Reply(add),
+                kind: EventKind::AddItems {
+                    results: vec![(
+                        key(1),
+                        Ok(ItemInfo {
+                            data_type: None,
+                            type_id: None,
+                            writable: false,
+                        }),
+                    )],
+                },
+            })
+            .unwrap();
+        let Due::Read { keys, permit, .. } = engine
+            .due(now, Duration::ZERO, None)
+            .into_iter()
+            .next()
+            .unwrap()
+        else {
+            panic!("new read due")
+        };
+        assert!(matches!(
+            engine.send_due_read(sid(1), Protocol::OpcUa, old_keys, old_permit, ()),
+            Err(DispatchError::ReadBusy)
+        ));
+        assert!(engine.due(now, Duration::ZERO, None).is_empty());
+        engine
+            .send_due_read(sid(1), Protocol::OpcUa, keys, permit, ())
+            .unwrap();
+    }
+    #[test]
+    fn registration_identity_ledger_has_visible_limit() {
+        use opclook_contract::model::ItemSpec;
+        let mut engine = Engine::<()>::default();
+        engine.test_skip_dispatch = true;
+        let mut view =
+            SessionRuntime::new(EndpointSpec::ua("opc.tcp://localhost:4840"), Instant::now());
+        view.state = SessionState::Connected;
+        view.used_keys
+            .extend((1..=constants::MAX_ITEM_KEYS_PER_CONNECTION as u32).filter_map(ItemKey::new));
+        engine.sessions.insert(sid(1), view);
+        let item = ItemSpec {
+            key: key(constants::MAX_ITEM_KEYS_PER_CONNECTION as u32 + 1),
+            item_id: "a".into(),
+        };
+        assert!(matches!(
+            engine.send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::AddItems { items: vec![item] },
+                ()
+            ),
+            Err(DispatchError::ItemKeyLimit)
+        ));
+    }
+    #[test]
+    fn legacy_failed_and_poll_only_continue_after_initial_read() {
+        for state in [SubscriptionState::Failed, SubscriptionState::Active] {
+            let now = Instant::now();
+            let mut engine = Engine::<()>::default();
+            engine.test_skip_dispatch = true;
+            let mut view = SessionRuntime::new(EndpointSpec::ua("opc.tcp://localhost:4840"), now);
+            view.state = SessionState::Connected;
+            view.subscription = state;
+            view.items.insert(key(1), true);
+            view.pending_initial.insert(key(1), now);
+            view.poll_defer_since.insert(key(1), now);
+            engine.sessions.insert(sid(1), view);
+            let Due::Read { keys, permit, .. } = engine
+                .due(now + Duration::from_secs(2), Duration::from_secs(1), None)
+                .into_iter()
+                .next()
+                .unwrap()
+            else {
+                panic!("initial read")
+            };
+            let id = engine
+                .send_due_read(sid(1), Protocol::OpcUa, keys, permit, ())
+                .unwrap();
+            engine
+                .accept(&Event {
+                    owner: owner(1),
+                    origin: Origin::Reply(id),
+                    kind: EventKind::Values { values: vec![] },
+                })
+                .unwrap();
+            assert!(matches!(
+                engine
+                    .due(now + Duration::from_secs(4), Duration::from_secs(1), None)
+                    .as_slice(),
+                [Due::Read { .. }]
+            ));
+        }
+    }
+    #[test]
+    fn read_error_does_not_erase_later_initial_demand() {
+        use opclook_contract::model::{ItemInfo, ItemSpec};
+        let now = Instant::now();
+        let mut engine = Engine::<()>::default();
+        engine.test_skip_dispatch = true;
+        let mut view = SessionRuntime::new(EndpointSpec::ua("opc.tcp://localhost:4840"), now);
+        view.state = SessionState::Connected;
+        view.subscription = SubscriptionState::Active;
+        view.items.insert(key(1), false);
+        engine.sessions.insert(sid(1), view);
+        let old = engine
+            .send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::Read { keys: vec![key(1)] },
+                (),
+            )
+            .unwrap();
+        let add = engine
+            .send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::AddItems {
+                    items: vec![ItemSpec {
+                        key: key(2),
+                        item_id: "b".into(),
+                    }],
+                },
+                (),
+            )
+            .unwrap();
+        engine
+            .accept(&Event {
+                owner: owner(1),
+                origin: Origin::Reply(add),
+                kind: EventKind::AddItems {
+                    results: vec![(
+                        key(2),
+                        Ok(ItemInfo {
+                            data_type: None,
+                            type_id: None,
+                            writable: false,
+                        }),
+                    )],
+                },
+            })
+            .unwrap();
+        engine
+            .accept(&Event {
+                owner: owner(1),
+                origin: Origin::Reply(old),
+                kind: EventKind::Error {
+                    operation: Operation::Read,
+                    message: BackendMsg::raw("failed"),
+                },
+            })
+            .unwrap();
+        assert!(
+            matches!(engine.due(now + Duration::from_secs(2), Duration::from_secs(1), None).as_slice(), [Due::Read { keys, .. }] if keys == &vec![key(2)])
+        );
+    }
+    #[test]
+    fn repeated_add_batches_do_not_starve_older_poll_keys() {
+        use opclook_contract::model::{ItemInfo, ItemSpec};
+        let now = Instant::now();
+        let mut engine = Engine::<()>::default();
+        engine.test_skip_dispatch = true;
+        let mut view = SessionRuntime::new(EndpointSpec::ua("opc.tcp://localhost:4840"), now);
+        view.state = SessionState::Connected;
+        view.subscription = SubscriptionState::Failed;
+        view.items.insert(key(1), false);
+        engine.sessions.insert(sid(1), view);
+        for (n, millis) in [(2, 1500), (3, 2400)] {
+            let add = engine
+                .send(
+                    sid(1),
+                    Protocol::OpcUa,
+                    CommandKind::AddItems {
+                        items: vec![ItemSpec {
+                            key: key(n),
+                            item_id: n.to_string(),
+                        }],
+                    },
+                    (),
+                )
+                .unwrap();
+            engine
+                .accept_at(
+                    &Event {
+                        owner: owner(1),
+                        origin: Origin::Reply(add),
+                        kind: EventKind::AddItems {
+                            results: vec![(
+                                key(n),
+                                Ok(ItemInfo {
+                                    data_type: None,
+                                    type_id: None,
+                                    writable: false,
+                                }),
+                            )],
+                        },
+                    },
+                    now + Duration::from_millis(millis),
+                )
+                .unwrap();
+            let due = engine.due(
+                now + Duration::from_millis(millis),
+                Duration::from_secs(1),
+                None,
+            );
+            let Due::Read { keys, permit, .. } = due.into_iter().next().unwrap() else {
+                panic!("poll due")
+            };
+            assert!(keys.contains(&key(1)));
+            let id = engine
+                .send_due_read(sid(1), Protocol::OpcUa, keys, permit, ())
+                .unwrap();
+            engine
+                .accept(&Event {
+                    owner: owner(1),
+                    origin: Origin::Reply(id),
+                    kind: EventKind::Values { values: vec![] },
+                })
+                .unwrap();
+        }
     }
     #[test]
     fn add_results_install_only_confirmed_keys_and_preserve_early_poll_only() {
@@ -2032,9 +2761,10 @@ mod tests {
                 ctx: (),
             },
         );
-        engine
-            .pending_adds
-            .insert((owner(1), rid(50)), [(key(4), false)].into_iter().collect());
+        engine.pending_adds.insert(
+            (owner(1), rid(50)),
+            [(key(4), PendingAdd::default())].into_iter().collect(),
+        );
         engine
             .accept(&Event {
                 owner: owner(1),
@@ -2275,6 +3005,7 @@ mod tests {
             engine.test_skip_dispatch = true;
             let mut view = SessionRuntime::new(EndpointSpec::ua("opc.tcp://127.0.0.1:4840"), now);
             view.state = SessionState::Connected;
+            view.force_poll = true;
             view.items.insert(ItemKey::FIRST, false);
             engine.sessions.insert(sid(1), view);
             let first = engine
@@ -2287,16 +3018,27 @@ mod tests {
                     (),
                 )
                 .unwrap();
-            let second = engine
-                .send(
+            assert!(matches!(
+                engine.send(
                     sid(1),
                     Protocol::OpcUa,
                     CommandKind::Read {
-                        keys: vec![ItemKey::FIRST],
+                        keys: vec![ItemKey::FIRST]
                     },
-                    (),
-                )
-                .unwrap();
+                    ()
+                ),
+                Err(DispatchError::ReadBusy)
+            ));
+            // A legacy overlapping request may still be present during transition.
+            let second = rid(99);
+            engine.requests.insert(
+                (owner(1), second),
+                PendingRequest {
+                    operation: Operation::Read,
+                    sent: now,
+                    ctx: (),
+                },
+            );
             let kind = if first_is_error {
                 EventKind::Error {
                     operation: Operation::Read,
@@ -2339,6 +3081,7 @@ mod tests {
         let mut view =
             SessionRuntime::new(EndpointSpec::ua("opc.tcp://127.0.0.1:4840"), Instant::now());
         view.state = SessionState::Connected;
+        view.force_poll = true;
         view.connection_id = Some(rid(77));
         view.items.insert(key(7), true);
         view.read_in_flight = true;

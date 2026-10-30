@@ -689,9 +689,28 @@ impl App {
         kind: CommandKind,
         ctx: PendingCtx,
     ) -> Option<RequestId> {
+        self.send_with_permit(owner, protocol, kind, ctx, None)
+    }
+
+    pub(super) fn send_with_permit(
+        &mut self,
+        owner: impl Into<Owner>,
+        protocol: Protocol,
+        kind: CommandKind,
+        ctx: PendingCtx,
+        permit: Option<opclook_engine::ReadPermit>,
+    ) -> Option<RequestId> {
         let owner = owner.into();
         let operation = kind.operation();
         let dispatch = match (owner, kind) {
+            (Owner::Session(session), CommandKind::Read { keys }) if permit.is_some() => {
+                match permit {
+                    Some(permit) => self
+                        .engine
+                        .send_due_read(session, protocol, keys, permit, ctx),
+                    None => return None,
+                }
+            }
             (
                 Owner::Session(session),
                 CommandKind::Browse {
@@ -726,6 +745,26 @@ impl App {
             Err(DispatchError::Exhausted) => {
                 self.journal.error_l(Tr::RequestIdsExhausted, &[]);
                 self.status = tr(self.lang(), Tr::RequestIdsExhausted).to_string();
+                return None;
+            }
+            Err(DispatchError::ReadBusy) => {
+                self.journal.error_l(Tr::ReadBusy, &[]);
+                self.status = tr(self.lang(), Tr::ReadBusy).to_string();
+                return None;
+            }
+            Err(DispatchError::ReadEmpty) => {
+                self.journal.error_l(Tr::ReadEmpty, &[]);
+                self.status = tr(self.lang(), Tr::ReadEmpty).to_string();
+                return None;
+            }
+            Err(DispatchError::ItemKeyReused) => {
+                self.journal.error_l(Tr::ItemKeyReused, &[]);
+                self.status = tr(self.lang(), Tr::ItemKeyReused).to_string();
+                return None;
+            }
+            Err(DispatchError::ItemKeyLimit) => {
+                self.journal.error_l(Tr::ItemKeyLimit, &[]);
+                self.status = tr(self.lang(), Tr::ItemKeyLimit).to_string();
                 return None;
             }
             Err(DispatchError::ActionUnavailable(reason)) => {
