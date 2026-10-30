@@ -1,5 +1,31 @@
 # Текущий статус
 
+## 2026-10-31 — N3 локальная приёмка native preview на `46339cc`
+
+Проверенный код: `46339ccf0bb46fb15ef4ab4fcc4cbfaa5baba0b7`. Все шесть
+CI jobs завершены успешно: [SDK — 3 jobs](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41124600706),
+[COM — 1 job](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41124600770),
+[приложение Linux и Windows x86 — 2 jobs](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41124600679).
+Windows прошёл fmt, сборки, изолированные COM/VARIANT, shared/CLI, библиотечные
+и интеграционные тесты, net helper и диагностический UA loopback. Отдельные
+внешние live tests остаются ignored; успешный job не означает их выполнение.
+
+Реальный Win32 SDK barrier probe воспроизвёл уничтожение временного context
+на worker и self-wait старого порядка; общий EphemeralContext завершил worker
+и уничтожил context на caller. SDK callback → C ABI → Rust mapping прошёл;
+его stand завершил 4 теста. Строгий Gateway прошёл 3/3 отдельных процесса
+(измерено: 0.89, 0.89, 0.85 с) с новым сервером и cleanup. Сценарий включает
+Discover/Browse, Unicode ID и BSTR, scalar/array read-write-readback,
+reconnect, subscription и registration guards.
+
+Это измеренный локальный SDK-server preview, не завершение N2/N3/N4.
+Три успешных процесса не доказывают отсутствие всех гонок или единственную
+причину прежнего AV. Production DA остаётся legacy. Далее по R00/R03/R09:
+проверить remote/другой сервер, late callback и failure/timeout teardown,
+изоляцию сессий и license closure; затем решать N4. Настоящая запись
+документирует указанный code head; последующий documentation-only commit
+не является новым измерением runtime. Ниже сохранена история этапов.
+
 ## 2026-10-31 — N3 SDK временный worker ownership (Windows CI ожидается)
 
 Pinned SDK source: `SOCltTask` держит ссылку на element до destructor, но

@@ -1205,3 +1205,16 @@ server impl; SDK управляет своим потоком. Barrier fixture �
 SDK task, unguarded baseline в subprocess с watchdog и guarded destructor/thread
 проверку. Пока это проект проверок, не измеренный Win32 результат и не доказанная
 причина AV; полная subscription/teardown/remote проверка остаётся открытой.
+
+2026-10-31 N3 measured acceptance: code `46339cc` прошёл все 6 CI jobs:
+SDK run 41124600706 (3), COM 41124600770 (1), app 41124600679 (2).
+Win32 baseline watchdog воспроизвёл self-wait; guarded SDK worker joined,
+destructor on caller PASS; callback ABI mapping PASS, stand 4/4.
+Gateway 3/3 независимых процесса: 0.89/0.89/0.85 с, strict assertions и
+cleanup пройдены. Windows все шаги success, включая диагностический UA probe;
+отдельные внешние live tests ignored. Production DA остаётся legacy.
+Routing/status/audit обновлены по измерению точного code head; последующий
+documentation-only commit не меняет код и не объявляется новым runtime proof.
+Следующий gap: remote/другой сервер, late/failure/timeout teardown,
+session isolation и license closure. Выборочная серия не доказывает отсутствие
+всех races и единственную причинность прежнего AV.

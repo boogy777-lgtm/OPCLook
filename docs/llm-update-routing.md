@@ -1,11 +1,23 @@
 # Входной документ для LLM: маршруты обновления OPCLook
 
-Дата: 2026-10-30. ID: R2.ROUTE. Область: получение значений OPC UA/DA.
+Дата обновления: 2026-10-31. ID: R2.ROUTE. Область: получение значений OPC UA/DA.
 База исследования: `main@4738cbd9ace14bdd3f59808f40ffa7f8c635a2f0`.
 Это входное задание для нового чата. Маршруты направляют к существующим механизмам; текущий частичный runtime срез
 ExplicitRefresh и CLI opt-in WriteReadback описан в status.md. Полный R2 не завершён.
 
-N2.1 добавил offline bounded callback fact adapter (`native/softing-da`, `bff/softing_facts.rs`); это не production backend и не live proof. См. status и N2F01–N2F07 в truth tables (R00/R03/R13). Продолжать с session/registration identity, реального ABI wiring и N3 interop, сохраняя SDK lifecycle owner.
+Текущий проверенный runtime: `46339cc` в PR #18; все 6 CI jobs прошли.
+Native DA preview имеет реальный SDK → C ABI → Rust → Gateway путь.
+Локальный strict fixture прошёл 3/3 процесса с Discover/Browse, Unicode,
+scalar/array I/O, reconnect и subscription. SDK barrier regression проверяет
+общий EphemeralContext для resolve/discover; не возвращать direct
+SODaCComServerDefault без SDK initialization и не вводить второй worker owner.
+Точные CI ссылки, выполненные проверки и ограничения — в начале status.md.
+Исторический N2.1 offline mapper и N2F01–N2F07 не заменяют этот live fixture.
+Следующая задача: R00/R03/R09 — remote/другой сервер, late callback,
+failure/timeout teardown, session isolation и license closure перед N4.
+Production DA остаётся legacy; 3 успешных процесса не доказывают отсутствие
+всех гонок. Не повторять завершённую локальную реализацию и не объявлять
+полную миграцию по одному локальному SDK серверу.
 
 ## 1. Начало работы
 
