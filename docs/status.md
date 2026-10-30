@@ -23,8 +23,11 @@ VerifyGlobs из-за обратных слешей пути. Это ошибк�
 41063686408 подтвердил, что предыдущий выбор без common XML неверен: DA Browse
 использует `SOCmnVariant::getVARTYPE`, доступный при CMN_XML. Common XML
 возвращён; Watch и XML-DA остаются вне test profile. Точные Expat C файлы
-собраны раздельно на Linux: namespace/DTD и C-to-C++ linkage прошли; Windows
-build, link, init/cleanup и callback ещё ожидают нового CI. Системный Windows/DA
+собраны раздельно на Linux: namespace/DTD и C-to-C++ linkage прошли;
+компиляция SDK core и Expat на Win32 прошла в 41065211900, но core link остановился:
+SDK host hook `getInstanceHandle` не был предоставлен. Probe теперь использует
+реальный Win32 module handle; в нём нет таблицы сообщений SDK. Windows link,
+parser runtime, init/cleanup и callback ещё ожидают нового CI. Системный Windows/DA
 сервер здесь недоступен. UA SDK не менялся; старый production DA worker
 сохранён, native DA migration и полная проверка лицензий SDK closure открыты.
 Предыдущий published head 2335b8e прошёл Linux/Windows x86 CI run 41051563765;

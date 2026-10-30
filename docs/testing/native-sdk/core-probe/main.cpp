@@ -3,6 +3,10 @@
 #include <cstring>
 #include <type_traits>
 
+// SDK's sample host supplies this C++ hook for Win32 resource lookup.
+// The probe executable does not include the sample's message resource table.
+HINSTANCE getInstanceHandle() { return ::GetModuleHandle(nullptr); }
+
 static_assert(std::is_same<XML_Char, char>::value, "SDK expects narrow Expat strings");
 using ExpectedExpatStart = void (XMLCALL *)(void*, const char*, const char**);
 static_assert(std::is_same<XML_StartElementHandler, ExpectedExpatStart>::value,
@@ -83,6 +87,7 @@ static int run_callbacks() {
     return (read_correct ? 1 : 0) | (write_correct ? 2 : 0);
 }
 int main(int argc, char** argv) {
+    if (!getInstanceHandle()) return 9;
     const bool baseline = argc == 2 && std::strcmp(argv[1], "--expect-existing-defect") == 0;
     SOCmnPointer<SODaCEntry> entry = getSODaCEntry();
     if (!entry.isNotNull() || !entry->initialize(COINIT_MULTITHREADED)) return 10;

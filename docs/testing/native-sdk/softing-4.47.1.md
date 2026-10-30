@@ -35,9 +35,13 @@ CI run 41062539737 дошёл до Win32 C++ и показал несовмес�
 компилируется как три отдельных C translation units вместо SDK C++ TU: SDK
 `winconfig.h` задаёт XML_NS/XML_DTD и narrow ABI с `XML_STATIC`; на Linux
 реальный C parser/link smoke проверил namespace, DTD и C-to-C++ callback ABI.
-Windows компиляция и устранение WinSDK conflict ещё не подтверждены. Первое
-локальное воспроизведение ошибочно использовало неполный заголовок; он был
-восстановлен и проверен по Git blob перед успешным smoke.
+В CI 41065211900 Windows x86 компиляция SDK core и Expat прошла; core link
+остановился на host hook `getInstanceHandle`, до запуска parser или callback.
+SDK sample предоставляет handle своего приложения для FormatMessage; test
+host использует Win32 `GetModuleHandle(nullptr)` и не содержит SDK message
+resource table. Наличие локализованных текстов ошибок этим не доказано.
+Первое локальное воспроизведение ошибочно использовало неполный заголовок;
+он был восстановлен и проверен по Git blob перед успешным smoke.
 
 ## SDK defect: неверное сопоставление HRESULT после неизвестного handle
 

@@ -987,3 +987,13 @@ CI 41063686408 подтвердил зависимость DA Browse от CMN_XM
 namespace, DTD и C-to-C++ linkage прошли. SDK исходники не менялись. Первый
 локальный запуск использовал усечённый header, после восстановления blob SHA
 повтор прошёл. WinSDK compatibility и оставшиеся ошибки проверит новый CI.
+
+## N1 Win32 host hook — анализ до исправления
+
+Class: SDK sample host integration для форматирования сообщений ресурсов.
+Inv: probe использует настоящий Win32 module handle, не подменяет SDK error,
+DA protocol или COM; результат linked/runtime всё ещё проверяет CI.
+N+1: resource lookup и отсутствие host message table не считаются доказанной
+поддержкой локализованных ошибок; SDK source/patch остаются без изменений.
+Defect: run 41065211900 скомпилировал native core и Expat, но link завершился
+LNK2019: host не предоставил SDK `getInstanceHandle()`.
