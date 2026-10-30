@@ -17,8 +17,15 @@ if(NOT pin_result EQUAL 0)
 endif()
 set(core "${SOFTING_SDK_ROOT_NORMALIZED}/development/core")
 file(GLOB core_sources CONFIGURE_DEPENDS
-  "${core}/src/SOCmn/*.cpp" "${core}/src/SOClt/*.cpp" "${core}/src/SODaC/*.cpp"
-  "${core}/src/opc/*_i.c")
+  "${core}/src/SOCmn/*.cpp" "${core}/src/SOClt/*.cpp" "${core}/src/SODaC/*.cpp")
+if(DEFINED OPCF_MIT_GENERATED)
+  include("${CMAKE_CURRENT_SOURCE_DIR}/opcf-mit-inputs.cmake")
+  opcf_mit_inputs(opc_sources opc_include)
+else()
+  file(GLOB opc_sources CONFIGURE_DEPENDS "${core}/src/opc/*_i.c")
+  set(opc_include "${core}/src/opc")
+endif()
+list(APPEND core_sources ${opc_sources})
 # SDK embeds Expat sources into one C++ TU. Build the same pinned C sources
 # as separate C translation units so winconfig.h controls its own Windows
 # includes and its private types do not collide with the SDK headers.
@@ -36,9 +43,17 @@ add_library(softing_da_bridge STATIC ../../../../native/softing-da/adapter.cpp .
 add_executable(softing_core_probe main.cpp)
 target_link_libraries(softing_core_probe PRIVATE softing_da_bridge)
 target_include_directories(softing_da_bridge PUBLIC
-  "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/../../../../native/softing-da" "${core}/src/include" "${core}/src/opc"
+  "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/../../../../native/softing-da" "${core}/src/include" "${opc_include}"
   "${core}/src/common" "${core}/common")
 target_compile_definitions(softing_da_bridge PUBLIC
   _WINDOWS WIN32 _UNICODE UNICODE _WIN32_DCOM _CRT_SECURE_NO_WARNINGS _CRT_NON_CONFORMING_SWPRINTFS OPCL_DA_TESTING)
 target_compile_options(softing_da_bridge PUBLIC /W3 /Zc:wchar_t- /EHsc)
 target_link_libraries(softing_da_bridge PUBLIC softing_expat ole32 oleaut32 uuid advapi32 ws2_32 mpr rpcrt4)
+
+if(DEFINED OPCF_MIT_GENERATED)
+  add_dependencies(softing_da_bridge opcf_mit_guard)
+  add_dependencies(softing_core_probe opcf_mit_guard)
+  target_compile_options(softing_da_bridge PRIVATE /showIncludes)
+  target_compile_options(softing_core_probe PRIVATE /showIncludes)
+  target_link_options(softing_core_probe PRIVATE /VERBOSE:LIB)
+endif()

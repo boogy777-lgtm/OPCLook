@@ -79,3 +79,77 @@ trace, linker inputs/map and released-artifact inventory remain pending. Local
 checker tests use temporary Git repositories, not a real Windows SDK build.
 Do not mark N1.LICENSE or N4 closed until these facts and the OPC grant are
 resolved and the intended release's notices are verified.
+
+## Experimental MIT-labelled input build
+
+The **default** build still compiles Softing `src/opc` headers and `*_i.c` and
+generates its fixture proxy from Softing IDL. The applicable grant for these
+exact older copies remains open. An opt-in CMake path below selects the official
+MIT-labelled inputs; it has not been built or tested on Windows here and is not
+proof of drop-in ABI or release readiness.
+
+A source scan of all 86 complete pinned `SOCmn`, `SOClt`, `SODaC`, `SOSrv`,
+and `SODaS` top-level `.cpp` files found references to `opcerror.h` and
+`opcae_er.h` in addition to the generated interfaces. For example,
+[`SOCltElement.cpp:5`](https://github.com/SoftingIndustrial/OPC-Classic-SDK/blob/5130e763998189c822882434c43e6be2eb0174cf/development/core/src/SOClt/SOCltElement.cpp#L5)
+includes `opcerror.h`, and
+[`SODaSComServer.cpp:39–40`](https://github.com/SoftingIndustrial/OPC-Classic-SDK/blob/5130e763998189c822882434c43e6be2eb0174cf/development/core/src/SODaS/SODaSComServer.cpp#L39)
+includes both. The SDK's
+[`SOClt.h:98–103`](https://github.com/SoftingIndustrial/OPC-Classic-SDK/blob/5130e763998189c822882434c43e6be2eb0174cf/development/core/src/include/SOClt.h#L98)
+requires Common, Enum, DA, AE and Security headers. OPCF's pinned repo supplies
+three MIT-labelled helper headers (`opcerror.h`, `opcae_er.h`, `opcaedef.h`)
+in addition to the five IDLs. The two error-header bodies differ from the SDK
+copies, though their literal `#define` lines matched in the source comparison;
+that comparison does not establish full compile or runtime equivalence.
+
+To prepare an experimental isolated MIDL output on Windows from an existing
+Git checkout of the official repo (no installer or license acceptance), set up
+an x86 Developer Command Prompt and run from the OPCLook repository:
+
+```cmd
+python docs\testing\native-sdk\stage-opcf-mit-inputs.py --repo ..\opc-core-components --output ..\opcf-staged
+python docs\testing\native-sdk\generate-opcf-midl.py --source ..\opcf-staged --output ..\opcf-generated
+```
+
+The checkout must be at `efe0d1d1ea86a8a727bf26a501a261765e836766`.
+Staging reads Git objects from that commit, verifies path/blob IDs and the MIT
+header, and rejects an existing output directory. MIDL generation rechecks all
+staged blobs and requires five headers/IID sources and DA/Common proxy/dlldata
+outputs; it also copies three verified MIT-labelled helper headers. A receipt
+binds output hashes for subsequent configure/build guards; it is a local change
+detector, not authentication of the MIDL executable or proof of ABI. A failed run may
+leave an output directory: remove that disposable directory before retrying.
+This uses Windows SDK MIDL and platform imports; it does not implement COM.
+
+Configure the existing core-probe and fixture in **separate clean build
+folders**, passing both absolute paths:
+
+```cmd
+cmake -S docs\testing\native-sdk\core-probe -B ..\softing-mit-build -A Win32 -DSOFTING_SDK_ROOT=C:/path/softing-sdk -DOPCF_MIT_STAGED=C:/path/opcf-staged -DOPCF_MIT_GENERATED=C:/path/opcf-generated
+cmake -S docs\testing\native-sdk\server-fixture -B ..\fixture-mit-build -A Win32 -DSOFTING_SDK_ROOT=C:/path/softing-sdk -DOPCF_MIT_STAGED=C:/path/opcf-staged -DOPCF_MIT_GENERATED=C:/path/opcf-generated
+```
+
+In this mode CMake excludes the SDK `src/opc` include directory and `*_i.c`
+glob, explicitly compiles five generated IID sources, and builds the fixture
+proxy from generated DA/Common proxy sources. A guard verifies staged blobs and
+generated receipt at configure and build. `/showIncludes` and `/VERBOSE:LIB`
+are enabled on the relevant targets. Capture each complete clean build with
+`cmake --build <folder> --config Release --verbose --parallel 1` into separate
+UTF-8 logs, preserving exit status and logs as CI artifacts. Then for example:
+
+```cmd
+python docs\testing\native-sdk\check-opcf-include-trace.py --log bridge-includes.txt --old-opc-dir C:\sdk\development\core\src\opc --generated-dir C:\build\opcf-generated --require opcda.h --require opccomn.h --require OpcEnum.h --require opc_ae.h --require opcSec.h --require opcerror.h --require opcda_i.c --require opccomn_i.c --require OpcEnum_i.c --require opc_ae_i.c --require opcSec_i.c
+```
+
+For fixture log require `opcae_er.h`, `opcda_p.c` and `opccomn_p.c` as well. The checker scans paths,
+not language-dependent MSVC prefix text; it rejects any mention of the old
+SDK OPC path and missing required generated headers. It cannot establish that
+the log captures every compilation or that another copy exists under a
+different directory, nor that IID objects and link inputs came from the new
+source. Preserve full clean-build command lines, compiler include traces and
+linker/library inputs; verify the generated source list and final link map,
+then rerun the strict x86 Gateway, state and isolation live checks. ABI and
+feature-guard differences in MIDL output must be resolved before changing
+CMake defaults. No Windows MIDL, compiler trace or live interoperability for
+this candidate has been measured here. Notice packaging and the wider license
+and N4 gates remain open.

@@ -16,7 +16,15 @@ if(NOT pin_result EQUAL 0)
   message(FATAL_ERROR "SDK pin/source verification failed")
 endif()
 set(core "${sdk}/development/core")
-file(GLOB common_sources CONFIGURE_DEPENDS "${core}/src/SOCmn/*.cpp" "${core}/src/opc/*_i.c")
+file(GLOB common_sources CONFIGURE_DEPENDS "${core}/src/SOCmn/*.cpp")
+if(DEFINED OPCF_MIT_GENERATED)
+  include("${CMAKE_CURRENT_SOURCE_DIR}/../core-probe/opcf-mit-inputs.cmake")
+  opcf_mit_inputs(opc_sources opc_include)
+else()
+  file(GLOB opc_sources CONFIGURE_DEPENDS "${core}/src/opc/*_i.c")
+  set(opc_include "${core}/src/opc")
+endif()
+list(APPEND common_sources ${opc_sources})
 include("${CMAKE_CURRENT_SOURCE_DIR}/../core-probe/filter-embedded-expat.cmake")
 filter_embedded_expat(common_sources)
 set(expat "${core}/src/SOCmn/expat")
@@ -34,7 +42,7 @@ add_executable(opcl_da_sdk_client client-smoke.cpp ${common_sources} ${client_so
 target_compile_definitions(opcl_da_sdk_client PRIVATE OPCL_FIXTURE_CLIENT)
 foreach(target opcl_da_server opcl_da_sdk_client)
   target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
-    "${core}/src/include" "${core}/src/opc" "${core}/src/common" "${core}/common"
+    "${core}/src/include" "${opc_include}" "${core}/src/common" "${core}/common"
     "${core}/src/demo/SOServer" "${core}/src/SOSrv" "${core}/src/SODaS")
   target_compile_definitions(${target} PRIVATE _WINDOWS WIN32 _WIN32_DCOM
     _CRT_SECURE_NO_WARNINGS _CRT_NON_CONFORMING_SWPRINTFS)
@@ -45,6 +53,17 @@ endforeach()
 
 # The Windows image need not have the OPC Foundation Core Components installed.
 # Generate only the RPC proxy/stub from the pinned original interface IDL.
+if(DEFINED OPCF_MIT_GENERATED)
+  add_library(opcl_opcproxy SHARED proxy-list-mit.c proxy.def
+    "${OPCF_MIT_GENERATED}/opccomn_p.c" "${OPCF_MIT_GENERATED}/opccomn_i.c"
+    "${OPCF_MIT_GENERATED}/opcda_p.c" "${OPCF_MIT_GENERATED}/opcda_i.c")
+  target_include_directories(opcl_opcproxy PRIVATE "${OPCF_MIT_GENERATED}")
+  foreach(target opcl_da_server opcl_da_sdk_client opcl_opcproxy)
+    add_dependencies(${target} opcf_mit_guard)
+    target_compile_options(${target} PRIVATE /showIncludes)
+    target_link_options(${target} PRIVATE /VERBOSE:LIB)
+  endforeach()
+else()
 find_program(MIDL_EXECUTABLE midl REQUIRED)
 set(generated "${CMAKE_CURRENT_BINARY_DIR}/rpc")
 file(MAKE_DIRECTORY "${generated}")
@@ -60,5 +79,6 @@ add_library(opcl_opcproxy SHARED proxy-list.c proxy.def
   "${generated}/OPCCOMN_p.c" "${generated}/OPCCOMN_i.c"
   "${generated}/OPCDA_p.c" "${generated}/OPCDA_i.c")
 target_include_directories(opcl_opcproxy PRIVATE "${generated}")
+endif()
 target_compile_definitions(opcl_opcproxy PRIVATE REGISTER_PROXY_DLL _WIN32_WINNT=0x0601)
 target_link_libraries(opcl_opcproxy PRIVATE rpcrt4 oleaut32 uuid)
