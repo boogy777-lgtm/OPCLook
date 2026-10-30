@@ -48,3 +48,15 @@ IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
 CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
 TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+OPC Foundation interface definitions in the pinned Softing SDK
+Copyright (c) 1997-2002 The OPC Foundation (OPCDA.IDL)
+Copyright (c) 1998-2002 The OPC Foundation (OPCCOMN.IDL and OpcEnum.idl)
+Copyright (c) 1999-2003 The OPC Foundation (opcSec.idl)
+Copyright (c) 1997-2003 The OPC Foundation (opc_ae.idl)
+
+These upstream files state ALL RIGHTS RESERVED and refer to the License Grant
+section of the relevant OPC Specification. This notice records attribution;
+it does not determine the grant for these copies or derived interfaces. Newer
+OPC Foundation MIT-labelled versions are discussed in the inventory. See:
+https://github.com/SoftingIndustrial/OPC-Classic-SDK/tree/5130e763998189c822882434c43e6be2eb0174cf/development/core/src/opc
