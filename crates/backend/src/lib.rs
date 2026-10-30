@@ -26,10 +26,9 @@ pub fn acquisition_capabilities(
 ) -> AcquisitionCapabilities {
     use opclook_contract::model::Protocol;
     match protocol {
-        // UA maxAge=effective interval is not yet wired for CacheAllowed.
         Protocol::OpcUa => AcquisitionCapabilities {
             subscription: true,
-            cache_allowed: false,
+            cache_allowed: true,
             fresh_source: true,
             read_after_write: true,
         },
@@ -108,10 +107,7 @@ mod acquisition_tests {
         config.interval_ms = 1000;
         config.poll_freshness = PollFreshness::CacheAllowed;
         endpoint.acquisition = Some(config);
-        assert_eq!(
-            validate_acquisition(&endpoint),
-            Err(AcquisitionError::FreshnessUnsupported)
-        );
+        assert_eq!(validate_acquisition(&endpoint), Ok(()));
         let mut da = EndpointSpec::da("", "test");
         let mut config = AcquisitionConfig::da_available();
         da.acquisition = Some(config.clone());

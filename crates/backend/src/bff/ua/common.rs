@@ -63,7 +63,7 @@ pub(super) fn reply_no_connection(tx: &Sender<Event>, command: Command) {
         // These historical error operations differ from the dispatch labels.
         CommandKind::AddItems { .. } => error(Operation::Add),
         CommandKind::RemoveItems { .. } => error(Operation::Remove),
-        CommandKind::Read { keys } => send(
+        CommandKind::Read { keys } | CommandKind::ReadCached { keys, .. } => send(
             tx,
             Event {
                 origin: request_id.into(),

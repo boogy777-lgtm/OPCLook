@@ -176,6 +176,12 @@ pub enum CommandKind {
     Read {
         keys: Vec<ItemKey>,
     },
+    /// Engine-generated UA read using a bounded server cache age. Frontend
+    /// callers must use the ordinary Read or a scheduled read reservation.
+    ReadCached {
+        keys: Vec<ItemKey>,
+        max_age_ms: u32,
+    },
     Write {
         request: WriteRequest,
     },
@@ -207,7 +213,7 @@ impl CommandKind {
             CommandKind::ResolveBrowsePath { .. } => Operation::ResolveBrowsePath,
             CommandKind::AddItems { .. } => Operation::AddItems,
             CommandKind::RemoveItems { .. } => Operation::RemoveItems,
-            CommandKind::Read { .. } => Operation::Read,
+            CommandKind::Read { .. } | CommandKind::ReadCached { .. } => Operation::Read,
             CommandKind::Write { .. } => Operation::Write,
             CommandKind::ConfigureUaSubscription { .. } => Operation::Subscription,
             CommandKind::Test => Operation::Test,

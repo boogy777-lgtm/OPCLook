@@ -62,6 +62,10 @@ pub fn route_of(kind: &CommandKind) -> Route {
             Route::Unsupported(kind.operation(), BackendMsg::DaNoUaNetworkSearch)
         }
         CommandKind::BrowseViews => Route::Unsupported(kind.operation(), BackendMsg::DaNoViews),
+        CommandKind::ReadCached { .. } => Route::Unsupported(
+            kind.operation(),
+            BackendMsg::raw("UA maxAge read is not supported by the DA adapter"),
+        ),
         CommandKind::ResolveBrowsePath { .. } => {
             Route::Unsupported(kind.operation(), BackendMsg::DaNoBrowsePath)
         }

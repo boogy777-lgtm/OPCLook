@@ -2097,3 +2097,141 @@ fn b15_live_disconnect_interrupts_held_initial_load() {
         0
     );
 }
+
+// Observe the actual unencrypted SDK ReadRequest while forwarding the complete
+// conversation to the sample server. The target NodeId excludes setup reads.
+struct ReadAgeProxy {
+    url: String,
+    ages: Receiver<f64>,
+    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+impl ReadAgeProxy {
+    fn start(server: &TestServer, target: NodeId) -> Self {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server_port = server.port;
+        let (tx, ages) = channel();
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let thread = std::thread::spawn(move || {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(async move {
+                let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+                let mut tasks = tokio::task::JoinSet::new();
+                tokio::pin!(stopped);
+                loop {
+                    tokio::select! {
+                        _ = &mut stopped => break,
+                        accepted = listener.accept() => {
+                            let Ok((client, _)) = accepted else { break; };
+                            let tx = tx.clone();
+                            let target = target.clone();
+                            tasks.spawn(async move {
+                                let Ok(server) = tokio::net::TcpStream::connect(("127.0.0.1", server_port)).await else { return; };
+                                let (mut cr, mut cw) = client.into_split();
+                                let (mut sr, mut sw) = server.into_split();
+                                let upstream = async move {
+                                    loop {
+                                        let mut header = [0u8; 8];
+                                        if cr.read_exact(&mut header).await.is_err() { break; }
+                                        let len = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize;
+                                        if !(8..=1_048_576).contains(&len) { break; }
+                                        let mut frame = vec![0; len];
+                                        frame[..8].copy_from_slice(&header);
+                                        if cr.read_exact(&mut frame[8..]).await.is_err() { break; }
+                                        if &header[..4] == b"MSGF" && len > 24 {
+                                            use opcua::types::{BinaryDecodable, ContextOwned, ObjectId, ReadRequest};
+                                            let context = ContextOwned::default();
+                                            let mut body = std::io::Cursor::new(&frame[24..]);
+                                            if let Ok(id) = NodeId::decode(&mut body, &context.context()) {
+                                                if id == NodeId::from(ObjectId::ReadRequest_Encoding_DefaultBinary) {
+                                                    if let Ok(request) = ReadRequest::decode(&mut body, &context.context()) {
+                                                        if request.nodes_to_read.as_ref().is_some_and(|nodes| nodes.iter().any(|n| n.node_id == target)) {
+                                                            let _ = tx.send(request.max_age);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if sw.write_all(&frame).await.is_err() { break; }
+                                    }
+                                };
+                                let downstream = async move { let _ = tokio::io::copy(&mut sr, &mut cw).await; };
+                                tokio::select! { _ = upstream => {}, _ = downstream => {} }
+                            });
+                        }
+                    }
+                }
+                tasks.abort_all();
+                while tasks.join_next().await.is_some() {}
+            });
+        });
+        Self {
+            url: format!("opc.tcp://127.0.0.1:{port}/"),
+            ages,
+            stop: Some(stop),
+            thread: Some(thread),
+        }
+    }
+}
+impl Drop for ReadAgeProxy {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+#[test]
+fn ua_live_read_sends_requested_max_age_and_direct_read_sends_zero() {
+    let server = TestServer::start(free_port());
+    let node = server.node("Level");
+    let proxy = ReadAgeProxy::start(&server, super::values::parse_node(&node).unwrap());
+    let mut app = Harness::new();
+    let session = SessionId::new(1).unwrap();
+    let key = ItemKey::new(1).unwrap();
+    let mut endpoint = Harness::endpoint(&proxy.url);
+    let mut profile = crate::bff::model::AcquisitionConfig::ua_default();
+    profile.update_mode = crate::bff::model::UpdateMode::Poll;
+    endpoint.acquisition = Some(profile);
+    app.connect(session, endpoint).expect("connect");
+    let added = app.add_items(session, &[(key, node)]);
+    assert!(added[0].1.is_ok(), "{added:?}");
+    // AddItems may itself read attributes of the target; only the following
+    // correlated commands are under test.
+    while proxy.ages.try_recv().is_ok() {}
+    for (kind, expected) in [
+        (
+            CommandKind::ReadCached {
+                keys: vec![key],
+                max_age_ms: 1234,
+            },
+            1234.0,
+        ),
+        (CommandKind::Read { keys: vec![key] }, 0.0),
+    ] {
+        let id = app.send(session.into(), kind);
+        let reply = app.reply(id, Duration::from_secs(10)).expect("read reply");
+        assert!(
+            matches!(reply.kind, EventKind::Values { ref values } if values.len() == 1 && values[0].1.reason.is_none()),
+            "{reply:?}"
+        );
+        assert_eq!(
+            proxy
+                .ages
+                .recv_timeout(Duration::from_secs(10))
+                .expect("SDK wire ReadRequest"),
+            expected
+        );
+    }
+    app.disconnect(session);
+}

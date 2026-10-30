@@ -343,6 +343,8 @@ pub struct Engine<C> {
     timeout_queued: HashSet<(Owner, RequestId)>,
     #[cfg(test)]
     test_skip_dispatch: bool,
+    #[cfg(test)]
+    test_commands: std::cell::RefCell<Vec<Command>>,
     #[cfg(feature = "test-support")]
     test_dispatch_limit: std::cell::Cell<Option<usize>>,
     #[cfg(feature = "test-support")]
@@ -369,6 +371,8 @@ impl<C> Default for Engine<C> {
             timeout_queued: HashSet::new(),
             #[cfg(test)]
             test_skip_dispatch: false,
+            #[cfg(test)]
+            test_commands: std::cell::RefCell::new(Vec::new()),
             #[cfg(feature = "test-support")]
             test_dispatch_limit: std::cell::Cell::new(None),
             #[cfg(feature = "test-support")]
@@ -620,6 +624,7 @@ impl<C> Engine<C> {
         }
         #[cfg(test)]
         if self.test_skip_dispatch {
+            self.test_commands.borrow_mut().push(command);
             return Ok(());
         }
         self.gateway.send(command)
@@ -842,6 +847,11 @@ impl<C> Engine<C> {
         ctx: C,
         permit: Option<ReadPermit>,
     ) -> Result<RequestId, DispatchError> {
+        // Only this engine may turn a validated reservation into a cached
+        // transport read. Public callers cannot bypass reservation checks.
+        if matches!(&kind, CommandKind::ReadCached { .. }) {
+            return Err(DispatchError::ReadBusy);
+        }
         if let CommandKind::Connect { endpoint } = &kind {
             validate_acquisition(endpoint).map_err(DispatchError::InvalidAcquisition)?;
         }
@@ -1000,6 +1010,30 @@ impl<C> Engine<C> {
             self.pending_adds.retain(|(id, _), _| *id != owner);
         }
         self.next = id.successor();
+        // Coalesced explicit refresh/read-back is stronger than the polling
+        // profile, so any covered demand forces maxAge=0 for the whole Read.
+        // Subscription snapshots stay fresh until revised publishing rates
+        // are available; the Poll interval is its effective cadence here.
+        let cached_age =
+            if permit.is_some() && covered_demands.is_empty() && protocol == Protocol::OpcUa {
+                session
+                    .and_then(|id| self.sessions.get(&id))
+                    .and_then(|view| view.endpoint.acquisition.as_ref())
+                    .filter(|config| {
+                        config.update_mode == opclook_contract::model::UpdateMode::Poll
+                            && config.poll_freshness
+                                == opclook_contract::model::PollFreshness::CacheAllowed
+                    })
+                    .and_then(|config| u32::try_from(config.interval_ms).ok())
+            } else {
+                None
+            };
+        let kind = match (kind, cached_age) {
+            (CommandKind::Read { keys }, Some(max_age_ms)) => {
+                CommandKind::ReadCached { keys, max_age_ms }
+            }
+            (kind, _) => kind,
+        };
         let operation = kind.operation();
         let profile_readback_key = match (&kind, session.and_then(|id| self.sessions.get(&id))) {
             (CommandKind::Write { request }, Some(view))
@@ -1806,6 +1840,168 @@ mod tests {
         RequestId::new(n).unwrap()
     }
     use opclook_contract::model::BackendMsg;
+    fn cached_poll_engine(now: Instant) -> Engine<()> {
+        use opclook_contract::model::{AcquisitionConfig, PollFreshness, UpdateMode};
+        let mut endpoint = EndpointSpec::ua("opc.tcp://localhost:4840");
+        let mut profile = AcquisitionConfig::ua_default();
+        profile.update_mode = UpdateMode::Poll;
+        profile.poll_freshness = PollFreshness::CacheAllowed;
+        profile.interval_ms = 1234;
+        endpoint.acquisition = Some(profile);
+        let mut view = SessionRuntime::new(endpoint, now);
+        view.state = SessionState::Connected;
+        view.connection_id = Some(rid(77));
+        view.items.insert(key(1), false);
+        view.items.insert(key(2), false);
+        let mut engine = Engine::default();
+        engine.test_skip_dispatch = true;
+        engine.sessions.insert(sid(1), view);
+        engine
+    }
+
+    fn dispatch_due(engine: &mut Engine<()>, now: Instant) -> RequestId {
+        let due = engine.due(now, Duration::from_secs(60), None);
+        let [Due::Read { keys, permit, .. }] = due.as_slice() else {
+            panic!("expected one read")
+        };
+        engine
+            .send_due_read(sid(1), Protocol::OpcUa, keys.clone(), *permit, ())
+            .unwrap()
+    }
+
+    #[test]
+    fn cached_poll_uses_requested_interval_but_direct_read_stays_fresh() {
+        let now = Instant::now();
+        let mut engine = cached_poll_engine(now);
+        let id = dispatch_due(&mut engine, now);
+        assert!(
+            matches!(&engine.test_commands.borrow().last().unwrap().kind,
+            CommandKind::ReadCached { keys, max_age_ms: 1234 } if keys == &vec![key(1), key(2)])
+        );
+        engine
+            .accept_at(
+                &Event {
+                    owner: owner(1),
+                    origin: Origin::Reply(id),
+                    kind: EventKind::Values { values: vec![] },
+                },
+                now,
+            )
+            .unwrap();
+        assert!(matches!(
+            engine.send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::ReadCached {
+                    keys: vec![key(1)],
+                    max_age_ms: 1234
+                },
+                ()
+            ),
+            Err(DispatchError::ReadBusy)
+        ));
+        engine
+            .send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::Read { keys: vec![key(1)] },
+                (),
+            )
+            .unwrap();
+        assert!(matches!(
+            &engine.test_commands.borrow().last().unwrap().kind,
+            CommandKind::Read { .. }
+        ));
+    }
+
+    #[test]
+    fn coalesced_refresh_and_readback_force_fresh_poll_batch() {
+        use opclook_contract::model::{Value, WriteOutcome, WriteRequest};
+        let now = Instant::now();
+        for readback in [false, true] {
+            let mut engine = cached_poll_engine(now);
+            if readback {
+                let id = engine
+                    .send_write_with_readback(
+                        sid(1),
+                        Protocol::OpcUa,
+                        WriteRequest {
+                            key: key(1),
+                            value: Value::I64(7),
+                            type_hint: None,
+                        },
+                        (),
+                    )
+                    .unwrap();
+                engine
+                    .accept_at(
+                        &Event {
+                            owner: owner(1),
+                            origin: Origin::Reply(id),
+                            kind: EventKind::Wrote {
+                                key: key(1),
+                                result: Ok(WriteOutcome::from_ua(0, "good")),
+                            },
+                        },
+                        now,
+                    )
+                    .unwrap();
+            } else {
+                engine.request_refresh(sid(1), key(1)).unwrap();
+            }
+            dispatch_due(&mut engine, now);
+            assert!(
+                matches!(&engine.test_commands.borrow().last().unwrap().kind,
+                CommandKind::Read { keys } if keys == &vec![key(1), key(2)])
+            );
+        }
+    }
+
+    #[test]
+    fn stale_cached_poll_permit_cannot_dispatch() {
+        let now = Instant::now();
+        let mut engine = cached_poll_engine(now);
+        let due = engine.due(now, Duration::from_secs(60), None);
+        let [Due::Read { keys, permit, .. }] = due.as_slice() else {
+            panic!("read due")
+        };
+        engine
+            .send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::RemoveItems { keys: vec![key(1)] },
+                (),
+            )
+            .unwrap();
+        assert!(matches!(
+            engine.send_due_read(sid(1), Protocol::OpcUa, keys.clone(), *permit, ()),
+            Err(DispatchError::ReadBusy)
+        ));
+        assert!(
+            engine
+                .test_commands
+                .borrow()
+                .iter()
+                .all(|command| !matches!(command.kind, CommandKind::ReadCached { .. }))
+        );
+    }
+
+    #[test]
+    fn subscription_initial_snapshot_keeps_fresh_read() {
+        use opclook_contract::model::UpdateMode;
+        let now = Instant::now();
+        let mut engine = cached_poll_engine(now);
+        let view = engine.sessions.get_mut(&sid(1)).unwrap();
+        view.endpoint.acquisition.as_mut().unwrap().update_mode = UpdateMode::Subscription;
+        view.pending_initial
+            .insert(key(1), now - Duration::from_secs(2));
+        dispatch_due(&mut engine, now);
+        assert!(matches!(
+            &engine.test_commands.borrow().last().unwrap().kind,
+            CommandKind::Read { .. }
+        ));
+    }
+
     #[test]
     fn browse_action_availability_is_pure_and_execution_correlates_request() {
         use opclook_contract::actions::DomainAction;

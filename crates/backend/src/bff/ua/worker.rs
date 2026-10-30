@@ -745,7 +745,10 @@ impl CommandQueue {
 /// (browse/refresh/reconnect latency). Reads are independent best-effort polls,
 /// so they are safe to defer; they are re-ordered, never dropped.
 pub(super) fn is_control_command(kind: &CommandKind) -> bool {
-    !matches!(kind, CommandKind::Read { .. } | CommandKind::Test)
+    !matches!(
+        kind,
+        CommandKind::Read { .. } | CommandKind::ReadCached { .. } | CommandKind::Test
+    )
 }
 
 enum InitialLoad<T> {
@@ -1023,19 +1026,10 @@ impl Actor {
                 }
                 Flow::Continue
             }
-            CommandKind::Read { keys } => {
-                let values = read(&mut self.session, &keys).await;
-                self.send_event(request_id, EventKind::Values { values });
-                if self.session.timed_out {
-                    return self
-                        .close_timed_out(
-                            request_id,
-                            Operation::Read,
-                            BackendMsg::RequestTimedOutSessionClosed,
-                        )
-                        .await;
-                }
-                Flow::Continue
+            CommandKind::Read { keys } => self.read_command(request_id, keys, 0.0).await,
+            CommandKind::ReadCached { keys, max_age_ms } => {
+                self.read_command(request_id, keys, f64::from(max_age_ms))
+                    .await
             }
             CommandKind::Write { request } => {
                 let key = request.key;
@@ -1078,6 +1072,27 @@ impl Actor {
                 Flow::Continue
             }
         }
+    }
+
+    /// Dispatch a read through the existing session and timeout path.
+    async fn read_command(
+        &mut self,
+        request_id: Option<crate::bff::model::RequestId>,
+        keys: Vec<crate::bff::model::ItemKey>,
+        max_age: f64,
+    ) -> Flow {
+        let values = read(&mut self.session, &keys, max_age).await;
+        self.send_event(request_id, EventKind::Values { values });
+        if self.session.timed_out {
+            return self
+                .close_timed_out(
+                    request_id,
+                    Operation::Read,
+                    BackendMsg::RequestTimedOutSessionClosed,
+                )
+                .await;
+        }
+        Flow::Continue
     }
 
     /// Dispatches a session-operation result. A timed-out operation poisons the

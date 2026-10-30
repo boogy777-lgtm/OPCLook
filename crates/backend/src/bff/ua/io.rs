@@ -319,7 +319,11 @@ pub(super) fn parse_relative_path(path: &str) -> Result<Vec<RelativePathElement>
     Ok(elements)
 }
 
-pub(super) async fn read(session: &mut UaSession, keys: &[ItemKey]) -> Vec<(ItemKey, DataValue)> {
+pub(super) async fn read(
+    session: &mut UaSession,
+    keys: &[ItemKey],
+    max_age: f64,
+) -> Vec<(ItemKey, DataValue)> {
     let mut requests = Vec::new();
     let mut index_of: HashMap<ItemKey, usize> = HashMap::new();
     for key in keys {
@@ -343,7 +347,7 @@ pub(super) async fn read(session: &mut UaSession, keys: &[ItemKey]) -> Vec<(Item
     }
 
     let values = match session
-        .read_values_chunked(&requests, TimestampsToReturn::Both, 0.0)
+        .read_values_chunked(&requests, TimestampsToReturn::Both, max_age)
         .await
     {
         Ok(values) => values,
