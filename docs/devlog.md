@@ -1279,3 +1279,16 @@ rejectвсехunexpectedReply и nativeDa0. UIprojection/recoveryfacts/itemvalid
 Linux/Windows2/2SUCCESS. Вместе сSDK41139819035(3) иCOM41139819114(1)
 все6jobsSUCCESS. Только послеэтогопубликуютсяcodecommitsпар03/04 иих
 новаяmatrix. Это не доказательство новыхнеисполненныхtestcases.
+
+2026-10-31 measured690a830: SDK41141220207(4), COM41141220142(2),
+app41141220265(2) всеSUCCESS. OfficialMIT8inputs staged/MIDL, traces14/11
+requiredpaths nooldOPC; обаnativeварианта Gateway3/3+isolation+pending
+shutdown+hostreuse. SampleUAwire1234/0 иrequested/revised1000/2000PASS.
+Пара05review: Class=persisted legacyprofile и ambiguousWriteexception,
+Inv=checkedatomicmigration/visiblewarning, oneUnknown/noRetry/cleanup;
+N+1=mixedexplicit/invalid/savefailure/idempotence иone-shotSDKthrowaftercall;
+Defect=missingmigration инеизмеренныйN2L10 (необъявленruntimebug).
+Local3puremigration+localecompile,42mockABIstand+typedtestshim PASS;
+Settings/App иновыеC++/livependingCI. ParentSDKsourcecheckpoint pinned0.19
+иguardinstalledVCS, localtemporaryregressionPASS, actualidentitypending.
+Пара06terminalAPI/P4вработе; realUI/SDKgatesнеподмененыstand.

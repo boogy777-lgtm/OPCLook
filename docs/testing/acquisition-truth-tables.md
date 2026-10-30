@@ -420,7 +420,7 @@ live delivery, transaction correlation, teardown or two-session isolation.
 | N2L07 | Owner закрывает host при живой session thread | Busy; native host остаётся живым для завершения зависшей операции | Реальный Rust wrapper + mock ABI прошёл; sdk_pending_shutdown_live прошёл на70357117: Busy до release и финальный cleanup после |
 
 | N2L08 | Gateway Connect/Add/Read/Write/Remove через SDK preview | Обычные correlated Command/Event, raw write status, unsupported явно | Real router/adapter + mock ABI прошёл; strict Win32 sdk_gateway_live прошёл 3/3, включая Test RUNNING/FAILED/RUNNING |
-| N2L09 | Новый Gateway пока старый worker удерживает SDK host | Общий process owner повторно выдаёт существующий host; не освобождает его под вызовом | sdk_host_reuse_live добавлен: bounded A, same live SharedCore, B I/O до release; 41 mock stand/hook PASS, Win32 live pending |
+| N2L09 | Новый Gateway пока старый worker удерживает SDK host | Общий process owner повторно выдаёт существующий host; не освобождает его под вызовом | sdk_host_reuse_live добавлен: bounded A, same live SharedCore, B I/O до release; 41 mock stand/hook PASS, оба Win32 native matrix live PASS на690a830 |
 | N2L10 | SDK task выбрасывает исключение при Write | Task завершается ошибкой, Write outcome Unknown с available service HRESULT, повтора нет | Код с catch и status mapping; injection/Win32 pending |
 
 | N2L11 | Новый Gateway после idle и финальное завершение процесса | Один SDK host переиспользуется; terminate только final и ожидание ограничено | Linux mock Gateway test и strict Win32 Gateway final shutdown прошли; это idle/normal scope |
@@ -446,6 +446,6 @@ UA Engine stand проверил cache permit/fresh dominance, per-key revised g
 mixed minimum age, stale epoch и invalid/overflow ratio. Реальные backend
 sample tests `ua_live_read_sends_requested_max_age_and_direct_read_sends_zero`
 и `ua_live_reports_requested_and_server_revised_subscription_parameters`
-добавлены в обычный suite, но ещё не измерены. O01/O02/O08 не объявляются
-полностью закрытыми до SDK compile/live и UI projection; item sentinel -1
+прошли в обычном suite на690a830 (все8jobs). O01/O02/O08 не объявляются
+полностью закрытыми до оставшихся UI projection/recovery cases; item sentinel -1
 сохраняется как SDK факт, не как положительный sampling interval.

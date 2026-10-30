@@ -3,6 +3,40 @@
 Режим продолжения по поручению владельца: все оставшиеся задачи выполнять
 парами Terra High; [очередь и зависимости](remaining-work.md).
 
+## 2026-10-31 — пары03/04 приняты на `690a830`, пара05 подготовлена
+
+Head `690a830761b2ce9b33d58ffa58edb44873606106` прошёл все8jobs:
+[SDK4](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41141220207),
+[COM2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41141220142),
+[приложение Linux/Windows2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41141220265).
+Два native matrix варианта sdk/official-mit прошли Gateway3/3 каждый,
+isolation, pending shutdown и N2L09 host reuse. MIT fixture trace содержал14,
+bridge/core trace11 требуемых generated paths без старого SDK OPC каталога.
+Pinned8 inputs реально staged, MIDL и SDK baseline/patched lifecycle и
+callback→Rust regression прошли. Это измеренный build/local fixture proof,
+не полный release/license closure и не remote DA.
+
+Новые обычные sample-UA tests прошли: фактический wire maxAge1234/0,
+requested publishing1000/revised2000 и SDK item facts. Все8jobs прошли;
+это относится к данному head, не к следующим новым функциям.
+
+Пара05 reviewed/integrated privately: migration persisted recent_endpoints
+из legacy None в явныеUA Subscription/FreshSource/readback=false и
+DA Poll/Sync/Cache/readback=false; checked interval, atomic persist/retry,
+точные RU/EN/ZH warning/status и блокировка исходного файла при invalid.
+3 pure real-file migration tests и production locale compile прошли;
+3 file-I/O и2App tests ожидают CI. last_* строки не называются migrated.
+N2L10 добавляет test-only исключение после фактического SDK syncWrite,
+fixture write counter и strict Unknown/E_UNEXPECTED/no retry/cleanup test.
+42 mock-ABI tests прошли, Win32 новых C++/live ещё не измерен.
+
+Parent source audit уточнил locked UA SDK ownership:
+[проверка0.19](testing/ua-sdk-0.19-recovery-audit.md). Installed-crate VCS guard
+и его временный regression добавлены, реальная identity проверка pendingCI.
+Тонкое наблюдение SDK event stream/reconciliation/replay остаётся открытым.
+Пара06 выполняет per-key Read terminals и полный срез P4 palette/epoch guards.
+Ниже сохранена история отдельных состояний.
+
 ## 2026-10-31 — пара 04 интегрирована, новый runtime CI ожидается
 
 Два отдельных commits добавляют SDK negotiated snapshot и N2L09 host reuse.

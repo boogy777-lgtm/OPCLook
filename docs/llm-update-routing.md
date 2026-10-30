@@ -8,13 +8,14 @@
 Это входное задание для нового чата. Маршруты направляют к существующим механизмам; текущий частичный runtime срез
 ExplicitRefresh и CLI opt-in WriteReadback описан в status.md. Полный R2 не завершён.
 
-Текущий проверенный runtime: `36fa668` в PR #18; все 6 CI jobs прошли.
-Пара 01 также проверила native Test RUNNING/FAILED и межсессионную изоляцию
-при blocked device write. Пара 02 на `70357117` прошла SDK3/3 и COM, включая pending-I/O shutdown
-и clean SDK inventory guard; app run41139818993 прошёл2/2, все6 jobs success. Полный N1
-не закрыт. Пара03 добавляет bounded UA Poll maxAge и opt-in MIT build inputs,
-новый live/Windows gate pending; пара04 добавляет negotiated facts и N2L09
-host reuse, также pending нового runtime CI. Пара05 — M03/M04 и N2L10.
+Текущий проверенный runtime: `690a830` в PR #18; все8 CI jobs прошли.
+Пары03/04 подтвердили wire UA maxAge, SDK revised parameters, official MIT
+Win32 inputs и host reuse при pending write в обеих native matrix. Пары01/02
+ранее проверили native Test, isolation и bounded pending shutdown.
+Пара05 добавляет migration persisted recent и N2L10 exception: новый CI pending.
+Пара06 выполняет terminal API и P4; общий R2/N4 не завершён. Дополнительно
+[locked UA SDK source audit](testing/ua-sdk-0.19-recovery-audit.md) уточняет
+готовые recovery/Publish API и ещё отсутствующую adapter observability.
 Native DA preview имеет реальный SDK → C ABI → Rust → Gateway путь.
 Локальный strict fixture прошёл 3/3 процесса с Discover/Browse, Unicode,
 scalar/array I/O, reconnect и subscription. SDK barrier regression проверяет
