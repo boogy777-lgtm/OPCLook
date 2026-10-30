@@ -72,5 +72,7 @@ python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture
 
 `Fixture.ServerState` is an I4 control tag with initial value 1. Writes 1 and 2
 call SDK `SODaSEntry::setServerState` for Running and Failed respectively;
-other values fail. Its initial value leaves the normal SDK state unchanged.
-This fixture control is not a claim about other servers' response to Failed.
+other values fail. After `start()` succeeds, the fixture explicitly sets the SDK
+server state to Running before signaling readiness, matching the control tag.
+The SDK setter marks the state as manually set; this fixture behavior makes no
+claim about the startup state or Failed response of other DA servers.

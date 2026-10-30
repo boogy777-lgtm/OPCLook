@@ -171,6 +171,7 @@ static int run(int argc, char** argv) {
             if (!tags) result = 15;
         }
         if (result == 0 && !entry->start()) result = 16;
+        if (result == 0 && !entry->setServerState(OPC_STATUS_RUNNING)) result = 22;
         if (result == 0) {
             FILE* ready = nullptr;
             if (fopen_s(&ready, argv[1], "wb") != 0 || !ready) result = 17;
