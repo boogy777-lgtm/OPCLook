@@ -8,7 +8,10 @@
 Это входное задание для нового чата. Маршруты направляют к существующим механизмам; текущий частичный runtime срез
 ExplicitRefresh и CLI opt-in WriteReadback описан в status.md. Полный R2 не завершён.
 
-Текущий проверенный runtime: `46339cc` в PR #18; все 6 CI jobs прошли.
+Текущий проверенный runtime: `36fa668` в PR #18; все 6 CI jobs прошли.
+Пара 01 также проверила native Test RUNNING/FAILED и межсессионную изоляцию
+при blocked device write. Пара 02 добавляет pending-I/O shutdown и license
+inventory guard; их новый Win32 результат ожидается, полный N1 не закрыт.
 Native DA preview имеет реальный SDK → C ABI → Rust → Gateway путь.
 Локальный strict fixture прошёл 3/3 процесса с Discover/Browse, Unicode,
 scalar/array I/O, reconnect и subscription. SDK barrier regression проверяет
@@ -17,7 +20,8 @@ SODaCComServerDefault без SDK initialization и не вводить втор�
 Точные CI ссылки, выполненные проверки и ограничения — в начале status.md.
 Исторический N2.1 offline mapper и N2F01–N2F07 не заменяют этот live fixture.
 Следующая задача: R00/R03/R09 — remote/другой сервер, late callback,
-failure/timeout teardown, session isolation и license closure перед N4.
+failure/timeout teardown и license closure перед N4; локальный isolation gate
+пары 01 не повторять как отсутствующий.
 Production DA остаётся legacy; 3 успешных процесса не доказывают отсутствие
 всех гонок. Не повторять завершённую локальную реализацию и не объявлять
 полную миграцию по одному локальному SDK серверу.

@@ -21,6 +21,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: i686-pc-windows-msvc
+      - name: Verify reviewed SDK source inventory before patches
+        shell: pwsh
+        run: |
+          python opclook/docs/testing/native-sdk/verify-license-closure.py softing-sdk
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build ready SDK server, client and original IDL RPC proxy
         shell: cmd
         run: |
@@ -100,4 +105,18 @@ jobs:
           cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-preview --test sdk_session_isolation_live --no-run
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll --isolation -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-preview --test sdk_session_isolation_live -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Bounded shutdown with pending native device write
+        shell: pwsh
+        working-directory: opclook
+        env:
+          SOFTING_RUNTIME_LIB_DIR: ${{ github.workspace }}/softing-build/Release
+          CARGO_BUILD_JOBS: 1
+          CARGO_PROFILE_DEV_DEBUG: 0
+          CARGO_PROFILE_TEST_DEBUG: 0
+          CARGO_INCREMENTAL: 0
+        run: |
+          cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-preview --test sdk_pending_shutdown_live --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll --isolation -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-preview --test sdk_pending_shutdown_live -- --nocapture
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

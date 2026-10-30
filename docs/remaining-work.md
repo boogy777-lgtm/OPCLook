@@ -26,18 +26,18 @@
 - Native preview code `46339cc`: 6 CI jobs и 3 отдельных Gateway процесса прошли.
   Это локальная приёмка, не закрытие всех N2/N3/N4 и R2.
 
-## Текущая пара 01
+## Пары и измерения
 
-| Задача | Реализация | Приёмка |
+| Пара | Задачи | Результат |
 | --- | --- | --- |
-| N2.TEST | Test через public SDK status API, общий D6 verdict, корреляция и hex negative HRESULT | 41 mock stand tests прошли; real Running/Failed/Running требует нового CI |
-| N3.ISOLATION | SDK device-write barrier A и read/write/read-back B до release, затем cleanup | Launcher tests прошли; real two-session gate ещё не измерен |
+| 01 | N2.TEST, N3.ISOLATION | `36fa668`: все 6 CI jobs success, Gateway 3/3 и live two-session gate 1/1; см. status |
+| 02 | N3.PENDING-IO-SHUTDOWN, N1.LICENSE inventory/guard | Код и локальные проверки готовы; новый Win32 shutdown и guard полного SDK checkout ожидают CI |
+| 03 | R2 UA CacheAllowed/maxAge, N1 official MIT OPC Core build inputs | Два исполнителя работают в отдельных worktree; результат ещё не принят |
 
-На code `a004b226` SDK 3 jobs прошли. COM обнаружил исходное состояние fixture
-NOCONFIG вместо ожидаемого Running; это правильный отрицательный Test verdict.
-Gateway остановился на первом процессе; isolation не запускался. Cleanup прошёл.
-Fixture теперь явно вызывает SDK setServerState(RUNNING) после start и до ready.
-Принятие NOCONFIG как успеха не допускается. Проверка исправления ожидает CI.
+Пара 01 исправила начальное состояние fixture после честного отрицательного
+NOCONFIG verdict на `a004b226`. Проверка на `36fa668` подтвердила
+RUNNING → FAILED → RUNNING во всех трёх процессах и read/write/read-back B
+до освобождения device-write A. Это не remote/другой DA server proof.
 
 ## Очередь по зависимостям
 
@@ -60,8 +60,8 @@ Fixture теперь явно вызывает SDK setServerState(RUNNING) по�
 | N4 | Production native DA и удаление прежнего OPC COM data-plane | Native SDK capability, interop/lifetime/license gates закрыты; системный WinAPI/helper не удалён как OPC code |
 | R2.6 / N6 | Полная матрица G/D/E/S/T/C/U/M/A/O, упаковка и согласование планов | Доказательства по стабильным ID, точный code head, итоговые настройки/документы и CI; число строк CSV не число пройденных тестов |
 
-Предпочтительная следующая пара после 01: N3.LIFETIME и N1.LICENSE.
-Затем — UA acquisition/negotiation и миграция профилей. Дальнейшие пары выбирать
+После пары 03 — UA negotiated parameters и миграция профилей либо другой
+независимый готовый срез согласно результатам review/CI. Дальнейшие пары выбирать
 по готовности контрактов и непересекающемуся владению файлами.
 
 ## Внешние гейты

@@ -3,6 +3,31 @@
 Режим продолжения по поручению владельца: все оставшиеся задачи выполнять
 парами Terra High; [очередь и зависимости](remaining-work.md).
 
+## 2026-10-31 — пара 01 принята на `36fa668`, пара 02 ожидает CI
+
+На `36fa668a4b5777cbf751ee4eee866e9c1151518a` успешно завершились все
+6 jobs: [SDK — 3](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41137831955),
+[COM — 1](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41137831873),
+[приложение Linux/Windows x86 — 2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41137831806).
+Strict Gateway прошёл 3/3 отдельных процесса, каждый с RUNNING → FAILED →
+RUNNING verdict. Двухсессионный live gate прошёл: B прочитал 42, записал 77 и
+прочитал 77, пока device-write A ожидал release; затем A завершился и cleanup
+прошёл. Измеренное время isolation test — 0.31 с. Это локальный SDK fixture.
+
+Пара 02 добавляет отдельный strict pending-write shutdown test: ожидаются
+ограниченный shutdown, Busy SDK до release, один terminal write reply и
+финальное освобождение SDK после release. Он включён в Win32 COM CI;
+реальный результат этого нового сценария пока не измерен. Локально прошли
+41 mock-stand тест, launcher и compile-only проверка файла со stub Gateway.
+N1.LICENSE добавляет pinned inventory, profile guard и notices: 4 локальных
+теста checker прошли. Проверка полного SDK checkout включена в CI до patch.
+Grant точных старых OPC Foundation copies, configured include/link trace и
+release notices остаются открытыми; inventory не является legal clearance.
+
+Следующая пара 03 выполняется изолированно: UA CacheAllowed/maxAge и
+официальные MIT OPC Core build inputs. Production DA остаётся legacy;
+N1/N3/N4 не объявляются полностью завершёнными. Ниже — история состояний.
+
 ## 2026-10-31 — начальное состояние fixture для N2.TEST (CI ожидается)
 
 COM run [41136545085](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41136545085)

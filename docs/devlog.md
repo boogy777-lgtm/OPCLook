@@ -1236,3 +1236,15 @@ NOCONFIG=3; API/mapping не объявили его успехом. Fixture п�
 Running после start до ready; новый CI pending. Владелец поручил далее
 выполнять весь оставшийся план парами Terra High. Очередь remaining-work.md
 объединяет прежние R2/N/P планы, различает выполненное, pending и внешние гейты.
+
+2026-10-31 пары 01/02: `36fa668` прошёл все 6 jobs (SDK41137831955,
+COM41137831873, app41137831806). Test RUNNING/FAILED/RUNNING в Gateway3/3;
+isolation1/1 за0.31с, B42→77→77 до release A, cleanupPASS. Пара02: Class =
+bounded shutdown при pending SDK I/O и provenance build inputs; Inv = SDK
+не освобождается пока session running, reply не повторяется, drift не
+проходит guard; N+1 = существующий barrier и pinned inventory checker;
+Defect = missing live timeout acceptance и неполная source/license closure.
+Добавлен strict test и CI prepatch guard. Локально measured41mock stand,
+launcher, compile-only stubGateway,4checker tests; Win32/live нового test
+pending. Legal clearance и release inventory не установлены. Следующая
+пара03: UA cache/maxAge и MIT OPC inputs, изолированное владение.
