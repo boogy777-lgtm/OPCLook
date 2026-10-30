@@ -421,7 +421,7 @@ live delivery, transaction correlation, teardown or two-session isolation.
 
 | N2L08 | Gateway Connect/Add/Read/Write/Remove через SDK preview | Обычные correlated Command/Event, raw write status, unsupported явно | Real router/adapter + mock ABI прошёл; strict Win32 sdk_gateway_live прошёл 3/3, включая Test RUNNING/FAILED/RUNNING |
 | N2L09 | Новый Gateway пока старый worker удерживает SDK host | Общий process owner повторно выдаёт существующий host; не освобождает его под вызовом | sdk_host_reuse_live добавлен: bounded A, same live SharedCore, B I/O до release; 41 mock stand/hook PASS, оба Win32 native matrix live PASS на690a830 |
-| N2L10 | SDK task выбрасывает исключение при Write | Task завершается ошибкой, Write outcome Unknown с available service HRESULT, повтора нет | Код с catch и status mapping; injection/Win32 pending |
+| N2L10 | SDK task выбрасывает исключение при Write | Task завершается ошибкой, Write outcome Unknown с available service HRESULT, повтора нет | sdk_write_exception_live PASS обоих variants наdf2bf1d: Unknown/DaService E_UNEXPECTED, server count1, no retry, cleanup; full app head7/8 |
 
 | N2L11 | Новый Gateway после idle и финальное завершение процесса | Один SDK host переиспользуется; terminate только final и ожидание ограничено | Linux mock Gateway test и strict Win32 Gateway final shutdown прошли; это idle/normal scope |
 
@@ -449,3 +449,13 @@ sample tests `ua_live_read_sends_requested_max_age_and_direct_read_sends_zero`
 прошли в обычном suite на690a830 (все8jobs). O01/O02/O08 не объявляются
 полностью закрытыми до оставшихся UI projection/recovery cases; item sentinel -1
 сохраняется как SDK факт, не как положительный sampling interval.
+
+### Пара06 terminal API — bounded coverage, runtime CI pending
+
+14 новых реальных Engine tests через path/mock stand проверили partial/missing,
+Bad/Uncertain/reason, service/timeout/late, remove/pending-new, epoch/untracked,
+dispatch closed, ID/permit exhaustion и explicit shutdown. PendingRequest и
+sink — две проекции одного terminal, не две операции. Это не complete G/D/E/S.
+Initial push/E02, frontend consumers и Drop без explicit shutdown ещё не
+закрыты API этого среза; E02/front projection выполняет пара07. P4 actual UI,
+2 counterfactual guard regressions и4PNG ожидают новогоCI.

@@ -89,7 +89,7 @@ jobs:
         run: >
           sudo apt-get update && sudo apt-get install -y
           libxkbcommon-dev libwayland-dev libxcb1-dev libx11-dev libgl1-mesa-dev
-          libegl1-mesa-dev pkg-config fonts-noto-cjk
+          libegl1-mesa-dev mesa-vulkan-drivers pkg-config fonts-noto-cjk
       - name: scripts/check-linux.sh
         run: |
           set -o pipefail
@@ -97,3 +97,28 @@ jobs:
             scripts/ci-annotate.sh "Linux gate failed" gate-output.txt
             exit 1
           fi
+      - name: Verify P4 epoch regression against disabled and restored guards
+        shell: bash
+        run: |
+          python3 docs/testing/test-p4-epoch-baseline.py
+          python3 docs/testing/p4-epoch-baseline.py
+      - name: Render P4 palette and write confirmation for visual review
+        shell: bash
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          WGPU_BACKEND: vulkan
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/opclook-xdg"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          cargo test --locked --target x86_64-unknown-linux-gnu --features ui-snapshots --test ui_snapshots p4_palette_browse_ru -- --ignored --nocapture
+          python3 scripts/ci-p4-png.py
+      - name: Preserve P4 rendered visual evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p4-palette-visual-qa
+          path: |
+            docs/screenshots/p4-palette-browse-*.png
+            docs/screenshots/p4-palette-write-confirm-ru.png
+          if-no-files-found: warn

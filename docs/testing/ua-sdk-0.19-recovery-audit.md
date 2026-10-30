@@ -9,7 +9,8 @@ are introduced. A release dependency/notice audit remains separate.
 
 `ua-sdk-source.py` checks the installed registry crate's `.cargo_vcs_info.json`
 against this commit using locked Cargo metadata. Its temporary-file regression
-passed locally; actual installed-crate verification is pending the new CI.
+passed locally; installed-crate verification passed on df2bf1d in Linux and
+Windows CI (the Windows job later failed an unrelated PKI isolation assertion).
 A matching manifest version alone is insufficient proof of published bytes.
 No moving `latest` documentation is used as the API oracle.
 

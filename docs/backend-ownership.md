@@ -51,7 +51,7 @@ COM bindings. Общий scheduler остаётся оправданным то�
 разделяет SDK reconnect/transfer/recreation/Publish ownership и ещё открытую
 adapter observability/registration/replay приёмку. Историческое moving-latest
 наблюдение ниже не использовать как API oracle. Installed-crate VCS guard
-добавлен, его реальный CI результат ожидается.
+добавлен и прошёлнаdf2bf1d; полныйWindowsjobпозжеупалвPKIisolationtest.
 
 `crates/backend/Cargo.toml` содержит async-opcua 0.19.
 `ua/session/connection.rs` запускает SDK event loop.

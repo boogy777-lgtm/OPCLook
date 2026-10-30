@@ -3,6 +3,48 @@
 Режим продолжения по поручению владельца: все оставшиеся задачи выполнять
 парами Terra High; [очередь и зависимости](remaining-work.md).
 
+## 2026-10-31 — пара05:7/8jobs; пара06 подготовлена
+
+Head `df2bf1d55d35a38d0156894099436b1e1e4449a4`:
+[SDK4](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41143031194) и
+[COM2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41143031277) success.
+[App41143031202](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41143031202):
+Linux success, Windows integration failure в test_isolation: private PKI own
+не появился за30с после auto-search. Windows build, shared/CLI, library и
+остальные предыдущие шаги прошли. Product PKI wrong-path/root cause этим не
+установлены. Test driver теперь явно отправляет один loopback discovery через
+App вместо автоматического mDNS/LDS/adapter поиска; isolation assertions и30с
+сохранены. Новый Windows результат этой проверки pending.
+
+N2L10 реально прошёл в обоих native variants: post-syncWrite exception дал
+Unknown/DaService(0x8000ffff), fixture count1, read-back77, reconnectcount1,
+no retry и cleanup. Official-MIT test duration0.11с. Installed Cargo client
+VCS guard прошёл, поэтому audited9ad28fc подтверждён фактическим0.19 crate.
+Migration file-I/O/App tests прошли Linux и Windows library; весь head не green.
+
+Пара06 reviewed: Engine выдаёт per-key terminal result через PendingRequest и
+opt-in синхронный sink, без очереди. Missing/Bad/Uncertain/service error/timeout/
+cancellation/dispatch failure различаются, covered purposes отделены от новых
+needs после dispatch. 14 новых real-Engine/mock-Gateway targeted tests прошли;
+это не полный workspace suite. Initial push/E02, GUI/CLI sink integration и
+Drop без explicit shutdown ещё не покрыты этим API; одинаковые needs до dispatch
+coalesced, без отдельных Write IDs. Пара07 выполняет frontend/E02 integration.
+
+P4: Mod+P, typed arbitrary Browse с anchor только после correlated success,
+Write через существующую форму/confirmation, session+epoch recheck. Добавлены
+2 stale-form/Yes regressions и counterfactual runner (guards off→2 assertion
+failures, restore→2passes), плюс actual UI tests. Local3 real-actions/mock tests,
+locale3-языка и2 runner selftests прошли; GUI/actual counterfactual pendingCI.
+Подготовлен Linux wgpu render4PNG (DarkRU/EN/ZH Browse, LightRU Write confirm),
+log/artifact capture; PNG ещё не созданы и не просмотрены, P4 пока не принят.
+
+Во время работы среда очистила старый scratch Git/toolchain. Опубликованный
+snapshot восстановлен в текущем каталоге с точным tree89b4ebaf и362 blob SHA;
+private06code и изменения07 сохранены, remote/main не переписывались. Rust1.99.1
+доступен в текущем runtime, утраченный dependency cache не выдаётся за сборку.
+Пара07 также готовит preferred official-MIT/no-test-hooks private CLI bundle;
+новый Windows build/package и release/license/N4 gates остаются открытыми.
+
 ## 2026-10-31 — пары03/04 приняты на `690a830`, пара05 подготовлена
 
 Head `690a830761b2ce9b33d58ffa58edb44873606106` прошёл все8jobs:

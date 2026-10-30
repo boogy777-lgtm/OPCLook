@@ -12,8 +12,10 @@ ExplicitRefresh и CLI opt-in WriteReadback описан в status.md. Полн�
 Пары03/04 подтвердили wire UA maxAge, SDK revised parameters, official MIT
 Win32 inputs и host reuse при pending write в обеих native matrix. Пары01/02
 ранее проверили native Test, isolation и bounded pending shutdown.
-Пара05 добавляет migration persisted recent и N2L10 exception: новый CI pending.
-Пара06 выполняет terminal API и P4; общий R2/N4 не завершён. Дополнительно
+Пара05 df2bf1d: SDK4/COM2/Linux success, N2L10Unknown/noRetry реально прошёл;
+Windows integration PKI isolation-test failure, loopback driver fix pending.
+Пара06 добавляет terminal API и P4 с новым GUI/counterfactual/PNG gate pending;
+пара07 — E02/front consumers и preferred MIT/no-hook package. Общий R2/N4 открыт. Дополнительно
 [locked UA SDK source audit](testing/ua-sdk-0.19-recovery-audit.md) уточняет
 готовые recovery/Publish API и ещё отсутствующую adapter observability.
 Native DA preview имеет реальный SDK → C ABI → Rust → Gateway путь.

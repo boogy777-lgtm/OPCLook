@@ -34,8 +34,9 @@
 | 02 | N3.PENDING-IO-SHUTDOWN, N1.LICENSE inventory/guard | `70357117`: SDK3/3 и COM success, shutdown5.003833с/Busy/release/cleanup; app2/2, все6 jobs success |
 | 03 | R2 UA CacheAllowed/maxAge, N1 official MIT OPC Core build inputs | `690a830`: все8 jobs success, wire1234/0 и обе Win32/COM matrix прошли |
 | 04 | R2 negotiated subscription facts, N2L09 SDK host reuse | `690a830`: sample1000→2000 и host reuse в обоих native matrix прошли; UI/recovery ещё open |
-| 05 | R2 legacy profile migration M03/M04, N2L10 Write-task exception | Reviewed/integrated, new Settings/App/C++/live gate pendingCI |
-| 06 | R2 per-key Read terminal API, P4 typed palette/epoch guards | Два исполнителя работают изолированно; результат ещё не принят |
+| 05 | R2 legacy profile migration M03/M04, N2L10 Write-task exception | df2bf1d: SDK4+COM2+Linux success; Windows PKI isolation-test failure, bounded driver fix pending |
+| 06 | R2 per-key Read terminal API, P4 typed palette/epoch guards | Reviewed;14 Engine tests, actions/locale/runner checks прошли; actual GUI/counterfactual/4PNG pendingCI |
+| 07 | E02+GUI/CLI read-outcome consumers, preferred MIT/no-hook preview package | Два исполнителя работают изолированно; новый build/runtime результат ещё не принят |
 
 Пара 01 исправила начальное состояние fixture после честного отрицательного
 NOCONFIG verdict на `a004b226`. Проверка на `36fa668` подтвердила

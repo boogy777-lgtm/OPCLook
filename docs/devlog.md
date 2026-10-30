@@ -1292,3 +1292,19 @@ Local3puremigration+localecompile,42mockABIstand+typedtestshim PASS;
 Settings/App иновыеC++/livependingCI. ParentSDKsourcecheckpoint pinned0.19
 иguardinstalledVCS, localtemporaryregressionPASS, actualidentitypending.
 Пара06terminalAPI/P4вработе; realUI/SDKgatesнеподмененыstand.
+
+2026-10-31 df2bf1d checkpoint: SDK41143031194(4), COM41143031277(2),
+appLinuxPASS; Windows124361565035FAILEDтолькоintegration/test_isolation
+privatePKIownнепоявилсяза30сautosearch. Productrootcauseнеустановлен;
+Class=testprecondition, Inv=тотжеApp/SDKprivatePKIpath иsentinelassertions,
+N+1=loopback query безmDNS/adapter, Defect=assertзависелотобщегоautosearch.
+Тестdriverявныйloopback,30снеувеличено, новыйWinCIpending. Nativeexception
+реальноUnknownDaService0x8000ffff/count1/readback77/noRetry,0.11сofficial;
+installedUAcrateVCS9adpass. Пара06Class=readneedterminals/contextualpalette,
+Inv=coverage+epoch/oneoutcome иstaleform/Yesnotdispatch; N+1=14Engineedges
+иtypedUnknownBrowse/3locale/IME/repeat; Defect=missingperkeyAPI/P4context
+иstaleWriteguard. Local14Engine/mock+3actions/mock+locale+2runnerchecksPASS;
+fullGUI/counterfactual/PNGpendingCI. СредаудалилаoldsessionGitdb/cache;
+recoveredexactpublishedtree89b4/362blobsвcurrentdirectory,06sources/07WIP
+сохранены, remotehistoryнепереписана. FuturelocalSHAsновые,remoteheaddf2
+осталсяparentдлянефорсирующейпубликации. Пара07frontendE02/packageвработе.
