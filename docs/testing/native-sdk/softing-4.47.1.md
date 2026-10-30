@@ -40,6 +40,11 @@ CI run 41062539737 дошёл до Win32 C++ и показал несовмес�
 SDK sample предоставляет handle своего приложения для FormatMessage; test
 host использует Win32 `GetModuleHandle(nullptr)` и не содержит SDK message
 resource table. Наличие локализованных текстов ошибок этим не доказано.
+Run 41066061516 слинковал core и выполнил Win32 Expat smoke, но core probe
+завершился до итогов callback; исходный exit code не был виден. Официальный
+SOClient вызывает `initSOCmn`/`exitSOCmn` для SOFLAG_NO_DLLS; probe теперь
+использует этот lifecycle, печатает фазы с flush и запускается через bounded
+runner с печатью исходного кода. Причина прежнего завершения не установлена.
 Первое локальное воспроизведение ошибочно использовало неполный заголовок;
 он был восстановлен и проверен по Git blob перед успешным smoke.
 

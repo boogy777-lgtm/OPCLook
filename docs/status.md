@@ -26,8 +26,10 @@ VerifyGlobs из-за обратных слешей пути. Это ошибк�
 собраны раздельно на Linux: namespace/DTD и C-to-C++ linkage прошли;
 компиляция SDK core и Expat на Win32 прошла в 41065211900, но core link остановился:
 SDK host hook `getInstanceHandle` не был предоставлен. Probe теперь использует
-реальный Win32 module handle; в нём нет таблицы сообщений SDK. Windows link,
-parser runtime, init/cleanup и callback ещё ожидают нового CI. Системный Windows/DA
+реальный Win32 module handle; в нём нет таблицы сообщений SDK. Run 41066061516 собрал и слинковал Win32 core, а Expat namespace/DTD smoke
+прошёл. Core probe завершился до итогов callback, исходный exit code не был
+виден. SDK common lifecycle и диагностический runner добавлены для следующего
+CI; init/cleanup и callback пока не доказаны. Системный Windows/DA
 сервер здесь недоступен. UA SDK не менялся; старый production DA worker
 сохранён, native DA migration и полная проверка лицензий SDK closure открыты.
 Предыдущий published head 2335b8e прошёл Linux/Windows x86 CI run 41051563765;

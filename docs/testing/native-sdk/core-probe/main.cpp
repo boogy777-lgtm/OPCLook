@@ -41,8 +41,14 @@ public:
     ~ProbeCallback() override { m_established = FALSE; }
     using SODaCDataCallback::handleReadAdvise;
 };
+static void phase(const char* name) {
+    std::printf("phase: %s\n", name);
+    std::fflush(stdout);
+}
 static int run_callbacks() {
+    phase("create-group");
     CaptureGroup* group = new CaptureGroup;
+    phase("add-item");
     SODaCItem* item = group->addItem(_T("N1.probe"));
     if (!item) { group->release(); return 11; }
     OPCHANDLE valid = item->getClientHandle();
@@ -59,10 +65,12 @@ static int run_callbacks() {
     bool read_setup = true, read_correct = true, write_setup = true, write_correct = true;
     bool unchanged = true;
     {
+        phase("create-offline-callback");
         ProbeCallback callback(group);
         for (HRESULT valid_status : valid_statuses) {
             HRESULT errors[] = {E_INVALIDARG, valid_status};
             for (BYTE mode = 0; mode < 2; ++mode) {
+                phase(mode == 0 ? "read-data-change" : "read-complete");
                 HRESULT call = callback.handleReadAdvise(mode, 42, group->getOpcHandle(), S_OK, S_OK,
                                                          2, handles, values, qualities, times, errors);
                 read_setup = read_setup && SUCCEEDED(call) && group->read_count == 1 && group->read_item == item &&
@@ -70,6 +78,7 @@ static int run_callbacks() {
                              group->read_time.dwLowDateTime == 1 && item->getReadResult() == valid_status;
                 read_correct = read_correct && group->read_result == valid_status;
             }
+            phase("write-complete");
             HRESULT call = callback.OnWriteComplete(42, group->getOpcHandle(), S_OK, 2, handles, errors);
             write_setup = write_setup && SUCCEEDED(call) && group->write_count == 1 &&
                           group->write_item == item && group->write_result == valid_status;
@@ -79,6 +88,8 @@ static int run_callbacks() {
     }
     std::printf("read_setup=%d read_correct=%d write_setup=%d write_correct=%d unchanged=%d\n",
                 read_setup, read_correct, write_setup, write_correct, unchanged);
+    std::fflush(stdout);
+    phase("release-fixture");
     VariantClear(&values[0]); VariantClear(&values[1]);
     item->release();
     group->release();
@@ -87,13 +98,33 @@ static int run_callbacks() {
     return (read_correct ? 1 : 0) | (write_correct ? 2 : 0);
 }
 int main(int argc, char** argv) {
+    phase("start");
     if (!getInstanceHandle()) return 9;
     const bool baseline = argc == 2 && std::strcmp(argv[1], "--expect-existing-defect") == 0;
-    SOCmnPointer<SODaCEntry> entry = getSODaCEntry();
-    if (!entry.isNotNull() || !entry->initialize(COINIT_MULTITHREADED)) return 10;
-    const int result = run_callbacks();
-    // Always terminate the initialized SDK, including fixture failures.
-    if (!entry->terminate()) return 14;
+    phase("common-init");
+    initSOCmn();
+    phase("common-init-complete");
+    int result = 10;
+    {
+        phase("get-entry");
+        SOCmnPointer<SODaCEntry> entry = getSODaCEntry();
+        if (entry.isNotNull()) {
+            phase("entry-init");
+            if (entry->initialize(COINIT_MULTITHREADED)) {
+                phase("callbacks");
+                result = run_callbacks();
+            }
+            phase("disconnect");
+            entry->disconnect();
+            phase("terminate");
+            if (!entry->terminate()) result = 14;
+        }
+        phase("entry-release");
+        entry.release();
+    }
+    phase("common-exit");
+    exitSOCmn();
+    phase("done");
     if (result > 3) return result;
     return (baseline ? result == 0 : result == 3) ? 0 : 1;
 }

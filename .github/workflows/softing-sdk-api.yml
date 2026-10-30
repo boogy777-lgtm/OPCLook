@@ -37,6 +37,7 @@ jobs:
           python3 docs/testing/native-sdk/test-core-features.py
           docs/testing/native-sdk/test-expat-link.sh
           cmake -P docs/testing/native-sdk/core-probe/test-normalize-sdk-path.cmake
+          python3 docs/testing/native-sdk/test-run-native-probe.py
           python3 docs/testing/native-sdk/test_softing_patch.py
           python3 docs/testing/native-sdk/reproduce-softing-status.py --expect-existing-defect
           python3 docs/testing/native-sdk/reproduce-softing-status.py --patched
@@ -56,6 +57,8 @@ jobs:
           python docs\testing\native-sdk\verify-softing-sdk.py
           if errorlevel 1 exit /b 1
           cmake -P docs\testing\native-sdk\core-probe\test-normalize-sdk-path.cmake
+          if errorlevel 1 exit /b 1
+          python docs\testing\native-sdk\test-run-native-probe.py
           if errorlevel 1 exit /b 1
           python docs\testing\native-sdk\test_softing_patch.py
           if errorlevel 1 exit /b 1
@@ -91,9 +94,9 @@ jobs:
         run: |
           cmake --build softing-build --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & ./softing-build/Release/softing_expat_smoke.exe
+          python opclook/docs/testing/native-sdk/run-native-probe.py -- ./softing-build/Release/softing_expat_smoke.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & ./softing-build/Release/softing_core_probe.exe --expect-existing-defect
+          python opclook/docs/testing/native-sdk/run-native-probe.py -- ./softing-build/Release/softing_core_probe.exe --expect-existing-defect
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build and check proposed library patch
         shell: pwsh
@@ -104,5 +107,5 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build softing-build --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & ./softing-build/Release/softing_core_probe.exe
+          python opclook/docs/testing/native-sdk/run-native-probe.py -- ./softing-build/Release/softing_core_probe.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

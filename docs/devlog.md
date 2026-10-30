@@ -997,3 +997,16 @@ N+1: resource lookup и отсутствие host message table не счита�
 поддержкой локализованных ошибок; SDK source/patch остаются без изменений.
 Defect: run 41065211900 скомпилировал native core и Expat, но link завершился
 LNK2019: host не предоставил SDK `getInstanceHandle()`.
+
+## N1: SDK lifecycle и диагностика Win32 probe
+
+Class: host SDK lifecycle и диагностика исполняемого test probe.
+Inv: `initSOCmn` предшествует созданию entry, SDK владеет COM, entry
+освобождается до `exitSOCmn`; исходный код процесса и timeout видимы в CI.
+N+1: ошибка initialize, callback fixture или terminate проходит освобождение;
+ненулевой код и timeout не превращаются в успех. До нового CI причина падения
+не доказана; synthetic callback не проверяет COM advise и физический сервер.
+Defect: run 41066061516 скомпилировал и слинковал core, Win32 Expat smoke
+прошёл, но core probe завершился до итогов callback; фактический код был
+скрыт оболочкой CI. Пример SDK требует initSOCmn/exitSOCmn при SOFLAG_NO_DLLS,
+а probe их не вызывал. Добавлены SDK lifecycle и flush фаз; без изменения SDK.
