@@ -296,6 +296,13 @@ unsafe extern "C" {
     #[cfg(feature = "native-da-test-hooks")]
     fn opcl_da_test_async_last_token(session: *mut c_void, token: *mut u32) -> i32;
     #[cfg(feature = "native-da-test-hooks")]
+    fn opcl_da_test_async_facts(
+        session: *mut c_void,
+        flags: *mut u32,
+        submit: *mut i32,
+        item: *mut i32,
+    ) -> i32;
+    #[cfg(feature = "native-da-test-hooks")]
     fn opcl_da_test_async_is_pending(session: *mut c_void, pending: *mut u32) -> i32;
     #[cfg(feature = "native-da-test-hooks")]
     fn opcl_da_test_arm_write_exception() -> i32;
@@ -609,6 +616,15 @@ impl TestAsyncSessionLease {
         // SAFETY: the lease retains the session; the SDK slot serializes token access.
         check(unsafe { opcl_da_test_async_last_token(session.ptr.as_ptr(), &mut token) })?;
         Ok(token)
+    }
+    pub fn facts(&self) -> Result<(u32, i32, i32), Error> {
+        let session = self.session.as_ref().ok_or(Error::InvalidHandle)?;
+        let (mut flags, mut submit, mut item) = (0, 0, 0);
+        // SAFETY: the lease owns the live session; outputs are writable for this call.
+        check(unsafe {
+            opcl_da_test_async_facts(session.ptr.as_ptr(), &mut flags, &mut submit, &mut item)
+        })?;
+        Ok((flags, submit, item))
     }
     pub fn prepare(&mut self) -> Result<(), Error> {
         let session = self.session.as_ref().ok_or(Error::InvalidHandle)?;

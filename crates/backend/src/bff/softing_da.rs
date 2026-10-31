@@ -240,6 +240,12 @@ impl TestManagerAsyncLease {
             .map(super::softing_scalar::decode_read_outcome)
             .map_err(|e| format!("async read: {e:?}"))
     }
+    /// Flags: call attempted, SDK returned, submit item known, matching callback observed.
+    pub fn facts(&self) -> Result<(u32, i32, i32), String> {
+        self.lease
+            .facts()
+            .map_err(|e| format!("async facts: {e:?}"))
+    }
     pub fn retire(&mut self, timeout_ms: u32) -> Result<(i32, i32), String> {
         self.lease
             .wait_retire(timeout_ms)

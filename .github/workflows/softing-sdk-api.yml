@@ -47,6 +47,7 @@ jobs:
           python3 docs/testing/native-sdk/test-core-features.py
           python3 docs/testing/native-sdk/test-async-empty-callback.py
           python3 docs/testing/native-sdk/test-async-generic-source.py
+          python3 docs/testing/native-sdk/test-async-facts-source.py
           python3 docs/testing/native-sdk/test-async-task-destruction.py --task-source "$SOFTING_SDK_ROOT/development/core/src/SOClt/SOCltTask.cpp"
           python3 docs/testing/native-sdk/test-primitive-array-source.py
           python3 docs/testing/native-sdk/test-late-callback-gate.py

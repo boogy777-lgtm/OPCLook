@@ -1068,6 +1068,16 @@ static bool test_async_terminal(const PushState& state) {
         (test_async_admission_unknown(state) ? state.async_done :
          (FAILED(state.async_submit_result) || (state.async_sdk_item_known && FAILED(state.async_submit_item)) || state.async_done));
 }
+// A snapshot, not a second SDK operation; values are meaningful only under their flags.
+extern "C" int32_t opcl_da_test_async_facts(OpclDaSession* session, uint32_t* flags, int32_t* submit, int32_t* item) try {
+    if (!session || !session->push || !flags || !submit || !item) return E_INVALIDARG;
+    std::lock_guard<std::mutex> lock(session->push->mutex);
+    const auto& state = *session->push;
+    *flags = (state.async_call_attempted ? 1u : 0u) | (state.async_sdk_returned ? 2u : 0u) |
+             (state.async_sdk_item_known ? 4u : 0u) | (state.async_done ? 8u : 0u);
+    *submit = state.async_submit_result; *item = state.async_submit_item;
+    return S_OK;
+} catch (...) { return E_UNEXPECTED; }
 // Nonblocking poll: a timed-out request remains pinned until the SDK task and
 // completion are terminal. Only the serialized session owner may call this.
 extern "C" int32_t opcl_da_test_async_retire(OpclDaSession* session, OpclDaReadI4* out) try {
