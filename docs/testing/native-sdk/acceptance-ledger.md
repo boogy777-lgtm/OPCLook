@@ -110,9 +110,10 @@ The current production selector deliberately rejects `DaReadMethod::Async`; no
 capability is enabled by these tests. The SDK owner remains the existing
 server/group worker, callback and COM transport. Async fields within
 `PushState`, `TestAsyncReadTask` and `TestAsyncSessionLease` are gated by
-`OPCL_DA_TESTING`/`native-da-test-hooks`; they cover one pending I4 read,
+`OPCL_DA_TESTING`/`native-da-test-hooks`; they cover one pending bounded single-item read,
 non-reused transaction tokens and retained host/session ownership. This is a
-prototype, not a generic asynchronous Gateway route. Source and test details
+prototype, not a production asynchronous Gateway route. The separately armed
+test-only Gateway correlation case has bounded live acceptance below. Source and test details
 are in [DA Async audit](da-async-audit.md) and [session lease](async-session-lease.md).
 
 The next implementation should remain bounded and preserve SDK ownership:
@@ -191,3 +192,19 @@ cleanup checks passed. Other native gates also passed. These outcomes cover
 the stated local test-only scope, not remote DA, old callbacks crossing Connect,
 all async failures/versions, cancellation or production Async adoption.
 Production Async remains Unsupported.
+
+
+### Prepared forced DA2/DA3 synchronous routes (pair29)
+
+[Version probes](version-routes.md) generalize the existing test-only early-force
+open; production default and the DA1 wrapper remain unchanged. Pinned SDK source
+fragments compiled with COM stubs verify DA2 interface filtering and Cache versus
+Device selection, plus DA3 ReadMaxAge forwarding. The fixture driver checks
+per-read target counter deltas: DA2 UINT32_MAX→Cache,0/1234→Device; DA3 all three
+ages→syncMaxAge. That measures request kinds, not numeric age arriving at the
+server, cache freshness or a physical DA2/DA3-only server.
+
+Root runtime/mock54/54 and actual-source/stub guards passed, including a
+wrong-kind counterfactual. Two independent live entries are wired into each COM
+input. Actual Win32 compilation, execution and cleanup are pending the new head.
+This is Sync route evidence, not Async version/cancellation admission or N4.

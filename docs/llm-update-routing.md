@@ -8,7 +8,7 @@
 Это входное задание для нового чата. Маршруты направляют к существующим механизмам; текущий частичный runtime срез
 ExplicitRefresh и CLI opt-in WriteReadback описан в status.md. Полный R2 не завершён.
 
-Последний принятый exact code head — `f787f43`, все9 jobs; generic test-only
+Последний принятый exact head — `06dfc79`, все9 jobs; generic test-only
 Async fixture прошёл обе i686 COM matrix. SDK readiness/racefix/drain — отдельный
 reviewed research packet, без production pin/App change, только одна subscription
 в ReactivatedSession. Актуальные scope/gaps и следующая пара находятся в
@@ -18,6 +18,11 @@ reviewed research packet, без production pin/App change, только одн�
 [namespace source audit](testing/ua-sdk-namespace-cache-audit.md), без принятого
 namespace fix или production Async. Не восстанавливать эти результаты из старых
 чекбоксов и не считать allocated token серверным acceptance.
+Пара29: [DA2/DA3 routes](testing/native-sdk/version-routes.md) подготовлены для
+actual обоих COM inputs (pending); [ACK results](testing/ua-sdk-ack-results-audit.md)
+— SDK-owned bounded observations с unit/source proof, не production pin change.
+ACK-specific uncertainty не заменяет recovery history flag или App events.
+
 
 Полностью принятый runtime: `690a830` (8/8 jobs). На `cb3da7d` SDK4/COM2
 прошли; App build/shared/library прошли, две exact menu-label assertions

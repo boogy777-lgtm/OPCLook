@@ -1,5 +1,33 @@
 # Текущий статус
 
+## 2026-10-31 — пара29: DA2/DA3 routes и SDK Publish ACK results
+
+Последний accepted exact `06dfc796e08cd9c533458306002f78d36de3b179`
+прошёл9/9: [SDK4](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41179520507),
+[COM2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41179520461),
+[App2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41179520429),
+[package1](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41179520430).
+
+Новые test-only DA2/DA3 probes используют тот же early-force SDK open и inactive
+group, сохраняя production zero/default и DA1 ABI. DA2 проверяет Cache для
+UINT32_MAX, Device для0 и1234; DA3 — syncMaxAge request kind для всех трёх ages.
+Fixture counters измеряют вид запроса; числовой age на сервере не измерен.
+Pinned SDK fragments со stubs проверяют forwarding; root runtime/mock54/54,
+actual-source/stub route guards и before/after wrong-kind check прошли.
+Два отдельных live gate включены в оба COM inputs, actual Win32 pending нового
+head. [Scope](testing/native-sdk/version-routes.md); production Async Unsupported.
+
+[SDK ACK result candidate](testing/ua-sdk-ack-results-audit.md) хранит bounded
+latest summary и отдельный ACK-specific sticky flag; notifications/callback и
+more_notifications сохраняются, status retry не добавлен. Guard commit означает
+местное завершение владения, не server acceptance. Root fresh exact-source
+counterfactual упал на ожидаемой проверке; fixed3/3, existing ACK guards2/2 и
+recovery16/16 прошли. Runner аутентифицирует архив по Cargo.lock, сверяет все40
+файлов, отклоняет symlinks/лишние файлы/пересечения путей и сохраняет старый log;
+quick guards прошли. Это in-process SDK research, не wire/Windows/App acceptance.
+SDK production pin/App не меняются; getter нельзя вызывать из SDK callback
+или под backend identity lock. Namespace gate и остальные N4/external gates открыты.
+
 ## 2026-10-31 — пара28: Async Gateway fixture и namespace source audit
 
 Точный code head `f787f43842756c58ab57beeb689e09ede9e7c920` прошёл9/9:

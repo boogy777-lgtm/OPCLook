@@ -69,3 +69,25 @@ records exact locked SDK blob identities and the unguarded post-Read commit
 path. Independent static review accepted the source-only description. There is
 no reproduced NewSession cache failure or verified fix for that slice; its
 unfinished SDK/test copies are excluded. This remains an adoption gate.
+
+
+## Bounded SDK Publish ACK-result candidate (pair29)
+
+The [ACK-result overlay and runner](ua-sdk-ack-results-audit.md) extend the existing
+SDK service owner. Per-position exact Good is distinct from non-exact raw status,
+missing and excess results. A fixed-size latest summary and Session-object-lifetime
+ACK-specific uncertainty are observable; this is not a durable event journal or
+a replacement for republish history/App state. Callback notification delivery and
+more_notifications remain independent. Local guard commit does not assert server
+ACK acceptance, and no status retry is introduced. Historical request IDs do not
+control a current subscription incarnation. The getter takes the SDK state mutex:
+query outside callbacks and backend identity locks.
+
+Both owner and independent root fresh runs authenticated the published client
+archive against Cargo.lock and applied ordered overlays. Counterfactual summary
+omission failed as expected; fixed3/3, cancellation/incarnation2/2 and recovery16/16
+passed. All40 package files and isolated paths were checked; corruption, source
+change, extras, symlinks, path overlap and log preservation guards passed. These
+are in-process SDK response tests with synthetic opaque callback data, not wire
+decoder/live server/Windows/GUI or production adoption. Namespace, multiple
+subscriptions, transfer/secure interleavings and final candidate adoption remain open.
