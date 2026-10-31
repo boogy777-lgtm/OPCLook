@@ -371,11 +371,44 @@ fn ui4_first_value_after_adding_a_row_is_not_highlighted() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    let key = app.seed_row(sid(1), "ns=2;s=A", "Level", Value::Empty);
-    // Still pending: the first value arrives.
-    app.rows_mut_for_test()[0].pending = true;
+    app.record_dispatches_for_test();
+    assert!(app.add_items(sid(1), vec![("ns=2;s=A".into(), "Level".into())]));
+    let key = app.rows()[0].key;
+    let add = app
+        .dispatched_for_test()
+        .into_iter()
+        .find(|command| {
+            matches!(
+                command.kind,
+                opclook::bff::model::CommandKind::AddItems { .. }
+            )
+        })
+        .and_then(|command| command.request_id)
+        .expect("Add request");
+    // Early push is held until the real registration acknowledgement.
     push_value(&mut app, key, Value::F64(5.0), QualityKind::Good);
+    assert!(app.rows()[0].pending);
     assert!(changed_at(&app, key).is_none(), "pending → value: no flash");
+    app.on_event_for_test_with_request(
+        sid(1),
+        add,
+        EventKind::AddItems {
+            results: vec![(
+                key,
+                Ok(opclook::bff::model::ItemInfo {
+                    data_type: None,
+                    type_id: None,
+                    writable: false,
+                }),
+            )],
+        },
+    );
+    assert!(!app.rows()[0].pending);
+    assert!(matches!(app.rows()[0].value, Value::F64(5.0)));
+    assert!(
+        changed_at(&app, key).is_none(),
+        "first registered value: no flash"
+    );
     // Registered but waiting for the first value (placeholder quality).
     app.rows_mut_for_test()[0].value = Value::Empty;
     app.rows_mut_for_test()[0].quality = opclook::app::RowQuality::Waiting("waiting".into());
