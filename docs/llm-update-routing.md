@@ -14,6 +14,12 @@ ExplicitRefresh и CLI opt-in WriteReadback описан в status.md. Полн�
 и preferred MIT/no-hook package reviewed privately. Пара08 раздельные времена
 и native Device adapter reviewed privately; пара09 выполняет Engine integration
 и actual package/CI proof. Не называть новые private code heads принятым runtime.
+Локальная интеграция77869bd прошла full App integration и реальные counterfactual
+P3/P4; Engine88/App264/CLI18 измерены на согласованных отдельных деревьях. Windows
+PKI isolation47e6558 реально1/1 pass6.41с; Windows всего head ещё не green.
+G-R2/fairness/Drop исправлены, см. read-matrix-results;8G actual combinations
+отделены от120 early guards, все128D измерены. Следующая UA recovery ветка имеет
+known failed strict-first notification; не закрывать её числом3 других live passes.
 Общий R2/N4 открыт. Дополнительно
 [locked UA SDK source audit](testing/ua-sdk-0.19-recovery-audit.md) уточняет
 готовые recovery/Publish API и ещё отсутствующую adapter observability.

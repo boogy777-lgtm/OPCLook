@@ -3,6 +3,58 @@
 Режим продолжения по поручению владельца: все оставшиеся задачи выполнять
 парами Terra High; [очередь и зависимости](remaining-work.md).
 
+## 2026-10-31 — пары07–12: локальные реальные проверки и подготовка Windows
+
+Текущий интегрированный code `77869bd` ещё не назван Windows-green.
+Восстановлены Cargo sources; последующие проверки используют настоящий SDK0.19,
+не прежние stubs. Измерено на Linux: весь App integration suite прошёл,
+включая ui_interactions257/257 (один отдельный Windows-only ignored), table21/21,
+theme19/19 и PKI isolation. P4 targeted19/19; реальные counterfactual runners
+отключили только guards, получили2/2 ожидаемых assertion failures дляP4 и1/1
+дляP3, восстановили точные файлы и получили2/2 и1/1 passes. PNG ещё требуют
+рендеринга/личного просмотра; этим они не заменены.
+
+Новые реальные Cargo проверки отдельных согласованных деревьев: Engine88/88,
+App264/264, CLI18/18; CLI sample live2/2, backend239/239 ранее прошли на том же
+неизменённом backend code. Native Rust adapter44/44 с mock ABI прошёл; это не
+Windows COM. Уточнение прежней диагностики: на опубликованном47e6558 actual
+Windows PKI isolation1/1 прошёл за6.41с ([App run](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41148984434)).
+SDK4/4 и COM2/2 также success ([SDK](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41148984433),
+[COM](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41148984417)); App целиком
+не green из-за трёхP4 тестов, исправленных и проверенных локально после этого.
+
+Пара10: общий typed payload validator до dispatch (policy1MiB UTF-8/bytes,
+depth32, nodes/children65536) сохраняет приоритет unavailable/epoch/registration.
+GUI/CLI сообщают отказ без исходного payload. P3 защищает numeric/checkbox IME,
+обычный ввод/commit/pointer сохранён; integer drag speed1 вместо0.25 — осознанная
+UI policy для работающего keyboard step, float speed не менялся. Инвентарь P5:
+[локальные компоненты](reports/p3-p5-followup.md). Physical Windows IME/layouts
+и native accessibility отдельно открыты.
+
+G-R2 regression исправлен: pending Disconnect с connection_id=None больше не
+планирует Read;6 старых Connected fixtures получили действительную epoch.
+Drop теперь завершает pending/reserved/in-flight read needs через прежний
+cancel_reads; explicit shutdown→Drop не дублирует terminal (2 actual tests).
+S11 fairness: ожидающий due strong Read имеет приоритет перед новым Browse;
+существующая GUI AddChildren queue сохраняет исходный item/epoch и ждёт без
+pop/loss/busy-spin. Typed Deferred отделён от failure, CLI получает явный отказ
+до RequestId. Периодический Poll не запрещает Browse навсегда.
+
+[Матрица](testing/read-matrix-results.md): измерены все128D (104 dispatch/24 no-read).
+128G не объявлены128 одновременно достижимыми состояниями:8 actual combinations,
+остальные120 — настоящие ранние guards/недоступная FreshSource. Есть реальные
+old-epoch/Remove/coalescing/fairness/Drop проверки, не копия формулы CSV.
+
+Следующая пара backend reviewed privately: UA SDK stream recovery/reconciliation,
+namespace/type invalidation и shared bounded URI identity;3 sample recovery
+сценария прошли на отдельном дереве. Строгий первый43.5 после ReactivatedSession
+реально не доставлен, поздний44.5 доставлен; это известный незакрытый SDK/history
+gap, не green за счёт ignored. Engine/UI/CLI consumers и защита Browse/metadata
+после NewSession интегрируются отдельно. Native Async пока только fail-closed
+selector и test-only SDK prototype, actual i686 proof pending; product capability
+не включена. N1 nohook package, Windows Device/readback, source/license closure,
+remote/other-server и N4 production gates остаются открыты до своих доказательств.
+
 ## 2026-10-31 — пары07/08 подготовлены, интеграция09
 
 На `cb3da7d` SDK4/4 и COM2/2 прошли: [SDK](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41146777682),

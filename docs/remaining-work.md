@@ -38,7 +38,10 @@
 | 06 | R2 per-key Read terminal API, P4 typed palette/epoch guards | cb3: SDK4/COM2 success; App252 library tests/platform прошли, menu-label assertions fixed47e6558; actual counterfactual/4PNG pendingCI |
 | 07 | E02+GUI/CLI read-outcome consumers, preferred MIT/no-hook preview package | Code reviewed;6 Engine+2 buffer tests и7 packaging+4 license tests локально; actual app/package pendingCI |
 | 08 | R2.T distinct time facts/ordering, N2 Device/Fresh read | Code reviewed;5 time policy+1 propagation и43 native mock tests; integration/Win32/GPU pending |
-| 09 | Engine native Fresh/readback integration, CI/nohook packaged CLI proof | Выполняются двумя Terra High; ownership разделён между Engine/backend и workflows/scripts |
+| 09 | Engine native Fresh/readback integration, CI/nohook packaged CLI proof | Code reviewed; actual Engine/CLI/Linux tests прошли, новый Win32/package proof pending |
+| 10 | P2 payload limits, P3/P5 embedded/numeric controls and inventory | Реальные Engine/App/CLI и GUI tests прошли; PNG/native Windows input отдельно |
+| 11 | SDK UA recovery/identity, SDK DA Async source/prototype | UA3 live scenarios pass privately; strict-first notification failed; Async test-only/no production cap, i686 pending |
+| 12 | G/D/fairness/Drop, UA Engine/App/CLI consumers | Engine88/App264/CLI18 и full GUI integration прошли для fairness/Drop; UA consumer/late Browse scope ещё интегрируются |
 
 Пара 01 исправила начальное состояние fixture после честного отрицательного
 NOCONFIG verdict на `a004b226`. Проверка на `36fa668` подтвердила

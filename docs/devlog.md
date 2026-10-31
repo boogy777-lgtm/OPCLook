@@ -1326,3 +1326,29 @@ recoveredexactpublishedtree89b4/362blobsвcurrentdirectory,06sources/07WIP
   assertions и видимого Ctrl+P (47e6558); новый CI ещё ожидается.
 - Пара09 выполняет native Fresh/readback capability/permit integration и отдельный
   actual nohook packaged CLI build/fixture read. External/legal/N4 gates открыты.
+
+## 2026-10-31 — реальные gates после восстановления Cargo cache
+
+Class G-R2/S11/E11/P2/P3/P4/P5: epoch admission, очередь и UI input.
+Inv: pending Disconnect не даёт Read; due strong demand получает safe boundary
+перед Browse2; Deferred не теряет initial tree item; Drop завершает needs один раз.
+N+1: continuous Browse+sessionB, grace100s, Poll не блокирует Browse, held repeat,
+early push требует AddOK, hover Time должен быть физически видимым.
+
+Измеренные результаты и exact scope перечислены в начале status.md: Engine88,
+App264, CLI18; full Linux GUI integration257/table21/theme19; P4 target19,
+real guard-disabled/restored P4(2) иP3(1) прошли нужную последовательность.
+Native44 — mock ABI, не Win32; Windows PKI47e1/1 за6.41с подтверждён actual log.
+До этого новые тестовые drivers ошибочно ждали Read при pending root Browse,
+считали synthetic repeat без held-key настоящим repeat и hover невидимой Time
+ячейки. Исправлены реальные последовательности без ослабления guards; Source/
+Server/Received вTime fixture различаются, pending first push применяется послеAddOK.
+
+Подготовленный Windows batch включает Device+Engine readback и nohook packaged
+CLI read. Отдельные UA recovery/namespace/metadata branches ещё review/private;
+strict first notification реально failed, поздний sample и NewSession проходят.
+Никаких production Async/native DA или release/legal clearance этим не включено.
+
+Большие debug artifacts заполнили временный диск; root удалил только свой
+воспроизводимый Cargo target, исходники и logs сохранены. Последующие локальные
+сборки debug-info=0/incremental=0, без изменения debug assertions/opt policy.
