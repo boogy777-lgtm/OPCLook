@@ -231,6 +231,7 @@ static int run(int argc, char** argv) {
         }
         entry->stop();
         exception_count_cache.release();
+        device_read_count_cache.release();
         if (isolation_entered) CloseHandle(isolation_entered);
         if (isolation_release) CloseHandle(isolation_release);
     } else result = 19;
