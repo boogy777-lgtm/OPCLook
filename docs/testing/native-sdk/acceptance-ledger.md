@@ -143,7 +143,9 @@ The next implementation should remain bounded and preserve SDK ownership:
    pinned-source candidate and synthetic test are not a production SDK patch
    or real Win32 cancellation proof; do not repeat the old null-pointer crash
    diagnostic. Cancellation must not be presented as guaranteed completion.
-6. DA2 device semantics and DA3 max-age need explicit negotiated-path tests.
+6. Forced DA2/DA3 Sync request routes are measured below. Async negotiation,
+   numeric max-age at the server and cache-freshness/other-server behavior remain
+   separate gates.
    DA1's server-assigned cancel ID and early-completion ordering need a
    separate correlation design; do not silently route it through a DA2/3
    transaction assumption. The local forced DA1 **Sync** result above is not
@@ -194,7 +196,7 @@ all async failures/versions, cancellation or production Async adoption.
 Production Async remains Unsupported.
 
 
-### Prepared forced DA2/DA3 synchronous routes (pair29)
+### Accepted forced DA2/DA3 synchronous routes (pair29)
 
 [Version probes](version-routes.md) generalize the existing test-only early-force
 open; production default and the DA1 wrapper remain unchanged. Pinned SDK source
@@ -205,6 +207,11 @@ ages→syncMaxAge. That measures request kinds, not numeric age arriving at the
 server, cache freshness or a physical DA2/DA3-only server.
 
 Root runtime/mock54/54 and actual-source/stub guards passed, including a
-wrong-kind counterfactual. Two independent live entries are wired into each COM
-input. Actual Win32 compilation, execution and cleanup are pending the new head.
+wrong-kind counterfactual. Two independent live entries ran in each COM
+input on exact22a. Both Windows x86 jobs passed compilation, all route assertions
+and strict fixture cleanup: [SDK inputs124547050998](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41204614566/job/124547050998)
+and [official-MIT124547051147](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41204614566/job/124547051147).
+Forced/selected versions512/768 and inactive group were observed; for ages
+MAX/0/1234 the total/cache/device deltas were DA2:1/1/0,1/0/1,1/0/1 and
+DA3:1/0/0 each. All9 jobs for22a passed.
 This is Sync route evidence, not Async version/cancellation admission or N4.

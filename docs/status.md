@@ -2,6 +2,17 @@
 
 ## 2026-10-31 — пара29: DA2/DA3 routes и SDK Publish ACK results
 
+Exact code `22a134866bdad3dfdc487156cb9613ba74c2238f` прошёл9/9:
+[SDK4](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41204614557),
+[COM2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41204614566),
+[App2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41204614561),
+[package1](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41204614562).
+Оба COM inputs выполнили DA2 и DA3 probes со strict cleanup PASS: forced=selected
+512/768, group connected1/started0, sample42 и nonzero timestamp. DA2 deltas
+дляMAX/0/1234:1/1/0,1/0/1,1/0/1; DA3 —1/0/0 для каждого age.
+Это local forced SDK route proof, не числовой age на сервере или physical DA2/3.
+SDK ACK overlay отдельно принят как unit/source research, без production pin change.
+
 Последний accepted exact `06dfc796e08cd9c533458306002f78d36de3b179`
 прошёл9/9: [SDK4](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41179520507),
 [COM2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41179520461),
@@ -14,8 +25,8 @@ UINT32_MAX, Device для0 и1234; DA3 — syncMaxAge request kind для все
 Fixture counters измеряют вид запроса; числовой age на сервере не измерен.
 Pinned SDK fragments со stubs проверяют forwarding; root runtime/mock54/54,
 actual-source/stub route guards и before/after wrong-kind check прошли.
-Два отдельных live gate включены в оба COM inputs, actual Win32 pending нового
-head. [Scope](testing/native-sdk/version-routes.md); production Async Unsupported.
+Два отдельных live gate выполнились в обоих COM inputs на22a; actual Win32
+результат принят выше. [Scope](testing/native-sdk/version-routes.md); production Async Unsupported.
 
 [SDK ACK result candidate](testing/ua-sdk-ack-results-audit.md) хранит bounded
 latest summary и отдельный ACK-specific sticky flag; notifications/callback и

@@ -6,13 +6,12 @@
 
 ## Последний подтверждённый срез
 
-`06dfc79` также прошёл все9 jobs (SDK4/COM2/App2/package1),
-сохранив accepted code f787 и обновлённые receipts. Новый test-only
-Gateway Async fixture прошёл1/1 в обоих i686 COM inputs: SDK0.32с,
-official-MIT0.33с, обе strict cleanup PASS. Generic single-slot value fixture
-и прежние native gates также прошли. Production Async остаётся Unsupported.
-Это заменяет pending verdict исторических строк только для вошедшего кода;
-accepted test-only correlation не означает production transaction/cancel policy.
+`22a1348` прошёл все9 jobs (SDK4/COM2/App2/package1). Forced DA2 иDA3
+Sync probes прошли в обоих i686 COM inputs со strict cleanup, как и прежние
+native gates. Per-read counter deltas доказывают request kind; числовой max-age
+на сервере и physical/remote interop остаются отдельными проверками. SDK ACK
+candidate принят только как unit/source research3+2+16. Production Async
+остаётся Unsupported. Подробные receipts и scope — в status и двух ledgers.
 
 SDK readiness/racefix/drain принят как воспроизводимый исследовательский
 артефакт: [точные измерения и границы](testing/ua-sdk-readiness-drain-proof.md).
@@ -76,14 +75,15 @@ Production SDK pin/App не меняются; общий порядок Push/Rea
 | 26 | Forced SDK DA1 source route, generic single-slot Async values | DA1 passed both81f COM; generic fixture passed both6c COM with cleanup; no physical DA1/productionAsync claim |
 | 27 | Native generic CI acceptance, SDK shared recovery guard and scoped drain | 6c all9green; SDK16+ACK2 and fresh Engine15.45с/Closed30.93с research accepted; one-subscription ReactivatedSession only |
 | 28 | SDK namespace-cache identity audit, test-only native Async Gateway correlation | Namespace source-only risk, no measured fix; Gateway mock54/49-nohooks, Linux typecheck and both f787 COM live gates passed; no production Async claim |
-| 29 | Negotiated DA2/DA3 Sync routes, SDK Publish per-ACK results | DA source/mock54 and pinned fragments passed, both COM gates wired/pending; SDK fixed3+ACK2+recovery16 and full40-file/path guards passed as research |
+| 29 | Negotiated DA2/DA3 Sync routes, SDK Publish per-ACK results | DA source/mock54, pinned fragments and both22a COM live gates passed; SDK fixed3+ACK2+recovery16 and full40-file/path guards passed as research |
 
 Пара 01 исправила начальное состояние fixture после честного отрицательного
 NOCONFIG verdict на `a004b226`. Проверка на `36fa668` подтвердила
 RUNNING → FAILED → RUNNING во всех трёх процессах и read/write/read-back B
 до освобождения device-write A. Это не remote/другой DA server proof.
 
-Пара29 готовит forced DA2/DA3 actual gates: не закрывать их Linux stubs.
+Пара29 приняла forced DA2/DA3 actual gates на22a в обоих COM inputs.
+Не повторять эту локальную приёмку как отсутствующую и не называть её remote.
 SDK per-ACK results проверены in-process в disposable library overlay; остаются
 wire/server variations и production observability/adoption, namespace scope,
 multiple subscriptions, transfer/secure cases. Production Async/N4 не включены.
