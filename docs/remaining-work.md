@@ -6,13 +6,12 @@
 
 ## Последний подтверждённый срез
 
-`5eb9912` прошёл все 9 jobs (SDK4/COM2/App2/package1), включая совместимость
-SDK research artifacts. Ранее в6c и повторно5eb test-only
-single-slot generic Async value fixture выполнен в обоих i686 COM inputs
-(по 1/1) со strict cleanup; старые native gates также прошли. Production Async
-остаётся Unsupported. Это заменяет pending verdict исторических строк ниже
-только для кода, вошедшего в этот head. Новый Gateway fixture пары28 требует
-следующего exact-head Windows CI.
+`f787f43` прошёл все9 jobs (SDK4/COM2/App2/package1). Новый test-only
+Gateway Async fixture прошёл1/1 в обоих i686 COM inputs: SDK0.32с,
+official-MIT0.33с, обе strict cleanup PASS. Generic single-slot value fixture
+и прежние native gates также прошли. Production Async остаётся Unsupported.
+Это заменяет pending verdict исторических строк только для вошедшего кода;
+accepted test-only correlation не означает production transaction/cancel policy.
 
 SDK readiness/racefix/drain принят как воспроизводимый исследовательский
 артефакт: [точные измерения и границы](testing/ua-sdk-readiness-drain-proof.md).
@@ -75,7 +74,7 @@ Production SDK pin/App не меняются; общий порядок Push/Rea
 | 25 | A09 actual item/quality failures, SDK bounded readiness handoff | A09 passed both81f/6c COM; readiness fixes reviewed as research, no production pin/Async switch |
 | 26 | Forced SDK DA1 source route, generic single-slot Async values | DA1 passed both81f COM; generic fixture passed both6c COM with cleanup; no physical DA1/productionAsync claim |
 | 27 | Native generic CI acceptance, SDK shared recovery guard and scoped drain | 6c all9green; SDK16+ACK2 and fresh Engine15.45с/Closed30.93с research accepted; one-subscription ReactivatedSession only |
-| 28 | SDK namespace-cache identity audit, test-only native Async Gateway correlation | Namespace source-only risk, no measured fix; Gateway mock54/49-nohooks and Linux typecheck passed, actual Windows gate wired/pending |
+| 28 | SDK namespace-cache identity audit, test-only native Async Gateway correlation | Namespace source-only risk, no measured fix; Gateway mock54/49-nohooks, Linux typecheck and both f787 COM live gates passed; no production Async claim |
 
 Пара 01 исправила начальное состояние fixture после честного отрицательного
 NOCONFIG verdict на `a004b226`. Проверка на `36fa668` подтвердила
@@ -103,8 +102,9 @@ RUNNING → FAILED → RUNNING во всех трёх процессах и read
 | N4 | Production native DA и удаление прежнего OPC COM data-plane | Native SDK capability, interop/lifetime/license gates закрыты; системный WinAPI/helper не удалён как OPC code |
 | R2.6 / N6 | Полная матрица G/D/E/S/T/C/U/M/A/O, упаковка и согласование планов | Доказательства по стабильным ID, точный code head, итоговые настройки/документы и CI; число строк CSV не число пройденных тестов |
 
-Пара28 подготовила test-only DA Async Gateway RequestId/epoch/registration
-fixture; дождаться его нового exact-head Win32 результата. Namespace-cache
+Пара28 приняла test-only DA Async Gateway RequestId/epoch/registration
+fixture на обоих f787 Win32 inputs. Production facade/cancel/version/cleanup
+policy и late callback через новый Connect остаются отдельными гейтами. Namespace-cache
 [source audit](testing/ua-sdk-namespace-cache-audit.md) выявил риск по SDK source,
 но не дал измеренного defect/fix: этот gate остаётся открытым. Непроверенный
 SDK prototype не включать в production или в accepted patch packet.

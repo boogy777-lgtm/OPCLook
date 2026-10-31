@@ -44,7 +44,12 @@ cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features 
 python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- python scripts/ci-cargo-live.py -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_async_gateway_live -- --nocapture
 ```
 
-Actual Windows compilation, callback, two sessions, correlations and fixture
-cleanup remain pending CI. This research seam does not establish production
+Exact `f787f43842756c58ab57beeb689e09ede9e7c920` compiled and ran this
+fixture on i686 Windows in both COM variants:
+[SDK inputs](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41178553338/job/124471049602)
+passed1/1 in0.32s;
+[official-MIT inputs](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41178553338/job/124471049388)
+passed1/1 in0.33s. Both strict server/proxy cleanups passed. All nine jobs for
+that code head passed. This research seam does not establish production
 Async lifecycle, cancellation, DA1 behavior, remote interoperability, or
 bounded recovery of an SDK task that never completes.

@@ -8,13 +8,13 @@
 Это входное задание для нового чата. Маршруты направляют к существующим механизмам; текущий частичный runtime срез
 ExplicitRefresh и CLI opt-in WriteReadback описан в status.md. Полный R2 не завершён.
 
-Последний принятый exact head — `5eb9912`, все9 jobs; generic test-only
+Последний принятый exact code head — `f787f43`, все9 jobs; generic test-only
 Async fixture прошёл обе i686 COM matrix. SDK readiness/racefix/drain — отдельный
 reviewed research packet, без production pin/App change, только одна subscription
 в ReactivatedSession. Актуальные scope/gaps и следующая пара находятся в
 [remaining-work](remaining-work.md) и [UA ledger](testing/ua-sdk-acceptance-ledger.md).
 Исторические snapshots ниже не заменяют текущий status.
-Пара28 добавляет test-only Gateway Async fixture (Windows pending) и
+Пара28 приняла test-only Gateway Async fixture в обоих Win32 COM inputs и
 [namespace source audit](testing/ua-sdk-namespace-cache-audit.md), без принятого
 namespace fix или production Async. Не восстанавливать эти результаты из старых
 чекбоксов и не считать allocated token серверным acceptance.

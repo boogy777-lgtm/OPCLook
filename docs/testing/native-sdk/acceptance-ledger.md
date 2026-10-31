@@ -168,7 +168,7 @@ not reproduced as a Windows SDK crash. Generic batching, cancellation negotiatio
 version/capability/cleanup policy and production facade are still separate gates.
 
 
-### Prepared Gateway correlation fixture after5eb
+### Accepted scoped Gateway correlation fixture onf787
 
 [Gateway probe](async-gateway-correlation.md) routes one explicitly armed
 ReadFresh through the existing SDK slot, scoped by owner, Connect epoch,
@@ -178,9 +178,16 @@ while the SDK lease is quarantined; no bounded reclamation claim is made.
 A later Connect is tested after full retirement, not with a late old callback
 crossing that Connect. The allocated token alone is not SDK/server acceptance.
 Root source/mock54/54, getter source/stub and Linux Rust-only typecheck passed;
-agent no-default-features49/49 and three C++ guards passed. A distinct i686 live
-fixture is wired into both COM inputs with precompile/nonzero-test guard.
-Its actual Win32 ABI/SDK/Gateway/cleanup outcome is pending a new published head;
-6c/5eb results do not cover this extension. Exact5eb also passed all9 jobs
-([COM](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41177513818));
-its DA implementation was unchanged from6c. Production Async remains Unsupported.
+agent no-default-features49/49 and three C++ guards passed.
+
+Exact `f787f43842756c58ab57beeb689e09ede9e7c920` passed all9 jobs:
+[SDK4](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41178553269),
+[COM2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41178553338),
+[App2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41178553274),
+[package1](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41178553268).
+The new live fixture passed1/1 on SDK inputs (job124471049602,0.32s) and
+1/1 on official-MIT inputs (job124471049388,0.33s); both strict server/proxy
+cleanup checks passed. Other native gates also passed. These outcomes cover
+the stated local test-only scope, not remote DA, old callbacks crossing Connect,
+all async failures/versions, cancellation or production Async adoption.
+Production Async remains Unsupported.
