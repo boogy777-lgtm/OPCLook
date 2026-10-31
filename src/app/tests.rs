@@ -1780,6 +1780,9 @@ fn write_request(key: ItemKey) -> WriteRequest {
 fn start_batch(app: &mut App, keys: &[ItemKey]) {
     app.perform_write(PendingWrites {
         session: crate::bff::model::SessionId::new(1).unwrap(),
+        context_generation: app
+            .session(SessionId::FIRST)
+            .and_then(|v| v.context_generation),
         epoch: app.engine.connection_id(SessionId::FIRST),
         protocol: Protocol::OpcUa,
         requests: keys.iter().copied().map(write_request).collect(),
@@ -2397,6 +2400,9 @@ fn partial_write_then_closed_worker_finishes_batch() {
     app.engine.limit_dispatch_for_test(1);
     app.perform_write(PendingWrites {
         session: crate::bff::model::SessionId::new(1).unwrap(),
+        context_generation: app
+            .session(SessionId::FIRST)
+            .and_then(|v| v.context_generation),
         epoch: app.engine.connection_id(SessionId::FIRST),
         protocol: Protocol::OpcUa,
         requests: vec![
@@ -2521,6 +2527,7 @@ fn old_disconnect_preserves_new_connection_write_confirmation() {
         focus_pending: true,
         action: ConfirmAction::Write(PendingWrites {
             session,
+            context_generation: app.session(session).and_then(|v| v.context_generation),
             epoch: Some(b),
             protocol: Protocol::OpcUa,
             requests: vec![],
@@ -4037,4 +4044,238 @@ fn deferred_add_children_keeps_exact_item_until_read_reply() {
             .iter()
             .any(|item| item.parent == Some(selected) && item.node.node_id == "child")
     );
+}
+
+#[test]
+fn ua_recovery_reports_missing_and_metadata_without_claiming_history() {
+    use crate::bff::model::{UaRecoveryMode, UaRecoveryState};
+    let (_ctx, mut app) = tree_app();
+    let session = SessionId::FIRST;
+    app.add_items(session, vec![("ns=2;s=missing".into(), "missing".into())]);
+    let key = app.rows[0].key;
+    app.sync_fixture_sessions();
+    let send = |app: &mut App, state| {
+        app.on_synced_event_for_test_at(session, EventKind::UaRecovery { state })
+    };
+    send(
+        &mut app,
+        UaRecoveryState::ConnectionLost { status: 0x80000000 },
+    );
+    assert!(app.status.contains("80000000"));
+    send(
+        &mut app,
+        UaRecoveryState::Reconnected {
+            mode: UaRecoveryMode::NewSession,
+        },
+    );
+    send(
+        &mut app,
+        UaRecoveryState::Reconciled {
+            missing: vec![key],
+            ambiguous: true,
+        },
+    );
+    assert!(matches!(app.rows[0].quality, RowQuality::Error(_)));
+    assert!(app.status.contains('1'));
+    send(
+        &mut app,
+        UaRecoveryState::TypeMetadata { known: 1, total: 3 },
+    );
+    assert!(app.status.contains('1') && app.status.contains('3'));
+    send(&mut app, UaRecoveryState::Stopped { status: 0x80010000 });
+    assert!(app.status.contains("80010000"));
+    let stopped = app.status.clone();
+    send(
+        &mut app,
+        UaRecoveryState::Reconciled {
+            missing: vec![],
+            ambiguous: false,
+        },
+    );
+    assert_eq!(app.status, stopped);
+}
+
+#[test]
+fn ua_new_session_rejects_queued_confirmation_and_discards_old_tree_metadata() {
+    use crate::bff::model::{UaRecoveryMode, UaRecoveryState};
+    let (_ctx, mut app) = tree_app();
+    let session = SessionId::FIRST;
+    app.record_dispatches_for_test();
+    let key = app.seed_writable_row(session, "ns=2;s=old", "old", Value::I64(1));
+    app.rows[0].data_type = Some("Int32".into());
+    let old_tree = app.seed_tree_item(session, None, 0, branch_node("ns=2;s=old", "old", false));
+    app.set_tree_focus(session, old_tree);
+    app.settings.view.options.confirm_write = true;
+    app.open_write_dialog(vec![key]);
+    app.dialogs.write.text = "7".into();
+    app.apply_write();
+    let queued = app.dialogs.confirm.take().expect("confirmation");
+    let epoch = app.engine.connection_id(session);
+    app.on_synced_event_for_test_at(
+        session,
+        EventKind::UaRecovery {
+            state: UaRecoveryState::ConnectionLost { status: 1 },
+        },
+    );
+    app.on_synced_event_for_test_at(
+        session,
+        EventKind::UaRecovery {
+            state: UaRecoveryState::Reconnected {
+                mode: UaRecoveryMode::NewSession,
+            },
+        },
+    );
+    assert_eq!(app.engine.connection_id(session), epoch);
+    assert!(app.session(session).unwrap().tree().is_empty());
+    assert!(app.tree_focus.is_none());
+    assert!(app.rows[0].data_type.is_none());
+    assert!(!app.rows[0].writable);
+    app.on_synced_event_for_test_at(
+        session,
+        EventKind::UaRecovery {
+            state: UaRecoveryState::Reconciled {
+                missing: vec![],
+                ambiguous: false,
+            },
+        },
+    );
+    app.dialogs.confirm = Some(queued);
+    app.confirm_yes();
+    assert!(
+        app.dispatched_for_test()
+            .iter()
+            .all(|c| !matches!(c.kind, CommandKind::Write { .. }))
+    );
+    assert_eq!(app.status, tr(app.lang(), Tr::PaletteWriteStale));
+    let new_id = app.seed_tree_item(session, None, 0, branch_node("ns=2;s=new", "new", false));
+    assert_ne!(old_tree, new_id);
+}
+
+#[test]
+fn ua_recovery_invalidates_palette_and_cancels_recursive_browse_without_clearing_text() {
+    use crate::bff::model::{UaRecoveryMode, UaRecoveryState};
+    use opclook_contract::actions::ActionId;
+    let (_ctx, mut app) = tree_app();
+    let session = SessionId::FIRST;
+    app.record_dispatches_for_test();
+    app.start_add_children(session, "ns=2;s=old");
+    assert!(app.add_children.is_some());
+    app.open_command_palette();
+    app.dialogs.palette.browse_node = "ns=2;s=old".into();
+    let epoch = app.engine.connection_id(session);
+    app.on_synced_event_for_test_at(
+        session,
+        EventKind::UaRecovery {
+            state: UaRecoveryState::ConnectionLost { status: 1 },
+        },
+    );
+    assert!(app.add_children.is_none());
+    app.on_synced_event_for_test_at(
+        session,
+        EventKind::UaRecovery {
+            state: UaRecoveryState::Reconnected {
+                mode: UaRecoveryMode::ReactivatedSession,
+            },
+        },
+    );
+    assert_eq!(app.engine.connection_id(session), epoch);
+    assert_eq!(app.dialogs.palette.browse_node, "ns=2;s=old");
+    assert_eq!(
+        app.execute_palette_action(ActionId::Browse),
+        Err(Tr::PaletteConnectionChanged)
+    );
+}
+
+#[test]
+fn ua_recovery_metadata_is_scoped_and_unknown_is_not_read_only() {
+    use crate::bff::model::{UaItemMetadata, UaRecoveryMode, UaRecoveryState};
+    let (_ctx, mut app) = tree_app();
+    let session = SessionId::FIRST;
+    let key = app.seed_writable_row(session, "ns=2;s=tag", "tag", Value::I64(1));
+    app.sync_fixture_sessions();
+    let connection = app.engine.connection_id(session).unwrap();
+    let send = |app: &mut App, revision, kind| {
+        app.on_event(Event {
+            owner: session.into(),
+            origin: Origin::UaSession {
+                connection,
+                revision,
+            },
+            kind,
+        })
+    };
+    send(
+        &mut app,
+        1,
+        EventKind::UaRecovery {
+            state: UaRecoveryState::ConnectionLost { status: 1 },
+        },
+    );
+    send(
+        &mut app,
+        2,
+        EventKind::UaRecovery {
+            state: UaRecoveryState::Reconnected {
+                mode: UaRecoveryMode::NewSession,
+            },
+        },
+    );
+    send(
+        &mut app,
+        2,
+        EventKind::UaRecovery {
+            state: UaRecoveryState::Reconciled {
+                missing: vec![],
+                ambiguous: false,
+            },
+        },
+    );
+    let fact = |access| UaItemMetadata {
+        key,
+        data_type: Some("Int32".into()),
+        type_id: Some(6),
+        user_access_level: access,
+        diagnostic: None,
+    };
+    send(
+        &mut app,
+        1,
+        EventKind::UaItemMetadata {
+            facts: vec![fact(Some(3))],
+        },
+    );
+    assert!(!app.rows[0].writable && !app.rows[0].ua_access_known);
+    send(
+        &mut app,
+        2,
+        EventKind::UaItemMetadata {
+            facts: vec![fact(Some(1))],
+        },
+    );
+    assert!(!app.rows[0].writable && app.rows[0].ua_access_known);
+    assert_eq!(app.rows[0].ua_type_id, Some(6));
+    send(
+        &mut app,
+        2,
+        EventKind::UaItemMetadata {
+            facts: vec![fact(None)],
+        },
+    );
+    assert!(!app.rows[0].writable && !app.rows[0].ua_access_known);
+    send(
+        &mut app,
+        2,
+        EventKind::UaItemMetadata {
+            facts: vec![fact(Some(3))],
+        },
+    );
+    assert!(app.rows[0].writable && app.rows[0].ua_access_known);
+    app.settings.view.options.confirm_write = false;
+    app.record_dispatches_for_test();
+    app.open_write_dialog(vec![key]);
+    app.dialogs.write.text = "7".into();
+    app.apply_write();
+    assert!(app.dispatched_for_test().iter().any(
+        |command| matches!(&command.kind, CommandKind::Write { request } if request.key == key)
+    ));
 }

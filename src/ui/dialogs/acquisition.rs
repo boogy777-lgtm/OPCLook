@@ -1,6 +1,6 @@
 use crate::app::App;
 use crate::bff::model::{PollFreshness, Protocol, UpdateMode};
-use crate::i18n::{Tr, tr};
+use crate::i18n::{Tr, fmt, tr};
 use crate::ui::ImeSafeClick;
 
 pub(super) fn acquisition_dialog(app: &mut App, ui: &mut egui::Ui) {
@@ -11,6 +11,9 @@ pub(super) fn acquisition_dialog(app: &mut App, ui: &mut egui::Ui) {
         .session
         .and_then(|id| app.sessions.iter().find(|view| view.id == id));
     let endpoint = target.map(|view| view.endpoint().clone());
+    let negotiated = target
+        .and_then(|view| view.ua())
+        .map(|ua| ua.negotiated.clone());
     let mut apply = None;
     let mut cancel = false;
     let height = (ui.ctx().content_rect().height() - 32.0).max(100.0);
@@ -64,6 +67,49 @@ pub(super) fn acquisition_dialog(app: &mut App, ui: &mut egui::Ui) {
                     ));
                 } else {
                     ui.label(tr(lang, Tr::AcquisitionLegacy));
+                }
+                if let Some(negotiated) = &negotiated {
+                    ui.separator();
+                    ui.heading(tr(lang, Tr::UaNegotiatedHeading));
+                    ui.label(tr(lang, Tr::UaSamplingDefaultHint));
+                    if negotiated.is_empty() {
+                        ui.label(tr(lang, Tr::UaNegotiatedUnknown));
+                    }
+                    for sub in negotiated.iter() {
+                        let revised = sub
+                            .revised
+                            .as_ref()
+                            .map(|value| value.publishing_ms.to_string())
+                            .unwrap_or_else(|| tr(lang, Tr::UaNegotiatedUnknown).to_string());
+                        ui.label(fmt(
+                            lang,
+                            Tr::UaPublishingFacts,
+                            &[&sub.requested_publishing_ms, &revised],
+                        ));
+                        egui::ScrollArea::vertical()
+                            .id_salt(("ua-negotiated-items", sub.subscription_id))
+                            .max_height(120.0)
+                            .show_rows(
+                                ui,
+                                ui.text_style_height(&egui::TextStyle::Body),
+                                sub.items.len(),
+                                |ui, visible| {
+                                    for item in &sub.items[visible] {
+                                        ui.label(fmt(
+                                            lang,
+                                            Tr::UaSamplingFacts,
+                                            &[
+                                                &item.key,
+                                                &item.requested_sampling_ms,
+                                                &item.revised_sampling_ms,
+                                                &item.requested_queue_size,
+                                                &item.revised_queue_size,
+                                            ],
+                                        ));
+                                    }
+                                },
+                            );
+                    }
                 }
                 ui.separator();
                 ui.heading(tr(lang, Tr::AcquisitionDraft));

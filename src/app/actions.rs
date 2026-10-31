@@ -72,7 +72,10 @@ impl App {
         session: crate::bff::model::SessionId,
         protocol: crate::bff::model::Protocol,
     ) -> Option<Tr> {
-        if self.dialogs.write.epoch.is_none()
+        if self.dialogs.write.context_generation.is_none()
+            || self.dialogs.write.context_generation
+                != self.session(session).and_then(|v| v.context_generation)
+            || self.dialogs.write.epoch.is_none()
             || self.dialogs.write.epoch != self.engine.connection_id(session)
         {
             return Some(Tr::PaletteWriteStale);
@@ -107,6 +110,9 @@ impl App {
         let session = self.active_session;
         self.dialogs.palette.context_session = session;
         self.dialogs.palette.context_epoch = session.and_then(|id| self.engine.connection_id(id));
+        self.dialogs.palette.context_generation = session
+            .and_then(|id| self.session(id))
+            .and_then(|v| v.context_generation);
         self.dialogs.palette.context_initialized = true;
     }
 
@@ -125,7 +131,10 @@ impl App {
         let Some(session) = self.dialogs.palette.context_session else {
             return Some(Tr::PaletteNeedsContext);
         };
-        if self.active_session != Some(session)
+        if self.dialogs.palette.context_generation.is_none()
+            || self.dialogs.palette.context_generation
+                != self.session(session).and_then(|v| v.context_generation)
+            || self.active_session != Some(session)
             || self.dialogs.palette.context_epoch.is_none()
             || self.engine.connection_id(session) != self.dialogs.palette.context_epoch
         {

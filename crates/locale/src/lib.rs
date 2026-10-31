@@ -163,6 +163,14 @@ translation_keys! {
     ReadNeedRefresh,
     ReadNeedReadback,
     ReadNeedDirect,
+    ReadNeedRecovery,
+    RecoveryLost,
+    RecoveryReactivated,
+    RecoveryNewSession,
+    RecoveryReconciled,
+    RecoveryMissing,
+    RecoveryMetadata,
+    RecoveryStopped,
     ReadTerminalLine,
     ReadTerminalReceived,
     ReadTerminalInitial,
@@ -514,6 +522,15 @@ translation_keys! {
     CurrentValue,
     ServerTypeLabel,
     ReadOnly,
+    UaAccessUnknown,
+    UaHistoryGap,
+    UaHistoryUncertain,
+    UaHistoryOverflow,
+    UaNegotiatedHeading,
+    UaSamplingDefaultHint,
+    UaNegotiatedUnknown,
+    UaPublishingFacts,
+    UaSamplingFacts,
     CanonicalDaType,
     ServerDataType,
     WriteTypeLabel,
@@ -982,6 +999,18 @@ fn ru(key: Tr) -> &'static str {
         ReadNeedRefresh => "обновление",
         ReadNeedReadback => "чтение после записи",
         ReadNeedDirect => "прямое чтение",
+        ReadNeedRecovery => "снимок после восстановления",
+        RecoveryLost => {
+            "Связь UA потеряна ({0}); значения могут устареть; история и возможный пропуск первого уведомления неизвестны"
+        }
+        RecoveryReactivated => "Сеанс UA восстановлен; выполняется сверка",
+        RecoveryNewSession => "Создан новый сеанс UA; выполняется сверка",
+        RecoveryReconciled => {
+            "Сверка UA: недоступно {0}, неоднозначность: {1}. Последующее чтение не восстанавливает историю"
+        }
+        RecoveryMissing => "Элемент недоступен после восстановления UA",
+        RecoveryMetadata => "Метаданные типов UA: {0} из {1}",
+        RecoveryStopped => "Восстановление UA остановлено ({0}); данные могут устареть",
         ReadTerminalLine => {
             "Чтение: соединение {0}, эпоха {1}, сигнал {2}, запрос {3}, цель {4}: {5}"
         }
@@ -1326,6 +1355,19 @@ fn ru(key: Tr) -> &'static str {
         WriteTargetCount => "Количество выбранных сигналов: {0}",
         CurrentValue => "Текущее значение: {0}",
         ServerTypeLabel => "Тип сервера: {0}",
+        UaAccessUnknown => "Права записи неизвестны",
+        UaHistoryGap => "Обнаружен разрыв последовательности UA: {0} → {1}; история неполна",
+        UaHistoryUncertain => {
+            "Неопределённая последовательность UA: {0} → {1}; полнота истории неизвестна"
+        }
+        UaHistoryOverflow => "Переполнение очереди UA для ключа {0} ({1}); история неполна",
+        UaNegotiatedHeading => "Согласованные параметры SDK (мс)",
+        UaSamplingDefaultHint => "−1 запрашивает интервал публикации подписки",
+        UaNegotiatedUnknown => "Нет сведений SDK",
+        UaPublishingFacts => "Публикация: запрос {0}, пересмотрено {1}",
+        UaSamplingFacts => {
+            "Ключ {0}: выборка запрос {1}, пересмотрено {2}; очередь запрос {3}, пересмотрено {4}"
+        }
         ReadOnly => "Сигнал только для чтения (запись недоступна)",
         CanonicalDaType => "Канонический тип DA: {0}",
         ServerDataType => "Тип данных сервера: {0}",
@@ -1719,6 +1761,18 @@ fn en(key: Tr) -> &'static str {
         ReadNeedRefresh => "refresh",
         ReadNeedReadback => "read after write",
         ReadNeedDirect => "direct read",
+        ReadNeedRecovery => "recovery snapshot",
+        RecoveryLost => {
+            "UA connection lost ({0}); values may be stale; history and a possible first-notification gap are unknown"
+        }
+        RecoveryReactivated => "UA session reactivated; reconciling items",
+        RecoveryNewSession => "New UA session; reconciling items",
+        RecoveryReconciled => {
+            "UA reconciliation: {0} missing, ambiguity: {1}. A later read does not restore history"
+        }
+        RecoveryMissing => "Item unavailable after UA recovery",
+        RecoveryMetadata => "UA type metadata: {0} of {1}",
+        RecoveryStopped => "UA recovery stopped ({0}); values may be stale",
         ReadTerminalLine => "Read: session {0}, epoch {1}, item {2}, request {3}, need {4}: {5}",
         ReadTerminalReceived => "Result received: quality {0}; reason: {1}",
         ReadTerminalInitial => "Initial notification: quality {0}; reason: {1}",
@@ -2059,6 +2113,17 @@ fn en(key: Tr) -> &'static str {
         WriteTargetCount => "Number of selected signals: {0}",
         CurrentValue => "Current value: {0}",
         ServerTypeLabel => "Server type: {0}",
+        UaAccessUnknown => "Write permission is unknown",
+        UaHistoryGap => "UA sequence gap: {0} → {1}; history is incomplete",
+        UaHistoryUncertain => "UA sequence uncertain: {0} → {1}; history completeness is unknown",
+        UaHistoryOverflow => "UA queue overflow for key {0} ({1}); history is incomplete",
+        UaNegotiatedHeading => "SDK negotiated parameters (ms)",
+        UaSamplingDefaultHint => "−1 requests the subscription publishing interval",
+        UaNegotiatedUnknown => "No SDK facts available",
+        UaPublishingFacts => "Publishing: requested {0}, revised {1}",
+        UaSamplingFacts => {
+            "Key {0}: sampling requested {1}, revised {2}; queue requested {3}, revised {4}"
+        }
         ReadOnly => "Signal is read-only (writing is unavailable)",
         CanonicalDaType => "Canonical DA type: {0}",
         ServerDataType => "Server data type: {0}",
@@ -2436,6 +2501,14 @@ fn zh(key: Tr) -> &'static str {
         ReadNeedRefresh => "刷新",
         ReadNeedReadback => "写入后读取",
         ReadNeedDirect => "直接读取",
+        ReadNeedRecovery => "恢复后快照",
+        RecoveryLost => "UA 连接已断开（{0}）；值可能过时；通知历史及首次通知可能缺失的情况未知",
+        RecoveryReactivated => "UA 会话已恢复；正在核对项目",
+        RecoveryNewSession => "已创建新 UA 会话；正在核对项目",
+        RecoveryReconciled => "UA 核对：缺失 {0}，存在歧义：{1}。后续读取不能恢复历史",
+        RecoveryMissing => "UA 恢复后项目不可用",
+        RecoveryMetadata => "UA 类型元数据：{0} / {1}",
+        RecoveryStopped => "UA 恢复已停止（{0}）；值可能过时",
         ReadTerminalLine => "读取：会话 {0}，周期 {1}，信号 {2}，请求 {3}，用途 {4}：{5}",
         ReadTerminalReceived => "已收到结果：质量 {0}；原因：{1}",
         ReadTerminalInitial => "初始通知：质量 {0}；原因：{1}",
@@ -2762,6 +2835,15 @@ fn zh(key: Tr) -> &'static str {
         WriteTargetCount => "所选信号数: {0}",
         CurrentValue => "当前值: {0}",
         ServerTypeLabel => "服务器类型: {0}",
+        UaAccessUnknown => "写入权限未知",
+        UaHistoryGap => "UA 序列中断：{0} → {1}；历史不完整",
+        UaHistoryUncertain => "UA 序列不确定：{0} → {1}；历史完整性未知",
+        UaHistoryOverflow => "UA 键 {0} 队列溢出（{1}）；历史不完整",
+        UaNegotiatedHeading => "SDK 协商参数（毫秒）",
+        UaSamplingDefaultHint => "−1 请求使用订阅发布间隔",
+        UaNegotiatedUnknown => "没有 SDK 数据",
+        UaPublishingFacts => "发布：请求 {0}，修订 {1}",
+        UaSamplingFacts => "键 {0}：采样请求 {1}，修订 {2}；队列请求 {3}，修订 {4}",
         ReadOnly => "信号为只读 (无法写入)",
         CanonicalDaType => "规范 DA 类型: {0}",
         ServerDataType => "服务器数据类型: {0}",
@@ -3159,6 +3241,18 @@ pub fn backend_text(lang: Lang, msg: &BackendMsg) -> String {
         M::InvalidItemHandle => tr(lang, Tr::InvalidItemHandle).to_string(),
         M::Raw(text) => text.clone(),
         M::SendFailed(error) => send_error_text(lang, *error).to_string(),
+        M::UaIdentityChanged { service } => backend_text(
+            lang,
+            &M::UaServiceError {
+                service: *service,
+                detail: l!(
+                    lang,
+                    "контекст UA-сессии изменился или восстановление ещё не завершено; результат запроса отклонён",
+                    "the UA session context changed or recovery is unfinished; the operation result was rejected",
+                    "UA 会话上下文已更改或恢复尚未完成；操作结果已拒绝"
+                ),
+            },
+        ),
         M::UaServiceError { service, detail } => {
             use opclook_contract::model::UaService;
             let label = match service {
@@ -3172,6 +3266,15 @@ pub fn backend_text(lang: Lang, msg: &BackendMsg) -> String {
                 }
                 UaService::Read => l!(lang, "чтение", "read", "读取"),
                 UaService::Write => l!(lang, "запись", "write", "写入"),
+                UaService::CreateSubscription => {
+                    l!(lang, "создание подписки", "create subscription", "创建订阅")
+                }
+                UaService::CreateMonitoredItems => l!(
+                    lang,
+                    "регистрация тегов",
+                    "register monitored items",
+                    "注册监视项"
+                ),
             };
             format!("{label}: {detail}")
         }
@@ -4275,6 +4378,12 @@ mod tests {
                 },
                 vec!["§v§"],
             ),
+            (
+                BackendMsg::UaIdentityChanged {
+                    service: opclook_contract::model::UaService::Browse,
+                },
+                vec![],
+            ),
             (BackendMsg::RequestTimeout { seconds: 17 }, vec!["17"]),
             (
                 BackendMsg::DaRoute(opclook_contract::da_route::DaRouteError::NoAdapter),
@@ -5002,6 +5111,8 @@ mod tests {
             UaService::TranslatePath,
             UaService::Read,
             UaService::Write,
+            UaService::CreateSubscription,
+            UaService::CreateMonitoredItems,
         ] {
             let message = BackendMsg::UaServiceError {
                 service,

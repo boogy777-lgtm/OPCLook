@@ -125,6 +125,11 @@ pub enum Origin {
     Unsolicited,
     /// Unsolicited event from the connection created by this Connect request.
     Session(RequestId),
+    /// SDK-owned UA stream in one local Connect epoch and remote recovery revision.
+    UaSession {
+        connection: RequestId,
+        revision: u64,
+    },
 }
 impl From<Option<RequestId>> for Origin {
     fn from(id: Option<RequestId>) -> Self {

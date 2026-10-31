@@ -92,6 +92,7 @@ pub struct UaSessionView {
     pub ua_session_timeout_ms: u32,
     /// Projected from Engine; only Active suppresses normal polling.
     pub subscription: SubscriptionState,
+    pub negotiated: std::sync::Arc<Vec<crate::bff::model::UaSubscriptionParameters>>,
 }
 
 impl Default for UaSessionView {
@@ -101,6 +102,7 @@ impl Default for UaSessionView {
             ua_browse_filter: NodeClassFilter::All,
             ua_session_timeout_ms: crate::settings::default_session_timeout(),
             subscription: SubscriptionState::Inactive,
+            negotiated: std::sync::Arc::default(),
         }
     }
 }
@@ -139,6 +141,7 @@ pub struct SessionView {
     pub(super) tree: Vec<TreeItem>,
     tree_visible_cache: std::cell::RefCell<Option<std::rc::Rc<Vec<usize>>>>,
     pub next_tree_id: u64,
+    pub context_generation: Option<u64>,
     pub root_loaded: bool,
     pub root_loading: bool,
     pub read_in_flight: bool,
@@ -164,6 +167,7 @@ impl SessionView {
             tree: Vec::new(),
             tree_visible_cache: std::cell::RefCell::new(None),
             next_tree_id: 1,
+            context_generation: Some(1),
             root_loaded: false,
             root_loading: false,
             read_in_flight: false,
@@ -298,6 +302,8 @@ pub struct Row {
     pub canonical_vt: Option<VarType>,
     pub write_type: Option<VarType>,
     pub writable: bool,
+    pub ua_access_known: bool,
+    pub ua_type_id: Option<u16>,
     pub value: Value,
     pub quality: RowQuality,
     pub timestamp: Option<DateTime<Utc>>,

@@ -129,6 +129,8 @@ pub enum UaService {
     TranslatePath,
     Read,
     Write,
+    CreateSubscription,
+    CreateMonitoredItems,
 }
 
 /// A message of the backend (DA/UA workers, discovery, mDNS) for the user.
@@ -149,6 +151,11 @@ pub enum BackendMsg {
     UaServiceError {
         service: UaService,
         detail: String,
+    },
+    /// Client-side rejection of an operation whose SDK session scope changed.
+    /// This does not manufacture a server StatusCode.
+    UaIdentityChanged {
+        service: UaService,
     },
     DaRoute(crate::da_route::DaRouteError),
     RequestTimeout {

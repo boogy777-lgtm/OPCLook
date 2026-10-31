@@ -8,6 +8,7 @@ use super::{
     security_error, security_summary, trust_for_session,
 };
 use super::{Event, EventKind, READ_MAX_ITEMS_PER_CALL, Sender};
+use futures_util::StreamExt;
 
 pub(in crate::bff::ua) fn describe_connect_error(
     url: &str,
@@ -34,15 +35,148 @@ pub(in crate::bff::ua) fn describe_connect_error(
 /// the endpoint description has been selected. A cancelled attempt closes the
 /// channel gracefully like a failed one.
 async fn activate_ua_session<C>(
-    session: &Session,
+    session: &std::sync::Arc<Session>,
     event_loop: opcua::client::SessionEventLoop<C>,
     url: &str,
     cancel: &CancellationToken,
+    session_id: SessionId,
+    connection_id: Option<crate::bff::model::RequestId>,
+    event_tx: Sender<Event>,
+    recovery: tokio::sync::watch::Sender<(u64, super::RecoveryNotice)>,
+    callback_types: std::sync::Arc<
+        std::sync::RwLock<Option<std::sync::Arc<opcua::types::custom::DataTypeTree>>>,
+    >,
+    push_keys: std::sync::Arc<std::sync::Mutex<HashSet<crate::bff::model::ItemKey>>>,
+    identity_gate: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<JoinHandle<StatusCode>, BackendMsg>
 where
     C: opcua::client::transport::Connector + Send + Sync + 'static,
 {
-    let mut event_loop = event_loop.spawn();
+    let sdk_session = session.clone();
+    let mut event_loop = tokio::spawn(async move {
+        use crate::bff::model::{UaRecoveryMode, UaRecoveryState};
+        use opcua::client::{SessionConnectMode, SessionPollResult};
+        let stream = event_loop.enter();
+        tokio::pin!(stream);
+        let mut established = false;
+        while let Some(event) = stream.next().await {
+            match event {
+                #[cfg(test)]
+                Ok(SessionPollResult::Subscription(activity)) => {
+                    if std::env::var_os("OPCLOOK_UA_RECOVERY_TRACE").is_some() {
+                        eprintln!("UA recovery SDK subscription activity: {activity:?}");
+                    }
+                }
+                Ok(SessionPollResult::ConnectionLost(status)) => {
+                    {
+                        let mut keys = push_keys
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        identity_gate.store(false, std::sync::atomic::Ordering::SeqCst);
+                        keys.clear();
+                        recovery.send_modify(|(revision, notice)| {
+                            *revision = revision.saturating_add(1);
+                            *notice = super::RecoveryNotice::Lost;
+                            // Send transition before watch wakes the actor.
+                            let _ = event_tx.send(Event {
+                                owner: session_id.into(),
+                                origin: super::notification::scoped_origin(
+                                    connection_id,
+                                    *revision,
+                                ),
+                                kind: EventKind::UaRecovery {
+                                    state: UaRecoveryState::ConnectionLost {
+                                        status: status.bits(),
+                                    },
+                                },
+                            });
+                        });
+                    }
+                    #[cfg(test)]
+                    if std::env::var_os("OPCLOOK_UA_RECOVERY_TRACE").is_some() {
+                        eprintln!("UA recovery SDK: lost {status:?}");
+                    }
+                    *callback_types
+                        .write()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+                    *sdk_session.encoding_context().write().loaders_mut() =
+                        opcua::types::TypeLoaderCollection::new();
+                }
+                Ok(SessionPollResult::Reconnected(mode)) => {
+                    if !established {
+                        established = true;
+                        continue;
+                    }
+                    #[cfg(test)]
+                    if std::env::var_os("OPCLOOK_UA_RECOVERY_TRACE").is_some() {
+                        eprintln!("UA recovery SDK: reconnected {mode:?}");
+                    }
+                    let mode = match mode {
+                        SessionConnectMode::NewSession(_) => UaRecoveryMode::NewSession,
+                        SessionConnectMode::ReactivatedSession(_) => {
+                            UaRecoveryMode::ReactivatedSession
+                        }
+                    };
+                    {
+                        // Serializes revision/event publication with callback and
+                        // reconciliation gate opening on the same mutex.
+                        let _keys = push_keys
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        recovery.send_modify(|(revision, notice)| {
+                            *revision = revision.saturating_add(1);
+                            *notice = super::RecoveryNotice::Connected;
+                            let _ = event_tx.send(Event {
+                                owner: session_id.into(),
+                                origin: super::notification::scoped_origin(
+                                    connection_id,
+                                    *revision,
+                                ),
+                                kind: EventKind::UaRecovery {
+                                    state: UaRecoveryState::Reconnected { mode },
+                                },
+                            });
+                        });
+                    }
+                    sdk_session.trigger_publish_now();
+                }
+                Err(status) => {
+                    {
+                        let mut keys = push_keys
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        identity_gate.store(false, std::sync::atomic::Ordering::SeqCst);
+                        keys.clear();
+                        recovery.send_modify(|(revision, notice)| {
+                            *revision = revision.saturating_add(1);
+                            *notice = super::RecoveryNotice::Stopped;
+                            // Send transition before watch wakes the actor.
+                            let _ = event_tx.send(Event {
+                                owner: session_id.into(),
+                                origin: super::notification::scoped_origin(
+                                    connection_id,
+                                    *revision,
+                                ),
+                                kind: EventKind::UaRecovery {
+                                    state: UaRecoveryState::Stopped {
+                                        status: status.bits(),
+                                    },
+                                },
+                            });
+                        });
+                    }
+                    *callback_types
+                        .write()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+                    *sdk_session.encoding_context().write().loaders_mut() =
+                        opcua::types::TypeLoaderCollection::new();
+                    return status;
+                }
+                _ => {}
+            }
+        }
+        StatusCode::Good
+    });
     let connected = tokio::select! {
         biased;
         _ = cancel.cancelled() => None,
@@ -184,6 +318,11 @@ pub(in crate::bff::ua) async fn connect(
     // 7. Build the session (no network I/O), then start its event loop and wait
     //    for activation. The binding captured on the EndpointSpec is reused on
     //    every reconnect so a session never silently moves to another card.
+    let callback_types = std::sync::Arc::new(std::sync::RwLock::new(None));
+    let push_keys = std::sync::Arc::new(std::sync::Mutex::new(HashSet::new()));
+    let identity_gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let (recovery_tx, recovery) =
+        tokio::sync::watch::channel((0u64, super::RecoveryNotice::Connected));
     let (session, event_loop) = if let Some(binding) = binding {
         let (session, event_loop) = client
             .session_builder()
@@ -193,7 +332,20 @@ pub(in crate::bff::ua) async fn connect(
             .user_identity_token(identity)
             .build(client.certificate_store().clone())
             .map_err(|error| describe_connect_error(url, &pki, error))?;
-        let event_loop = activate_ua_session(&session, event_loop, url, cancel).await?;
+        let event_loop = activate_ua_session(
+            &session,
+            event_loop,
+            url,
+            cancel,
+            session_id,
+            connection_id,
+            event_tx.clone(),
+            recovery_tx,
+            callback_types.clone(),
+            push_keys.clone(),
+            identity_gate.clone(),
+        )
+        .await?;
         (session, event_loop)
     } else {
         let (session, event_loop) = client
@@ -203,7 +355,20 @@ pub(in crate::bff::ua) async fn connect(
             .user_identity_token(identity)
             .build(client.certificate_store().clone())
             .map_err(|error| describe_connect_error(url, &pki, error))?;
-        let event_loop = activate_ua_session(&session, event_loop, url, cancel).await?;
+        let event_loop = activate_ua_session(
+            &session,
+            event_loop,
+            url,
+            cancel,
+            session_id,
+            connection_id,
+            event_tx.clone(),
+            recovery_tx,
+            callback_types.clone(),
+            push_keys.clone(),
+            identity_gate.clone(),
+        )
+        .await?;
         (session, event_loop)
     };
 
@@ -221,12 +386,19 @@ pub(in crate::bff::ua) async fn connect(
         explicit_acquisition: endpoint.acquisition.is_some(),
         session,
         event_loop,
+        recovery,
+        push_keys,
+        identity_gate,
+        namespace_uris: HashMap::new(),
+        namespace_pool: super::recovery::NamespacePool::default(),
+        identity_blocked: HashSet::new(),
         items: HashMap::new(),
         node_types: HashMap::new(),
         info: security_summary(url, &policy_short, mode, secure_was_available),
         session_id,
         connection_id,
         subscriptions: Vec::new(),
+        notification_generation: 0,
         publishing_interval_ms: endpoint.acquisition.as_ref().map_or(0, |c| c.interval_ms),
         deadband: 0.0,
         last_requested_interval_ms: 0,
@@ -237,8 +409,10 @@ pub(in crate::bff::ua) async fn connect(
         monitor_chunk: READ_MAX_ITEMS_PER_CALL,
         unfiltered: HashSet::new(),
         timed_out: false,
+        identity_quarantined: None,
         trust,
         types: None,
+        callback_types,
     })
 }
 

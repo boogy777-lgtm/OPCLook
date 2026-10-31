@@ -1023,6 +1023,19 @@ impl App {
             view.last_test = runtime.last_test;
         }
     }
+    fn project_ua_negotiated(&mut self, id: SessionId) {
+        let Some(runtime) = self.engine.session(id) else {
+            return;
+        };
+        if let Some(ua) = self
+            .sessions
+            .iter_mut()
+            .find(|view| view.id == id)
+            .and_then(|view| view.ua_mut())
+        {
+            ua.negotiated = std::sync::Arc::new(runtime.ua_subscriptions.clone());
+        }
+    }
     #[cfg(feature = "test-support")]
     fn sync_fixture_sessions(&mut self) {
         for view in &self.sessions {
@@ -1115,6 +1128,8 @@ impl App {
             canonical_vt: None,
             write_type: None,
             writable: false,
+            ua_access_known: true,
+            ua_type_id: None,
             value,
             quality: RowQuality::Server(Quality {
                 code: 0xC0,

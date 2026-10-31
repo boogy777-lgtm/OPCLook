@@ -216,6 +216,7 @@ impl<C> PendingRequest<C> {
 pub enum ReadDemandKind {
     ExplicitRefresh,
     WriteReadback,
+    RecoverySnapshot,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct ReadDemand {
@@ -235,6 +236,15 @@ pub enum DemandWriteError {
     Dispatch(DispatchError),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UaRecoveryPhase {
+    Normal,
+    Lost,
+    Reconciling,
+    Ready,
+    Stopped,
+}
+
 #[derive(Clone, Debug)]
 pub struct SessionRuntime {
     pub endpoint: EndpointSpec,
@@ -243,6 +253,11 @@ pub struct SessionRuntime {
     pub subscription: SubscriptionState,
     /// SDK-reported state for the current UA connection epoch.
     pub ua_subscriptions: Vec<opclook_contract::model::UaSubscriptionParameters>,
+    pub ua_recovery_phase: UaRecoveryPhase,
+    pub ua_revision: u64,
+    pub ua_history_incomplete: bool,
+    pub ua_history_uncertain: bool,
+    pub recovery_blocked: HashSet<ItemKey>,
     pub read_in_flight: bool,
     pub last_poll: Instant,
     pub last_test: Instant,
@@ -261,6 +276,14 @@ pub struct SessionRuntime {
     connection_id: Option<RequestId>,
 }
 impl SessionRuntime {
+    fn reset_ua_scope(&mut self) {
+        self.ua_recovery_phase = UaRecoveryPhase::Normal;
+        self.ua_revision = 0;
+        self.ua_history_incomplete = false;
+        self.ua_history_uncertain = false;
+        self.recovery_blocked.clear();
+    }
+
     pub fn new(endpoint: EndpointSpec, now: Instant) -> Self {
         Self {
             endpoint,
@@ -268,6 +291,11 @@ impl SessionRuntime {
             reconnect: ReconnectState::Idle,
             subscription: SubscriptionState::Inactive,
             ua_subscriptions: Vec::new(),
+            ua_recovery_phase: UaRecoveryPhase::Normal,
+            ua_revision: 0,
+            ua_history_incomplete: false,
+            ua_history_uncertain: false,
+            recovery_blocked: HashSet::new(),
             read_in_flight: false,
             last_poll: now.checked_sub(Duration::from_secs(10)).unwrap_or(now),
             last_test: now,
@@ -294,6 +322,9 @@ impl SessionRuntime {
         now: Instant,
         fallback: Option<Duration>,
     ) -> bool {
+        if self.recovery_blocked.contains(&key) {
+            return false;
+        }
         let configured_poll = self
             .endpoint
             .acquisition
@@ -409,6 +440,7 @@ pub struct Engine<C> {
     route_events: VecDeque<Event>,
     invalidated: HashMap<SessionId, Vec<Operation>>,
     timeout_queued: HashSet<(Owner, RequestId)>,
+    identity_cancelled: HashSet<(Owner, RequestId)>,
     read_terminal_sink: Option<
         Box<dyn FnMut(SessionId, Option<RequestId>, &opclook_contract::model::ReadTerminal) + Send>,
     >,
@@ -440,6 +472,7 @@ impl<C> Default for Engine<C> {
             route_events: VecDeque::new(),
             invalidated: HashMap::new(),
             timeout_queued: HashSet::new(),
+            identity_cancelled: HashSet::new(),
             read_terminal_sink: None,
             #[cfg(test)]
             test_skip_dispatch: false,
@@ -526,6 +559,7 @@ impl<C> Engine<C> {
                     pending.entry(d.key).or_default().push(match d.kind {
                         ReadDemandKind::ExplicitRefresh => ReadNeed::ExplicitRefresh,
                         ReadDemandKind::WriteReadback => ReadNeed::WriteReadback,
+                        ReadDemandKind::RecoverySnapshot => ReadNeed::RecoverySnapshot,
                     });
                     false
                 } else {
@@ -568,6 +602,7 @@ impl<C> Engine<C> {
                     reserved.entry(d.key).or_default().push(match d.kind {
                         ReadDemandKind::ExplicitRefresh => ReadNeed::ExplicitRefresh,
                         ReadDemandKind::WriteReadback => ReadNeed::WriteReadback,
+                        ReadDemandKind::RecoverySnapshot => ReadNeed::RecoverySnapshot,
                     });
                     false
                 } else {
@@ -635,6 +670,7 @@ impl<C> Engine<C> {
                 .push(match demand.kind {
                     ReadDemandKind::ExplicitRefresh => ReadNeed::ExplicitRefresh,
                     ReadDemandKind::WriteReadback => ReadNeed::WriteReadback,
+                    ReadDemandKind::RecoverySnapshot => ReadNeed::RecoverySnapshot,
                 });
         }
         needs
@@ -724,6 +760,7 @@ impl<C> Engine<C> {
                 .or_insert_with(|| SessionRuntime::new(endpoint.clone(), Instant::now()));
             view.endpoint = endpoint.clone();
             view.connection_id = Some(id);
+            view.reset_ua_scope();
             view.state = SessionState::Connecting;
             view.read_in_flight = false;
             view.subscription = SubscriptionState::Inactive;
@@ -1022,7 +1059,14 @@ impl<C> Engine<C> {
         // Browses can be queued while connecting; writes cannot.
         if runtime.state == SessionState::Disconnected
             || (write
-                && (runtime.state != SessionState::Connected || runtime.connection_id.is_none()))
+                && (runtime.state != SessionState::Connected
+                    || runtime.connection_id.is_none()
+                    || matches!(
+                        runtime.ua_recovery_phase,
+                        UaRecoveryPhase::Lost
+                            | UaRecoveryPhase::Reconciling
+                            | UaRecoveryPhase::Stopped
+                    )))
         {
             return Some(ActionUnavailable::SessionNotConnected);
         }
@@ -1093,13 +1137,19 @@ impl<C> Engine<C> {
             .sessions
             .get(&session)
             .ok_or(DemandWriteError::Demand(DemandError::SessionUnavailable))?;
-        if view.state != SessionState::Connected || view.connection_id.is_none() {
+        if view.state != SessionState::Connected
+            || view.connection_id.is_none()
+            || matches!(
+                view.ua_recovery_phase,
+                UaRecoveryPhase::Lost | UaRecoveryPhase::Reconciling | UaRecoveryPhase::Stopped
+            )
+        {
             return Err(DemandWriteError::Demand(DemandError::SessionUnavailable));
         }
         if !supports_fresh_source(view.endpoint.protocol) || view.endpoint.protocol != protocol {
             return Err(DemandWriteError::Demand(DemandError::UnsupportedFreshness));
         }
-        if !view.items.contains_key(&request.key) {
+        if !view.items.contains_key(&request.key) || view.recovery_blocked.contains(&request.key) {
             return Err(DemandWriteError::Demand(DemandError::ItemNotRegistered));
         }
         let key = request.key;
@@ -1121,13 +1171,19 @@ impl<C> Engine<C> {
             .sessions
             .get_mut(&session)
             .ok_or(DemandError::SessionUnavailable)?;
-        if view.state != SessionState::Connected || view.connection_id.is_none() {
+        if view.state != SessionState::Connected
+            || view.connection_id.is_none()
+            || matches!(
+                view.ua_recovery_phase,
+                UaRecoveryPhase::Lost | UaRecoveryPhase::Reconciling | UaRecoveryPhase::Stopped
+            )
+        {
             return Err(DemandError::SessionUnavailable);
         }
         if !supports_fresh_source(view.endpoint.protocol) {
             return Err(DemandError::UnsupportedFreshness);
         }
-        if !view.items.contains_key(&key) {
+        if !view.items.contains_key(&key) || view.recovery_blocked.contains(&key) {
             return Err(DemandError::ItemNotRegistered);
         }
         view.pending_demands.insert(ReadDemand { key, kind });
@@ -1184,6 +1240,26 @@ impl<C> Engine<C> {
         }
         if let CommandKind::Connect { endpoint } = &kind {
             validate_acquisition(endpoint).map_err(DispatchError::InvalidAcquisition)?;
+        }
+        if let (Owner::Session(session), CommandKind::Read { keys }) = (owner, &kind)
+            && self.sessions.get(&session).is_some_and(|view| {
+                matches!(
+                    view.ua_recovery_phase,
+                    UaRecoveryPhase::Lost | UaRecoveryPhase::Reconciling | UaRecoveryPhase::Stopped
+                ) || keys.iter().any(|key| view.recovery_blocked.contains(key))
+            })
+        {
+            return Err(DispatchError::ReadBusy);
+        }
+        if let (Owner::Session(session), CommandKind::Write { request }) = (owner, &kind)
+            && self
+                .sessions
+                .get(&session)
+                .is_some_and(|view| view.recovery_blocked.contains(&request.key))
+        {
+            return Err(DispatchError::ActionUnavailable(
+                ActionUnavailable::SessionNotConnected,
+            ));
         }
         if matches!(&kind, CommandKind::Write { .. }) {
             let reason = match owner {
@@ -1363,6 +1439,9 @@ impl<C> Engine<C> {
                             ReadDemandKind::WriteReadback => {
                                 opclook_contract::model::ReadNeed::WriteReadback
                             }
+                            ReadDemandKind::RecoverySnapshot => {
+                                opclook_contract::model::ReadNeed::RecoverySnapshot
+                            }
                         });
                 }
                 for &key in &requested {
@@ -1407,6 +1486,7 @@ impl<C> Engine<C> {
             }
             self.cancel_da_routes(owner);
             self.timeout_queued.retain(|(id, _)| *id != owner);
+            self.identity_cancelled.retain(|(id, _)| *id != owner);
             self.requests.retain(|(id, _), _| *id != owner);
             self.pending_adds.retain(|(id, _), _| *id != owner);
         }
@@ -1503,6 +1583,28 @@ impl<C> Engine<C> {
                 },
             );
         }
+        if let (Some(endpoint), Some(session)) = (endpoint, session) {
+            let view = self
+                .sessions
+                .entry(session)
+                .or_insert_with(|| SessionRuntime::new(endpoint.clone(), Instant::now()));
+            view.endpoint = endpoint;
+            view.connection_id = Some(id);
+            view.reset_ua_scope();
+            view.state = SessionState::Connecting;
+            view.read_in_flight = false;
+            view.subscription = SubscriptionState::Inactive;
+            view.ua_subscriptions.clear();
+            view.items.clear();
+            view.pending_initial.clear();
+            view.pending_demands.clear();
+            view.reserved_demands.clear();
+            view.reserved_initial.clear();
+            view.reserved_poll.clear();
+            view.poll_defer_since.clear();
+            view.reserved_read = None;
+            view.used_keys.clear();
+        }
         if let Err(cause) = self.dispatch(Command {
             request_id: Some(id),
             owner,
@@ -1542,6 +1644,9 @@ impl<C> Engine<C> {
                 .values_mut()
                 .filter(|view| view.endpoint.protocol == protocol)
             {
+                if operation == Operation::Connect && view.connection_id == Some(id) {
+                    view.connection_id = None;
+                }
                 view.state = SessionState::Disconnected;
                 view.reconnect = ReconnectState::Stopped;
                 view.read_in_flight = false;
@@ -1566,27 +1671,6 @@ impl<C> Engine<C> {
                 view.reserved_read = None;
                 view.read_in_flight = false;
             }
-        }
-        if let (Some(endpoint), Some(session)) = (endpoint, session) {
-            let view = self
-                .sessions
-                .entry(session)
-                .or_insert_with(|| SessionRuntime::new(endpoint.clone(), Instant::now()));
-            view.endpoint = endpoint;
-            view.connection_id = Some(id);
-            view.state = SessionState::Connecting;
-            view.read_in_flight = false;
-            view.subscription = SubscriptionState::Inactive;
-            view.ua_subscriptions.clear();
-            view.items.clear();
-            view.pending_initial.clear();
-            view.pending_demands.clear();
-            view.reserved_demands.clear();
-            view.reserved_initial.clear();
-            view.reserved_poll.clear();
-            view.poll_defer_since.clear();
-            view.reserved_read = None;
-            view.used_keys.clear();
         }
         if !added.is_empty() {
             if let Some(view) = session.and_then(|session| self.sessions.get_mut(&session)) {
@@ -1640,24 +1724,57 @@ impl<C> Engine<C> {
         event: &Event,
         now: Instant,
     ) -> Result<Option<PendingRequest<C>>, ()> {
+        if matches!(
+            event.kind,
+            EventKind::UaItemMetadata { .. } | EventKind::UaNotificationFacts { .. }
+        ) && !matches!(event.origin, Origin::UaSession { .. })
+        {
+            return Err(());
+        }
+        if matches!(
+            event.kind,
+            EventKind::UaRecovery { .. } | EventKind::UaSubscriptionParameters { .. }
+        ) && !matches!(event.origin, Origin::Session(_) | Origin::UaSession { .. })
+        {
+            return Err(());
+        }
+        // An SDK loop can stop before its Connect reply reaches this thread.
+        // Never publish that stale success or consume its pending timeout.
+        if let (Owner::Session(session), Origin::Reply(id), EventKind::Connected { .. }) =
+            (event.owner, event.origin, &event.kind)
+            && self.sessions.get(&session).is_some_and(|view| {
+                view.connection_id == Some(id) && view.ua_recovery_phase == UaRecoveryPhase::Stopped
+            })
+        {
+            return Err(());
+        }
         let pending = match event.origin {
-            Origin::Unsolicited | Origin::Session(_) => None,
+            Origin::Unsolicited | Origin::Session(_) | Origin::UaSession { .. } => None,
             Origin::Reply(id) => {
                 // Once the deadline is queued, a racing transport reply cannot
                 // take its correlation slot ahead of the synthetic timeout.
-                if self.timeout_queued.contains(&(event.owner, id))
+                if (self.timeout_queued.contains(&(event.owner, id))
                     && !matches!(
                         &event.kind,
                         EventKind::Error {
                             message: BackendMsg::RequestTimeout { .. },
                             ..
                         }
-                    )
+                    ))
+                    || (self.identity_cancelled.contains(&(event.owner, id))
+                        && !matches!(
+                            &event.kind,
+                            EventKind::Error {
+                                message: BackendMsg::UaIdentityChanged { .. },
+                                ..
+                            }
+                        ))
                 {
                     return Err(());
                 }
                 let mut pending = self.requests.remove(&(event.owner, id)).ok_or(())?;
                 let synthetic_timeout = self.timeout_queued.remove(&(event.owner, id));
+                self.identity_cancelled.remove(&(event.owner, id));
                 if pending.operation == Operation::Read {
                     use opclook_contract::model::{ReadTerminal, ReadTerminalStatus};
                     // Index only requested keys; duplicate entries are a
@@ -1721,14 +1838,14 @@ impl<C> Engine<C> {
             return Ok(pending);
         };
         if matches!(event.kind, EventKind::UaSubscriptionParameters { .. })
-            && !matches!(event.origin, Origin::Session(_))
+            && !matches!(event.origin, Origin::Session(_) | Origin::UaSession { .. })
         {
             return Err(());
         }
         // Session state changes require the identity of the Connect that created
         // the producer. Untagged session diagnostics remain visible.
         let affects_session = !matches!(event.kind, EventKind::Log { .. });
-        if matches!(event.origin, Origin::Session(_))
+        if matches!(event.origin, Origin::Session(_) | Origin::UaSession { .. })
             && matches!(event.kind, EventKind::Values { .. })
             && self
                 .sessions
@@ -1742,6 +1859,71 @@ impl<C> Engine<C> {
         }
 
         match event.origin {
+            Origin::UaSession {
+                connection,
+                revision,
+            } => {
+                let view = self.sessions.get_mut(&session).ok_or(())?;
+                let transition = matches!(
+                    &event.kind,
+                    EventKind::UaRecovery {
+                        state: opclook_contract::model::UaRecoveryState::ConnectionLost { .. }
+                            | opclook_contract::model::UaRecoveryState::Reconnected { .. }
+                            | opclook_contract::model::UaRecoveryState::Stopped { .. }
+                    }
+                );
+                let early_reconciled = view.ua_recovery_phase == UaRecoveryPhase::Reconciling
+                    && matches!(
+                        &event.kind,
+                        EventKind::UaRecovery {
+                            state: opclook_contract::model::UaRecoveryState::Reconciled { .. }
+                        }
+                    );
+                if view.endpoint.protocol != Protocol::OpcUa
+                    || view.connection_id != Some(connection)
+                    || !(view.state == SessionState::Connected
+                        || (view.state == SessionState::Connecting
+                            && (transition || early_reconciled)))
+                {
+                    return Err(());
+                }
+                if transition {
+                    let legal = match &event.kind {
+                        EventKind::UaRecovery {
+                            state: opclook_contract::model::UaRecoveryState::ConnectionLost { .. },
+                        } => view.ua_recovery_phase != UaRecoveryPhase::Stopped,
+                        EventKind::UaRecovery {
+                            state: opclook_contract::model::UaRecoveryState::Reconnected { .. },
+                        } => view.ua_recovery_phase == UaRecoveryPhase::Lost,
+                        EventKind::UaRecovery {
+                            state: opclook_contract::model::UaRecoveryState::Stopped { .. },
+                        } => true,
+                        _ => false,
+                    };
+                    if !legal {
+                        return Err(());
+                    }
+                    if revision <= view.ua_revision {
+                        return Err(());
+                    }
+                    view.ua_revision = revision;
+                } else if revision != view.ua_revision {
+                    return Err(());
+                }
+                if let EventKind::UaItemMetadata { facts } = &event.kind {
+                    if !matches!(
+                        view.ua_recovery_phase,
+                        UaRecoveryPhase::Normal | UaRecoveryPhase::Ready
+                    ) || (!facts.is_empty()
+                        && !facts.iter().any(|fact| {
+                            view.items.contains_key(&fact.key)
+                                && !view.recovery_blocked.contains(&fact.key)
+                        }))
+                    {
+                        return Err(());
+                    }
+                }
+            }
             Origin::Session(id) => {
                 if !self.sessions.get(&session).is_some_and(|view| {
                     view.connection_id == Some(id) && view.state == SessionState::Connected
@@ -1751,6 +1933,136 @@ impl<C> Engine<C> {
             }
             Origin::Unsolicited if affects_session => return Err(()),
             _ => {}
+        }
+        if let EventKind::UaNotificationFacts { evidence, .. } = &event.kind
+            && let Some(view) = self.sessions.get_mut(&session)
+        {
+            match evidence {
+                opclook_contract::model::UaNotificationEvidence::SequenceGap { .. }
+                | opclook_contract::model::UaNotificationEvidence::DataOverflow { .. } => {
+                    view.ua_history_incomplete = true
+                }
+                opclook_contract::model::UaNotificationEvidence::SequenceUncertain { .. } => {
+                    view.ua_history_uncertain = true
+                }
+            }
+        }
+        if let EventKind::UaRecovery { state } = &event.kind {
+            use opclook_contract::model::UaRecoveryState;
+            let phase = self.sessions.get(&session).ok_or(())?.ua_recovery_phase;
+            match state {
+                UaRecoveryState::ConnectionLost { .. } if phase != UaRecoveryPhase::Stopped => {
+                    self.cancel_reads(
+                        session,
+                        None,
+                        opclook_contract::model::ReadCancelReason::Cancelled,
+                    );
+                    self.purge_read_requests(session);
+                    // Reserve each correlation for a typed cancellation before a
+                    // raced SDK reply can be accepted in the same Connect epoch.
+                    let owner = Owner::Session(session);
+                    let cancelled: Vec<_> = self
+                        .requests
+                        .iter()
+                        .filter_map(|(&(candidate, id), pending)| {
+                            if candidate != owner
+                                || self.timeout_queued.contains(&(owner, id))
+                                || self.identity_cancelled.contains(&(owner, id))
+                            {
+                                return None;
+                            }
+                            let service = match pending.operation {
+                                Operation::Browse => opclook_contract::model::UaService::Browse,
+                                Operation::BrowseViews => {
+                                    opclook_contract::model::UaService::BrowseViews
+                                }
+                                Operation::ResolveBrowsePath => {
+                                    opclook_contract::model::UaService::TranslatePath
+                                }
+                                _ => return None,
+                            };
+                            Some((id, pending.operation, service))
+                        })
+                        .collect();
+                    for (id, operation, service) in cancelled {
+                        self.identity_cancelled.insert((owner, id));
+                        self.route_events.push_back(Event {
+                            owner,
+                            origin: Origin::Reply(id),
+                            kind: EventKind::Error {
+                                operation,
+                                message: BackendMsg::UaIdentityChanged { service },
+                            },
+                        });
+                    }
+                    let view = self.sessions.get_mut(&session).ok_or(())?;
+                    view.ua_recovery_phase = UaRecoveryPhase::Lost;
+                    view.ua_history_uncertain = true;
+                    view.ua_subscriptions.clear();
+                    view.subscription = SubscriptionState::Inactive;
+                    view.read_in_flight = false;
+                    view.reserved_read = None;
+                }
+                UaRecoveryState::Reconnected { .. } if phase == UaRecoveryPhase::Lost => {
+                    self.sessions.get_mut(&session).ok_or(())?.ua_recovery_phase =
+                        UaRecoveryPhase::Reconciling;
+                }
+                UaRecoveryState::Reconciled { missing, .. }
+                    if phase == UaRecoveryPhase::Reconciling =>
+                {
+                    let blocked: HashSet<_> = missing.iter().copied().collect();
+                    self.cancel_reads(
+                        session,
+                        Some(&blocked),
+                        opclook_contract::model::ReadCancelReason::Cancelled,
+                    );
+                    let view = self.sessions.get_mut(&session).ok_or(())?;
+                    view.recovery_blocked = blocked;
+                    view.ua_recovery_phase = UaRecoveryPhase::Ready;
+                    for key in view
+                        .items
+                        .keys()
+                        .filter(|key| !view.recovery_blocked.contains(key))
+                    {
+                        view.pending_demands.insert(ReadDemand {
+                            key: *key,
+                            kind: ReadDemandKind::RecoverySnapshot,
+                        });
+                    }
+                }
+                UaRecoveryState::Stopped { .. } => {
+                    self.cancel_reads(
+                        session,
+                        None,
+                        opclook_contract::model::ReadCancelReason::Cancelled,
+                    );
+                    self.purge_read_requests(session);
+                    let view = self.sessions.get_mut(&session).ok_or(())?;
+                    view.ua_recovery_phase = UaRecoveryPhase::Stopped;
+                    if view.state == SessionState::Connecting {
+                        view.state = SessionState::Disconnected;
+                        view.reconnect = ReconnectState::Stopped;
+                    }
+                    view.ua_subscriptions.clear();
+                    view.subscription = SubscriptionState::Failed;
+                    view.read_in_flight = false;
+                    view.reserved_read = None;
+                }
+                UaRecoveryState::TypeMetadata { .. } if phase != UaRecoveryPhase::Stopped => {}
+                _ => return Err(()),
+            }
+        }
+        if matches!(event.origin, Origin::Session(_) | Origin::UaSession { .. })
+            && let EventKind::Values { values } = &event.kind
+            && let Some(view) = self.sessions.get(&session)
+            && (matches!(
+                view.ua_recovery_phase,
+                UaRecoveryPhase::Lost | UaRecoveryPhase::Reconciling | UaRecoveryPhase::Stopped
+            ) || values
+                .iter()
+                .any(|(key, _)| view.recovery_blocked.contains(key)))
+        {
+            return Err(());
         }
         let failed_connect = matches!(
             &event.kind,
@@ -1805,7 +2117,7 @@ impl<C> Engine<C> {
             });
         }
         let additions = match event.origin {
-            Origin::Unsolicited | Origin::Session(_) => None,
+            Origin::Unsolicited | Origin::Session(_) | Origin::UaSession { .. } => None,
             Origin::Reply(id) => self.pending_adds.remove(&(event.owner, id)),
         };
         if let EventKind::PollOnly { keys } = &event.kind {
@@ -1853,7 +2165,7 @@ impl<C> Engine<C> {
                 }
             }
         }
-        if matches!(event.origin, Origin::Session(_))
+        if matches!(event.origin, Origin::Session(_) | Origin::UaSession { .. })
             && let EventKind::Values { values } = &event.kind
             && let Some(view) = self.sessions.get_mut(&session)
         {
@@ -1982,9 +2294,19 @@ impl<C> Engine<C> {
                 } if correlated_read => view.read_in_flight = read_pending,
                 EventKind::Values { .. } if correlated_read => view.read_in_flight = read_pending,
                 EventKind::UaSubscriptionParameters { subscriptions } => {
-                    view.ua_subscriptions = subscriptions.clone();
+                    if !matches!(
+                        view.ua_recovery_phase,
+                        UaRecoveryPhase::Lost | UaRecoveryPhase::Stopped
+                    ) {
+                        view.ua_subscriptions = subscriptions.clone();
+                    }
                 }
-                EventKind::SubscriptionState { state } => {
+                EventKind::SubscriptionState { state }
+                    if !matches!(
+                        view.ua_recovery_phase,
+                        UaRecoveryPhase::Lost | UaRecoveryPhase::Stopped
+                    ) =>
+                {
                     view.subscription = *state;
                     if *state == SubscriptionState::Active
                         && !read_pending
@@ -2022,6 +2344,14 @@ impl<C> Engine<C> {
         for (&id, view) in &mut self.sessions {
             match view.state {
                 SessionState::Connected => {
+                    if matches!(
+                        view.ua_recovery_phase,
+                        UaRecoveryPhase::Lost
+                            | UaRecoveryPhase::Reconciling
+                            | UaRecoveryPhase::Stopped
+                    ) {
+                        continue;
+                    }
                     let profile = view.endpoint.acquisition.as_ref();
                     let interval = profile
                         .map(|c| Duration::from_millis(c.interval_ms))
@@ -2058,8 +2388,9 @@ impl<C> Engine<C> {
                                         now.saturating_duration_since(*since) < interval
                                     });
                                 ((!push || (configured_poll.is_none() && poll_only))
-                                    && !startup_wait)
-                                    .then_some(key)
+                                    && !startup_wait
+                                    && !view.recovery_blocked.contains(&key))
+                                .then_some(key)
                             }));
                             keys.extend(poll.iter().copied());
                         }
@@ -2135,6 +2466,7 @@ impl<C> Engine<C> {
     pub fn discard_pending(&mut self, owner: impl Into<Owner>, request: RequestId) {
         let session = owner.into();
         self.timeout_queued.remove(&(session, request));
+        self.identity_cancelled.remove(&(session, request));
         self.pending_adds.remove(&(session, request));
         self.deferred_routes
             .retain(|item| !(item.owner == session && item.request_id == request));
@@ -2195,6 +2527,7 @@ impl<C> Engine<C> {
         }
         self.deferred_routes.retain(|item| item.owner != owner);
         self.timeout_queued.retain(|(sid, _)| *sid != owner);
+        self.identity_cancelled.retain(|(sid, _)| *sid != owner);
         self.pending_adds.retain(|(sid, _), _| *sid != owner);
         if owner == Owner::Discovery {
             self.discovery_routes.clear();
@@ -2254,7 +2587,8 @@ impl<C> Engine<C> {
             .filter_map(|(&(sid, id), pending)| {
                 let limit = request_timeout(pending.operation, configured);
                 (now.saturating_duration_since(pending.sent) > limit
-                    && !self.timeout_queued.contains(&(sid, id)))
+                    && !self.timeout_queued.contains(&(sid, id))
+                    && !self.identity_cancelled.contains(&(sid, id)))
                 .then_some((sid, id, pending.operation, limit.as_secs()))
             })
             .collect();
@@ -2456,6 +2790,7 @@ impl<C> Engine<C> {
         self.invalidated.clear();
         self.pending_adds.clear();
         self.timeout_queued.clear();
+        self.identity_cancelled.clear();
         self.route_service = None;
         self.gateway.shutdown()
     }
@@ -2602,6 +2937,717 @@ mod tests {
         engine.test_skip_dispatch = true;
         engine.sessions.insert(sid(1), view);
         engine
+    }
+
+    #[test]
+    fn ua_connect_accepts_early_recovery_without_losing_remote_scope() {
+        use opclook_contract::model::{UaNotificationEvidence, UaRecoveryMode, UaRecoveryState};
+        let now = Instant::now();
+        let mut engine = Engine::default();
+        engine.test_skip_dispatch = true;
+        let endpoint = EndpointSpec::ua("opc.tcp://localhost:4840");
+        let id = engine
+            .send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::Connect {
+                    endpoint: endpoint.clone(),
+                },
+                (),
+            )
+            .unwrap();
+        let event = |connection, revision, kind| Event {
+            owner: owner(1),
+            origin: Origin::UaSession {
+                connection,
+                revision,
+            },
+            kind,
+        };
+        let lost = EventKind::UaRecovery {
+            state: UaRecoveryState::ConnectionLost { status: 1 },
+        };
+        assert!(
+            engine
+                .accept_at(&event(rid(99), 1, lost.clone()), now)
+                .is_err()
+        );
+        engine
+            .accept_at(&event(id, 1, lost), now)
+            .expect("early Lost");
+        assert!(
+            engine
+                .accept_at(&event(id, 1, EventKind::Values { values: vec![] }), now)
+                .is_err()
+        );
+        assert!(
+            engine
+                .accept_at(
+                    &event(
+                        id,
+                        1,
+                        EventKind::UaNotificationFacts {
+                            subscription_generation: 1,
+                            evidence: UaNotificationEvidence::SequenceGap {
+                                previous: 1,
+                                current: 3
+                            }
+                        }
+                    ),
+                    now
+                )
+                .is_err()
+        );
+        assert!(
+            engine
+                .accept_at(
+                    &event(id, 1, EventKind::UaItemMetadata { facts: vec![] }),
+                    now
+                )
+                .is_err()
+        );
+        assert!(
+            engine
+                .accept_at(
+                    &event(
+                        id,
+                        1,
+                        EventKind::UaRecovery {
+                            state: UaRecoveryState::Reconciled {
+                                missing: vec![],
+                                ambiguous: false
+                            }
+                        }
+                    ),
+                    now
+                )
+                .is_err()
+        );
+        engine
+            .accept_at(
+                &event(
+                    id,
+                    2,
+                    EventKind::UaRecovery {
+                        state: UaRecoveryState::Reconnected {
+                            mode: UaRecoveryMode::NewSession,
+                        },
+                    },
+                ),
+                now,
+            )
+            .unwrap();
+        engine
+            .accept_at(
+                &Event {
+                    owner: owner(1),
+                    origin: Origin::Reply(id),
+                    kind: EventKind::Connected {
+                        endpoint: endpoint.clone(),
+                        info: BackendMsg::raw("connected"),
+                    },
+                },
+                now,
+            )
+            .unwrap();
+        let view = engine.session(sid(1)).unwrap();
+        assert_eq!(view.ua_revision, 2);
+        assert_eq!(view.ua_recovery_phase, UaRecoveryPhase::Reconciling);
+        assert!(view.ua_history_uncertain);
+        engine
+            .accept_at(
+                &event(
+                    id,
+                    2,
+                    EventKind::UaRecovery {
+                        state: UaRecoveryState::Reconciled {
+                            missing: vec![],
+                            ambiguous: false,
+                        },
+                    },
+                ),
+                now,
+            )
+            .unwrap();
+        assert_eq!(
+            engine.session(sid(1)).unwrap().ua_recovery_phase,
+            UaRecoveryPhase::Ready
+        );
+        let facts = || EventKind::UaNotificationFacts {
+            subscription_generation: 1,
+            evidence: UaNotificationEvidence::SequenceGap {
+                previous: 4,
+                current: 6,
+            },
+        };
+        assert!(engine.accept_at(&event(id, 1, facts()), now).is_err());
+        engine.accept_at(&event(id, 2, facts()), now).unwrap();
+        assert!(engine.session(sid(1)).unwrap().ua_history_incomplete);
+        assert!(engine.session(sid(1)).unwrap().items.is_empty());
+        let next = engine
+            .send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::Connect { endpoint },
+                (),
+            )
+            .unwrap();
+        let view = engine.session(sid(1)).unwrap();
+        assert_eq!(view.connection_id, Some(next));
+        assert_eq!(view.ua_revision, 0);
+        assert_eq!(view.ua_recovery_phase, UaRecoveryPhase::Normal);
+        assert!(!view.ua_history_uncertain);
+        assert!(
+            engine
+                .accept_at(
+                    &event(
+                        id,
+                        3,
+                        EventKind::UaRecovery {
+                            state: UaRecoveryState::ConnectionLost { status: 1 }
+                        }
+                    ),
+                    now
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn ua_reconciliation_before_connect_reply_keeps_current_scope() {
+        use opclook_contract::model::{UaRecoveryMode, UaRecoveryState};
+        let now = Instant::now();
+        let mut engine = Engine::default();
+        engine.test_skip_dispatch = true;
+        let endpoint = EndpointSpec::ua("opc.tcp://localhost:4840");
+        let id = engine
+            .send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::Connect {
+                    endpoint: endpoint.clone(),
+                },
+                (),
+            )
+            .unwrap();
+        let recovery = |revision, state| Event {
+            owner: owner(1),
+            origin: Origin::UaSession {
+                connection: id,
+                revision,
+            },
+            kind: EventKind::UaRecovery { state },
+        };
+        engine
+            .accept_at(
+                &recovery(1, UaRecoveryState::ConnectionLost { status: 1 }),
+                now,
+            )
+            .unwrap();
+        engine
+            .accept_at(
+                &recovery(
+                    2,
+                    UaRecoveryState::Reconnected {
+                        mode: UaRecoveryMode::NewSession,
+                    },
+                ),
+                now,
+            )
+            .unwrap();
+        engine
+            .accept_at(
+                &recovery(
+                    2,
+                    UaRecoveryState::Reconciled {
+                        missing: vec![key(3)],
+                        ambiguous: false,
+                    },
+                ),
+                now,
+            )
+            .unwrap();
+        let view = engine.session(sid(1)).unwrap();
+        assert_eq!(view.state, SessionState::Connecting);
+        assert_eq!(view.ua_recovery_phase, UaRecoveryPhase::Ready);
+        assert!(view.items.is_empty());
+        assert!(view.recovery_blocked.contains(&key(3)));
+        engine
+            .accept_at(
+                &Event {
+                    owner: owner(1),
+                    origin: Origin::Reply(id),
+                    kind: EventKind::Connected {
+                        endpoint,
+                        info: BackendMsg::raw("connected"),
+                    },
+                },
+                now,
+            )
+            .unwrap();
+        let view = engine.session(sid(1)).unwrap();
+        assert_eq!(view.ua_revision, 2);
+        assert_eq!(view.ua_recovery_phase, UaRecoveryPhase::Ready);
+        assert!(view.ua_history_uncertain);
+        assert!(view.recovery_blocked.contains(&key(3)));
+        assert!(view.items.is_empty());
+    }
+
+    #[test]
+    fn da_route_connect_clears_old_ua_scope_on_registration() {
+        let now = Instant::now();
+        let mut engine = cached_poll_engine(now);
+        let old = engine.sessions.get_mut(&sid(1)).unwrap();
+        old.ua_revision = 4;
+        old.ua_recovery_phase = UaRecoveryPhase::Stopped;
+        old.ua_history_incomplete = true;
+        old.ua_history_uncertain = true;
+        old.recovery_blocked.insert(key(1));
+        let id = engine
+            .prepare_da(
+                sid(1),
+                CommandKind::Connect {
+                    endpoint: EndpointSpec::da("127.0.0.1", "Srv"),
+                },
+                (),
+                RouteOptions {
+                    adapter: None,
+                    local_addresses: vec![],
+                    deadline: now + Duration::from_secs(2),
+                },
+            )
+            .unwrap();
+        let view = engine.session(sid(1)).unwrap();
+        assert_eq!(view.connection_id, Some(id));
+        assert_eq!(view.ua_revision, 0);
+        assert_eq!(view.ua_recovery_phase, UaRecoveryPhase::Normal);
+        assert!(!view.ua_history_uncertain && !view.ua_history_incomplete);
+        assert!(view.recovery_blocked.is_empty());
+        engine.cancel_da_routes(sid(1));
+    }
+
+    #[test]
+    fn early_stopped_does_not_resurrect_on_connect_reply() {
+        use opclook_contract::model::UaRecoveryState;
+        let now = Instant::now();
+        let mut engine = Engine::default();
+        engine.test_skip_dispatch = true;
+        let endpoint = EndpointSpec::ua("opc.tcp://localhost:4840");
+        let id = engine
+            .send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::Connect {
+                    endpoint: endpoint.clone(),
+                },
+                (),
+            )
+            .unwrap();
+        engine
+            .accept_at(
+                &Event {
+                    owner: owner(1),
+                    origin: Origin::UaSession {
+                        connection: id,
+                        revision: 1,
+                    },
+                    kind: EventKind::UaRecovery {
+                        state: UaRecoveryState::Stopped { status: 1 },
+                    },
+                },
+                now,
+            )
+            .unwrap();
+        assert!(
+            engine
+                .accept_at(
+                    &Event {
+                        owner: owner(1),
+                        origin: Origin::Reply(id),
+                        kind: EventKind::Connected {
+                            endpoint,
+                            info: BackendMsg::raw("connected")
+                        }
+                    },
+                    now
+                )
+                .is_err()
+        );
+        assert_ne!(
+            engine.session(sid(1)).unwrap().state,
+            SessionState::Connected
+        );
+    }
+
+    #[test]
+    fn ua_early_overflow_marks_sticky_history_without_acknowledging_registration() {
+        use opclook_contract::model::UaNotificationEvidence;
+        let now = Instant::now();
+        let mut engine = cached_poll_engine(now);
+        let unknown = key(99);
+        let fact = Event {
+            owner: owner(1),
+            origin: Origin::UaSession {
+                connection: rid(77),
+                revision: 0,
+            },
+            kind: EventKind::UaNotificationFacts {
+                subscription_generation: 1,
+                evidence: UaNotificationEvidence::DataOverflow {
+                    key: unknown,
+                    status: 0x480,
+                },
+            },
+        };
+        engine.accept_at(&fact, now).unwrap();
+        assert!(engine.session(sid(1)).unwrap().ua_history_incomplete);
+        assert!(!engine.session(sid(1)).unwrap().items.contains_key(&unknown));
+        let id = dispatch_due(&mut engine, now);
+        engine
+            .accept_at(
+                &Event {
+                    owner: owner(1),
+                    origin: Origin::Reply(id),
+                    kind: EventKind::Values { values: vec![] },
+                },
+                now,
+            )
+            .unwrap();
+        assert!(engine.session(sid(1)).unwrap().ua_history_incomplete);
+    }
+
+    #[test]
+    fn ua_metadata_rejects_old_sdk_revision_and_unregistered_keys() {
+        use opclook_contract::model::{UaItemMetadata, UaRecoveryMode, UaRecoveryState};
+        let now = Instant::now();
+        let mut engine = cached_poll_engine(now);
+        let event = |revision, kind| Event {
+            owner: owner(1),
+            origin: Origin::UaSession {
+                connection: rid(77),
+                revision,
+            },
+            kind,
+        };
+        engine
+            .accept_at(
+                &event(
+                    1,
+                    EventKind::UaRecovery {
+                        state: UaRecoveryState::ConnectionLost { status: 1 },
+                    },
+                ),
+                now,
+            )
+            .unwrap();
+        engine
+            .accept_at(
+                &event(
+                    2,
+                    EventKind::UaRecovery {
+                        state: UaRecoveryState::Reconnected {
+                            mode: UaRecoveryMode::NewSession,
+                        },
+                    },
+                ),
+                now,
+            )
+            .unwrap();
+        engine
+            .accept_at(
+                &event(
+                    2,
+                    EventKind::UaRecovery {
+                        state: UaRecoveryState::Reconciled {
+                            missing: vec![key(2)],
+                            ambiguous: true,
+                        },
+                    },
+                ),
+                now,
+            )
+            .unwrap();
+        let fact = |key| UaItemMetadata {
+            key,
+            data_type: Some("Int32".into()),
+            type_id: Some(6),
+            user_access_level: Some(3),
+            diagnostic: None,
+        };
+        assert!(
+            engine
+                .accept_at(
+                    &event(
+                        1,
+                        EventKind::UaItemMetadata {
+                            facts: vec![fact(key(1))]
+                        }
+                    ),
+                    now
+                )
+                .is_err()
+        );
+        assert!(
+            engine
+                .accept_at(
+                    &event(
+                        2,
+                        EventKind::UaItemMetadata {
+                            facts: vec![fact(key(2))]
+                        }
+                    ),
+                    now
+                )
+                .is_err()
+        );
+        assert!(
+            engine
+                .accept_at(
+                    &event(
+                        2,
+                        EventKind::UaItemMetadata {
+                            facts: vec![fact(key(1))]
+                        }
+                    ),
+                    now
+                )
+                .is_ok()
+        );
+        assert!(
+            engine
+                .accept_at(&event(1, EventKind::Values { values: vec![] }), now)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn recovery_lost_cancels_browse_with_correlated_typed_terminal() {
+        use opclook_contract::model::{NodeClassFilter, UaRecoveryState, UaService};
+        let now = Instant::now();
+        let mut engine = cached_poll_engine(now);
+        let id = engine
+            .send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::Browse {
+                    node_id: "ns=2;s=old".into(),
+                    filter: NodeClassFilter::All,
+                    view_id: None,
+                },
+                (),
+            )
+            .unwrap();
+        let lost = Event {
+            owner: owner(1),
+            origin: Origin::Session(rid(77)),
+            kind: EventKind::UaRecovery {
+                state: UaRecoveryState::ConnectionLost { status: 1 },
+            },
+        };
+        engine.accept_at(&lost, now).unwrap();
+        let late = Event {
+            owner: owner(1),
+            origin: Origin::Reply(id),
+            kind: EventKind::Browse {
+                node_id: "ns=2;s=old".into(),
+                children: vec![],
+            },
+        };
+        assert!(engine.accept_at(&late, now).is_err());
+        let terminal = engine.try_recv().unwrap();
+        assert!(matches!(
+            terminal.kind,
+            EventKind::Error {
+                operation: Operation::Browse,
+                message: BackendMsg::UaIdentityChanged {
+                    service: UaService::Browse
+                }
+            }
+        ));
+        assert!(engine.accept_at(&terminal, now).unwrap().is_some());
+        assert!(engine.accept_at(&late, now).is_err());
+    }
+
+    #[test]
+    fn recovery_cancels_views_and_resolve_and_beats_timeout() {
+        use opclook_contract::model::{UaRecoveryState, UaService};
+        let now = Instant::now();
+        let mut engine = cached_poll_engine(now);
+        let views = engine
+            .send(sid(1), Protocol::OpcUa, CommandKind::BrowseViews, ())
+            .unwrap();
+        let path = engine
+            .send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::ResolveBrowsePath {
+                    start_node: None,
+                    path: "old".into(),
+                },
+                (),
+            )
+            .unwrap();
+        engine
+            .accept_at(
+                &Event {
+                    owner: owner(1),
+                    origin: Origin::Session(rid(77)),
+                    kind: EventKind::UaRecovery {
+                        state: UaRecoveryState::ConnectionLost { status: 1 },
+                    },
+                },
+                now,
+            )
+            .unwrap();
+        engine.expire_requests(now + Duration::from_secs(120), 1);
+        for (id, kind) in [
+            (views, EventKind::Views { children: vec![] }),
+            (path, EventKind::PathResolved { targets: vec![] }),
+        ] {
+            assert!(
+                engine
+                    .accept_at(
+                        &Event {
+                            owner: owner(1),
+                            origin: Origin::Reply(id),
+                            kind
+                        },
+                        now
+                    )
+                    .is_err()
+            );
+        }
+        let mut seen = Vec::new();
+        for _ in 0..2 {
+            let terminal = engine.try_recv().unwrap();
+            if let EventKind::Error {
+                message: BackendMsg::UaIdentityChanged { service },
+                ..
+            } = &terminal.kind
+            {
+                seen.push(*service);
+            } else {
+                panic!("typed cancellation expected");
+            }
+            engine.accept_at(&terminal, now).unwrap();
+        }
+        assert!(seen.contains(&UaService::BrowseViews));
+        assert!(seen.contains(&UaService::TranslatePath));
+        assert!(engine.try_recv().is_none());
+    }
+
+    #[test]
+    fn recovery_is_epoch_guarded_and_schedules_one_fresh_snapshot_per_valid_key() {
+        use opclook_contract::model::{ReadNeed, UaRecoveryMode, UaRecoveryState};
+        let now = Instant::now();
+        let mut engine = cached_poll_engine(now);
+        let old_read = dispatch_due(&mut engine, now);
+        let event = |origin, state| Event {
+            owner: owner(1),
+            origin,
+            kind: EventKind::UaRecovery { state },
+        };
+        let lost = UaRecoveryState::ConnectionLost { status: 0x80000000 };
+        assert!(
+            engine
+                .accept_at(&event(Origin::Session(rid(78)), lost.clone()), now)
+                .is_err()
+        );
+        engine
+            .accept_at(&event(Origin::Session(rid(77)), lost), now)
+            .unwrap();
+        assert!(engine.session(sid(1)).unwrap().ua_subscriptions.is_empty());
+        assert!(engine.session(sid(1)).unwrap().ua_history_uncertain);
+        assert!(!engine.session(sid(1)).unwrap().ua_history_incomplete);
+        assert!(
+            engine
+                .due(now + Duration::from_secs(10), Duration::ZERO, None)
+                .is_empty()
+        );
+        assert!(
+            engine
+                .accept_at(
+                    &Event {
+                        owner: owner(1),
+                        origin: Origin::Reply(old_read),
+                        kind: EventKind::Values { values: vec![] }
+                    },
+                    now
+                )
+                .is_err()
+        );
+        let reconnected = UaRecoveryState::Reconnected {
+            mode: UaRecoveryMode::NewSession,
+        };
+        engine
+            .accept_at(&event(Origin::Session(rid(77)), reconnected.clone()), now)
+            .unwrap();
+        let reconciled = UaRecoveryState::Reconciled {
+            missing: vec![key(2)],
+            ambiguous: true,
+        };
+        engine
+            .accept_at(&event(Origin::Session(rid(77)), reconciled.clone()), now)
+            .unwrap();
+        assert!(
+            engine
+                .accept_at(&event(Origin::Session(rid(77)), reconciled), now)
+                .is_err()
+        );
+        assert!(engine.request_refresh(sid(1), key(2)).is_err());
+        let due = engine.due(now, Duration::from_secs(60), None);
+        let [Due::Read { keys, permit, .. }] = due.as_slice() else {
+            panic!("one snapshot")
+        };
+        assert_eq!(keys, &vec![key(1)]);
+        let read = engine
+            .send_due_read(sid(1), Protocol::OpcUa, keys.clone(), *permit, ())
+            .unwrap();
+        assert!(matches!(
+            &engine.test_commands.borrow().last().unwrap().kind,
+            CommandKind::Read { .. }
+        ));
+        let pending = engine
+            .accept_at(
+                &Event {
+                    owner: owner(1),
+                    origin: Origin::Reply(read),
+                    kind: EventKind::Values { values: vec![] },
+                },
+                now,
+            )
+            .unwrap()
+            .unwrap();
+        assert!(
+            pending.read_terminals[0]
+                .needs
+                .contains(&ReadNeed::RecoverySnapshot)
+        );
+        assert!(engine.session(sid(1)).unwrap().ua_history_uncertain);
+        assert!(!engine.session(sid(1)).unwrap().ua_history_incomplete);
+        assert!(
+            engine
+                .accept_at(&event(Origin::Session(rid(77)), reconnected), now)
+                .is_err()
+        );
+        engine
+            .accept_at(
+                &event(
+                    Origin::Session(rid(77)),
+                    UaRecoveryState::Stopped { status: 1 },
+                ),
+                now,
+            )
+            .unwrap();
+        assert_eq!(
+            engine.session(sid(1)).unwrap().subscription,
+            SubscriptionState::Failed
+        );
+        assert!(
+            engine
+                .due(now + Duration::from_secs(10), Duration::ZERO, None)
+                .is_empty()
+        );
     }
 
     fn dispatch_due(engine: &mut Engine<()>, now: Instant) -> RequestId {

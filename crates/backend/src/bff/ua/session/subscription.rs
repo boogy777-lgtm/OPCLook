@@ -1,6 +1,6 @@
 use super::{
-    AttributeId, BackendMsg, DataChangeCallback, Duration, Event, EventKind, HashMap, IO_TIMEOUT,
-    ItemFailure, ItemKey, MAX_SUBSCRIPTIONS_PER_SESSION, MonitorOutcome, MonitoredItem,
+    AttributeId, BackendMsg, DataChangeCallback, Duration, Event, EventKind, HashMap, HashSet,
+    IO_TIMEOUT, ItemFailure, ItemKey, MAX_SUBSCRIPTIONS_PER_SESSION, MonitorOutcome, MonitoredItem,
     MonitoredItemCreateRequest, MonitoredItemModifyRequest, MonitoringMode, MonitoringParameters,
     NodeId, NumericRange, QualifiedName, READ_MAX_ITEMS_PER_CALL, ReadValueId, Sender, StatusCode,
     SubscriptionState, TimestampsToReturn, UA_SUBSCRIPTION_KEEPALIVE_COUNT,
@@ -10,31 +10,250 @@ use super::{
 };
 use crate::constants::UA_SAMPLING_INTERVAL_MS;
 
+// A service-level transport/session error may beat the event-loop Lost event.
+// It leaves Create's remote outcome ambiguous, unlike an ordinary refusal.
+fn ambiguous_create_failure(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::BadUnexpectedError
+            | StatusCode::BadDecodingError
+            | StatusCode::BadResponseTooLarge
+            | StatusCode::BadUnknownResponse
+            | StatusCode::BadRequestInterrupted
+            | StatusCode::BadCommunicationError
+            | StatusCode::BadConnectionClosed
+            | StatusCode::BadSecureChannelClosed
+            | StatusCode::BadSecureChannelIdInvalid
+            | StatusCode::BadServerNotConnected
+            | StatusCode::BadSessionClosed
+            | StatusCode::BadSessionIdInvalid
+    )
+}
+
 impl UaSession {
+    /// Retain adapter identity for reconciliation, but withdraw the stale
+    /// negotiated snapshot while transport recovery is in progress.
+    pub(in crate::bff::ua) fn recovery_lost(&self, tx: &Sender<Event>) {
+        send(
+            tx,
+            Event {
+                origin: super::notification::scoped_origin(
+                    self.connection_id,
+                    self.recovery.borrow().0,
+                ),
+                owner: self.session_id.into(),
+                kind: EventKind::UaSubscriptionParameters {
+                    subscriptions: Vec::new(),
+                },
+            },
+        );
+    }
+    /// A terminated SDK loop cannot support previously reported monitored facts.
+    pub(in crate::bff::ua) fn recovery_stopped(&mut self, tx: &Sender<Event>) {
+        let mut missing: Vec<_> = self
+            .monitored
+            .keys()
+            .filter(|key| self.items.contains_key(key))
+            .copied()
+            .collect();
+        missing.sort_unstable();
+        self.monitored.clear();
+        self.requested_intervals_ms.clear();
+        self.push_keys
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        send(
+            tx,
+            Event {
+                origin: super::notification::scoped_origin(
+                    self.connection_id,
+                    self.recovery.borrow().0,
+                ),
+                owner: self.session_id.into(),
+                kind: EventKind::UaSubscriptionParameters {
+                    subscriptions: Vec::new(),
+                },
+            },
+        );
+        self.report_subscription_state(tx, SubscriptionState::Failed);
+        send(
+            tx,
+            Event {
+                origin: super::notification::scoped_origin(
+                    self.connection_id,
+                    self.recovery.borrow().0,
+                ),
+                owner: self.session_id.into(),
+                kind: EventKind::UaRecovery {
+                    state: crate::bff::model::UaRecoveryState::Reconciled {
+                        missing,
+                        ambiguous: true,
+                    },
+                },
+            },
+        );
+    }
+    /// Rebind adapter IDs from the SDK's post-recovery state. The SDK owns
+    /// transfer/recreation; missing facts remain visible and are not retried here.
+    pub(in crate::bff::ua) fn reconcile_recovery(
+        &mut self,
+        tx: &Sender<Event>,
+        identity_missing: Vec<ItemKey>,
+    ) {
+        let revision = self.recovery.borrow().0;
+        let mut snapshot = Vec::new();
+        let ids;
+        {
+            let state = self.session.subscription_state().lock();
+            ids = state.subscription_ids().unwrap_or_default();
+            for &id in &ids {
+                if let Some(sub) = state.get(id) {
+                    for item in sub.monitored_items() {
+                        if let Some(key) = ItemKey::new(item.client_handle()) {
+                            snapshot.push((id, key, item.id()));
+                        }
+                    }
+                }
+            }
+        }
+        let identity_missing_set: HashSet<_> = identity_missing.iter().copied().collect();
+        let current = self
+            .items
+            .keys()
+            .filter(|key| {
+                !self.identity_blocked.contains(key) && !identity_missing_set.contains(key)
+            })
+            .copied()
+            .collect();
+        let mut result = super::recovery::reconcile(
+            &current,
+            &self.monitored,
+            &self.requested_intervals_ms,
+            &ids,
+            &snapshot,
+        );
+        // Keep an unambiguous SDK ID for deletion of blocked registrations;
+        // it never authorizes values or appears in negotiated item facts.
+        for &key in &identity_missing {
+            let mut matches = snapshot
+                .iter()
+                .filter(|(sub, candidate, id)| *candidate == key && *sub != 0 && *id != 0);
+            if let Some(&(sub, _, id)) = matches.next()
+                && matches.next().is_none()
+            {
+                result.monitored.insert(key, (sub, id));
+            }
+        }
+        // A subsequent SDK event makes this sampled view obsolete; leave the
+        // existing registration map intact and process the newer revision.
+        if self.recovery.has_changed().unwrap_or(true) {
+            return;
+        }
+        result.missing.extend(identity_missing);
+        result.missing.sort_unstable();
+        result.missing.dedup();
+        if !result.missing.is_empty() {
+            result.ambiguous = true;
+        }
+        {
+            let mut allowed = self
+                .push_keys
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if self.recovery.has_changed().unwrap_or(true) {
+                return;
+            }
+            self.identity_blocked
+                .extend(identity_missing_set.iter().copied());
+            allowed.clear();
+            allowed.extend(
+                result
+                    .monitored
+                    .keys()
+                    .filter(|key| !self.identity_blocked.contains(key))
+                    .copied(),
+            );
+        }
+        self.monitored = result.monitored;
+        self.subscriptions = result.subscriptions;
+        self.requested_intervals_ms = result.requested;
+        send(
+            tx,
+            Event {
+                origin: super::notification::scoped_origin(self.connection_id, revision),
+                owner: self.session_id.into(),
+                kind: EventKind::UaRecovery {
+                    state: crate::bff::model::UaRecoveryState::Reconciled {
+                        missing: result.missing,
+                        ambiguous: result.ambiguous,
+                    },
+                },
+            },
+        );
+        self.report_negotiated_at(tx, revision);
+        {
+            let _allowed = self
+                .push_keys
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // A newer Lost event owns the gate; never reopen it for this snapshot.
+            if self.recovery.borrow().0 == revision {
+                self.identity_gate
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+    }
     pub(in crate::bff::ua) async fn ensure_subscription(
         &mut self,
         tx: &Sender<Event>,
+        revision: u64,
     ) -> Result<(), BackendMsg> {
+        if !self.check_add_scope(revision, crate::bff::model::UaService::CreateSubscription) {
+            return Err(BackendMsg::UaIdentityChanged {
+                service: crate::bff::model::UaService::CreateSubscription,
+            });
+        }
         if !self.subscriptions.is_empty() {
             return Ok(());
         }
-        self.create_subscription(tx).await.map(|_| ())
+        self.create_subscription(tx, revision).await.map(|_| ())
     }
 
     /// Create one more subscription. Publishing interval mirrors the app update
     /// interval (default 1000 ms) and the DataChange callback forwards
     /// quality/timestamp-mapped values to the UI.
-    async fn create_subscription(&mut self, tx: &Sender<Event>) -> Result<u32, BackendMsg> {
+    async fn create_subscription(
+        &mut self,
+        tx: &Sender<Event>,
+        revision: u64,
+    ) -> Result<u32, BackendMsg> {
+        if !self.check_add_scope(revision, crate::bff::model::UaService::CreateSubscription) {
+            return Err(BackendMsg::UaIdentityChanged {
+                service: crate::bff::model::UaService::CreateSubscription,
+            });
+        }
         let interval_ms = if self.explicit_acquisition {
             self.publishing_interval_ms.clamp(1, 3_600_000)
         } else {
             self.publishing_interval_ms.clamp(100, 3_600_000)
         };
         let interval = Duration::from_millis(interval_ms);
+        let Some(generation) = self.notification_generation.checked_add(1) else {
+            let service = crate::bff::model::UaService::CreateSubscription;
+            self.quarantine_add(service);
+            return Err(BackendMsg::UaIdentityChanged { service });
+        };
+        self.notification_generation = generation;
         let session_id = self.session_id;
         let connection_id = self.connection_id;
         let event_tx = tx.clone();
-        let types = self.types.clone();
+        let callback_recovery = self.recovery.clone();
+        let notification_scope = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let callback_scope = notification_scope.clone();
+        let types = self.callback_types.clone();
+        let push_keys = self.push_keys.clone();
+        let identity_gate = self.identity_gate.clone();
         let callback =
             DataChangeCallback::new(move |data_value: UaDataValue, item: &MonitoredItem| {
                 let Some(key) = ItemKey::new(item.client_handle()) else {
@@ -50,11 +269,47 @@ impl UaSession {
                     });
                     return;
                 };
+                let allowed = push_keys
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                #[cfg(test)]
+                if std::env::var_os("OPCLOOK_UA_RECOVERY_TRACE").is_some() {
+                    eprintln!(
+                        "UA recovery callback key={key:?} allowed={}",
+                        allowed.contains(&key)
+                    );
+                }
+                if !identity_gate.load(std::sync::atomic::Ordering::SeqCst)
+                    || !allowed.contains(&key)
+                {
+                    return;
+                }
+                let Some(revision) = super::notification::current_notification_scope(
+                    &callback_scope,
+                    &identity_gate,
+                    &callback_recovery,
+                ) else {
+                    return;
+                };
+                if let Some(status) = super::notification::data_overflow(data_value.status) {
+                    let _ = event_tx.send(Event {
+                        origin: super::notification::scoped_origin(connection_id, revision),
+                        owner: session_id.into(),
+                        kind: EventKind::UaNotificationFacts {
+                            subscription_generation: generation,
+                            evidence: crate::bff::model::UaNotificationEvidence::DataOverflow {
+                                key,
+                                status,
+                            },
+                        },
+                    });
+                }
+                let types = types
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone();
                 let _ = event_tx.send(Event {
-                    origin: connection_id.map_or(
-                        crate::bff::model::Origin::Unsolicited,
-                        crate::bff::model::Origin::Session,
-                    ),
+                    origin: super::notification::scoped_origin(connection_id, revision),
                     owner: session_id.into(),
                     kind: EventKind::Values {
                         values: vec![(
@@ -67,7 +322,20 @@ impl UaSession {
                         )],
                     },
                 });
+                drop(allowed);
             });
+        let callback = super::notification::ObservedNotification {
+            inner: callback,
+            tracker: Default::default(),
+            generation,
+            connection: connection_id,
+            session: session_id,
+            events: tx.clone(),
+            gate: self.identity_gate.clone(),
+            keys: self.push_keys.clone(),
+            recovery: self.recovery.clone(),
+            scope: notification_scope,
+        };
         let created = timeout_drain(
             self.session.create_subscription(
                 interval,
@@ -81,13 +349,34 @@ impl UaSession {
             IO_TIMEOUT,
         )
         .await;
-        let Ok(created) = created else {
+        if created.is_err() {
             self.timed_out = true;
+        }
+        if !self.check_add_scope(revision, crate::bff::model::UaService::CreateSubscription) {
+            return Err(BackendMsg::UaIdentityChanged {
+                service: crate::bff::model::UaService::CreateSubscription,
+            });
+        }
+        let Ok(created) = created else {
             return Err(BackendMsg::TimeoutCreateSubscription);
         };
-        let sub_id = created.map_err(|e| BackendMsg::CreateSubscriptionFailed {
-            detail: e.to_string(),
-        })?;
+        let sub_id = match created {
+            Ok(id) => id,
+            Err(e) if e.status() == StatusCode::BadTimeout => {
+                self.timed_out = true;
+                return Err(BackendMsg::TimeoutCreateSubscription);
+            }
+            Err(e) if ambiguous_create_failure(e.status()) => {
+                let service = crate::bff::model::UaService::CreateSubscription;
+                self.quarantine_add(service);
+                return Err(BackendMsg::UaIdentityChanged { service });
+            }
+            Err(e) => {
+                return Err(BackendMsg::CreateSubscriptionFailed {
+                    detail: e.to_string(),
+                });
+            }
+        };
         if self.subscriptions.is_empty() {
             self.last_requested_interval_ms = interval_ms;
             self.applied_deadband = self.deadband;
@@ -296,10 +585,14 @@ impl UaSession {
         subscription_id: u32,
         round: &[(ItemKey, MonitoredItemCreateRequest)],
         tx: &Sender<Event>,
+        revision: u64,
     ) -> Vec<(ItemKey, Result<u32, ItemFailure>)> {
         let mut out: Vec<(ItemKey, Result<u32, ItemFailure>)> = Vec::with_capacity(round.len());
         let mut start = 0usize;
         while start < round.len() {
+            if !self.check_add_scope(revision, crate::bff::model::UaService::CreateMonitoredItems) {
+                break;
+            }
             let size = self.monitor_chunk.max(1).min(round.len() - start);
             let Some(chunk) = round.get(start..start + size) else {
                 break;
@@ -315,8 +608,13 @@ impl UaSession {
                 IO_TIMEOUT,
             )
             .await;
-            let failure = if created.is_err() {
+            if created.is_err() {
                 self.timed_out = true;
+            }
+            if !self.check_add_scope(revision, crate::bff::model::UaService::CreateMonitoredItems) {
+                break;
+            }
+            let failure = if created.is_err() {
                 Some(BackendMsg::TimeoutMonitoredItems)
             } else {
                 match created {
@@ -329,6 +627,14 @@ impl UaSession {
                         out.extend(create_outcomes(&keys, &statuses));
                         start += size;
                         None
+                    }
+                    Ok(Err(e)) if e.status() == StatusCode::BadTimeout => {
+                        self.timed_out = true;
+                        Some(BackendMsg::TimeoutMonitoredItems)
+                    }
+                    Ok(Err(e)) if ambiguous_create_failure(e.status()) => {
+                        self.quarantine_add(crate::bff::model::UaService::CreateMonitoredItems);
+                        break;
                     }
                     Ok(Err(e)) if is_too_many_operations(e.status()) && size > 1 => {
                         self.monitor_chunk = (size / 2).max(1);
@@ -379,6 +685,7 @@ impl UaSession {
         &mut self,
         tx: &Sender<Event>,
         nodes: &[(ItemKey, NodeId)],
+        revision: u64,
     ) -> MonitorOutcome {
         let mut outcome = MonitorOutcome::default();
         let mut pending: Vec<(ItemKey, NodeId)> = nodes.to_vec();
@@ -388,8 +695,10 @@ impl UaSession {
             let Some(&sub_id) = self.subscriptions.last() else {
                 break;
             };
-            let overflow = self.monitor_on(tx, sub_id, &pending, &mut outcome).await;
-            if overflow.is_empty() || self.timed_out {
+            let overflow = self
+                .monitor_on(tx, sub_id, &pending, &mut outcome, revision)
+                .await;
+            if overflow.is_empty() || self.timed_out || self.identity_quarantined.is_some() {
                 pending.clear();
                 break;
             }
@@ -404,7 +713,7 @@ impl UaSession {
             if self.subscriptions.len() >= MAX_SUBSCRIPTIONS_PER_SESSION {
                 break;
             }
-            match self.create_subscription(tx).await {
+            match self.create_subscription(tx, revision).await {
                 Ok(_) => fresh = true,
                 Err(_) => break,
             }
@@ -423,6 +732,7 @@ impl UaSession {
         subscription_id: u32,
         nodes: &[(ItemKey, NodeId)],
         outcome: &mut MonitorOutcome,
+        revision: u64,
     ) -> Vec<(ItemKey, NodeId)> {
         let round: Vec<(ItemKey, MonitoredItemCreateRequest)> = nodes
             .iter()
@@ -436,7 +746,10 @@ impl UaSession {
         for (key, node) in nodes {
             node_by_key.entry(*key).or_insert(node);
         }
-        for (key, result) in self.create_round(subscription_id, &round, tx).await {
+        for (key, result) in self
+            .create_round(subscription_id, &round, tx, revision)
+            .await
+        {
             let node = node_by_key.get(&key).copied();
             match result {
                 Ok(id) => {
@@ -460,7 +773,7 @@ impl UaSession {
             }
         }
 
-        if !retry.is_empty() {
+        if !retry.is_empty() && self.identity_quarantined.is_none() {
             let round: Vec<(ItemKey, MonitoredItemCreateRequest)> = retry
                 .iter()
                 .map(|(key, node)| (*key, self.monitor_request(*key, node, false)))
@@ -469,7 +782,10 @@ impl UaSession {
             for (key, node) in &retry {
                 retry_by_key.entry(*key).or_insert(node);
             }
-            for (key, result) in self.create_round(subscription_id, &round, tx).await {
+            for (key, result) in self
+                .create_round(subscription_id, &round, tx, revision)
+                .await
+            {
                 match result {
                     Ok(id) => {
                         self.monitored.insert(key, (subscription_id, id));
@@ -489,6 +805,11 @@ impl UaSession {
 
     /// Publish only facts held by the SDK, scoped to this connection epoch.
     pub(in crate::bff::ua) fn report_negotiated(&self, tx: &Sender<Event>) {
+        let revision = self.recovery.borrow().0;
+        self.report_negotiated_at(tx, revision);
+    }
+
+    pub(in crate::bff::ua) fn report_negotiated_at(&self, tx: &Sender<Event>, revision: u64) {
         use crate::bff::model::{
             UaMonitoredParameters, UaRevisedSubscription, UaSubscriptionParameters,
         };
@@ -511,6 +832,9 @@ impl UaSession {
                     let Some(key) = ItemKey::new(item.client_handle()) else {
                         continue;
                     };
+                    if self.identity_blocked.contains(&key) {
+                        continue;
+                    }
                     if !self.monitored.get(&key).is_some_and(|(sub, _)| *sub == id) {
                         continue;
                     }
@@ -550,10 +874,7 @@ impl UaSession {
         send(
             tx,
             Event {
-                origin: self.connection_id.map_or(
-                    crate::bff::model::Origin::Unsolicited,
-                    crate::bff::model::Origin::Session,
-                ),
+                origin: super::notification::scoped_origin(self.connection_id, revision),
                 owner: self.session_id.into(),
                 kind: EventKind::UaSubscriptionParameters { subscriptions },
             },
@@ -566,13 +887,20 @@ impl UaSession {
         tx: &Sender<Event>,
         state: SubscriptionState,
     ) {
+        let revision = self.recovery.borrow().0;
+        self.report_subscription_state_at(tx, state, revision);
+    }
+
+    pub(in crate::bff::ua) fn report_subscription_state_at(
+        &self,
+        tx: &Sender<Event>,
+        state: SubscriptionState,
+        revision: u64,
+    ) {
         send(
             tx,
             Event {
-                origin: self.connection_id.map_or(
-                    crate::bff::model::Origin::Unsolicited,
-                    crate::bff::model::Origin::Session,
-                ),
+                origin: super::notification::scoped_origin(self.connection_id, revision),
                 owner: self.session_id.into(),
                 kind: EventKind::SubscriptionState { state },
             },
@@ -610,5 +938,39 @@ impl UaSession {
         self.unfiltered.clear();
         self.poll_only.clear();
         self.report_subscription_state(tx, SubscriptionState::Inactive);
+    }
+}
+
+#[cfg(test)]
+mod add_scope_tests {
+    use super::*;
+
+    #[test]
+    fn only_ambiguous_create_errors_quarantine() {
+        for status in [
+            StatusCode::BadUnexpectedError,
+            StatusCode::BadDecodingError,
+            StatusCode::BadResponseTooLarge,
+            StatusCode::BadUnknownResponse,
+            StatusCode::BadRequestInterrupted,
+            StatusCode::BadCommunicationError,
+            StatusCode::BadConnectionClosed,
+            StatusCode::BadSecureChannelClosed,
+            StatusCode::BadSecureChannelIdInvalid,
+            StatusCode::BadServerNotConnected,
+            StatusCode::BadSessionClosed,
+            StatusCode::BadSessionIdInvalid,
+        ] {
+            assert!(ambiguous_create_failure(status), "{status:?}");
+        }
+        for status in [
+            StatusCode::Good,
+            StatusCode::BadTimeout,
+            StatusCode::BadTooManyOperations,
+            StatusCode::BadUserAccessDenied,
+            StatusCode::BadTooManyMonitoredItems,
+        ] {
+            assert!(!ambiguous_create_failure(status), "{status:?}");
+        }
     }
 }

@@ -168,6 +168,7 @@ impl App {
                             crate::bff::model::ReadNeed::Poll => Tr::ReadNeedPoll,
                             crate::bff::model::ReadNeed::ExplicitRefresh => Tr::ReadNeedRefresh,
                             crate::bff::model::ReadNeed::WriteReadback => Tr::ReadNeedReadback,
+                            crate::bff::model::ReadNeed::RecoverySnapshot => Tr::ReadNeedRecovery,
                             crate::bff::model::ReadNeed::Direct => Tr::ReadNeedDirect,
                         },
                     )
@@ -314,7 +315,9 @@ impl App {
                         &[
                             &match event.origin {
                                 Origin::Reply(id) => id.to_string(),
-                                Origin::Unsolicited | Origin::Session(_) => String::new(),
+                                Origin::Unsolicited
+                                | Origin::Session(_)
+                                | Origin::UaSession { .. } => String::new(),
                             },
                             &operation_label(self.lang(), pending.operation),
                             &owner_label(self.lang(), owner),
@@ -332,7 +335,9 @@ impl App {
                         &[
                             &match event.origin {
                                 Origin::Reply(id) => id.to_string(),
-                                Origin::Unsolicited | Origin::Session(_) => String::new(),
+                                Origin::Unsolicited
+                                | Origin::Session(_)
+                                | Origin::UaSession { .. } => String::new(),
                             },
                             &owner_label(self.lang(), owner),
                         ],
@@ -346,7 +351,7 @@ impl App {
         }
         let request_id = match event.origin {
             Origin::Reply(id) => Some(id),
-            Origin::Unsolicited | Origin::Session(_) => None,
+            Origin::Unsolicited | Origin::Session(_) | Origin::UaSession { .. } => None,
         };
         let kind = match (event.kind, &ctx) {
             (
@@ -369,6 +374,19 @@ impl App {
             }
         };
         self.project_session(session);
+        if matches!(
+            &kind,
+            EventKind::UaSubscriptionParameters { .. }
+                | EventKind::UaRecovery { .. }
+                | EventKind::Connected { .. }
+                | EventKind::Disconnected { .. }
+                | EventKind::Error {
+                    operation: Operation::Connect | Operation::Test,
+                    ..
+                }
+        ) {
+            self.project_ua_negotiated(session);
+        }
         match kind {
             EventKind::Error { operation, message } => {
                 self.on_operation_error(session, operation, message, ctx, request_id)
@@ -453,6 +471,133 @@ impl App {
     ) {
         let lang = self.lang();
         match kind {
+            EventKind::UaRecovery { state } => {
+                use crate::bff::model::{UaRecoveryMode, UaRecoveryState};
+                let text = match state {
+                    UaRecoveryState::ConnectionLost { status } => {
+                        self.cancel_add_children(session);
+                        if let Some(view) = self.session_mut(session) {
+                            view.context_generation =
+                                view.context_generation.and_then(|n| n.checked_add(1));
+                            view.clear_tree();
+                            view.root_loaded = false;
+                            view.root_loading = false;
+                        }
+                        self.selected_tree = self.selected_tree.filter(|(id, _)| *id != session);
+                        self.tree_focus = self.tree_focus.filter(|(id, _)| *id != session);
+                        if self.dialogs.add_signal.session == Some(session) {
+                            self.dialogs.add_signal.open = false;
+                            self.dialogs.add_signal.resolving = None;
+                        }
+                        fmt(lang, Tr::RecoveryLost, &[&format!("0x{status:08X}")])
+                    }
+                    UaRecoveryState::Reconnected { mode } => {
+                        if mode == UaRecoveryMode::NewSession {
+                            if let Some(view) = self.session_mut(session) {
+                                view.clear_tree();
+                                view.root_loaded = false;
+                                view.root_loading = false;
+                            }
+                            self.selected_tree =
+                                self.selected_tree.filter(|(id, _)| *id != session);
+                            self.tree_focus = self.tree_focus.filter(|(id, _)| *id != session);
+                            for row in self.rows.iter_mut().filter(|row| row.session == session) {
+                                row.data_type = None;
+                                row.canonical_vt = None;
+                                row.write_type = None;
+                                row.writable = false;
+                                row.ua_access_known = false;
+                                row.ua_type_id = None;
+                            }
+                        }
+                        tr(
+                            lang,
+                            match mode {
+                                UaRecoveryMode::ReactivatedSession => Tr::RecoveryReactivated,
+                                UaRecoveryMode::NewSession => Tr::RecoveryNewSession,
+                            },
+                        )
+                        .to_string()
+                    }
+                    UaRecoveryState::Reconciled { missing, ambiguous } => {
+                        let detail = tr(lang, Tr::RecoveryMissing).to_string();
+                        for key in &missing {
+                            self.journal.error(format!("{}: {}", detail, key.get()));
+                            if let Some(row) = self
+                                .row_position(*key)
+                                .and_then(|i| self.rows.get_mut(i))
+                                .filter(|r| r.session == session)
+                            {
+                                row.pending = false;
+                                row.pending_push = None;
+                                row.quality = RowQuality::Error(detail.clone());
+                            }
+                        }
+                        fmt(
+                            lang,
+                            Tr::RecoveryReconciled,
+                            &[
+                                &missing.len().to_string(),
+                                &tr(lang, if ambiguous { Tr::Yes } else { Tr::No }),
+                            ],
+                        )
+                    }
+                    UaRecoveryState::TypeMetadata { known, total } => fmt(
+                        lang,
+                        Tr::RecoveryMetadata,
+                        &[&known.to_string(), &total.to_string()],
+                    ),
+                    UaRecoveryState::Stopped { status } => {
+                        fmt(lang, Tr::RecoveryStopped, &[&format!("0x{status:08X}")])
+                    }
+                };
+                self.status = text.clone();
+                self.journal.warn(text);
+            }
+            EventKind::UaNotificationFacts { evidence, .. } => {
+                use crate::bff::model::UaNotificationEvidence;
+                let text = match evidence {
+                    UaNotificationEvidence::SequenceGap { previous, current } => {
+                        fmt(lang, Tr::UaHistoryGap, &[&previous, &current])
+                    }
+                    UaNotificationEvidence::SequenceUncertain { previous, current } => {
+                        fmt(lang, Tr::UaHistoryUncertain, &[&previous, &current])
+                    }
+                    UaNotificationEvidence::DataOverflow { key, status } => fmt(
+                        lang,
+                        Tr::UaHistoryOverflow,
+                        &[&key, &format!("0x{status:08X}")],
+                    ),
+                };
+                self.status = text.clone();
+                self.journal.warn(text);
+            }
+            EventKind::UaItemMetadata { facts } => {
+                for fact in facts {
+                    if !self.engine.session(session).is_some_and(|view| {
+                        view.items.contains_key(&fact.key)
+                            && !view.recovery_blocked.contains(&fact.key)
+                    }) {
+                        continue;
+                    }
+                    if let Some(row) = self
+                        .row_position(fact.key)
+                        .and_then(|i| self.rows.get_mut(i))
+                        .filter(|row| row.session == session && !row.pending)
+                    {
+                        row.data_type = fact.data_type;
+                        row.ua_type_id = fact.type_id;
+                        row.ua_access_known = fact.user_access_level.is_some();
+                        row.writable = fact
+                            .user_access_level
+                            .is_some_and(|value| value & 0x02 != 0);
+                    }
+                    if let Some(diagnostic) = fact.diagnostic {
+                        self.journal
+                            .warn(self.session_backend_text(session, &diagnostic));
+                    }
+                }
+            }
             EventKind::AddItems { results } => {
                 let mut seen = HashSet::new();
                 let mut duplicates = HashSet::new();
@@ -657,6 +802,13 @@ impl App {
             EventKind::Values { values } => {
                 let protocol = self.session_protocol(session);
                 for (key, value) in values {
+                    if self
+                        .engine
+                        .session(session)
+                        .is_some_and(|v| v.recovery_blocked.contains(&key))
+                    {
+                        continue;
+                    }
                     let reason_text = value
                         .reason
                         .as_ref()
@@ -1133,7 +1285,10 @@ impl App {
                 .unwrap_or(false);
             if !is_ua {
                 row.canonical_vt = info.type_id.map(crate::bff::model::VarType);
+            } else {
+                row.ua_type_id = info.type_id;
             }
+            row.ua_access_known = !is_ua || info.writable;
             row.writable = info.writable;
             row.pending = false;
             if matches!(row.quality, RowQuality::NoData(_)) {

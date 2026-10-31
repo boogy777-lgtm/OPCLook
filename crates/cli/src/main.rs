@@ -594,7 +594,13 @@ fn add_response(
         if let EventKind::Disconnected { reason } = &event.kind {
             return Err(message(reason, endpoint));
         }
-        if capture_early && matches!(event.origin, opclook_contract::model::Origin::Session(_)) {
+        if capture_early
+            && matches!(
+                event.origin,
+                opclook_contract::model::Origin::Session(_)
+                    | opclook_contract::model::Origin::UaSession { .. }
+            )
+        {
             if let EventKind::Values { values } = event.kind {
                 for (key, value) in values {
                     if key == ItemKey::FIRST
@@ -775,6 +781,7 @@ fn read_terminal_json(
             ReadNeed::Poll => "poll",
             ReadNeed::ExplicitRefresh => "refresh",
             ReadNeed::WriteReadback => "readback",
+            ReadNeed::RecoverySnapshot => "recovery_snapshot",
             ReadNeed::Direct => "direct",
         })
         .collect();
@@ -1304,8 +1311,66 @@ fn run_with_engine(
             .is_some_and(|pending| pending.operation == Operation::Read);
         let mut terminals = accepted.map(|p| p.read_terminals).unwrap_or_default();
         match event.kind {
+            EventKind::UaRecovery { state } => {
+                emit_cli(
+                    staged,
+                    streaming,
+                    &json!({"node_id":node,"ua_recovery":recovery_json(&state)}),
+                )?;
+            }
+            EventKind::UaNotificationFacts {
+                subscription_generation,
+                evidence,
+            } => {
+                use opclook_contract::model::UaNotificationEvidence;
+                let fact = match evidence {
+                    UaNotificationEvidence::SequenceGap { previous, current } => {
+                        json!({"kind":"sequence_gap","previous":previous,"current":current,"history":"incomplete"})
+                    }
+                    UaNotificationEvidence::SequenceUncertain { previous, current } => {
+                        json!({"kind":"sequence_uncertain","previous":previous,"current":current,"history":"unknown"})
+                    }
+                    UaNotificationEvidence::DataOverflow { key, status } => {
+                        json!({"kind":"data_overflow","key":key.get(),"status":status,"history":"incomplete"})
+                    }
+                };
+                emit_cli(
+                    staged,
+                    streaming,
+                    &json!({"node_id":node,"ua_notification":fact,"subscription_generation":subscription_generation}),
+                )?;
+            }
+            EventKind::UaItemMetadata { facts } => {
+                for fact in facts {
+                    if !engine.session(SessionId::FIRST).is_some_and(|view| {
+                        view.items.contains_key(&fact.key)
+                            && !view.recovery_blocked.contains(&fact.key)
+                    }) {
+                        continue;
+                    }
+                    emit_cli(
+                        staged,
+                        streaming,
+                        &json!({"node_id":node,"ua_item_metadata":{"key":fact.key.get(),"data_type":fact.data_type,"type_id":fact.type_id,"user_access_level":fact.user_access_level,"writable":fact.user_access_level.map(|value| value & 2 != 0),"diagnostic":fact.diagnostic.as_ref().map(|d| message(d, &options.endpoint))}}),
+                    )?;
+                }
+            }
+            EventKind::UaSubscriptionParameters { subscriptions } => {
+                let facts: Vec<_> = subscriptions.iter().map(|sub| json!({"subscription_id":sub.subscription_id,"requested_publishing_ms":sub.requested_publishing_ms,"revised_publishing_ms":sub.revised.as_ref().map(|v| v.publishing_ms),"items":sub.items.iter().map(|item| json!({"key":item.key.get(),"requested_sampling_ms":item.requested_sampling_ms,"revised_sampling_ms":item.revised_sampling_ms,"requested_queue_size":item.requested_queue_size,"revised_queue_size":item.revised_queue_size})).collect::<Vec<_>>()})).collect();
+                emit_cli(
+                    staged,
+                    streaming,
+                    &json!({"node_id":node,"ua_subscription_parameters":facts}),
+                )?;
+            }
             EventKind::Values { values } => {
                 for (key, data) in values {
+                    if engine
+                        .session(SessionId::FIRST)
+                        .is_some_and(|view| view.recovery_blocked.contains(&key))
+                    {
+                        continue;
+                    }
                     if key == ItemKey::FIRST {
                         let terminal = terminals
                             .iter()
@@ -1367,6 +1432,26 @@ fn run_with_engine(
     }
     Ok(())
 }
+fn recovery_json(state: &opclook_contract::model::UaRecoveryState) -> serde_json::Value {
+    use opclook_contract::model::{UaRecoveryMode, UaRecoveryState};
+    match state {
+        UaRecoveryState::ConnectionLost { status } => {
+            json!({"state":"connection_lost","status":status,"history":"unknown","first_notification_gap":"unknown"})
+        }
+        UaRecoveryState::Reconnected { mode } => {
+            json!({"state":"reconnected","mode":match mode { UaRecoveryMode::ReactivatedSession => "reactivated_session", UaRecoveryMode::NewSession => "new_session" },"history":"unknown"})
+        }
+        UaRecoveryState::Reconciled { missing, ambiguous } => {
+            json!({"state":"reconciled","missing_count":missing.len(),"missing_keys":missing.iter().map(|key| key.get()).collect::<Vec<_>>(),"ambiguous":ambiguous,"history":"unknown","first_notification_gap":"unknown","latest_value":"not_implied"})
+        }
+        UaRecoveryState::TypeMetadata { known, total } => {
+            json!({"state":"type_metadata","known":known,"total":total})
+        }
+        UaRecoveryState::Stopped { status } => {
+            json!({"state":"stopped","status":status,"history":"unknown"})
+        }
+    }
+}
 fn main() {
     match parse(std::env::args().skip(1).collect()) {
         Ok(None) => {
@@ -1412,6 +1497,20 @@ mod tests {
             matches!(parse_write("string", &boundary), Ok(Value::Str(value)) if value == boundary)
         );
     }
+    #[test]
+    fn recovery_json_keeps_unknown_history_and_per_key_facts() {
+        use opclook_contract::model::UaRecoveryState;
+        let value = super::recovery_json(&UaRecoveryState::Reconciled {
+            missing: vec![super::ItemKey::FIRST],
+            ambiguous: true,
+        });
+        assert_eq!(value["missing_count"], 1);
+        assert_eq!(value["missing_keys"], serde_json::json!([1]));
+        assert_eq!(value["ambiguous"], true);
+        assert_eq!(value["history"], "unknown");
+        assert_eq!(value["latest_value"], "not_implied");
+    }
+
     #[test]
     fn json_preserves_separate_time_facts_and_origin() {
         use super::*;

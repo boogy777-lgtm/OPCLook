@@ -702,7 +702,9 @@ mod tests {
     fn event_id(event: &Event) -> u64 {
         match event.origin {
             crate::bff::model::Origin::Reply(id) => id.get(),
-            crate::bff::model::Origin::Unsolicited | crate::bff::model::Origin::Session(_) => 0,
+            crate::bff::model::Origin::Unsolicited
+            | crate::bff::model::Origin::Session(_)
+            | crate::bff::model::Origin::UaSession { .. } => 0,
         }
     }
     fn is_kind(event: &Event, request_id: u64) -> bool {

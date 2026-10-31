@@ -238,6 +238,7 @@ pub struct AddSignalDialog {
 #[derive(Default)]
 pub struct WriteDialog {
     pub open: bool,
+    pub context_generation: Option<u64>,
     pub epoch: Option<RequestId>,
     pub keys: Vec<ItemKey>,
     pub text: String,
@@ -277,6 +278,7 @@ pub struct MessageDialog {
 #[derive(Clone, Debug)]
 pub struct PendingWrites {
     pub session: SessionId,
+    pub context_generation: Option<u64>,
     pub epoch: Option<RequestId>,
     pub protocol: Protocol,
     pub requests: Vec<WriteRequest>,
@@ -306,6 +308,7 @@ pub struct PaletteDialog {
     pub browse_node: String,
     pub context_session: Option<SessionId>,
     pub context_epoch: Option<RequestId>,
+    pub context_generation: Option<u64>,
     pub context_initialized: bool,
 }
 

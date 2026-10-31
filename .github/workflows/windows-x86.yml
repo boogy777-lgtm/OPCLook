@@ -169,3 +169,20 @@ jobs:
             docs/screenshots/p3-columns-focus-ru.png
             docs/screenshots/p5-options-hints-ru.png
           if-no-files-found: warn
+      - name: Render negotiated UA parameters for visual review
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          WGPU_BACKEND: vulkan
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/opclook-xdg"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          cargo test --locked --target x86_64-unknown-linux-gnu --features ui-snapshots --test ua_metadata_panel ua_acquisition_revised_facts_snapshot -- --ignored --nocapture
+          test -s docs/screenshots/ua-acquisition-revised-en.png
+      - name: Preserve negotiated UA parameter visual evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ua-negotiated-parameters
+          path: docs/screenshots/ua-acquisition-revised-en.png
+          if-no-files-found: warn

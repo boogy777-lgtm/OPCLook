@@ -17,7 +17,7 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
         .keys
         .first()
         .and_then(|key| app.rows().iter().find(|r| r.key == *key));
-    let (protocol, name, current, canonical, data_type, writable) = match first {
+    let (protocol, name, current, canonical, data_type, writable, access_known) = match first {
         Some(row) => {
             let protocol = app
                 .sessions
@@ -32,6 +32,7 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
                 row.canonical_vt,
                 row.data_type.clone(),
                 row.writable,
+                row.ua_access_known,
             )
         }
         None => {
@@ -70,7 +71,7 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
                 ui.label(fmt(lang, Tr::CurrentValue, &[&current]));
                 ui.label(fmt(lang, Tr::ServerTypeLabel, &[&protocol.to_string()]));
                 if !writable {
-                    ui.colored_label(red(), tr(lang, Tr::ReadOnly));
+                    ui.colored_label(red(), tr(lang, if access_known { Tr::ReadOnly } else { Tr::UaAccessUnknown }));
                 }
                 if let Some(vt) = canonical {
                     ui.label(fmt(

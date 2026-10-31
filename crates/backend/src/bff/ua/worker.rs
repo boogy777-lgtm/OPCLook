@@ -759,6 +759,11 @@ enum InitialLoad<T> {
     Disconnect(Command),
     Shutdown,
 }
+enum RecoveryFlow {
+    Continue,
+    Closed,
+    Shutdown,
+}
 
 async fn wait_initial_load<F: std::future::Future>(
     future: F,
@@ -800,6 +805,7 @@ impl Actor {
         .await;
         let mut shutdown = false;
         let mut already_closed = false;
+        let mut recovery_open = true;
         match initial {
             InitialLoad::Finished(Err(cause)) => {
                 self.send_event(
@@ -830,6 +836,17 @@ impl Actor {
             InitialLoad::Shutdown => shutdown = true,
         }
         'serve: while !already_closed && !shutdown {
+            if self.session.recovery.has_changed().unwrap_or(false) {
+                let (revision, notice) = *self.session.recovery.borrow_and_update();
+                match self.recovery_notice(notice, revision).await {
+                    RecoveryFlow::Continue => {}
+                    RecoveryFlow::Closed => break 'serve,
+                    RecoveryFlow::Shutdown => {
+                        shutdown = true;
+                        break 'serve;
+                    }
+                }
+            }
             // Take everything that is already waiting, so a control command
             // overtakes the reads queued before it.
             let mut inbox_closed = false;
@@ -849,7 +866,21 @@ impl Actor {
                     shutdown = true;
                     break 'serve;
                 }
-                None => match self.inbox.recv().await {
+                None => match tokio::select! {
+                    message = self.inbox.recv() => message,
+                    changed = self.session.recovery.changed(), if recovery_open => {
+                        if changed.is_ok() {
+                            let (revision, notice) = *self.session.recovery.borrow_and_update();
+                            match self.recovery_notice(notice, revision).await {
+                                RecoveryFlow::Continue => {},
+                                RecoveryFlow::Closed => break 'serve,
+                                RecoveryFlow::Shutdown => { shutdown = true; break 'serve; }
+                            }
+                        }
+                        else { recovery_open = false; }
+                        continue 'serve;
+                    }
+                } {
                     Some(message) => {
                         self.queue.push(message);
                         continue 'serve;
@@ -892,6 +923,140 @@ impl Actor {
         });
     }
 
+    async fn recovery_notice(
+        &mut self,
+        notice: super::session::RecoveryNotice,
+        notice_revision: u64,
+    ) -> RecoveryFlow {
+        self.session.types = None;
+        self.session.node_types.clear();
+        self.send_scoped(
+            notice_revision,
+            EventKind::UaRecovery {
+                state: crate::bff::model::UaRecoveryState::TypeMetadata {
+                    known: 0,
+                    total: self.session.items.len(),
+                },
+            },
+        );
+        match notice {
+            super::session::RecoveryNotice::Connected => {
+                let metadata_fresh = match wait_initial_load(
+                    self.session.load_struct_types(),
+                    &mut self.inbox,
+                    &mut self.queue,
+                )
+                .await
+                {
+                    InitialLoad::Finished(Ok(())) => true,
+                    InitialLoad::Finished(Err(cause)) => {
+                        self.send_event(
+                            None,
+                            EventKind::Log {
+                                message: BackendMsg::StructTypesUnavailable {
+                                    cause: Box::new(cause),
+                                },
+                            },
+                        );
+                        if self.session.timed_out {
+                            self.inbox.close();
+                            self.session.close().await;
+                            self.send_event(
+                                None,
+                                EventKind::Disconnected {
+                                    reason: BackendMsg::SessionClosedAfterTimeout,
+                                },
+                            );
+                            return RecoveryFlow::Closed;
+                        }
+                        false
+                    }
+                    InitialLoad::Disconnect(command) => {
+                        self.handle(command).await;
+                        return RecoveryFlow::Closed;
+                    }
+                    InitialLoad::Shutdown => return RecoveryFlow::Shutdown,
+                };
+                if self.session.recovery.has_changed().unwrap_or(true) {
+                    return RecoveryFlow::Continue;
+                }
+                let identity_missing = self.session.validate_namespace_identity(metadata_fresh);
+                self.session
+                    .reconcile_recovery(&self.event_tx, identity_missing);
+                if self.session.recovery.has_changed().unwrap_or(true) {
+                    return RecoveryFlow::Continue;
+                }
+                match wait_initial_load(
+                    self.session.refresh_node_types(),
+                    &mut self.inbox,
+                    &mut self.queue,
+                )
+                .await
+                {
+                    InitialLoad::Finished(Ok((known, total, revision, facts))) => {
+                        if let Some(connection) = self.session.connection_id {
+                            for chunk in facts.chunks(256) {
+                                send(
+                                    &self.event_tx,
+                                    Event {
+                                        origin: crate::bff::model::Origin::UaSession {
+                                            connection,
+                                            revision,
+                                        },
+                                        owner: self.id.into(),
+                                        kind: EventKind::UaItemMetadata {
+                                            facts: chunk.to_vec(),
+                                        },
+                                    },
+                                );
+                            }
+                        }
+                        self.send_scoped(
+                            revision,
+                            EventKind::UaRecovery {
+                                state: crate::bff::model::UaRecoveryState::TypeMetadata {
+                                    known,
+                                    total,
+                                },
+                            },
+                        );
+                    }
+                    InitialLoad::Finished(Err(cause)) => {
+                        self.send_event(
+                            None,
+                            EventKind::Log {
+                                message: BackendMsg::AttributesReadFailed {
+                                    cause: Box::new(cause),
+                                },
+                            },
+                        );
+                        if self.session.timed_out {
+                            self.inbox.close();
+                            self.session.close().await;
+                            self.send_event(
+                                None,
+                                EventKind::Disconnected {
+                                    reason: BackendMsg::SessionClosedAfterTimeout,
+                                },
+                            );
+                            return RecoveryFlow::Closed;
+                        }
+                    }
+                    InitialLoad::Disconnect(command) => {
+                        self.handle(command).await;
+                        return RecoveryFlow::Closed;
+                    }
+                    InitialLoad::Shutdown => return RecoveryFlow::Shutdown,
+                }
+            }
+            super::session::RecoveryNotice::Lost => self.session.recovery_lost(&self.event_tx),
+            super::session::RecoveryNotice::Stopped => {
+                self.session.recovery_stopped(&self.event_tx)
+            }
+        }
+        RecoveryFlow::Continue
+    }
+
     fn send_error(
         &self,
         request_id: Option<crate::bff::model::RequestId>,
@@ -899,6 +1064,22 @@ impl Actor {
         message: BackendMsg,
     ) {
         send_error(&self.event_tx, request_id, self.id, operation, message);
+    }
+
+    fn send_scoped(&self, revision: u64, kind: EventKind) {
+        if let Some(connection) = self.session.connection_id {
+            send(
+                &self.event_tx,
+                Event {
+                    origin: crate::bff::model::Origin::UaSession {
+                        connection,
+                        revision,
+                    },
+                    owner: self.id.into(),
+                    kind,
+                },
+            );
+        }
     }
 
     fn send_event(&self, request_id: Option<crate::bff::model::RequestId>, kind: EventKind) {
@@ -975,6 +1156,7 @@ impl Actor {
                 publishing_interval_ms,
                 deadband,
             } => {
+                let revision = self.session.identity_revision();
                 let problems = self
                     .session
                     .apply_subscription_settings(publishing_interval_ms, deadband)
@@ -982,7 +1164,11 @@ impl Actor {
                 for message in problems {
                     self.send_event(None, EventKind::Log { message });
                 }
-                self.session.report_negotiated(&tx);
+                if let Some(revision) = revision
+                    && self.session.identity_is_current(revision)
+                {
+                    self.session.report_negotiated_at(&tx, revision);
+                }
                 if self.session.timed_out {
                     return self
                         .close_timed_out(
@@ -995,19 +1181,67 @@ impl Actor {
                 Flow::Continue
             }
             CommandKind::AddItems { items } => {
-                let (results, warning) = self.session.add_items(&items, &tx).await;
+                let revision = self.session.identity_revision();
+                let mut metadata = Vec::new();
+                let (results, warning) = self
+                    .session
+                    .add_items_with_metadata(&items, &tx, &mut metadata)
+                    .await;
+                if let Some(service) = self.session.identity_quarantined {
+                    // Never delete an old server handle on a replacement session.
+                    // The SDK owns session shutdown and subscription cleanup.
+                    self.inbox.close();
+                    self.session.close().await;
+                    self.send_event(request_id, EventKind::AddItems { results });
+                    self.send_event(
+                        None,
+                        EventKind::Disconnected {
+                            reason: BackendMsg::UaIdentityChanged { service },
+                        },
+                    );
+                    return Flow::Closed;
+                }
                 if let Some(message) = warning {
                     // A command may produce exactly one request-id-correlated
                     // reply; ancillary diagnostics are unsolicited (id 0) so
                     // they cannot consume the AddItems reply's pending entry.
                     self.send_event(None, EventKind::Log { message });
                 }
-                self.session.report_negotiated(&tx);
+                if let Some(revision) = revision
+                    && self.session.identity_is_current(revision)
+                {
+                    self.session.report_negotiated_at(&tx, revision);
+                }
+                let accepted: std::collections::HashSet<_> = results
+                    .iter()
+                    .filter_map(|(key, result)| result.is_ok().then_some(*key))
+                    .collect();
+                metadata.retain(|fact| accepted.contains(&fact.key));
                 self.send_event(request_id, EventKind::AddItems { results });
+                if let (Some(revision), Some(connection)) = (revision, self.session.connection_id)
+                    && self.session.identity_is_current(revision)
+                    && !metadata.is_empty()
+                {
+                    for chunk in metadata.chunks(256) {
+                        send(
+                            &self.event_tx,
+                            Event {
+                                owner: self.id.into(),
+                                origin: crate::bff::model::Origin::UaSession {
+                                    connection,
+                                    revision,
+                                },
+                                kind: EventKind::UaItemMetadata {
+                                    facts: chunk.to_vec(),
+                                },
+                            },
+                        );
+                    }
+                }
                 if self.session.timed_out {
                     return self
                         .close_timed_out(
-                            request_id,
+                            None, // AddItems above is the one correlated terminal.
                             Operation::Add,
                             BackendMsg::RequestTimedOutSessionClosed,
                         )
@@ -1016,10 +1250,15 @@ impl Actor {
                 Flow::Continue
             }
             CommandKind::RemoveItems { keys } => {
+                let revision = self.session.identity_revision();
                 for message in self.session.remove_items(&tx, &keys).await {
                     self.send_event(None, EventKind::Log { message });
                 }
-                self.session.report_negotiated(&tx);
+                if let Some(revision) = revision
+                    && self.session.identity_is_current(revision)
+                {
+                    self.session.report_negotiated_at(&tx, revision);
+                }
                 self.send_event(request_id, EventKind::Removed { keys });
                 if self.session.timed_out {
                     return self

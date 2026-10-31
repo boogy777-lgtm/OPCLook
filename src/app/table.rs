@@ -59,6 +59,8 @@ impl App {
                 canonical_vt: None,
                 write_type: None,
                 writable: false,
+                ua_access_known: true,
+                ua_type_id: None,
                 value: Value::Empty,
                 quality: RowQuality::NoData(tr(self.lang(), Tr::NoData).to_string()),
                 timestamp: None,
@@ -216,6 +218,9 @@ impl App {
             return;
         }
         self.dialogs.write.epoch = self.engine.connection_id(first_session);
+        self.dialogs.write.context_generation = self
+            .session(first_session)
+            .and_then(|v| v.context_generation);
         self.dialogs.write.keys = keys;
         self.dialogs.write.text = first_text;
         self.dialogs.write.type_index = 0;
@@ -243,7 +248,12 @@ impl App {
             return;
         };
         // BEGIN P4 form epoch guard
-        if self.dialogs.write.epoch.is_none()
+        if self.dialogs.write.context_generation.is_none()
+            || self.dialogs.write.context_generation
+                != self
+                    .session(first_row.session)
+                    .and_then(|v| v.context_generation)
+            || self.dialogs.write.epoch.is_none()
             || self.dialogs.write.epoch != self.engine.connection_id(first_row.session)
         {
             self.dialogs.write.error = Some(tr(self.lang(), Tr::PaletteWriteStale).to_string());
@@ -315,6 +325,7 @@ impl App {
         let Some(view) = self.session(session) else {
             return Ok(PendingWrites {
                 session,
+                context_generation: self.dialogs.write.context_generation,
                 epoch: self.dialogs.write.epoch,
                 protocol: Protocol::OpcDa,
                 requests: Vec::new(),
@@ -357,6 +368,7 @@ impl App {
         }
         Ok(PendingWrites {
             session,
+            context_generation: self.dialogs.write.context_generation,
             epoch: self.dialogs.write.epoch,
             protocol,
             requests,
@@ -366,7 +378,14 @@ impl App {
 
     pub(super) fn perform_write(&mut self, pending: PendingWrites) {
         // BEGIN P4 confirmation epoch guard
-        if pending.epoch.is_none() || pending.epoch != self.engine.connection_id(pending.session) {
+        if pending.context_generation.is_none()
+            || pending.context_generation
+                != self
+                    .session(pending.session)
+                    .and_then(|v| v.context_generation)
+            || pending.epoch.is_none()
+            || pending.epoch != self.engine.connection_id(pending.session)
+        {
             self.dialogs.write.error = Some(tr(self.lang(), Tr::PaletteWriteStale).to_string());
             self.journal.error_l(Tr::PaletteWriteStale, &[]);
             self.status = tr(self.lang(), Tr::PaletteWriteStale).to_string();

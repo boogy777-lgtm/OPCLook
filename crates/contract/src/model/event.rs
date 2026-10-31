@@ -25,6 +25,26 @@ pub struct Event {
     pub kind: EventKind,
 }
 
+/// Current SDK attribute facts for an existing registration. Missing access
+/// means unknown, not read-only; the raw UA UserAccessLevel byte is retained.
+#[derive(Clone, Debug)]
+pub struct UaItemMetadata {
+    pub key: ItemKey,
+    pub data_type: Option<String>,
+    pub type_id: Option<u16>,
+    pub user_access_level: Option<u8>,
+    pub diagnostic: Option<BackendMsg>,
+}
+
+/// Evidence from an SDK notification stream; sequence uncertainty does not
+/// claim a number of lost values and is not repaired by a later snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UaNotificationEvidence {
+    SequenceGap { previous: u32, current: u32 },
+    SequenceUncertain { previous: u32, current: u32 },
+    DataOverflow { key: ItemKey, status: u32 },
+}
+
 /// Requested and server-revised parameters for one monitored UA item.
 #[derive(Clone, Debug, PartialEq)]
 pub struct UaMonitoredParameters {
@@ -82,6 +102,7 @@ pub enum ReadNeed {
     Poll,
     ExplicitRefresh,
     WriteReadback,
+    RecoverySnapshot,
     Direct,
 }
 
@@ -142,6 +163,35 @@ pub enum ScanEnd {
     Completed,
     Cancelled,
     Failed(BackendMsg),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UaRecoveryMode {
+    ReactivatedSession,
+    NewSession,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UaRecoveryState {
+    ConnectionLost {
+        status: u32,
+    },
+    Reconnected {
+        mode: UaRecoveryMode,
+    },
+    /// SDK-state reconciliation only; this does not establish history completeness.
+    Reconciled {
+        missing: Vec<ItemKey>,
+        ambiguous: bool,
+    },
+    /// Current-session item types read from the server; no history claim.
+    TypeMetadata {
+        known: usize,
+        total: usize,
+    },
+    Stopped {
+        status: u32,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -217,6 +267,19 @@ pub enum EventKind {
     /// Complete SDK snapshot for this connection epoch.
     UaSubscriptionParameters {
         subscriptions: Vec<UaSubscriptionParameters>,
+    },
+    /// Metadata in the Origin's UA SDK revision; not an AddItems acknowledgement.
+    UaItemMetadata {
+        facts: Vec<UaItemMetadata>,
+    },
+    /// Notification evidence scoped by the Origin and callback generation.
+    UaNotificationFacts {
+        subscription_generation: u64,
+        evidence: UaNotificationEvidence,
+    },
+    /// SDK recovery activity in the existing local Connect epoch.
+    UaRecovery {
+        state: UaRecoveryState,
     },
     Wrote {
         key: ItemKey,
