@@ -44,6 +44,10 @@
 | 12 | G/D/fairness/Drop, UA Engine/App/CLI consumers | be960ff: App2/SDK4 success,8PNG viewed; COM cleanup иpackage reverse repair pending; UA branch ещё private |
 | 13 | SDK async prototype review, UA Browse/metadata identity | Typed raw HRESULT review и SDK pre/post scope tests локально; actual Asynci686 pending |
 | 14 | Late Add quarantine, UI context generation | SDK3 cut/timeout tests pass; Engine91/App267 private context tests; следующий integration/CI pending |
+| 15 | UA per-key metadata/negotiated UI, SDK notification facts | Linux Engine93/App268/backend264+1knownignored; real SDK access/restart/gap/overflow and panel render passed; new WinCI pending |
+| 16 | SDK first-notification and Republish evidence, DA failure facts | Server defect and client gap isolated; DA mock47/48 and typed facts; i686 strict test pending |
+| 17 | N1 verified notice texts, SDK-only replay prototypes | Inventory183/94/295854bytes/missing0; library before/after stand; production pins unchanged |
+| 18 | Initial Connect/recovery scope, SDK checked Async lifetime | Two Terra High active; do not count proposed/stand behavior as production acceptance |
 
 Пара 01 исправила начальное состояние fixture после честного отрицательного
 NOCONFIG verdict на `a004b226`. Проверка на `36fa668` подтвердила

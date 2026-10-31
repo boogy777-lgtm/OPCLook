@@ -1,5 +1,16 @@
 # Текущий статус
 
+## 2026-10-31 — опубликованный baseline9/9; следующий пакет R2/N2/N1
+
+`adbd315` прошёл все9jobs, включая реальный запуск упакованного x86 CLI и
+строгую COM cleanup. Следующий private packet добавляет scoped SDK recovery,
+per-key UserAccessLevel/type metadata, sequence/Overflow facts, GUI/CLI requested
+vs revised, DA failure facts и проверенные Cargo notice texts. Измерения и
+ограничения: [packet evidence](testing/packet-2026-10-31.md). Native Async
+production по-прежнему Unsupported; library patches остаются research.
+N4/remote/physical Windows/legal gates не закрыты. Новый CI exact packet pending.
+
+
 Режим продолжения по поручению владельца: все оставшиеся задачи выполнять
 парами Terra High; [очередь и зависимости](remaining-work.md).
 
