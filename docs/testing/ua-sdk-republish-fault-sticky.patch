@@ -1,0 +1,32 @@
+--- a/src/session/mod.rs
++++ b/src/session/mod.rs
+@@ -198,0 +199 @@
++    pub(super) republish_history_uncertain: AtomicBool,
+@@ -211,0 +213,5 @@
++    /// Remains true after transport loss for this SDK Session object's lifetime.
++    /// A later replay result cannot prove the absence of a history gap.
++    pub fn republish_history_uncertain(&self) -> bool {
++        self.republish_history_uncertain.load(Ordering::SeqCst)
++    }
+@@ -249,0 +256 @@
++            republish_history_uncertain: AtomicBool::new(false),
+--- a/src/session/connect.rs
++++ b/src/session/connect.rs
+@@ -171,0 +172,13 @@
++
++#[cfg(test)]
++mod recovery_watch_overwrite_test {
++    use super::*;
++    #[test]
++    fn latest_watch_does_not_retain_cancelled_history() {
++        let (tx, mut rx) = tokio::sync::watch::channel(None);
++        RecoveryGuard(tx.clone(), true).finish(RepublishRecoveryOutcome::Cancelled);
++        RecoveryGuard(tx.clone(), true).finish(RepublishRecoveryOutcome::MessageNotAvailable);
++        assert_eq!(*rx.borrow_and_update(), Some(RepublishRecoveryOutcome::MessageNotAvailable));
++        assert!(!rx.has_changed().unwrap());
++    }
++}
+--- a/src/session/event_loop.rs
++++ b/src/session/event_loop.rs
+@@ -161,0 +162 @@
++                                    slf.inner.republish_history_uncertain.store(true, Ordering::SeqCst);

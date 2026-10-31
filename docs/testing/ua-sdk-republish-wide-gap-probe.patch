@@ -1,0 +1,159 @@
+diff --git a/crates/backend/src/bff/ua/live_tests.rs b/crates/backend/src/bff/ua/live_tests.rs
+index ca034b4..b6ea0d6 100644
+--- a/crates/backend/src/bff/ua/live_tests.rs
++++ b/crates/backend/src/bff/ua/live_tests.rs
+@@ -3584,0 +3585,154 @@ fn sdk_callback_reports_synthetic_publish_sequence_gap_and_still_delivers_value(
++
++struct WideGapProxy {
++    url: String,
++    armed: Arc<std::sync::atomic::AtomicBool>,
++    changed: Receiver<(u32, u32)>,
++    cut: tokio::sync::watch::Sender<u64>,
++    republish: Arc<std::sync::atomic::AtomicUsize>,
++    stop: Option<tokio::sync::oneshot::Sender<()>>,
++    thread: Option<std::thread::JoinHandle<()>>,
++}
++impl WideGapProxy {
++    fn start(server: &TestServer) -> Self {
++        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
++        listener.set_nonblocking(true).unwrap();
++        let port = listener.local_addr().unwrap().port();
++        let server_port = server.port;
++        let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
++        let proxy_armed = armed.clone();
++        let (changed_tx, changed) = channel();
++        let (cut, _) = tokio::sync::watch::channel(0u64);
++        let cut_ref = cut.clone();
++        let republish = Arc::new(std::sync::atomic::AtomicUsize::new(0));
++        let republish_ref = republish.clone();
++        let (stop, stopped) = tokio::sync::oneshot::channel();
++        let thread = std::thread::spawn(move || {
++            use tokio::io::{AsyncReadExt, AsyncWriteExt};
++            let rt = tokio::runtime::Builder::new_multi_thread()
++                .worker_threads(2)
++                .enable_all()
++                .build()
++                .unwrap();
++            rt.block_on(async move {
++                let listener = tokio::net::TcpListener::from_std(listener).unwrap(); let mut tasks = tokio::task::JoinSet::new(); tokio::pin!(stopped);
++                loop {
++                    tokio::select! {
++                        _ = &mut stopped => break,
++                        accepted = listener.accept() => {
++                            let Ok((client, _)) = accepted else { break }; let armed = proxy_armed.clone(); let changed_tx = changed_tx.clone(); let mut cut = cut_ref.subscribe(); let republish = republish_ref.clone();
++                            tasks.spawn(async move {
++                                let Ok(server) = tokio::net::TcpStream::connect(("127.0.0.1",server_port)).await else { return };
++                                let (mut cr,mut cw)=client.into_split(); let (mut sr,mut sw)=server.into_split();
++                                let upstream=async move { loop {
++                                    let mut h=[0u8;8]; if cr.read_exact(&mut h).await.is_err(){break}
++                                    let n=u32::from_le_bytes([h[4],h[5],h[6],h[7]]) as usize;
++                                    if !(8..=1_048_576).contains(&n){break} let mut f=vec![0;n];f[..8].copy_from_slice(&h);if cr.read_exact(&mut f[8..]).await.is_err(){break}
++                                    if &h[..4]==b"MSGF" && n>24 {use opcua::types::{BinaryDecodable,ContextOwned};let ctx=ContextOwned::default();let mut c=std::io::Cursor::new(&f[24..]);
++                                        if NodeId::decode(&mut c,&ctx.context()).is_ok_and(|id| id==NodeId::from(ObjectId::RepublishRequest_Encoding_DefaultBinary)) {republish.fetch_add(1,std::sync::atomic::Ordering::SeqCst);}
++                                    }
++                                    if sw.write_all(&f).await.is_err(){break}
++                                }};
++                                let downstream=async move {
++                                    loop {
++                                        let mut header=[0u8;8]; if sr.read_exact(&mut header).await.is_err() { break; }
++                                        let len=u32::from_le_bytes([header[4],header[5],header[6],header[7]]) as usize;
++                                        if !(8..=1_048_576).contains(&len) { break; }
++                                        let mut frame=vec![0;len]; frame[..8].copy_from_slice(&header);
++                                        if sr.read_exact(&mut frame[8..]).await.is_err() { break; }
++                                        if &header[..4] == b"MSGF" && len > 24 && armed.load(std::sync::atomic::Ordering::SeqCst) {
++                                            use opcua::types::{BinaryDecodable,BinaryEncodable,ContextOwned,PublishResponse};
++                                            let context=ContextOwned::default(); let mut body=std::io::Cursor::new(&frame[24..]);
++                                            if let Ok(id)=NodeId::decode(&mut body,&context.context()) {
++                                                if id == NodeId::from(ObjectId::PublishResponse_Encoding_DefaultBinary) {
++                                                    if let Ok(mut reply)=PublishResponse::decode(&mut body,&context.context()) {
++                                                        if reply.notification_message.notification_data.as_ref().is_some_and(|x| !x.is_empty()) {
++                                                            let previous=reply.notification_message.sequence_number;
++                                                            if let Some(changed)=previous.checked_add(70) {
++                                                                reply.notification_message.sequence_number=changed;
++                                                                let mut encoded=Vec::new();
++                                                                if id.encode(&mut encoded,&context.context()).is_ok() && reply.encode(&mut encoded,&context.context()).is_ok() && encoded.len()==frame.len()-24 && armed.swap(false,std::sync::atomic::Ordering::SeqCst) {
++                                                                    frame[24..].copy_from_slice(&encoded); let _=changed_tx.send((previous,changed));
++                                                                }
++                                                            }
++                                                        }
++                                                    }
++                                                }
++                                            }
++                                        }
++                                        if cw.write_all(&frame).await.is_err() { break; }
++                                    }
++                                };
++                                tokio::select! { _=upstream=>{}, _=downstream=>{}, _=cut.changed()=>{} }
++                            });
++                        }
++                    }
++                }
++                tasks.abort_all(); while tasks.join_next().await.is_some() {}
++            });
++        });
++        Self {
++            url: format!("opc.tcp://127.0.0.1:{port}/"),
++            armed,
++            changed,
++            cut,
++            republish,
++            stop: Some(stop),
++            thread: Some(thread),
++        }
++    }
++}
++impl Drop for WideGapProxy {
++    fn drop(&mut self) {
++        if let Some(stop) = self.stop.take() {
++            let _ = stop.send(());
++        }
++        if let Some(thread) = self.thread.take() {
++            let _ = thread.join();
++        }
++    }
++}
++
++
++#[test]
++fn sdk_recovery_wide_sequence_gap_reports_uncertain() {
++    use opcua::client::{DataChangeCallback, RepublishRecoveryOutcome};
++    use opcua::types::{AttributeId, MonitoredItemCreateRequest, MonitoringMode, MonitoringParameters, ReadValueId, TimestampsToReturn};
++    use std::sync::atomic::Ordering;
++    let server = TestServer::start(free_port());
++    let proxy = WideGapProxy::start(&server);
++    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
++    rt.block_on(async {
++        let (events, event_rx) = channel();
++        let cancel = tokio_util::sync::CancellationToken::new();
++        let mut adapter = super::session::connect(SessionId::FIRST, Some(crate::bff::model::RequestId::FIRST), Harness::endpoint(&proxy.url), &cancel, &events).await.unwrap();
++        let mut status = adapter.session.subscribe_republish_recovery();
++        let (values_tx, values_rx) = channel();
++        let callback = DataChangeCallback::new(move |value: DataValue, _| { let _ = values_tx.send(value); });
++        let sub = adapter.session.create_subscription(Duration::from_millis(100),100,20,1000,0,true,callback).await.unwrap();
++        let created = adapter.session.create_monitored_items(sub, TimestampsToReturn::Both, vec![MonitoredItemCreateRequest { item_to_monitor: ReadValueId { node_id: NodeId::new(server.ns,"Level"), attribute_id: AttributeId::Value as u32, ..Default::default() }, monitoring_mode: MonitoringMode::Reporting, requested_parameters: MonitoringParameters { client_handle: 1, sampling_interval: 0.0, queue_size: 10, discard_oldest: true, ..Default::default() } }]).await.unwrap();
++        assert!(created[0].result.status_code.is_good());
++        values_rx.recv_timeout(Duration::from_secs(15)).expect("initial SDK callback");
++        assert!(!adapter.session.republish_history_uncertain());
++        proxy.armed.store(true,Ordering::SeqCst);
++        server.set("Level",Variant::Double(67.25));
++        let (wire, changed)=proxy.changed.recv_timeout(Duration::from_secs(15)).expect("wide sequence altered on wire");
++        assert_eq!(changed,wire+70);
++        assert_eq!(values_rx.recv_timeout(Duration::from_secs(15)).expect("SDK callback").value,Some(Variant::Double(67.25)));
++        proxy.cut.send_modify(|n| *n += 1);
++        tokio::time::timeout(Duration::from_secs(30),status.changed()).await.expect("SDK recovery outcome timeout").unwrap();
++        assert_eq!(*status.borrow_and_update(), Some(RepublishRecoveryOutcome::SequenceUncertain), "wide gap must be visible");
++        assert!(adapter.session.republish_history_uncertain());
++        assert_eq!(proxy.republish.load(Ordering::SeqCst), 0, "must not replay from an uncertain cursor");
++        let until=Instant::now()+Duration::from_secs(30);
++        let mut reconnected=false;
++        while Instant::now()<until { let Ok(e)=event_rx.recv_timeout(until.saturating_duration_since(Instant::now())) else {break}; if matches!(e.kind,EventKind::UaRecovery {state:crate::bff::model::UaRecoveryState::Reconnected {mode:crate::bff::model::UaRecoveryMode::ReactivatedSession}}) {reconnected=true;break} }
++        assert!(reconnected,"actual same Session reactivation required");
++        server.set("Level",Variant::Double(68.25));
++        let until=Instant::now()+Duration::from_secs(20);let mut delivered=false;
++        while Instant::now()<until {let Ok(v)=values_rx.recv_timeout(until.saturating_duration_since(Instant::now())) else {break}; if v.value==Some(Variant::Double(68.25)){delivered=true;break}}
++        assert!(delivered,"normal SDK callback after uncertain recovery");
++        assert!(adapter.session.republish_history_uncertain());
++        eprintln!("OBSERVED wide_gap={wire}->{changed} outcome=SequenceUncertain republish=0 later=68.25 history_unknown=true");
++        adapter.close().await;
++    });
++}

@@ -1,0 +1,232 @@
+diff --git a/crates/backend/src/bff/ua/live_tests.rs b/crates/backend/src/bff/ua/live_tests.rs
+index 7eee090..32e40a2 100644
+--- a/crates/backend/src/bff/ua/live_tests.rs
++++ b/crates/backend/src/bff/ua/live_tests.rs
+@@ -3467,0 +3468,227 @@ fn sdk_callback_reports_synthetic_publish_sequence_gap_and_still_delivers_value(
++
++/// SDK-only wire probe: drop exactly one complete PublishResponse and cut the
++/// connection; server has already retained its notification for Republish.
++struct DropPublishProxy {
++    url: String,
++    armed: Arc<std::sync::atomic::AtomicBool>,
++    lost: Receiver<(u32, u32)>,
++    publish_after_cut: Receiver<()>,
++    republish_count: Arc<std::sync::atomic::AtomicUsize>,
++    cut_seen: Arc<std::sync::atomic::AtomicBool>,
++    fault_mode: Arc<std::sync::atomic::AtomicU8>,
++    fault_seen: Receiver<()>,
++    release: Arc<tokio::sync::Notify>,
++    stop: Option<tokio::sync::oneshot::Sender<()>>,
++    thread: Option<std::thread::JoinHandle<()>>,
++}
++impl DropPublishProxy {
++    fn start(server: &TestServer) -> Self {
++        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
++        listener.set_nonblocking(true).unwrap();
++        let port = listener.local_addr().unwrap().port();
++        let server_port = server.port;
++        let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
++        let proxy_armed = armed.clone();
++        let cut_seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
++        let proxy_cut = cut_seen.clone();
++        let republish_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
++        let proxy_rep = republish_count.clone();
++        let fault_mode = Arc::new(std::sync::atomic::AtomicU8::new(0));
++        let fault_ref = fault_mode.clone();
++        let release = Arc::new(tokio::sync::Notify::new());
++        let release_ref = release.clone();
++        let (fault_tx, fault_seen) = channel();
++        let (lost_tx, lost) = channel();
++        let (publish_tx, publish_after_cut) = channel();
++        let (stop, stopped) = tokio::sync::oneshot::channel();
++        let thread = std::thread::spawn(move || {
++            use tokio::io::{AsyncReadExt, AsyncWriteExt};
++            let rt = tokio::runtime::Builder::new_multi_thread()
++                .worker_threads(2)
++                .enable_all()
++                .build()
++                .unwrap();
++            rt.block_on(async move {
++                let listener=tokio::net::TcpListener::from_std(listener).unwrap(); let mut tasks=tokio::task::JoinSet::new(); tokio::pin!(stopped);
++                loop { tokio::select! {
++                    _=&mut stopped=>break,
++                    accepted=listener.accept()=>{
++                        let Ok((client,_))=accepted else {break}; let armed=proxy_armed.clone(); let cut=proxy_cut.clone(); let rep=proxy_rep.clone(); let lost_tx=lost_tx.clone(); let publish_tx=publish_tx.clone(); let fault=fault_ref.clone(); let fault_down=fault_ref.clone(); let signal=fault_tx.clone(); let signal_down=fault_tx.clone(); let release=release_ref.clone();
++                        tasks.spawn(async move {
++                            let Ok(server)=tokio::net::TcpStream::connect(("127.0.0.1",server_port)).await else {return};
++                            let (mut cr,mut cw)=client.into_split();let (mut sr,mut sw)=server.into_split(); let cut_up=cut.clone();
++                            let upstream=async move { loop {
++                                let mut h=[0u8;8]; if cr.read_exact(&mut h).await.is_err(){break} let n=u32::from_le_bytes([h[4],h[5],h[6],h[7]]) as usize;
++                                if !(8..=1_048_576).contains(&n){break} let mut f=vec![0;n];f[..8].copy_from_slice(&h);if cr.read_exact(&mut f[8..]).await.is_err(){break}
++                                if &h[..4]==b"MSGF" && n>24 { use opcua::types::{BinaryDecodable,ContextOwned}; let ctx=ContextOwned::default();let mut c=std::io::Cursor::new(&f[24..]);
++                                    if let Ok(id)=NodeId::decode(&mut c,&ctx.context()) {
++                                        if id==NodeId::from(ObjectId::RepublishRequest_Encoding_DefaultBinary){rep.fetch_add(1,std::sync::atomic::Ordering::SeqCst); if fault.compare_exchange(2,0,std::sync::atomic::Ordering::SeqCst,std::sync::atomic::Ordering::SeqCst).is_ok(){let _=signal.send(());break;}}
++                                        if id==NodeId::from(ObjectId::PublishRequest_Encoding_DefaultBinary)&&cut_up.load(std::sync::atomic::Ordering::SeqCst){let _=publish_tx.send(());}
++                                    }
++                                } if sw.write_all(&f).await.is_err(){break}
++                            }};
++                            let downstream=async move {loop {
++                                let mut held_reply = false;
++                                let mut h=[0u8;8];if sr.read_exact(&mut h).await.is_err(){break}let n=u32::from_le_bytes([h[4],h[5],h[6],h[7]]) as usize;
++                                if !(8..=1_048_576).contains(&n){break}let mut f=vec![0;n];f[..8].copy_from_slice(&h);if sr.read_exact(&mut f[8..]).await.is_err(){break}
++                                if &h[..4]==b"MSGF" && n>24 && fault_down.load(std::sync::atomic::Ordering::SeqCst)==1 { use opcua::types::{BinaryDecodable,ContextOwned};let ctx=ContextOwned::default();let mut c=std::io::Cursor::new(&f[24..]); if NodeId::decode(&mut c,&ctx.context()).is_ok_and(|id| id==NodeId::from(ObjectId::RepublishResponse_Encoding_DefaultBinary)) && fault_down.compare_exchange(1,0,std::sync::atomic::Ordering::SeqCst,std::sync::atomic::Ordering::SeqCst).is_ok(){let _=signal_down.send(());release.notified().await;held_reply=true;} }
++                                if &h[..4]==b"MSGF"&&n>24&&armed.load(std::sync::atomic::Ordering::SeqCst){use opcua::types::{BinaryDecodable,ContextOwned,PublishResponse};let ctx=ContextOwned::default();let mut c=std::io::Cursor::new(&f[24..]);
++                                    if NodeId::decode(&mut c,&ctx.context()).is_ok_and(|id|id==NodeId::from(ObjectId::PublishResponse_Encoding_DefaultBinary)){
++                                        if let Ok(r)=PublishResponse::decode(&mut c,&ctx.context()) {if r.notification_message.notification_data.as_ref().is_some_and(|v|!v.is_empty())&&armed.swap(false,std::sync::atomic::Ordering::SeqCst){
++                                            cut.store(true,std::sync::atomic::Ordering::SeqCst);let _=lost_tx.send((r.subscription_id,r.notification_message.sequence_number));break;
++                                        }}
++                                    }
++                                }if cw.write_all(&f).await.is_err(){break} if held_reply { let _=signal_down.send(()); }
++                            }};
++                            tokio::select!{_ = upstream=>{},_ = downstream=>{}}
++                        });
++                    }
++                }}tasks.abort_all();while tasks.join_next().await.is_some(){}
++            });
++        });
++        Self {
++            url: format!("opc.tcp://127.0.0.1:{port}/"),
++            armed,
++            lost,
++            publish_after_cut,
++            republish_count,
++            cut_seen,
++            fault_mode,
++            fault_seen,
++            release,
++            stop: Some(stop),
++            thread: Some(thread),
++        }
++    }
++}
++impl Drop for DropPublishProxy {
++    fn drop(&mut self) {
++        if let Some(stop) = self.stop.take() {
++            let _ = stop.send(());
++        }
++        if let Some(thread) = self.thread.take() {
++            let _ = thread.join();
++        }
++    }
++}
++
++#[test]
++fn sdk_republish_wire_loss_observation() {
++    use opcua::client::DataChangeCallback;
++    use opcua::types::{
++        AttributeId, MonitoredItemCreateRequest, MonitoringMode, MonitoringParameters, ReadValueId,
++        TimestampsToReturn,
++    };
++    use std::sync::atomic::Ordering;
++    let server = TestServer::start(free_port());
++    let proxy = DropPublishProxy::start(&server);
++    let rt = tokio::runtime::Builder::new_multi_thread()
++        .worker_threads(2)
++        .enable_all()
++        .build()
++        .unwrap();
++    rt.block_on(async {
++        let (events, event_rx)=channel();let cancel=tokio_util::sync::CancellationToken::new();
++        let mut adapter=super::session::connect(SessionId::FIRST,Some(crate::bff::model::RequestId::FIRST),Harness::endpoint(&proxy.url),&cancel,&events).await.unwrap();
++        let mut recovery_status = adapter.session.subscribe_republish_recovery();
++        let (value_tx,value_rx)=channel();
++        let callback=DataChangeCallback::new(move |value:DataValue,_|{let _=value_tx.send(value);});
++        let sub=adapter.session.create_subscription(Duration::from_millis(100),100,20,1000,0,true,callback).await.unwrap();
++        let response=adapter.session.create_monitored_items(sub,TimestampsToReturn::Both,vec![MonitoredItemCreateRequest {item_to_monitor:ReadValueId {node_id:NodeId::new(server.ns,"Level"),attribute_id:AttributeId::Value as u32,..Default::default()},monitoring_mode:MonitoringMode::Reporting,requested_parameters:MonitoringParameters {client_handle:1,sampling_interval:0.0,queue_size:10,discard_oldest:true,..Default::default()}}]).await.unwrap();
++        assert!(response[0].result.status_code.is_good());
++        let _=value_rx.recv_timeout(Duration::from_secs(15)).expect("initial callback");
++        while proxy.publish_after_cut.try_recv().is_ok() {}
++        proxy.armed.store(true,Ordering::SeqCst);server.set("Level",Variant::Double(52.5));
++        let (lost_sub,lost_seq)=proxy.lost.recv_timeout(Duration::from_secs(15)).expect("actual notification response dropped"); assert_eq!(sub,lost_sub);assert!(proxy.cut_seen.load(Ordering::SeqCst));
++        let deadline=Instant::now()+Duration::from_secs(30);let mut reactivated=false;
++        while Instant::now()<deadline {let Ok(event)=event_rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) else {break};
++            if matches!(event.kind,EventKind::UaRecovery {state:crate::bff::model::UaRecoveryState::Reconnected { mode:crate::bff::model::UaRecoveryMode::ReactivatedSession }}) { reactivated=true;break; }
++        } assert!(reactivated,"same remote Session was not reactivated");
++        proxy.publish_after_cut.recv_timeout(Duration::from_secs(20)).expect("normal Publish resumed");
++        assert!(proxy.republish_count.load(Ordering::SeqCst) > 0, "SDK did not automatically Republish");
++        tokio::time::timeout(Duration::from_secs(5), recovery_status.changed()).await.unwrap().unwrap();
++        assert_eq!(*recovery_status.borrow_and_update(), Some(opcua::client::RepublishRecoveryOutcome::MessageNotAvailable));
++        eprintln!("OBSERVED typed_recovery=MessageNotAvailable");
++        let first = value_rx.recv_timeout(Duration::from_secs(3)).expect("automatic recovered callback");
++        assert_eq!(first.value, Some(Variant::Double(52.5)));
++        server.set("Level",Variant::Double(53.5));
++        let next = value_rx.recv_timeout(Duration::from_secs(15)).expect("later callback");
++        assert_eq!(next.value, Some(Variant::Double(53.5)), "duplicate or wrong callback");
++        assert!(value_rx.recv_timeout(Duration::from_secs(1)).is_err(), "duplicate callback after recovery");
++        eprintln!("OBSERVED sdk_republish_callback=52.5 later=53.5 duplicates=0 sub={sub} seq={lost_seq}");
++        adapter.close().await;
++    });
++}
++
++fn sdk_republish_fault(mode: u8) {
++    use opcua::client::{DataChangeCallback, RepublishRecoveryOutcome};
++    use opcua::types::{AttributeId, MonitoredItemCreateRequest, MonitoringMode, MonitoringParameters, ReadValueId, TimestampsToReturn};
++    use std::sync::atomic::Ordering;
++    let server = TestServer::start(free_port());
++    let proxy = DropPublishProxy::start(&server);
++    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
++    rt.block_on(async {
++        let (events, event_rx) = channel();
++        let cancel = tokio_util::sync::CancellationToken::new();
++        let mut adapter = super::session::connect(SessionId::FIRST, Some(crate::bff::model::RequestId::FIRST), Harness::endpoint(&proxy.url), &cancel, &events).await.unwrap();
++        assert!(!adapter.session.republish_history_uncertain());
++        let mut recovery = adapter.session.subscribe_republish_recovery();
++        let (status_tx, status_rx) = channel();
++        let monitor = tokio::spawn(async move { while recovery.changed().await.is_ok() { let value = recovery.borrow_and_update().clone(); if let Some(v) = value { let _ = status_tx.send(v); } } });
++        let (value_tx, value_rx) = channel();
++        let callback = DataChangeCallback::new(move |value: DataValue, _| { let _ = value_tx.send(value); });
++        let sub = adapter.session.create_subscription(Duration::from_millis(100),100,20,1000,0,true,callback).await.unwrap();
++        let created = adapter.session.create_monitored_items(sub, TimestampsToReturn::Both, vec![MonitoredItemCreateRequest { item_to_monitor: ReadValueId { node_id: NodeId::new(server.ns,"Level"), attribute_id: AttributeId::Value as u32, ..Default::default() }, monitoring_mode: MonitoringMode::Reporting, requested_parameters: MonitoringParameters { client_handle: 1, sampling_interval: 0.0, queue_size: 10, discard_oldest: true, ..Default::default() } }]).await.unwrap();
++        assert!(created[0].result.status_code.is_good());
++        value_rx.recv_timeout(Duration::from_secs(15)).expect("initial callback");
++        proxy.fault_mode.store(mode, Ordering::SeqCst);
++        proxy.armed.store(true, Ordering::SeqCst);
++        server.set("Level", Variant::Double(52.5));
++        proxy.lost.recv_timeout(Duration::from_secs(15)).expect("initial value response dropped");
++        proxy.fault_seen.recv_timeout(Duration::from_secs(30)).expect("real Republish fault entered");
++        let wanted = if mode == 1 { RepublishRecoveryOutcome::Deadline } else { RepublishRecoveryOutcome::Cancelled };
++        let deadline = Instant::now() + Duration::from_secs(30);
++        let mut observed = Vec::new();
++        while Instant::now() < deadline && !observed.contains(&wanted) {
++            let Ok(status) = status_rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) else { break };
++            observed.push(status);
++        }
++        assert!(observed.contains(&wanted), "expected {wanted:?}, observed {observed:?}");
++        assert!(adapter.session.republish_history_uncertain());
++        if mode == 1 {
++            let until = Instant::now() + Duration::from_secs(15);
++            let mut reconnected = false;
++            while Instant::now() < until {
++                let Ok(event) = event_rx.recv_timeout(until.saturating_duration_since(Instant::now())) else { break };
++                if matches!(event.kind, EventKind::UaRecovery { state: crate::bff::model::UaRecoveryState::Reconnected { .. } }) { reconnected = true; break; }
++            }
++            assert!(reconnected, "new remote scope not announced before late reply");
++            proxy.release.notify_one();
++            proxy.fault_seen.recv_timeout(Duration::from_secs(5)).expect("held response sent after scope transition");
++            assert!(value_rx.recv_timeout(Duration::from_secs(2)).is_err(), "late response delivered stale callback");
++            server.set("Level", Variant::Double(53.5));
++            let v = value_rx.recv_timeout(Duration::from_secs(20)).expect("owner did not continue");
++            assert_eq!(v.value, Some(Variant::Double(53.5)));
++        } else {
++            let v = value_rx.recv_timeout(Duration::from_secs(30)).expect("recovery after cut");
++            assert_eq!(v.value, Some(Variant::Double(52.5)));
++            assert!(value_rx.recv_timeout(Duration::from_secs(2)).is_err(), "duplicate replay after cancellation");
++            server.set("Level", Variant::Double(53.5));
++            let v = value_rx.recv_timeout(Duration::from_secs(20)).expect("owner did not continue");
++            assert_eq!(v.value, Some(Variant::Double(53.5)));
++        }
++        if mode == 2 {
++            let latest = adapter.session.subscribe_republish_recovery();
++            assert_eq!(*latest.borrow(), Some(RepublishRecoveryOutcome::MessageNotAvailable));
++            eprintln!("OBSERVED latest_watch=MessageNotAvailable after_cancelled");
++        }
++        assert!(adapter.session.republish_history_uncertain(), "latest successful value must not clear unknown history");
++        eprintln!("OBSERVED mode={mode} outcome={wanted:?} later=53.5 sticky_unknown=true");
++        adapter.close().await;
++        monitor.abort();
++    });
++}
++#[test]
++fn sdk_republish_delayed_reply_after_deadline() { sdk_republish_fault(1); }
++#[test]
++fn sdk_republish_transport_cut_during_request() { sdk_republish_fault(2); }
