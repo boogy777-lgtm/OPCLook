@@ -85,6 +85,20 @@ class PreviewPackagingTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "untracked"):
                     preview.verify_sdk(sdk)
 
+    def test_cargo_log_checks_active_flags_not_declared_features(self):
+        good = r'''rustc --cfg "feature=\"native-da-preview\"" --check-cfg "cfg(feature, values(\"native-da-preview\", \"native-da-test-hooks\"))"
+[backend] cargo:rustc-link-search=native=C:\build\bridge\Release'''
+        bridge = r"C:\build\bridge\Release"
+        preview.verify_cargo_log(good, bridge)
+        for extra in (r''' --cfg "feature=\"native-da-test-hooks\""''',
+                      " CARGO_FEATURE_NATIVE_DA_TEST_HOOKS=1"):
+            with self.assertRaisesRegex(ValueError, "test hooks"):
+                preview.verify_cargo_log(good + extra, bridge)
+        with self.assertRaisesRegex(ValueError, "bridge"):
+            preview.verify_cargo_log(good, r"C:\other\Release")
+        with self.assertRaisesRegex(ValueError, "preview"):
+            preview.verify_cargo_log(good.replace(r'''--cfg "feature=\"native-da-preview\""''', ""), bridge)
+
     def test_link_map_requires_cli_bridge_and_both_symbols(self):
         good = "opclook-cli softing_da_bridge.lib opcl_da_host_create opcl_da_write_scalar"
         preview.verify_link_map(good)

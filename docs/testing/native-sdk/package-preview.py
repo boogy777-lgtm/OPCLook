@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import re
 import shutil
 import struct
 import subprocess
@@ -130,6 +131,21 @@ def verify_link_map(link_map):
             raise ValueError(f"CLI link map missing {required}")
 
 
+def verify_cargo_log(log, bridge_release):
+    # Cargo also emits --check-cfg listing *declared* features. Only --cfg
+    # activates a feature; Windows verbose commands may backslash-escape quotes.
+    unescaped = log.replace(r'\"', '"').replace(r"\'", "'")
+    def active(name):
+        pattern = r"(?<![\w-])--cfg(?:\s+|=)[\"']?feature\s*=\s*[\"']" + re.escape(name) + r"[\"']"
+        return re.search(pattern, unescaped, re.IGNORECASE) is not None
+    env_hook = re.search(r"(?<![\w])CARGO_FEATURE_NATIVE_DA_TEST_HOOKS\s*=\s*[\"']?1(?!\d)", unescaped, re.IGNORECASE)
+    normalized = log.replace("\\", "/").casefold()
+    lib_dir = str(bridge_release).replace("\\", "/").casefold()
+    if (not active("native-da-preview") or active("native-da-test-hooks") or env_hook
+            or lib_dir not in normalized or "rustc-link-search" not in normalized):
+        raise ValueError("cargo build log must show active preview, selected bridge path, and no test hooks")
+
+
 def verify_toolchain(log):
     lines = {line.split(":", 1)[0].strip().casefold(): line.split(":", 1)[1].strip()
              for line in log.splitlines() if ":" in line}
@@ -172,11 +188,7 @@ def assemble(args):
     trace.check(bridge_log, args.sdk / "development/core/src/opc", args.generated,
                 ["opcda.h", "opccomn.h", "OpcEnum.h", "opc_ae.h", "opcSec.h", "opcerror.h",
                  "opcda_i.c", "opccomn_i.c", "OpcEnum_i.c", "opc_ae_i.c", "opcSec_i.c"])
-    normalized_cargo = cargo_log.replace("\\", "/").casefold()
-    lib_dir = str((args.bridge / "Release").resolve()).replace("\\", "/").casefold()
-    if ("native-da-preview" not in cargo_log or "native-da-test-hooks" in cargo_log
-            or lib_dir not in normalized_cargo or "rustc-link-search" not in normalized_cargo):
-        raise ValueError("cargo build log must show preview, selected bridge path, and no test hooks")
+    verify_cargo_log(cargo_log, (args.bridge / "Release").resolve())
     verify_toolchain(toolchain_log)
     run("git", "-C", ROOT, "diff", "--quiet", "HEAD", "--")
     revision = run("git", "-C", ROOT, "rev-parse", "HEAD").decode().strip()
