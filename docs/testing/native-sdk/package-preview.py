@@ -28,8 +28,8 @@ def sha256(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def run(*args, cwd=None):
-    return subprocess.run(list(map(str, args)), cwd=cwd, check=True, stdout=subprocess.PIPE,
+def run(*args, cwd=None, input_data=None):
+    return subprocess.run(list(map(str, args)), cwd=cwd, input=input_data, check=True, stdout=subprocess.PIPE,
                           stderr=subprocess.PIPE).stdout
 
 
@@ -57,7 +57,10 @@ def verify_sdk(sdk):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(sdk / name, target)
         for patch in ("softing-com-balance.patch", "softing-status-alignment.patch"):
-            run("git", "-c", "core.autocrlf=false", "apply", "--reverse", "--whitespace=nowarn", HERE / patch, cwd=temp)
+            patch_bytes = (HERE / patch).read_bytes().replace(b"\r\n", b"\n")
+            if b"\r" in patch_bytes:
+                raise ValueError("reviewed patch contains unsupported carriage return")
+            run("git", "-c", "core.autocrlf=false", "apply", "--reverse", "--whitespace=nowarn", "-", cwd=temp, input_data=patch_bytes)
         for name, expected in PATCHED.items():
             if blob_hash((temp / name).read_bytes()) != expected:
                 raise ValueError(f"SDK patched source differs from reviewed patch: {name}")

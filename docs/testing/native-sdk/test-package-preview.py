@@ -75,7 +75,12 @@ class PreviewPackagingTests(unittest.TestCase):
             (here / "softing-com-balance.patch").write_bytes(git("diff", "--", files[1], files[2]))
             (here / "license-sdk-tree.json").write_text(json.dumps({"selection_prefixes": ["development/core/src/"]}))
             with patch.object(preview, "HERE", here), patch.object(preview, "SDK_PIN", commit), patch.object(preview, "PATCHED", original):
-                preview.verify_sdk(sdk)
+                patches = [here / name for name in ("softing-com-balance.patch", "softing-status-alignment.patch")]
+                originals = [file.read_bytes().replace(b"\r\n", b"\n") for file in patches]
+                for newline in (b"\n", b"\r\n"):
+                    for file, content in zip(patches, originals):
+                        file.write_bytes(content.replace(b"\n", newline))
+                    preview.verify_sdk(sdk)
                 with (sdk / files[0]).open("ab") as stream:
                     stream.write(b"unreviewed\n")
                 with self.assertRaises((ValueError, subprocess.CalledProcessError)):
