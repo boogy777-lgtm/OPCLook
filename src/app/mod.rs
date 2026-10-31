@@ -32,6 +32,7 @@ mod sessions;
 mod state;
 mod table;
 mod tree;
+mod value_time;
 mod view;
 
 #[cfg(test)]
@@ -48,6 +49,7 @@ pub use state::{
     RowQuality, SessionState, SessionView, TreeItem, WriteKind, WriteTypeChoice,
     write_type_choices,
 };
+pub use value_time::{TimeOrder, TimeSelection};
 pub use view::{CHANGE_FLASH, MAX_FIELD_LINES, TableLine, is_numeric_value};
 
 use self::present::{is_loopback_host, operation_label};
@@ -1091,6 +1093,8 @@ impl App {
                 text: "GOOD".into(),
             }),
             timestamp: None,
+            times: Default::default(),
+            time_selection: Default::default(),
             last_read: None,
             description: String::new(),
             pending: false,

@@ -47,6 +47,7 @@ impl ReadObservations {
             ReadTerminalStatus::Received(value) => ReadTerminalStatus::ReceivedMetadata {
                 quality: value.quality.clone(),
                 timestamp: value.timestamp,
+                times: value.times.clone(),
                 reason: value.reason.clone(),
             },
             status => status.clone(),
@@ -116,6 +117,7 @@ mod tests {
                 quality: Quality::from_ua(0x4000_0000, "uncertain"),
                 timestamp: None,
                 reason: Some(BackendMsg::Raw("reason".into())),
+                times: Default::default(),
             }),
         };
         buffer.record(SessionId::FIRST, None, &terminal);

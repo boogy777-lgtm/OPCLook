@@ -105,6 +105,7 @@ pub enum ReadTerminalStatus {
     ReceivedMetadata {
         quality: super::Quality,
         timestamp: Option<chrono::DateTime<chrono::Utc>>,
+        times: super::ValueTimes,
         reason: Option<BackendMsg>,
     },
     /// A subscription update completed the initial need before a Read was sent.
@@ -113,6 +114,7 @@ pub enum ReadTerminalStatus {
     InitialPush {
         quality: super::Quality,
         timestamp: Option<chrono::DateTime<chrono::Utc>>,
+        times: super::ValueTimes,
         reason: Option<BackendMsg>,
     },
     MissingResult,

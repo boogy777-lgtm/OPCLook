@@ -319,6 +319,14 @@ pub(super) fn parse_relative_path(path: &str) -> Result<Vec<RelativePathElement>
     Ok(elements)
 }
 
+// Local receive time records when this failure became observable, not a server timestamp.
+fn read_failure(reason: BackendMsg) -> DataValue {
+    let mut value = DataValue::bad(reason);
+    value.times.received_at = Some(chrono::Utc::now());
+    value.times.origin = crate::bff::model::ValueOrigin::Read;
+    value
+}
+
 pub(super) async fn read(
     session: &mut UaSession,
     keys: &[ItemKey],
@@ -342,7 +350,7 @@ pub(super) async fn read(
     if requests.is_empty() {
         return keys
             .iter()
-            .map(|key| (*key, DataValue::bad(BackendMsg::NodeNotSubscribed)))
+            .map(|key| (*key, read_failure(BackendMsg::NodeNotSubscribed)))
             .collect();
     }
 
@@ -358,10 +366,10 @@ pub(super) async fn read(
                     if index_of.contains_key(key) {
                         (
                             *key,
-                            DataValue::bad(BackendMsg::context("read", message.clone())),
+                            read_failure(BackendMsg::context("read", message.clone())),
                         )
                     } else {
-                        (*key, DataValue::bad(BackendMsg::NodeNotSubscribed))
+                        (*key, read_failure(BackendMsg::NodeNotSubscribed))
                     }
                 })
                 .collect();
@@ -371,14 +379,21 @@ pub(super) async fn read(
     let mut out = Vec::with_capacity(keys.len());
     for key in keys {
         let Some(index) = index_of.get(key) else {
-            out.push((*key, DataValue::bad(BackendMsg::NodeNotSubscribed)));
+            out.push((*key, read_failure(BackendMsg::NodeNotSubscribed)));
             continue;
         };
         let Some(dv) = values.get(*index) else {
-            out.push((*key, DataValue::bad(BackendMsg::ServerReturnedNoValue)));
+            out.push((*key, read_failure(BackendMsg::ServerReturnedNoValue)));
             continue;
         };
-        out.push((*key, ua_data_value_typed(dv, session.types.as_deref())));
+        out.push((
+            *key,
+            ua_data_value_typed(
+                dv,
+                session.types.as_deref(),
+                crate::bff::model::ValueOrigin::Read,
+            ),
+        ));
     }
     out
 }

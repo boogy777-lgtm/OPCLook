@@ -673,6 +673,17 @@ impl App {
                             }
                             continue;
                         }
+                        if !row.time_selection.select(
+                            &row.times,
+                            &row.value,
+                            row.quality.kind() == QualityKind::Good,
+                            &value,
+                            Instant::now(),
+                        ) {
+                            // A terminal Read still completes in Engine; only
+                            // the displayed sample is retained here.
+                            continue;
+                        }
                         // UI4: remember when the value really changed. The
                         // first value of a row (still pending / waiting) is
                         // not a change.
@@ -689,6 +700,7 @@ impl App {
                         }
                         row.quality = RowQuality::Server(quality);
                         row.timestamp = value.timestamp;
+                        row.times = value.times;
                         row.pending = false;
                     }
                 }

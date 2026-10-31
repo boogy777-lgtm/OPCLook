@@ -462,3 +462,40 @@ fn p4_palette_browse_ru() {
         .save("docs/screenshots/p4-palette-write-confirm-ru.png")
         .unwrap();
 }
+
+#[test]
+#[ignore = "manual visual QA requiring a headless wgpu renderer"]
+fn t08_value_time_tooltip_ru() {
+    use opclook::bff::model::{ValueOrigin, ValueTimes};
+    let session = SessionId::new(1).unwrap();
+    let mut app = base(Lang::Ru);
+    app.seed_session(session, EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_row(session, "ns=2;s=Clock", "Clock", Value::I64(1));
+    let now = chrono::Utc::now();
+    let row = &mut app.rows_mut_for_test()[0];
+    row.times = ValueTimes::ua(Some(now), Some(now), now, ValueOrigin::Read);
+    row.timestamp = row.times.primary();
+    let text = row.timestamp_text();
+    let mut h = Harness::builder()
+        .with_size([1200.0, 900.0])
+        .with_max_steps(60)
+        .with_accessibility_check(false)
+        .with_render_cursor(false)
+        .with_context_setup(|ctx| {
+            assert!(opclook::app::install_fonts(ctx).is_some());
+        })
+        .build_ui_state(|ui, app: &mut App| app.update(ui), app);
+    h.run_steps(8);
+    h.get_by_label(&text).hover();
+    h.run_steps(40);
+    assert!(
+        h.query_all_by_label_contains("Время источника")
+            .next()
+            .is_some()
+    );
+    std::fs::create_dir_all("docs/screenshots").unwrap();
+    h.render()
+        .unwrap()
+        .save("docs/screenshots/t08-value-time-tooltip-ru.png")
+        .unwrap();
+}

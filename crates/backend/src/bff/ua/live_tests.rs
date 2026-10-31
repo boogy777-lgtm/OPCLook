@@ -1716,9 +1716,18 @@ fn explicit_poll_reads_without_monitored_value_stream() {
     assert!(pushed.is_none(), "poll created a value stream");
     let id = app.send(session.into(), CommandKind::Read { keys: vec![key] });
     let reply = app.reply(id, Duration::from_secs(15)).expect("read");
-    assert!(
-        matches!(reply.kind, EventKind::Values { values } if values.iter().any(|(k, v)| *k == key && v.value == Value::F64(37.5)))
-    );
+    let EventKind::Values { values } = reply.kind else {
+        panic!("expected values");
+    };
+    let value = &values.iter().find(|(k, _)| *k == key).expect("read key").1;
+    assert_eq!(value.value, Value::F64(37.5));
+    assert_eq!(value.times.origin, crate::bff::model::ValueOrigin::Read);
+    assert!(value.times.ua_source.is_some());
+    assert!(value.times.ua_server.is_some());
+    assert!(value.times.received_at.is_some());
+    assert!(value.times.da_timestamp.is_none());
+    assert!(value.times.source_clock.is_none());
+    assert_eq!(value.timestamp, value.times.primary());
 }
 
 /// P1 scenario: `total` tags added in batches of 100 without waiting (like

@@ -813,6 +813,11 @@ impl DaSession {
                     value,
                     quality: Quality::from_da(state.wQuality),
                     timestamp: filetime_to_utc(state.ftTimeStamp),
+                    times: crate::bff::model::ValueTimes::da(
+                        filetime_to_utc(state.ftTimeStamp),
+                        chrono::Utc::now(),
+                        crate::bff::model::ValueOrigin::Read,
+                    ),
                     reason: None,
                 },
             ));

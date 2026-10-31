@@ -62,6 +62,8 @@ impl App {
                 value: Value::Empty,
                 quality: RowQuality::NoData(tr(self.lang(), Tr::NoData).to_string()),
                 timestamp: None,
+                times: Default::default(),
+                time_selection: Default::default(),
                 last_read: None,
                 description: String::new(),
                 pending: true,
@@ -108,6 +110,8 @@ impl App {
             row.pending = true;
             row.pending_push = None;
             row.last_read = None;
+            row.times = Default::default();
+            row.time_selection = Default::default();
             // The new session decides again which items it can push (P1).
             row.poll_only = false;
             specs.push(ItemSpec {

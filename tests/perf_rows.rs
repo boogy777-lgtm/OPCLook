@@ -56,6 +56,7 @@ fn a4_ten_thousand_rows() {
                         quality: good(),
                         timestamp: None,
                         reason: None,
+                        times: Default::default(),
                     },
                 )],
             },

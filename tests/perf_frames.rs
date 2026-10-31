@@ -88,6 +88,7 @@ fn scene(changed: usize, journal: bool) {
                                 0,
                             ),
                             reason: None,
+                            times: Default::default(),
                         },
                     )
                 })

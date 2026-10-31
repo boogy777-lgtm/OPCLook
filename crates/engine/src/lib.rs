@@ -1754,6 +1754,7 @@ impl<C> Engine<C> {
                             Some(opclook_contract::model::ReadTerminalStatus::InitialPush {
                                 quality: value.quality.clone(),
                                 timestamp: value.timestamp,
+                                times: value.times.clone(),
                                 reason: value.reason.clone(),
                             });
                     }
@@ -1766,6 +1767,7 @@ impl<C> Engine<C> {
                         status: opclook_contract::model::ReadTerminalStatus::InitialPush {
                             quality: value.quality.clone(),
                             timestamp: value.timestamp,
+                            times: value.times.clone(),
                             reason: value.reason.clone(),
                         },
                     });
@@ -3347,6 +3349,7 @@ mod tests {
             quality: Quality::from_ua(0x4000_0000, "uncertain"),
             timestamp: None,
             reason: Some(BackendMsg::Raw("native-detail".into())),
+            times: Default::default(),
         };
         let reply = Event {
             owner: owner(1),
@@ -3515,6 +3518,7 @@ mod tests {
             quality: Quality::from_ua(0x8032_0000, "waiting"),
             timestamp: None,
             reason: None,
+            times: Default::default(),
         };
         let push = |epoch| Event {
             owner: owner(1),
@@ -3638,6 +3642,37 @@ mod tests {
             .unwrap();
         assert!(observed.lock().unwrap().is_empty());
         assert!(!engine.sessions[&sid(1)].items.contains_key(&key(1)));
+    }
+
+    #[test]
+    fn read_terminal_and_metadata_observer_keep_time_facts() {
+        use opclook_contract::model::{DataValue, ReadTerminalStatus, SourceClockId, ValueOrigin};
+        let now = Instant::now();
+        let mut engine = cached_poll_engine(now);
+        let mut value = DataValue::bad(BackendMsg::NoConnection);
+        value.times.origin = ValueOrigin::Read;
+        value.times.source_clock = Some(SourceClockId(42));
+        let buffer = std::sync::Arc::new(std::sync::Mutex::new(
+            opclook_contract::read_observer::ReadObservations::default(),
+        ));
+        let sink = buffer.clone();
+        engine.set_read_terminal_sink(Some(Box::new(move |session, epoch, terminal| {
+            sink.lock().unwrap().record(session, epoch, terminal)
+        })));
+        let read = dispatch_due(&mut engine, now);
+        let event = Event {
+            owner: owner(1),
+            origin: Origin::Reply(read),
+            kind: EventKind::Values {
+                values: vec![(key(1), value)],
+            },
+        };
+        let result = engine.accept_at(&event, now).unwrap().unwrap();
+        assert!(
+            matches!(&result.read_terminals.iter().find(|t| t.key == key(1)).unwrap().status, ReadTerminalStatus::Received(v) if v.times.origin == ValueOrigin::Read && v.times.source_clock == Some(SourceClockId(42)))
+        );
+        let batch = buffer.lock().unwrap().drain();
+        assert!(batch.latest.iter().any(|entry| matches!(&entry.terminal.status, ReadTerminalStatus::ReceivedMetadata { times, .. } if times.origin == ValueOrigin::Read && times.source_clock == Some(SourceClockId(42)))));
     }
 
     #[test]
@@ -5089,6 +5124,7 @@ mod tests {
                                 quality: Quality::from_ua(status, "status"),
                                 timestamp: None,
                                 reason: None,
+                                times: Default::default(),
                             },
                         )],
                     },

@@ -2564,6 +2564,7 @@ fn stale_connection_push_does_not_change_current_row() {
                     quality: crate::bff::model::Quality::from_da(0xc0),
                     timestamp: None,
                     reason: None,
+                    times: Default::default(),
                 },
             )],
         },
@@ -2598,6 +2599,7 @@ fn late_unsolicited_data_cannot_revive_a_lost_or_connecting_link() {
                         quality: crate::bff::model::Quality::from_da(0xc0),
                         timestamp: None,
                         reason: None,
+                        times: Default::default(),
                     },
                 )],
             },
@@ -3380,6 +3382,7 @@ fn profile_reconnect_rejects_old_read_write_and_push_and_reregisters_rows() {
                     quality: Quality::from_da(0xc0),
                     timestamp: None,
                     reason: None,
+                    times: Default::default(),
                 },
             )],
         };
@@ -3850,11 +3853,19 @@ fn early_push_is_applied_only_after_successful_registration() {
             })
             .unwrap();
         let epoch = app.engine.connection_id(session).unwrap();
+        let received = chrono::Utc::now();
+        let times = crate::bff::model::ValueTimes::ua(
+            Some(received),
+            Some(received),
+            received,
+            crate::bff::model::ValueOrigin::Subscription,
+        );
         let value = DataValue {
             value: Value::I64(42),
             quality: Quality::from_ua(0, "Good"),
-            timestamp: None,
+            timestamp: times.primary(),
             reason: None,
+            times: times.clone(),
         };
         let push = |epoch| Event {
             owner: session.into(),
@@ -3892,6 +3903,8 @@ fn early_push_is_applied_only_after_successful_registration() {
         assert!(row.pending_push.is_none());
         if accepted {
             assert!(matches!(row.value, Value::I64(42)));
+            assert_eq!(row.times, times);
+            assert_eq!(row.timestamp, Some(received));
             assert!(matches!(
                 row.last_read.as_ref().map(|o| &o.terminal.status),
                 Some(crate::bff::model::ReadTerminalStatus::InitialPush { .. })

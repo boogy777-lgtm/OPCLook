@@ -733,6 +733,15 @@ fn encode(value: &Value, depth: usize, remaining: &mut usize) -> Result<Json, St
         }
     })
 }
+fn value_times_json(times: &opclook_contract::model::ValueTimes) -> Json {
+    let origin = match times.origin {
+        opclook_contract::model::ValueOrigin::Unknown => "unknown",
+        opclook_contract::model::ValueOrigin::Read => "read",
+        opclook_contract::model::ValueOrigin::Subscription => "subscription",
+    };
+    json!({"ua_source":times.ua_source.map(|v| v.to_rfc3339()), "ua_server":times.ua_server.map(|v| v.to_rfc3339()), "da_timestamp":times.da_timestamp.map(|v| v.to_rfc3339()), "received_at":times.received_at.map(|v| v.to_rfc3339()), "origin":origin, "source_clock":times.source_clock.map(|clock| clock.0)})
+}
+
 fn data_json(data: &DataValue, endpoint: &EndpointSpec) -> Result<Json, String> {
     if data.quality.text.len() > MAX_JSON_BUDGET {
         return Err("quality text exceeds JSON output limit".into());
@@ -743,7 +752,7 @@ fn data_json(data: &DataValue, endpoint: &EndpointSpec) -> Result<Json, String> 
         QualityKind::Bad => "bad",
     };
     Ok(
-        json!({"value":encode(&data.value,0,&mut MAX_JSON_BUDGET.clone())?,"quality":{"code":data.quality.code,"kind":quality,"text":data.quality.text},"timestamp":data.timestamp.map(|v| v.to_rfc3339()),"reason":data.reason.as_ref().map(|reason| message(reason,endpoint))}),
+        json!({"value":encode(&data.value,0,&mut MAX_JSON_BUDGET.clone())?,"quality":{"code":data.quality.code,"kind":quality,"text":data.quality.text},"timestamp":data.timestamp.map(|v| v.to_rfc3339()),"times":value_times_json(&data.times),"reason":data.reason.as_ref().map(|reason| message(reason,endpoint))}),
     )
 }
 
@@ -813,7 +822,13 @@ fn read_terminal_json(
         _ => None,
     };
     let quality = metadata.map(|(q, timestamp)| json!({ "code":q.code, "kind":match q.kind { QualityKind::Good => "good", QualityKind::Uncertain => "uncertain", QualityKind::Bad => "bad" }, "text":redact(q.text.to_string(), endpoint), "timestamp":timestamp.map(|t| t.to_rfc3339()) }));
-    json!({"request_id":terminal.request_id.map(|id| id.get()), "item_key":terminal.key.get(), "needs":needs, "status":status, "detail":detail, "quality":quality})
+    let times = match &terminal.status {
+        ReadTerminalStatus::Received(value) => Some(&value.times),
+        ReadTerminalStatus::InitialPush { times, .. }
+        | ReadTerminalStatus::ReceivedMetadata { times, .. } => Some(times),
+        _ => None,
+    };
+    json!({"request_id":terminal.request_id.map(|id| id.get()), "item_key":terminal.key.get(), "needs":needs, "status":status, "detail":detail, "quality":quality, "times":times.map(value_times_json)})
 }
 
 fn terminal_data(
@@ -1370,6 +1385,23 @@ fn main() {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn json_preserves_separate_time_facts_and_origin() {
+        use super::*;
+        use opclook_contract::model::{SourceClockId, ValueOrigin, ValueTimes};
+        let times = ValueTimes {
+            origin: ValueOrigin::Subscription,
+            source_clock: Some(SourceClockId(42)),
+            ..ValueTimes::default()
+        };
+        let json = value_times_json(&times);
+        assert!(json["ua_source"].is_null());
+        assert!(json["ua_server"].is_null());
+        assert!(json["da_timestamp"].is_null());
+        assert!(json["received_at"].is_null());
+        assert_eq!(json["origin"], "subscription");
+        assert_eq!(json["source_clock"], 42);
+    }
+    #[test]
     fn terminal_json_preserves_unusable_quality_and_redacts_reason() {
         use super::*;
         use opclook_contract::model::{Quality, ReadNeed, ReadTerminal, ReadTerminalStatus};
@@ -1382,6 +1414,7 @@ mod tests {
             status: ReadTerminalStatus::InitialPush {
                 quality: Quality::from_ua(0x4000_0000, "uncertain"),
                 timestamp: None,
+                times: Default::default(),
                 reason: Some(BackendMsg::Raw("secret failure".into())),
             },
         };
@@ -1752,6 +1785,7 @@ mod tests {
                     ),
                     timestamp: None,
                     reason: None,
+                    times: Default::default(),
                 }),
             };
             let applied = apply_readback(&mut record, result, &endpoint);

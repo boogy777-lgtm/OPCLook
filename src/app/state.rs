@@ -299,6 +299,8 @@ pub struct Row {
     pub value: Value,
     pub quality: RowQuality,
     pub timestamp: Option<DateTime<Utc>>,
+    pub times: crate::bff::model::ValueTimes,
+    pub time_selection: super::value_time::TimeSelection,
     /// Latest per-item read lifecycle observation for the current connection.
     pub last_read: Option<opclook_contract::read_observer::ReadObservation>,
     pub description: String,
@@ -335,6 +337,38 @@ impl Row {
     pub fn value_text(&self) -> String {
         let mut cached = self.value_text_cache.borrow_mut();
         cached.get_or_insert_with(|| self.value.to_string()).clone()
+    }
+
+    /// Tooltip exposes raw clock facts and avoids implying a global order.
+    pub fn time_details(&self, lang: Lang) -> String {
+        let show = |time: Option<DateTime<Utc>>| time.map(|v| v.to_rfc3339()).unwrap_or_default();
+        let origin = match self.times.origin {
+            crate::bff::model::ValueOrigin::Unknown => Tr::TimeOriginUnknown,
+            crate::bff::model::ValueOrigin::Read => Tr::TimeOriginRead,
+            crate::bff::model::ValueOrigin::Subscription => Tr::TimeOriginSubscription,
+        };
+        let order = match self.time_selection.order {
+            super::value_time::TimeOrder::Unknown => Tr::TimeOrderUnknown,
+            super::value_time::TimeOrder::Comparable => Tr::TimeOrderComparable,
+            super::value_time::TimeOrder::OlderHeld => Tr::TimeOrderOlderHeld,
+            super::value_time::TimeOrder::EqualConflict => Tr::TimeOrderEqualConflict,
+            super::value_time::TimeOrder::Discontinuity => Tr::TimeOrderDiscontinuity,
+            super::value_time::TimeOrder::Diagnostic => Tr::TimeOrderDiagnostic,
+        };
+        format!(
+            "{}: {}\n{}: {}\n{}: {}\n{}: {}\n{}: {}\n{}",
+            tr(lang, Tr::TimeSource),
+            show(self.times.ua_source),
+            tr(lang, Tr::TimeServer),
+            show(self.times.ua_server),
+            tr(lang, Tr::TimeDa),
+            show(self.times.da_timestamp),
+            tr(lang, Tr::TimeReceived),
+            show(self.times.received_at),
+            tr(lang, Tr::TimeOrigin),
+            tr(lang, origin),
+            tr(lang, order)
+        )
     }
 
     pub fn timestamp_text(&self) -> String {

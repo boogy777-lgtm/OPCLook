@@ -57,7 +57,14 @@ impl UaSession {
                     ),
                     owner: session_id.into(),
                     kind: EventKind::Values {
-                        values: vec![(key, ua_data_value_typed(&data_value, types.as_deref()))],
+                        values: vec![(
+                            key,
+                            ua_data_value_typed(
+                                &data_value,
+                                types.as_deref(),
+                                crate::bff::model::ValueOrigin::Subscription,
+                            ),
+                        )],
                     },
                 });
             });

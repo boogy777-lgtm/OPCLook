@@ -76,6 +76,15 @@ pub fn adapt(envelope: Envelope, raw: RawFact) -> Result<Fact, AdaptError> {
             value: Value::I64(i64::from(raw.i4)),
             quality: Quality::from_da(raw.quality),
             timestamp: ticks_to_utc(ticks),
+            times: opclook_contract::model::ValueTimes::da(
+                ticks_to_utc(ticks),
+                chrono::Utc::now(),
+                if envelope.mode == 1 {
+                    opclook_contract::model::ValueOrigin::Subscription
+                } else {
+                    opclook_contract::model::ValueOrigin::Read
+                },
+            ),
             reason: None,
         })
     };

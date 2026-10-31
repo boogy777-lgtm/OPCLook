@@ -184,6 +184,7 @@ fn push_value(app: &mut App, key: ItemKey, value: Value, kind: QualityKind) {
                     quality: quality(kind),
                     timestamp: None,
                     reason: None,
+                    times: Default::default(),
                 },
             )],
         },
@@ -591,6 +592,7 @@ fn server_quality_codes_do_not_collide_with_row_placeholders() {
                         quality: Quality::from_ua(code, "vendor status"),
                         timestamp: None,
                         reason: None,
+                        times: Default::default(),
                     },
                 )],
             },
@@ -664,6 +666,7 @@ fn expanded_fields_and_display_refresh_after_value_update() {
                     quality: quality(QualityKind::Good),
                     timestamp: None,
                     reason: None,
+                    times: Default::default(),
                 },
             )],
         },
@@ -687,4 +690,31 @@ fn write_type_reflects_metadata_updates_after_render() {
     assert_eq!(app.rows()[0].write_type_text(), "Int64");
     app.rows_mut_for_test()[0].data_type = Some("Boolean".into());
     assert_eq!(app.rows()[0].write_type_text(), "Boolean");
+}
+
+#[test]
+fn time_tooltip_exposes_distinct_ua_facts_and_origin() {
+    use opclook::bff::model::{ValueOrigin, ValueTimes};
+    let mut app = App::new_test(&egui::Context::default());
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_row(sid(1), "ns=2;s=Clock", "Clock", Value::I64(1));
+    let now = chrono::Utc::now();
+    let row = &mut app.rows_mut_for_test()[0];
+    row.times = ValueTimes::ua(Some(now), Some(now), now, ValueOrigin::Read);
+    row.timestamp = row.times.primary();
+    let text = row.timestamp_text();
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.get_by_label(&text).hover();
+    h.run_steps(40);
+    assert!(
+        h.query_all_by_label_contains("Время источника")
+            .next()
+            .is_some()
+    );
+    assert!(
+        h.query_all_by_label_contains("Время сервера")
+            .next()
+            .is_some()
+    );
 }
