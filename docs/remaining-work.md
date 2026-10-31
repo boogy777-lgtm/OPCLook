@@ -41,7 +41,9 @@
 | 09 | Engine native Fresh/readback integration, CI/nohook packaged CLI proof | Code reviewed; actual Engine/CLI/Linux tests прошли, новый Win32/package proof pending |
 | 10 | P2 payload limits, P3/P5 embedded/numeric controls and inventory | Реальные Engine/App/CLI и GUI tests прошли; PNG/native Windows input отдельно |
 | 11 | SDK UA recovery/identity, SDK DA Async source/prototype | UA3 live scenarios pass privately; strict-first notification failed; Async test-only/no production cap, i686 pending |
-| 12 | G/D/fairness/Drop, UA Engine/App/CLI consumers | Engine88/App264/CLI18 и full GUI integration прошли для fairness/Drop; UA consumer/late Browse scope ещё интегрируются |
+| 12 | G/D/fairness/Drop, UA Engine/App/CLI consumers | be960ff: App2/SDK4 success,8PNG viewed; COM cleanup иpackage reverse repair pending; UA branch ещё private |
+| 13 | SDK async prototype review, UA Browse/metadata identity | Typed raw HRESULT review и SDK pre/post scope tests локально; actual Asynci686 pending |
+| 14 | Late Add quarantine, UI context generation | SDK3 cut/timeout tests pass; Engine91/App267 private context tests; следующий integration/CI pending |
 
 Пара 01 исправила начальное состояние fixture после честного отрицательного
 NOCONFIG verdict на `a004b226`. Проверка на `36fa668` подтвердила

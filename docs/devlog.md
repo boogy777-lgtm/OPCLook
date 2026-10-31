@@ -1352,3 +1352,16 @@ strict first notification реально failed, поздний sample и NewSes
 Большие debug artifacts заполнили временный диск; root удалил только свой
 воспроизводимый Cargo target, исходники и logs сохранены. Последующие локальные
 сборки debug-info=0/incremental=0, без изменения debug assertions/opt policy.
+
+## 2026-10-31 — Win32 gate be960ff и ремонт private preview
+
+Class: SDK cache lifetime и reviewed patch newline. Inv: fixture-owned SDK refs
+освобождаются до SDK common teardown; reverse verification проверяет исходные
+blob bytes независимо от checkout CRLF. N+1: обе matrix и release nohook path,
+точно те же reviewed hashes, extra tracked/untracked inputs запрещены.
+Измерено: App2+SDK4 success;8PNG лично просмотрены root+UI owner. COM I/O PASS,
+но cleanup AV; добавлен release device cache как у прежнего exception cache,
+без подавления exit check. Packager reverse на CRLF падал на новом реальном
+Git regression, после stdin normalization7/7; actual Windows повтор pending.
+Root не смешивает этот repair с UA private recovery scopes; N4/remote/license
+и полный Async/первая post-recovery notification остаются отдельными gates.

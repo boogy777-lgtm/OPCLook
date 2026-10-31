@@ -3,6 +3,32 @@
 Режим продолжения по поручению владельца: все оставшиеся задачи выполнять
 парами Terra High; [очередь и зависимости](remaining-work.md).
 
+## 2026-10-31 — be960ff: App2/SDK4 success; два native регресса исправляются
+
+Измеренный [App CI](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41155211535)
+наbe960ff прошёл Linux и Windows, включая весь GUI suite, P3/P4 actual
+counterfactual и8PNG. [SDK CI](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41155211445)
+прошёл4/4. Root и первоначальный UI исполнитель лично просмотрели все8 локальных
+PNG того же code: P4RU/EN/ZH, Light confirmation, T08, P2, P3, P5; блокирующих
+layout проблем не нашли. T08 Source/Server/Received различимы, порядок остаётся
+Unknown без clock attestation. Это не physical Windows IME/layout proof.
+
+[COM2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41155211450) выполнил
+первый actual cross-process Read/Write с PASS, но server cleanup завершился
+0xC0000005 в обоих variants. Новый device_read_count_cache оставался global SDK
+reference после exitSOCmn, в отличие от exception_count_cache; добавлен release
+после entry.stop до terminate/common-exit. Строгий launcher exit gate сохранён;
+новый Win32 результат ожидается, единственная причина AV пока не объявлена.
+
+[Preview](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41155211495)
+реально собрал clean nohook bridge и x86 release CLI, затем остановился на
+reverse SDK patch verification. Новая LF/CRLF regression на disposable Git
+fixture воспроизвела отказ исходного packager; нормализация patch bytes при
+stdin reverse + eol=lf для *.patch дала7/7 passes. Patched SDK blob hashes и
+untracked-file checks сохранены. Bundle/packaged executable read не приняты,
+так как до них этот job не дошёл. Исправления отправляются отдельно от ещё
+частной UA recovery/Async ветки; весь be head не green (6/9jobs success).
+
 ## 2026-10-31 — пары07–12: локальные реальные проверки и подготовка Windows
 
 Текущий интегрированный code `77869bd` ещё не назван Windows-green.
