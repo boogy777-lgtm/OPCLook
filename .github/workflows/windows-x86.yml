@@ -142,3 +142,30 @@ jobs:
             docs/screenshots/p4-palette-browse-*.png
             docs/screenshots/p4-palette-write-confirm-ru.png
           if-no-files-found: warn
+
+      - name: Verify P3 focused-control regression before and after guard
+        run: |
+          python3 docs/testing/test-p3-columns-baseline.py
+          python3 docs/testing/p3-columns-baseline.py
+      - name: Render P2 error and P3 P5 local controls for visual review
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          WGPU_BACKEND: vulkan
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/opclook-xdg"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          for case in p2_action_payload_error_ru p3_columns_focused_control_ru p5_options_hints_ru; do
+            cargo test --locked --target x86_64-unknown-linux-gnu --features ui-snapshots --test ui_snapshots "$case" -- --ignored --nocapture
+          done
+          python3 scripts/ci-p3-p5-png.py
+      - name: Preserve P2 P3 P5 visual evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p2-p3-p5-visual-qa
+          path: |
+            docs/screenshots/p2-action-payload-error-ru.png
+            docs/screenshots/p3-columns-focus-ru.png
+            docs/screenshots/p5-options-hints-ru.png
+          if-no-files-found: warn
