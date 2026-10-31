@@ -299,8 +299,13 @@ pub struct Row {
     pub value: Value,
     pub quality: RowQuality,
     pub timestamp: Option<DateTime<Utc>>,
+    /// Latest per-item read lifecycle observation for the current connection.
+    pub last_read: Option<opclook_contract::read_observer::ReadObservation>,
     pub description: String,
     pub pending: bool,
+    /// Latest subscription value awaiting successful registration; never shown
+    /// as a registered value until the corresponding AddItems succeeds.
+    pub(super) pending_push: Option<crate::bff::model::DataValue>,
     /// P1 (UA): no subscription takes this item (server limits), so it is
     /// polled even while the session's push subscription is active.
     pub poll_only: bool,

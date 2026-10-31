@@ -100,6 +100,21 @@ pub enum ReadCancelReason {
 pub enum ReadTerminalStatus {
     /// A delivered value, whose quality and reason still determine usability.
     Received(DataValue),
+    /// Metadata-only consumer projection; the full value is in the original
+    /// event. Engine never constructs this variant as a native result.
+    ReceivedMetadata {
+        quality: super::Quality,
+        timestamp: Option<chrono::DateTime<chrono::Utc>>,
+        reason: Option<BackendMsg>,
+    },
+    /// A subscription update completed the initial need before a Read was sent.
+    /// The value itself is delivered by the original push event; retain only
+    /// status metadata while AddItems is awaiting its correlated result.
+    InitialPush {
+        quality: super::Quality,
+        timestamp: Option<chrono::DateTime<chrono::Utc>>,
+        reason: Option<BackendMsg>,
+    },
     MissingResult,
     ServiceError(BackendMsg),
     Timeout {

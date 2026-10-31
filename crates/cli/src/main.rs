@@ -465,11 +465,11 @@ fn stopped(stop: &Receiver<Result<(), String>>) -> Result<bool, String> {
         Err(mpsc::TryRecvError::Disconnected) => Err("signal handler stopped".into()),
     }
 }
-fn next_event(
+fn next_event_accepted(
     engine: &mut Engine<()>,
     deadline: Instant,
     stop: &Receiver<Result<(), String>>,
-) -> Result<Event, String> {
+) -> Result<(Event, Option<opclook_engine::PendingRequest<()>>), String> {
     loop {
         if stopped(stop)? {
             return Err("interrupted".into());
@@ -478,14 +478,66 @@ fn next_event(
             return Err("operation timed out".into());
         }
         if let Some(event) = engine.try_recv() {
-            if engine.accept(&event).is_ok() {
-                return Ok(event);
+            if let Ok(pending) = engine.accept(&event) {
+                return Ok((event, pending));
             }
         } else {
             std::thread::sleep(Duration::from_millis(10));
         }
     }
 }
+fn next_event(
+    engine: &mut Engine<()>,
+    deadline: Instant,
+    stop: &Receiver<Result<(), String>>,
+) -> Result<Event, String> {
+    next_event_accepted(engine, deadline, stop).map(|(event, _)| event)
+}
+
+/// A Read's terminal result is authoritative, including missing/duplicate keys.
+fn read_response(
+    engine: &mut Engine<()>,
+    request: opclook_contract::model::RequestId,
+    timeout: Duration,
+    stop: &Receiver<Result<(), String>>,
+    endpoint: &EndpointSpec,
+) -> Result<opclook_contract::model::ReadTerminal, String> {
+    let deadline = checked_deadline(Instant::now(), timeout)?;
+    let mut timed_out = false;
+    loop {
+        if stopped(stop)? {
+            engine.discard_pending(SessionId::FIRST, request);
+            return Err("interrupted".into());
+        }
+        if !timed_out && Instant::now() >= deadline {
+            timed_out = engine.timeout_read_request(SessionId::FIRST, request, timeout.as_secs());
+            if !timed_out {
+                return Err("operation timed out".into());
+            }
+        }
+        let Some(event) = engine.try_recv() else {
+            std::thread::sleep(Duration::from_millis(10));
+            continue;
+        };
+        let pending = match engine.accept(&event) {
+            Ok(pending) => pending,
+            Err(()) => continue,
+        };
+        if event.origin == opclook_contract::model::Origin::Reply(request) {
+            return pending
+                .and_then(|p| {
+                    p.read_terminals
+                        .into_iter()
+                        .find(|terminal| terminal.key == ItemKey::FIRST)
+                })
+                .ok_or_else(|| "read returned no terminal outcome".into());
+        }
+        if let EventKind::Disconnected { reason } = event.kind {
+            return Err(message(&reason, endpoint));
+        }
+    }
+}
+
 fn checked_deadline(now: Instant, timeout: Duration) -> Result<Instant, String> {
     now.checked_add(timeout)
         .ok_or_else(|| "operation timeout is too large".to_string())
@@ -512,6 +564,46 @@ fn response(
         }
     }
 }
+/// Preserve at most one bounded early watch value until its Add succeeds.
+fn add_response(
+    engine: &mut Engine<()>,
+    request: opclook_contract::model::RequestId,
+    timeout: Duration,
+    stop: &Receiver<Result<(), String>>,
+    endpoint: &EndpointSpec,
+    capture_early: bool,
+) -> Result<(EventKind, Option<Result<DataValue, String>>), String> {
+    let deadline = checked_deadline(Instant::now(), timeout)?;
+    let mut early = None;
+    loop {
+        let (event, _) = next_event_accepted(engine, deadline, stop)?;
+        if event.origin == opclook_contract::model::Origin::Reply(request) {
+            return match event.kind {
+                EventKind::Error {
+                    message: reason, ..
+                } => Err(message(&reason, endpoint)),
+                kind => Ok((kind, early)),
+            };
+        }
+        if let EventKind::Disconnected { reason } = &event.kind {
+            return Err(message(reason, endpoint));
+        }
+        if capture_early && matches!(event.origin, opclook_contract::model::Origin::Session(_)) {
+            if let EventKind::Values { values } = event.kind {
+                for (key, value) in values {
+                    if key == ItemKey::FIRST
+                        && !value.quality.waiting_for_initial_data(endpoint.protocol)
+                    {
+                        // Enforce the existing JSON value budget before retaining a copy.
+                        early = Some(data_json(&value, endpoint).map(|_| value));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn write_response(
     engine: &mut Engine<()>,
     request: opclook_contract::model::RequestId,
@@ -655,6 +747,95 @@ fn data_json(data: &DataValue, endpoint: &EndpointSpec) -> Result<Json, String> 
     )
 }
 
+fn read_terminal_json(
+    terminal: &opclook_contract::model::ReadTerminal,
+    endpoint: &EndpointSpec,
+) -> Json {
+    use opclook_contract::model::{ReadNeed, ReadTerminalStatus};
+    let needs: Vec<_> = terminal
+        .needs
+        .iter()
+        .map(|need| match need {
+            ReadNeed::Initial => "initial",
+            ReadNeed::Poll => "poll",
+            ReadNeed::ExplicitRefresh => "refresh",
+            ReadNeed::WriteReadback => "readback",
+            ReadNeed::Direct => "direct",
+        })
+        .collect();
+    let (status, detail) = match &terminal.status {
+        ReadTerminalStatus::Received(value) => (
+            if value.reason.is_none() && value.quality.kind == QualityKind::Good {
+                "received"
+            } else {
+                "unusable"
+            },
+            value.reason.as_ref().map(|v| message(v, endpoint)),
+        ),
+        ReadTerminalStatus::ReceivedMetadata {
+            quality, reason, ..
+        } => (
+            if reason.is_none() && quality.kind == QualityKind::Good {
+                "received"
+            } else {
+                "unusable"
+            },
+            reason.as_ref().map(|v| message(v, endpoint)),
+        ),
+        ReadTerminalStatus::InitialPush {
+            quality, reason, ..
+        } => (
+            if reason.is_none() && quality.kind == QualityKind::Good {
+                "initial_push"
+            } else {
+                "unusable"
+            },
+            reason.as_ref().map(|v| message(v, endpoint)),
+        ),
+        ReadTerminalStatus::MissingResult => ("missing_result", None),
+        ReadTerminalStatus::ServiceError(error) => {
+            ("service_error", Some(message(error, endpoint)))
+        }
+        ReadTerminalStatus::Timeout { seconds } => ("timeout", Some(seconds.to_string())),
+        ReadTerminalStatus::Cancelled(reason) => ("cancelled", Some(format!("{reason:?}"))),
+        ReadTerminalStatus::DispatchFailed(error) => ("dispatch_failed", Some(error.to_string())),
+        ReadTerminalStatus::Unavailable => ("unavailable", None),
+        ReadTerminalStatus::UnexpectedReply => ("unexpected_reply", None),
+    };
+    let metadata = match &terminal.status {
+        ReadTerminalStatus::Received(value) => Some((&value.quality, value.timestamp)),
+        ReadTerminalStatus::InitialPush {
+            quality, timestamp, ..
+        }
+        | ReadTerminalStatus::ReceivedMetadata {
+            quality, timestamp, ..
+        } => Some((quality, *timestamp)),
+        _ => None,
+    };
+    let quality = metadata.map(|(q, timestamp)| json!({ "code":q.code, "kind":match q.kind { QualityKind::Good => "good", QualityKind::Uncertain => "uncertain", QualityKind::Bad => "bad" }, "text":redact(q.text.to_string(), endpoint), "timestamp":timestamp.map(|t| t.to_rfc3339()) }));
+    json!({"request_id":terminal.request_id.map(|id| id.get()), "item_key":terminal.key.get(), "needs":needs, "status":status, "detail":detail, "quality":quality})
+}
+
+fn terminal_data(
+    terminal: &opclook_contract::model::ReadTerminal,
+    endpoint: &EndpointSpec,
+) -> Result<DataValue, String> {
+    use opclook_contract::model::ReadTerminalStatus;
+    match &terminal.status {
+        ReadTerminalStatus::Received(data) => Ok(data.clone()),
+        ReadTerminalStatus::ServiceError(reason) => Err(message(reason, endpoint)),
+        ReadTerminalStatus::MissingResult => Err("server returned no value".into()),
+        ReadTerminalStatus::Timeout { .. } => Err("operation timed out".into()),
+        ReadTerminalStatus::Cancelled(reason) => Err(format!("read cancelled: {reason:?}")),
+        ReadTerminalStatus::DispatchFailed(error) => Err(error.to_string()),
+        ReadTerminalStatus::Unavailable => Err("read unavailable".into()),
+        ReadTerminalStatus::UnexpectedReply => Err("invalid read response".into()),
+        ReadTerminalStatus::InitialPush { .. } | ReadTerminalStatus::ReceivedMetadata { .. } => {
+            Err("expected a read reply".into())
+        }
+    }
+}
+
 fn write_outcome_json(
     node: &str,
     outcome: &opclook_contract::model::WriteOutcome,
@@ -763,11 +944,67 @@ fn parse_write(kind: &str, value: &str) -> Result<Value, String> {
         _ => Err("unsupported write type".into()),
     }
 }
+fn emit_cli(staged: &mut Option<Json>, streaming: bool, record: &Json) -> Result<(), String> {
+    if streaming {
+        output(record)
+    } else {
+        *staged = Some(record.clone());
+        Ok(())
+    }
+}
+
+fn append_observations(
+    record: &mut Json,
+    batch: opclook_contract::read_observer::ReadObservationBatch,
+    endpoint: &EndpointSpec,
+) {
+    if !batch.latest.is_empty() {
+        record["read_observations"] = Json::Array(batch.latest.iter().map(|entry| json!({"session_id":entry.session.get(), "epoch":entry.epoch.map(|v| v.get()), "terminal":read_terminal_json(&entry.terminal, endpoint)})).collect());
+    }
+    if batch.replaced != 0 || batch.overflow != 0 {
+        record["read_terminal_notice"] =
+            json!({"coalesced":batch.replaced,"overflow":batch.overflow});
+    }
+}
+
 fn run(options: &Options) -> Result<(), String> {
     let stop = interrupt_receiver()?;
     let mut engine = Engine::<()>::default();
-    let result = run_with_engine(options, &stop, &mut engine);
+    let observations = std::sync::Arc::new(std::sync::Mutex::new(
+        opclook_contract::read_observer::ReadObservations::default(),
+    ));
+    let sink = observations.clone();
+    engine.set_read_terminal_sink(Some(Box::new(move |session, epoch, terminal| {
+        use opclook_contract::model::ReadTerminalStatus;
+        // Correlated replies are consumed from PendingRequest. The sink owns
+        // uncorrelated initial/pending cancellations and dispatch failures.
+        if terminal.request_id.is_none()
+            || matches!(
+                terminal.status,
+                ReadTerminalStatus::Cancelled(_) | ReadTerminalStatus::DispatchFailed(_)
+            )
+        {
+            sink.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .record(session, epoch, terminal);
+        }
+    })));
+    let mut staged = None;
+    let result = run_with_engine(options, &stop, &mut engine, &observations, &mut staged);
     let shutdown = engine.shutdown();
+    let node = options.command.get(1).map(String::as_str).unwrap_or("");
+    let batch = observations
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .drain();
+    if let Some(mut record) = staged {
+        append_observations(&mut record, batch, &options.endpoint);
+        output(&record)?;
+    } else if !batch.latest.is_empty() || batch.replaced != 0 || batch.overflow != 0 {
+        let mut record = json!({"node_id":node});
+        append_observations(&mut record, batch, &options.endpoint);
+        output(&record)?;
+    }
     let errors: Vec<String> = [("DA", shutdown.da), ("UA", shutdown.ua)]
         .into_iter()
         .filter_map(|(protocol, outcome)| {
@@ -788,6 +1025,10 @@ fn run_with_engine(
     options: &Options,
     stop: &Receiver<Result<(), String>>,
     mut engine: &mut Engine<()>,
+    observations: &std::sync::Arc<
+        std::sync::Mutex<opclook_contract::read_observer::ReadObservations>,
+    >,
+    staged: &mut Option<Json>,
 ) -> Result<(), String> {
     let protocol = options.endpoint.protocol;
     let command = options
@@ -795,6 +1036,7 @@ fn run_with_engine(
         .first()
         .map(String::as_str)
         .ok_or("a command is required")?;
+    let streaming = command == "watch";
     let expected = match command {
         "browse" => 1..=2,
         "read" | "watch" => 2..=2,
@@ -833,7 +1075,11 @@ fn run_with_engine(
         {
             EventKind::Browse { node_id, children } => {
                 let nodes:Vec<Json>=children.iter().map(|n|json!({"node_id":n.node_id,"name":n.name,"kind":match n.kind { opclook_contract::model::NodeKind::Branch => "branch",opclook_contract::model::NodeKind::Item => "item" },"has_children":n.has_children})).collect();
-                output(&json!({"node_id":node_id,"children":nodes}))
+                emit_cli(
+                    staged,
+                    streaming,
+                    &json!({"node_id":node_id,"children":nodes}),
+                )
             }
             _ => Err("unexpected browse response".into()),
         };
@@ -859,12 +1105,24 @@ fn run_with_engine(
             }],
         },
     )?;
-    match response(&mut engine, id, options.timeout, stop, &options.endpoint)? {
+    let (add_reply, early_watch) = add_response(
+        &mut engine,
+        id,
+        options.timeout,
+        stop,
+        &options.endpoint,
+        command == "watch",
+    )?;
+    match add_reply {
         EventKind::AddItems { results } => {
-            for (_, result) in results {
-                if let Err(error) = result {
-                    return Err(message(&error, &options.endpoint));
-                }
+            let [(key, result)] = results.as_slice() else {
+                return Err("invalid add response".into());
+            };
+            if *key != ItemKey::FIRST {
+                return Err("invalid add response key".into());
+            }
+            if let Err(error) = result {
+                return Err(message(error, &options.endpoint));
             }
         }
         _ => return Err("unexpected add response".into()),
@@ -885,7 +1143,7 @@ fn run_with_engine(
             Ok(outcome) => {
                 let mut record = write_outcome_json(&node, &outcome, &options.endpoint);
                 if !outcome.accepted() {
-                    output(&record)?;
+                    emit_cli(staged, streaming, &record)?;
                     return Err(redact(
                         opclook_locale::write_outcome_text(Lang::En, &outcome),
                         &options.endpoint,
@@ -898,19 +1156,21 @@ fn run_with_engine(
                             options.interval,
                             opclook_engine::ReadDemandKind::WriteReadback,
                         )?;
-                        match response(&mut engine, id, options.timeout, stop, &options.endpoint)? {
-                            EventKind::Values { values } => values
-                                .into_iter()
-                                .find_map(|(key, data)| (key == ItemKey::FIRST).then_some(data))
-                                .ok_or_else(|| "read-back returned no value".into()),
-                            _ => Err("unexpected read-back response".into()),
-                        }
+                        let terminal = read_response(
+                            &mut engine,
+                            id,
+                            options.timeout,
+                            stop,
+                            &options.endpoint,
+                        )?;
+                        record["read_terminal"] = read_terminal_json(&terminal, &options.endpoint);
+                        terminal_data(&terminal, &options.endpoint)
                     })();
                     let readback_result = apply_readback(&mut record, observed, &options.endpoint);
-                    output(&record)?;
+                    emit_cli(staged, streaming, &record)?;
                     readback_result?;
                 } else {
-                    output(&record)?;
+                    emit_cli(staged, streaming, &record)?;
                 }
                 Ok(())
             }
@@ -940,23 +1200,49 @@ fn run_with_engine(
                 },
             )?
         };
-        return match response(&mut engine, id, options.timeout, stop, &options.endpoint)? {
-            EventKind::Values { values } => {
-                let data = values
-                    .into_iter()
-                    .find_map(|(key, data)| (key == ItemKey::FIRST).then_some(data))
-                    .ok_or("server returned no value")?;
-                output(&json!({"node_id":node,"data":data_json(&data,&options.endpoint)?}))?;
+        let terminal = read_response(&mut engine, id, options.timeout, stop, &options.endpoint)?;
+        let summary = read_terminal_json(&terminal, &options.endpoint);
+        match terminal_data(&terminal, &options.endpoint) {
+            Ok(data) => {
+                emit_cli(
+                    staged,
+                    streaming,
+                    &json!({"node_id":node,"data":data_json(&data,&options.endpoint)?, "read_terminal":summary}),
+                )?;
                 if let Some(reason) = data.reason {
                     Err(message(&reason, &options.endpoint))
+                } else if data.quality.kind != QualityKind::Good {
+                    Err("read returned Bad or Uncertain quality".into())
                 } else {
                     Ok(())
                 }
             }
-            _ => Err("unexpected read response".into()),
-        };
+            Err(error) => {
+                emit_cli(
+                    staged,
+                    streaming,
+                    &json!({"node_id":node,"read_terminal":summary}),
+                )?;
+                Err(error)
+            }
+        }?;
+        return Ok(());
     }
     let mut count = 0usize;
+    if let Some(data) = early_watch {
+        let data = data?;
+        let mut record = json!({"node_id":node,"data":data_json(&data, &options.endpoint)?});
+        let batch = observations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .drain();
+        append_observations(&mut record, batch, &options.endpoint);
+        emit_cli(staged, streaming, &record)?;
+        count += 1;
+        if let Some(reason) = data.reason {
+            return Err(message(&reason, &options.endpoint));
+        }
+    }
     let mut event_batch = 0usize;
     while options.count.is_none_or(|limit| count < limit) {
         if event_batch >= 64 {
@@ -966,11 +1252,14 @@ fn run_with_engine(
         if stopped(stop)? {
             break;
         }
-        if engine.has_expired_operation(
+        let now = Instant::now();
+        if let Some(request) = engine.expired_read_request(SessionId::FIRST, now, options.timeout) {
+            engine.timeout_read_request(SessionId::FIRST, request, options.timeout.as_secs());
+        } else if engine.has_expired_operation(
             SessionId::FIRST,
-            Instant::now(),
+            now,
             options.timeout,
-            &[Operation::Read, Operation::Test],
+            &[Operation::Test],
         ) {
             return Err("operation timed out".into());
         }
@@ -981,24 +1270,71 @@ fn run_with_engine(
             continue;
         };
         event_batch += 1;
-        if engine.accept(&event).is_err() {
-            continue;
-        }
+        let accepted = match engine.accept(&event) {
+            Ok(pending) => pending,
+            Err(()) => continue,
+        };
+        let is_read_reply = accepted
+            .as_ref()
+            .is_some_and(|pending| pending.operation == Operation::Read);
+        let mut terminals = accepted.map(|p| p.read_terminals).unwrap_or_default();
         match event.kind {
             EventKind::Values { values } => {
                 for (key, data) in values {
                     if key == ItemKey::FIRST {
-                        output(
-                            &json!({"node_id":node,"data":data_json(&data,&options.endpoint)?}),
-                        )?;
+                        let terminal = terminals
+                            .iter()
+                            .position(|t| t.key == key)
+                            .map(|index| terminals.remove(index));
+                        if is_read_reply
+                            && !terminal.as_ref().is_some_and(|t| {
+                                matches!(
+                                    t.status,
+                                    opclook_contract::model::ReadTerminalStatus::Received(_)
+                                )
+                            })
+                        {
+                            if let Some(terminal) = terminal {
+                                output(
+                                    &json!({"node_id":node,"read_terminal":read_terminal_json(&terminal, &options.endpoint)}),
+                                )?;
+                            }
+                            continue;
+                        }
+                        let mut record =
+                            json!({"node_id":node,"data":data_json(&data,&options.endpoint)?});
+                        if let Some(terminal) = terminal {
+                            record["read_terminal"] =
+                                read_terminal_json(&terminal, &options.endpoint);
+                        }
+                        let batch = observations
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .drain();
+                        append_observations(&mut record, batch, &options.endpoint);
+                        emit_cli(staged, streaming, &record)?;
                         count += 1;
                         if let Some(reason) = data.reason {
                             return Err(message(&reason, &options.endpoint));
                         }
                     }
                 }
+                for terminal in terminals {
+                    emit_cli(
+                        staged,
+                        streaming,
+                        &json!({"node_id":node,"read_terminal":read_terminal_json(&terminal, &options.endpoint)}),
+                    )?;
+                }
             }
             EventKind::Error { message: error, .. } | EventKind::Disconnected { reason: error } => {
+                for terminal in terminals {
+                    emit_cli(
+                        staged,
+                        streaming,
+                        &json!({"node_id":node,"read_terminal":read_terminal_json(&terminal, &options.endpoint)}),
+                    )?;
+                }
                 return Err(message(&error, &options.endpoint));
             }
             _ => {}
@@ -1033,6 +1369,62 @@ fn main() {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn terminal_json_preserves_unusable_quality_and_redacts_reason() {
+        use super::*;
+        use opclook_contract::model::{Quality, ReadNeed, ReadTerminal, ReadTerminalStatus};
+        let mut endpoint = EndpointSpec::ua("opc.tcp://localhost:4840");
+        endpoint.password = "secret".into();
+        let terminal = ReadTerminal {
+            request_id: None,
+            key: ItemKey::FIRST,
+            needs: vec![ReadNeed::Initial],
+            status: ReadTerminalStatus::InitialPush {
+                quality: Quality::from_ua(0x4000_0000, "uncertain"),
+                timestamp: None,
+                reason: Some(BackendMsg::Raw("secret failure".into())),
+            },
+        };
+        let json = read_terminal_json(&terminal, &endpoint);
+        assert_eq!(json["status"], "unusable");
+        assert_eq!(json["quality"]["kind"], "uncertain");
+        assert!(!json.to_string().contains("secret"));
+    }
+
+    #[test]
+    fn one_shot_json_stages_one_record_with_observation_counts() {
+        use super::*;
+        use opclook_contract::model::{ReadNeed, ReadTerminal, ReadTerminalStatus};
+        let endpoint = EndpointSpec::ua("opc.tcp://localhost:4840");
+        let terminal = ReadTerminal {
+            request_id: None,
+            key: ItemKey::FIRST,
+            needs: vec![ReadNeed::Initial],
+            status: ReadTerminalStatus::MissingResult,
+        };
+        let mut buffer = opclook_contract::read_observer::ReadObservations::default();
+        buffer.record(SessionId::FIRST, None, &terminal);
+        buffer.record(SessionId::FIRST, None, &terminal);
+        let mut staged = None;
+        emit_cli(
+            &mut staged,
+            false,
+            &json!({"node_id":"tag", "data": {"value": 1}}),
+        )
+        .unwrap();
+        let mut record = staged.unwrap();
+        append_observations(&mut record, buffer.drain(), &endpoint);
+        assert_eq!(record["data"]["value"], 1);
+        assert_eq!(
+            record["read_observations"][0]["terminal"]["status"],
+            "missing_result"
+        );
+        assert_eq!(record["read_terminal_notice"]["coalesced"], 1);
+        let mut bytes = Vec::new();
+        output_to(&record, &mut bytes).unwrap();
+        assert!(serde_json::from_slice::<Json>(&bytes).is_ok());
+    }
+
     #[test]
     fn browse_reports_unavailable_session_before_dispatch() {
         let mut engine = opclook_engine::Engine::<()>::default();

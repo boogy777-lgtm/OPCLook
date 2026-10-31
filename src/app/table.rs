@@ -62,8 +62,10 @@ impl App {
                 value: Value::Empty,
                 quality: RowQuality::NoData(tr(self.lang(), Tr::NoData).to_string()),
                 timestamp: None,
+                last_read: None,
                 description: String::new(),
                 pending: true,
+                pending_push: None,
                 poll_only: false,
                 changed_at: None,
                 value_text_cache: Default::default(),
@@ -104,6 +106,8 @@ impl App {
         let mut specs = Vec::new();
         for row in self.rows.iter_mut().filter(|r| r.session == session) {
             row.pending = true;
+            row.pending_push = None;
+            row.last_read = None;
             // The new session decides again which items it can push (P1).
             row.poll_only = false;
             specs.push(ItemSpec {
@@ -124,6 +128,7 @@ impl App {
             {
                 for row in self.rows.iter_mut().filter(|row| keys.contains(&row.key)) {
                     row.pending = false;
+                    row.pending_push = None;
                 }
             }
         }

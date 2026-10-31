@@ -54,6 +54,8 @@ use self::present::{is_loopback_host, operation_label};
 
 pub struct App {
     engine: Engine<PendingCtx>,
+    read_observations:
+        std::sync::Arc<std::sync::Mutex<opclook_contract::read_observer::ReadObservations>>,
     pub settings: Settings,
     /// Lazily populated adapter inventory + current network lease.
     pub network: NetworkState,
@@ -308,8 +310,19 @@ impl App {
     fn new_inner(settings: Settings) -> Self {
         let script_text = settings.view.script.clone();
         let lang = settings.lang();
+        let read_observations = std::sync::Arc::new(std::sync::Mutex::new(
+            opclook_contract::read_observer::ReadObservations::default(),
+        ));
+        let sink = read_observations.clone();
+        let mut engine = Engine::default();
+        engine.set_read_terminal_sink(Some(Box::new(move |session, epoch, terminal| {
+            sink.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .record(session, epoch, terminal);
+        })));
         let mut app = Self {
-            engine: Engine::default(),
+            engine,
+            read_observations,
             settings,
             network: NetworkState::default(),
             sessions: Vec::new(),
@@ -699,6 +712,7 @@ impl App {
             .set_auto_reconnect(self.settings.view.options.auto_reconnect);
         self.poll_events();
         self.tick();
+        self.drain_read_observations();
         self.sync_table_view();
         crate::ui::draw(self, ui);
         ui.ctx().request_repaint_after(Duration::from_millis(200));
@@ -894,6 +908,7 @@ impl App {
         let text = tr(self.lang(), Tr::StaleData).to_string();
         for row in self.rows.iter_mut().filter(|r| r.session == session) {
             row.quality = RowQuality::Error(text.clone());
+            row.pending_push = None;
         }
     }
 
@@ -1076,8 +1091,10 @@ impl App {
                 text: "GOOD".into(),
             }),
             timestamp: None,
+            last_read: None,
             description: String::new(),
             pending: false,
+            pending_push: None,
             poll_only: false,
             changed_at: None,
             value_text_cache: Default::default(),
@@ -1337,6 +1354,7 @@ impl eframe::App for App {
             let _ = self.engine.disconnect_untracked(session, protocol);
         }
         let outcome = self.engine.shutdown();
+        self.drain_read_observations();
         let errors = exit_messages(save_error, self.lang(), outcome);
         if !errors.is_empty() {
             rfd::MessageDialog::new()

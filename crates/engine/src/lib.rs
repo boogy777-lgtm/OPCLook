@@ -346,10 +346,12 @@ struct DeferredRoute {
     kind: CommandKind,
     ticket: RouteTicket,
 }
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 struct PendingAdd {
     poll_only: bool,
     initial_seen: bool,
+    /// Keep only status metadata, never a second copy of a potentially large value.
+    initial_status: Option<opclook_contract::model::ReadTerminalStatus>,
 }
 pub struct Engine<C> {
     gateway: Gateway,
@@ -1698,11 +1700,20 @@ impl<C> Engine<C> {
                 }
             }
         }
+        let mut initial_terminals = Vec::new();
         if let (Some(additions), EventKind::AddItems { results }) = (additions, &event.kind)
             && let Some(view) = self.sessions.get_mut(&session)
         {
+            let mut seen = HashSet::new();
+            let mut duplicate = HashSet::new();
+            for (key, _) in results {
+                if !seen.insert(*key) {
+                    duplicate.insert(*key);
+                }
+            }
             for (key, result) in results {
-                if result.is_ok()
+                if !duplicate.contains(key)
+                    && result.is_ok()
                     && let Some(addition) = additions.get(key)
                 {
                     view.items
@@ -1711,6 +1722,13 @@ impl<C> Engine<C> {
                         .or_insert(addition.poll_only);
                     if !addition.initial_seen {
                         view.pending_initial.insert(*key, now);
+                    } else if let Some(status) = &addition.initial_status {
+                        initial_terminals.push(opclook_contract::model::ReadTerminal {
+                            request_id: None,
+                            key: *key,
+                            needs: vec![opclook_contract::model::ReadNeed::Initial],
+                            status: status.clone(),
+                        });
                     }
                     view.poll_defer_since.insert(*key, now);
                 }
@@ -1732,10 +1750,34 @@ impl<C> Engine<C> {
                         && let Some(addition) = additions.get_mut(key)
                     {
                         addition.initial_seen = true;
+                        addition.initial_status =
+                            Some(opclook_contract::model::ReadTerminalStatus::InitialPush {
+                                quality: value.quality.clone(),
+                                timestamp: value.timestamp,
+                                reason: value.reason.clone(),
+                            });
                     }
                 }
-                view.pending_initial.remove(key);
+                if view.pending_initial.remove(key).is_some() {
+                    initial_terminals.push(opclook_contract::model::ReadTerminal {
+                        request_id: None,
+                        key: *key,
+                        needs: vec![opclook_contract::model::ReadNeed::Initial],
+                        status: opclook_contract::model::ReadTerminalStatus::InitialPush {
+                            quality: value.quality.clone(),
+                            timestamp: value.timestamp,
+                            reason: value.reason.clone(),
+                        },
+                    });
+                }
             }
+        }
+        if !initial_terminals.is_empty() {
+            let epoch = self
+                .sessions
+                .get(&session)
+                .and_then(|view| view.connection_id);
+            self.notify_read_terminals(session, epoch, &initial_terminals);
         }
         let correlated_read = pending
             .as_ref()
@@ -2062,6 +2104,35 @@ impl<C> Engine<C> {
         );
         operations
     }
+    /// Queue the caller's already-expired Read deadline using the same
+    /// correlation and late-reply rejection as `expire_requests`.
+    pub fn timeout_read_request(
+        &mut self,
+        session: SessionId,
+        request: RequestId,
+        seconds: u64,
+    ) -> bool {
+        let owner = Owner::Session(session);
+        if self.timeout_queued.contains(&(owner, request))
+            || !self
+                .requests
+                .get(&(owner, request))
+                .is_some_and(|pending| pending.operation == Operation::Read)
+        {
+            return false;
+        }
+        self.timeout_queued.insert((owner, request));
+        self.route_events.push_back(Event {
+            owner,
+            origin: Origin::Reply(request),
+            kind: EventKind::Error {
+                operation: Operation::Read,
+                message: BackendMsg::RequestTimeout { seconds },
+            },
+        });
+        true
+    }
+
     /// Queue one correlated timeout event per expired request. The engine
     /// cancels unstarted preparation and tells a late Connect to disconnect.
     pub fn expire_requests(&mut self, now: Instant, configured: u64) -> Vec<SessionId> {
@@ -2132,6 +2203,21 @@ impl<C> Engine<C> {
                     .then(|| (sid, id, p.operation, p.ctx.clone(), limit.as_secs()))
             })
             .collect()
+    }
+    /// Return the first Read whose caller-defined deadline has elapsed.
+    pub fn expired_read_request(
+        &self,
+        session: SessionId,
+        now: Instant,
+        limit: Duration,
+    ) -> Option<RequestId> {
+        self.requests.iter().find_map(|(&(owner, id), pending)| {
+            (owner == Owner::Session(session)
+                && pending.operation == Operation::Read
+                && now.saturating_duration_since(pending.sent) >= limit
+                && !self.timeout_queued.contains(&(owner, id)))
+            .then_some(id)
+        })
     }
     pub fn has_expired_operation(
         &self,
@@ -3274,6 +3360,284 @@ mod tests {
             matches!(&result.read_terminals.iter().find(|t| t.key == key(1)).unwrap().status,
             ReadTerminalStatus::Received(v) if v.quality.kind == QualityKind::Uncertain && matches!(&v.reason, Some(BackendMsg::Raw(detail)) if detail == "native-detail"))
         );
+    }
+
+    #[test]
+    fn initial_push_before_add_reply_emits_only_after_success() {
+        use opclook_contract::model::{
+            DataValue, ItemInfo, ItemSpec, ReadNeed, ReadTerminalStatus,
+        };
+        let now = Instant::now();
+        for accepted in [false, true] {
+            let mut engine = cached_poll_engine(now);
+            let view = engine.sessions.get_mut(&sid(1)).unwrap();
+            view.endpoint.acquisition.as_mut().unwrap().update_mode =
+                opclook_contract::model::UpdateMode::Subscription;
+            view.items.clear();
+            let observed = terminal_observer(&mut engine);
+            let add = engine
+                .send(
+                    sid(1),
+                    Protocol::OpcUa,
+                    CommandKind::AddItems {
+                        items: vec![ItemSpec {
+                            key: key(1),
+                            item_id: "tag".into(),
+                        }],
+                    },
+                    (),
+                )
+                .unwrap();
+            let push = Event {
+                owner: owner(1),
+                origin: Origin::Session(rid(77)),
+                kind: EventKind::Values {
+                    values: vec![(key(1), DataValue::bad(BackendMsg::NoConnection))],
+                },
+            };
+            engine.accept_at(&push, now).unwrap();
+            assert!(observed.lock().unwrap().is_empty());
+            let result = if accepted {
+                Ok(ItemInfo {
+                    data_type: None,
+                    type_id: None,
+                    writable: false,
+                })
+            } else {
+                Err(BackendMsg::NoConnection)
+            };
+            engine
+                .accept_at(
+                    &Event {
+                        owner: owner(1),
+                        origin: Origin::Reply(add),
+                        kind: EventKind::AddItems {
+                            results: vec![(key(1), result)],
+                        },
+                    },
+                    now,
+                )
+                .unwrap();
+            let seen = observed.lock().unwrap().clone();
+            assert_eq!(seen.len(), usize::from(accepted));
+            if accepted {
+                assert!(matches!(
+                    &seen[0].2.status,
+                    ReadTerminalStatus::InitialPush {
+                        reason: Some(BackendMsg::NoConnection),
+                        ..
+                    }
+                ));
+                assert_eq!(seen[0].2.needs, vec![ReadNeed::Initial]);
+            }
+        }
+    }
+
+    #[test]
+    fn initial_push_after_add_completes_only_once() {
+        use opclook_contract::model::{DataValue, ReadTerminalStatus};
+        let now = Instant::now();
+        let mut engine = cached_poll_engine(now);
+        let view = engine.sessions.get_mut(&sid(1)).unwrap();
+        view.endpoint.acquisition.as_mut().unwrap().update_mode =
+            opclook_contract::model::UpdateMode::Subscription;
+        view.pending_initial.insert(key(1), now);
+        let observed = terminal_observer(&mut engine);
+        let push = Event {
+            owner: owner(1),
+            origin: Origin::Session(rid(77)),
+            kind: EventKind::Values {
+                values: vec![(key(1), DataValue::bad(BackendMsg::NoConnection))],
+            },
+        };
+        engine.accept_at(&push, now).unwrap();
+        engine.accept_at(&push, now).unwrap();
+        let seen = observed.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1);
+        assert!(matches!(
+            &seen[0].2.status,
+            ReadTerminalStatus::InitialPush { .. }
+        ));
+    }
+
+    #[test]
+    fn caller_read_deadline_queues_one_correlated_terminal_and_rejects_late() {
+        use opclook_contract::model::ReadTerminalStatus;
+        let now = Instant::now();
+        let mut engine = cached_poll_engine(now);
+        let observed = terminal_observer(&mut engine);
+        let read = dispatch_due(&mut engine, now);
+        assert!(engine.timeout_read_request(sid(1), read, 1));
+        assert!(!engine.timeout_read_request(sid(1), read, 1));
+        let late = Event {
+            owner: owner(1),
+            origin: Origin::Reply(read),
+            kind: EventKind::Values { values: vec![] },
+        };
+        assert!(engine.accept_at(&late, now).is_err());
+        let timeout = engine.try_recv().unwrap();
+        let result = engine.accept_at(&timeout, now).unwrap().unwrap();
+        assert!(
+            result
+                .read_terminals
+                .iter()
+                .all(|t| matches!(t.status, ReadTerminalStatus::Timeout { seconds: 1 }))
+        );
+        assert_eq!(observed.lock().unwrap().len(), 2);
+        assert!(!engine.timeout_read_request(sid(1), read, 1));
+    }
+
+    #[test]
+    fn initial_waiting_and_old_epoch_push_never_finish_initial_need() {
+        use opclook_contract::model::{DataValue, ItemInfo, ItemSpec, Quality, Value};
+        let now = Instant::now();
+        let mut engine = cached_poll_engine(now);
+        let view = engine.sessions.get_mut(&sid(1)).unwrap();
+        view.endpoint.acquisition.as_mut().unwrap().update_mode =
+            opclook_contract::model::UpdateMode::Subscription;
+        view.items.clear();
+        let observed = terminal_observer(&mut engine);
+        let add = engine
+            .send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::AddItems {
+                    items: vec![ItemSpec {
+                        key: key(1),
+                        item_id: "tag".into(),
+                    }],
+                },
+                (),
+            )
+            .unwrap();
+        let value = DataValue {
+            value: Value::Empty,
+            quality: Quality::from_ua(0x8032_0000, "waiting"),
+            timestamp: None,
+            reason: None,
+        };
+        let push = |epoch| Event {
+            owner: owner(1),
+            origin: Origin::Session(epoch),
+            kind: EventKind::Values {
+                values: vec![(key(1), value.clone())],
+            },
+        };
+        assert!(engine.accept_at(&push(rid(76)), now).is_err());
+        engine.accept_at(&push(rid(77)), now).unwrap();
+        engine
+            .accept_at(
+                &Event {
+                    owner: owner(1),
+                    origin: Origin::Reply(add),
+                    kind: EventKind::AddItems {
+                        results: vec![(
+                            key(1),
+                            Ok(ItemInfo {
+                                data_type: None,
+                                type_id: None,
+                                writable: false,
+                            }),
+                        )],
+                    },
+                },
+                now,
+            )
+            .unwrap();
+        assert!(observed.lock().unwrap().is_empty());
+        assert!(
+            engine.sessions[&sid(1)]
+                .pending_initial
+                .contains_key(&key(1))
+        );
+    }
+
+    #[test]
+    fn initial_push_during_reserved_read_does_not_finish_read_need() {
+        use opclook_contract::model::{DataValue, UpdateMode};
+        let now = Instant::now();
+        let mut engine = cached_poll_engine(now);
+        let view = engine.sessions.get_mut(&sid(1)).unwrap();
+        view.endpoint.acquisition.as_mut().unwrap().update_mode = UpdateMode::Subscription;
+        view.pending_initial
+            .insert(key(1), now - Duration::from_secs(2));
+        let observed = terminal_observer(&mut engine);
+        let due = engine.due(now, Duration::ZERO, None);
+        assert!(matches!(due.as_slice(), [Due::Read { .. }]));
+        engine
+            .accept_at(
+                &Event {
+                    owner: owner(1),
+                    origin: Origin::Session(rid(77)),
+                    kind: EventKind::Values {
+                        values: vec![(key(1), DataValue::bad(BackendMsg::NoConnection))],
+                    },
+                },
+                now,
+            )
+            .unwrap();
+        assert!(observed.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn duplicate_registration_never_emits_initial_push_success() {
+        use opclook_contract::model::{DataValue, ItemInfo, ItemSpec};
+        let now = Instant::now();
+        let mut engine = cached_poll_engine(now);
+        let view = engine.sessions.get_mut(&sid(1)).unwrap();
+        view.endpoint.acquisition.as_mut().unwrap().update_mode =
+            opclook_contract::model::UpdateMode::Subscription;
+        view.items.clear();
+        let observed = terminal_observer(&mut engine);
+        let add = engine
+            .send(
+                sid(1),
+                Protocol::OpcUa,
+                CommandKind::AddItems {
+                    items: vec![ItemSpec {
+                        key: key(1),
+                        item_id: "tag".into(),
+                    }],
+                },
+                (),
+            )
+            .unwrap();
+        engine
+            .accept_at(
+                &Event {
+                    owner: owner(1),
+                    origin: Origin::Session(rid(77)),
+                    kind: EventKind::Values {
+                        values: vec![(key(1), DataValue::bad(BackendMsg::NoConnection))],
+                    },
+                },
+                now,
+            )
+            .unwrap();
+        engine
+            .accept_at(
+                &Event {
+                    owner: owner(1),
+                    origin: Origin::Reply(add),
+                    kind: EventKind::AddItems {
+                        results: vec![
+                            (
+                                key(1),
+                                Ok(ItemInfo {
+                                    data_type: None,
+                                    type_id: None,
+                                    writable: false,
+                                }),
+                            ),
+                            (key(1), Err(BackendMsg::NoConnection)),
+                        ],
+                    },
+                },
+                now,
+            )
+            .unwrap();
+        assert!(observed.lock().unwrap().is_empty());
+        assert!(!engine.sessions[&sid(1)].items.contains_key(&key(1)));
     }
 
     #[test]

@@ -33,6 +33,191 @@ impl App {
     pub(super) fn poll_events(&mut self) {
         while let Some(event) = self.engine.try_recv() {
             self.on_event(event);
+            self.drain_read_observations();
+        }
+        self.drain_read_observations();
+    }
+
+    /// Project the latest observation per key on the UI thread. No sink
+    /// callback performs UI work or I/O; superseded and overflow counts are
+    /// made visible rather than silently hidden.
+    pub(super) fn drain_read_observations(&mut self) {
+        use crate::bff::model::{ReadCancelReason, ReadTerminalStatus};
+        let batch = self
+            .read_observations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .drain();
+        if batch.replaced != 0 || batch.overflow != 0 {
+            self.journal.warn_l(
+                Tr::ReadTerminalSummaryLoss,
+                &[&batch.replaced, &batch.overflow],
+            );
+        }
+        for observation in batch.latest {
+            let session = observation.session;
+            let terminal = &observation.terminal;
+            let lang = self.lang();
+            let (detail, failed) = match &terminal.status {
+                ReadTerminalStatus::Received(value) => {
+                    let reason = value
+                        .reason
+                        .as_ref()
+                        .map(|r| self.session_backend_text(session, r))
+                        .unwrap_or_default();
+                    let quality = self.session_backend_text(
+                        session,
+                        &crate::bff::model::BackendMsg::Raw(value.quality.text.to_string()),
+                    );
+                    (
+                        fmt(lang, Tr::ReadTerminalReceived, &[&quality, &reason]),
+                        value.quality.kind != QualityKind::Good || value.reason.is_some(),
+                    )
+                }
+                ReadTerminalStatus::ReceivedMetadata {
+                    quality, reason, ..
+                } => {
+                    let failed = quality.kind != QualityKind::Good || reason.is_some();
+                    let reason = reason
+                        .as_ref()
+                        .map(|r| self.session_backend_text(session, r))
+                        .unwrap_or_default();
+                    let text = self.session_backend_text(
+                        session,
+                        &crate::bff::model::BackendMsg::Raw(quality.text.to_string()),
+                    );
+                    (
+                        fmt(lang, Tr::ReadTerminalReceived, &[&text, &reason]),
+                        failed,
+                    )
+                }
+                ReadTerminalStatus::InitialPush {
+                    quality, reason, ..
+                } => {
+                    let has_reason = reason.is_some();
+                    let reason = reason
+                        .as_ref()
+                        .map(|r| self.session_backend_text(session, r))
+                        .unwrap_or_default();
+                    let text = self.session_backend_text(
+                        session,
+                        &crate::bff::model::BackendMsg::Raw(quality.text.to_string()),
+                    );
+                    (
+                        fmt(lang, Tr::ReadTerminalInitial, &[&text, &reason]),
+                        quality.kind != QualityKind::Good || has_reason,
+                    )
+                }
+                ReadTerminalStatus::MissingResult => {
+                    (tr(lang, Tr::ReadTerminalMissing).to_string(), true)
+                }
+                ReadTerminalStatus::ServiceError(reason) => (
+                    fmt(
+                        lang,
+                        Tr::ReadTerminalServiceError,
+                        &[&self.session_backend_text(session, reason)],
+                    ),
+                    true,
+                ),
+                ReadTerminalStatus::Timeout { seconds } => {
+                    (fmt(lang, Tr::ReadTerminalTimeout, &[seconds]), true)
+                }
+                ReadTerminalStatus::Cancelled(reason) => {
+                    let reason = tr(
+                        lang,
+                        match reason {
+                            ReadCancelReason::Removed => Tr::ReadCancelRemoved,
+                            ReadCancelReason::Disconnected => Tr::ReadCancelDisconnected,
+                            ReadCancelReason::EpochChanged => Tr::ReadCancelEpoch,
+                            ReadCancelReason::Cancelled => Tr::ReadCancelExplicit,
+                        },
+                    );
+                    (fmt(lang, Tr::ReadTerminalCancelled, &[&reason]), false)
+                }
+                ReadTerminalStatus::DispatchFailed(reason) => (
+                    fmt(
+                        lang,
+                        Tr::ReadTerminalDispatchFailed,
+                        &[&opclook_locale::send_error_text(lang, *reason)],
+                    ),
+                    true,
+                ),
+                ReadTerminalStatus::Unavailable => {
+                    (tr(lang, Tr::ReadTerminalUnavailable).to_string(), true)
+                }
+                ReadTerminalStatus::UnexpectedReply => {
+                    (tr(lang, Tr::ReadTerminalUnexpected).to_string(), true)
+                }
+            };
+            let request = terminal
+                .request_id
+                .map(|id| id.to_string())
+                .unwrap_or_default();
+            let epoch = observation
+                .epoch
+                .map(|id| id.to_string())
+                .unwrap_or_default();
+            let needs = terminal
+                .needs
+                .iter()
+                .map(|need| {
+                    tr(
+                        lang,
+                        match need {
+                            crate::bff::model::ReadNeed::Initial => Tr::ReadNeedInitial,
+                            crate::bff::model::ReadNeed::Poll => Tr::ReadNeedPoll,
+                            crate::bff::model::ReadNeed::ExplicitRefresh => Tr::ReadNeedRefresh,
+                            crate::bff::model::ReadNeed::WriteReadback => Tr::ReadNeedReadback,
+                            crate::bff::model::ReadNeed::Direct => Tr::ReadNeedDirect,
+                        },
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let routine_poll = !failed
+                && terminal
+                    .needs
+                    .iter()
+                    .all(|need| *need == crate::bff::model::ReadNeed::Poll);
+            if failed {
+                self.journal.warn_l(
+                    Tr::ReadTerminalLine,
+                    &[&session, &epoch, &terminal.key, &request, &needs, &detail],
+                );
+            } else if !routine_poll {
+                self.journal.info_l(
+                    Tr::ReadTerminalLine,
+                    &[&session, &epoch, &terminal.key, &request, &needs, &detail],
+                );
+            }
+            // A late/removed registration may be logged, but must not mutate a
+            // row belonging to another epoch or a replacement registration.
+            if self.engine.connection_id(session) == observation.epoch {
+                if let Some(row) = self
+                    .row_position(terminal.key)
+                    .and_then(|i| self.rows.get_mut(i))
+                    .filter(|row| row.session == session)
+                {
+                    row.last_read = Some(observation.clone());
+                    // Server quality is already projected from Values; do not
+                    // overwrite its native Bad/Uncertain code with a summary.
+                    if failed
+                        && !matches!(
+                            terminal.status,
+                            ReadTerminalStatus::Received(_)
+                                | ReadTerminalStatus::ReceivedMetadata { .. }
+                                | ReadTerminalStatus::InitialPush { .. }
+                        )
+                    {
+                        row.quality = RowQuality::Error(detail.clone());
+                        row.pending = false;
+                        row.invalidate_display();
+                    }
+                }
+                if failed {
+                    self.status = detail;
+                }
+            }
         }
     }
 
@@ -264,10 +449,48 @@ impl App {
         let lang = self.lang();
         match kind {
             EventKind::AddItems { results } => {
+                let mut seen = HashSet::new();
+                let mut duplicates = HashSet::new();
+                for (key, _) in &results {
+                    if !seen.insert(*key) {
+                        duplicates.insert(*key);
+                    }
+                }
+                for key in &duplicates {
+                    let message = tr(lang, Tr::AddDuplicateResult).to_string();
+                    if let Some(row) = self
+                        .row_position(*key)
+                        .and_then(|i| self.rows.get_mut(i))
+                        .filter(|row| row.session == session)
+                    {
+                        row.pending = false;
+                        row.pending_push = None;
+                        row.quality = RowQuality::Error(message.clone());
+                        self.journal.error(message);
+                    }
+                }
                 for (key, result) in results {
+                    if duplicates.contains(&key) {
+                        continue;
+                    }
                     match result {
                         Ok(info) => {
+                            let early = self
+                                .row_position(key)
+                                .and_then(|i| self.rows.get_mut(i))
+                                .filter(|row| row.session == session)
+                                .and_then(|row| row.pending_push.take());
                             self.apply_item_info(key, info);
+                            if let Some(value) = early {
+                                self.on_data_event(
+                                    session,
+                                    EventKind::Values {
+                                        values: vec![(key, value)],
+                                    },
+                                    PendingCtx::None,
+                                    None,
+                                );
+                            }
                         }
                         Err(message) => {
                             let message = self.session_backend_text(session, &message);
@@ -275,6 +498,7 @@ impl App {
                                 self.row_position(key).and_then(|p| self.rows.get_mut(p))
                             {
                                 row.pending = false;
+                                row.pending_push = None;
                                 row.quality = RowQuality::Error(message.clone());
                                 let name = row.display_name.clone();
                                 self.journal.error_l(Tr::AddFailedName, &[&name, &message]);
@@ -426,6 +650,7 @@ impl App {
                 }
             }
             EventKind::Values { values } => {
+                let protocol = self.session_protocol(session);
                 for (key, value) in values {
                     let reason_text = value
                         .reason
@@ -435,6 +660,19 @@ impl App {
                         self.detail_revision = self.detail_revision.wrapping_add(1);
                     }
                     if let Some(row) = self.row_position(key).and_then(|p| self.rows.get_mut(p)) {
+                        if row.session != session {
+                            continue;
+                        }
+                        if row.pending {
+                            if request_id.is_none()
+                                && !value
+                                    .quality
+                                    .waiting_for_initial_data(protocol.unwrap_or(Protocol::OpcUa))
+                            {
+                                row.pending_push = Some(value);
+                            }
+                            continue;
+                        }
                         // UI4: remember when the value really changed. The
                         // first value of a row (still pending / waiting) is
                         // not a change.
@@ -586,6 +824,7 @@ impl App {
                             self.row_position(*key).and_then(|p| self.rows.get_mut(p))
                         {
                             row.pending = false;
+                            row.pending_push = None;
                             row.quality = RowQuality::Error(message.clone());
                         }
                     }

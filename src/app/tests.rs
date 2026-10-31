@@ -3726,3 +3726,180 @@ fn p4_palette_captures_connection_when_opened() {
         Err(Tr::PaletteConnectionChanged)
     );
 }
+
+#[test]
+fn read_terminal_missing_is_visible_on_correct_row_once() {
+    use crate::journal::JournalMessage;
+    let (_ctx, mut app, _) = profile_fixture();
+    let session = SessionId::FIRST;
+    let key = app.seed_row(session, "tag", "Tag", Value::I64(10));
+    app.sync_fixture_sessions();
+    app.engine.request_refresh(session, key).unwrap();
+    let due = app
+        .engine
+        .due(Instant::now(), Duration::from_secs(60), None);
+    let [opclook_engine::Due::Read { keys, permit, .. }] = due.as_slice() else {
+        panic!("read due")
+    };
+    let request = app
+        .engine
+        .send_due_read(
+            session,
+            Protocol::OpcUa,
+            keys.clone(),
+            *permit,
+            PendingCtx::None,
+        )
+        .unwrap();
+    app.on_event(Event {
+        owner: session.into(),
+        origin: Origin::Reply(request),
+        kind: EventKind::Values { values: vec![] },
+    });
+    app.drain_read_observations();
+    assert!(matches!(
+        &app.rows.iter().find(|row| row.key == key).unwrap().quality,
+        RowQuality::Error(_)
+    ));
+    assert!(matches!(
+        &app.rows
+            .iter()
+            .find(|row| row.key == key)
+            .unwrap()
+            .last_read
+            .as_ref()
+            .unwrap()
+            .terminal
+            .status,
+        crate::bff::model::ReadTerminalStatus::MissingResult
+    ));
+    assert_eq!(
+        app.journal
+            .entries()
+            .iter()
+            .filter(|entry| matches!(
+                &entry.message,
+                JournalMessage::Localized {
+                    key: Tr::ReadTerminalLine,
+                    ..
+                }
+            ))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn removed_row_is_not_restored_by_late_terminal_projection() {
+    let (_ctx, mut app, _) = profile_fixture();
+    let session = SessionId::FIRST;
+    let key = app.seed_row(session, "tag", "Tag", Value::I64(10));
+    app.sync_fixture_sessions();
+    app.engine.request_refresh(session, key).unwrap();
+    let due = app
+        .engine
+        .due(Instant::now(), Duration::from_secs(60), None);
+    let [opclook_engine::Due::Read { keys, permit, .. }] = due.as_slice() else {
+        panic!("read due")
+    };
+    let request = app
+        .engine
+        .send_due_read(
+            session,
+            Protocol::OpcUa,
+            keys.clone(),
+            *permit,
+            PendingCtx::None,
+        )
+        .unwrap();
+    app.engine
+        .send(
+            session,
+            Protocol::OpcUa,
+            CommandKind::RemoveItems { keys: vec![key] },
+            PendingCtx::None,
+        )
+        .unwrap();
+    app.remove_rows(&[key].into_iter().collect());
+    app.drain_read_observations();
+    assert!(app.rows.iter().all(|row| row.key != key));
+    app.on_event(Event {
+        owner: session.into(),
+        origin: Origin::Reply(request),
+        kind: EventKind::Values { values: vec![] },
+    });
+    app.drain_read_observations();
+    assert!(app.rows.iter().all(|row| row.key != key));
+}
+
+#[test]
+fn early_push_is_applied_only_after_successful_registration() {
+    use crate::bff::model::{DataValue, ItemInfo};
+    for accepted in [false, true] {
+        let (_ctx, mut app, _) = profile_fixture();
+        let session = SessionId::FIRST;
+        assert!(app.add_items(session, vec![("tag".into(), "Tag".into())]));
+        let key = app.rows.last().unwrap().key;
+        let add = app
+            .dispatched_for_test()
+            .into_iter()
+            .rev()
+            .find_map(|command| match command.kind {
+                CommandKind::AddItems { .. } => command.request_id,
+                _ => None,
+            })
+            .unwrap();
+        let epoch = app.engine.connection_id(session).unwrap();
+        let value = DataValue {
+            value: Value::I64(42),
+            quality: Quality::from_ua(0, "Good"),
+            timestamp: None,
+            reason: None,
+        };
+        let push = |epoch| Event {
+            owner: session.into(),
+            origin: Origin::Session(epoch),
+            kind: EventKind::Values {
+                values: vec![(key, value.clone())],
+            },
+        };
+        app.on_event(push(RequestId::new(u64::MAX).unwrap()));
+        assert!(app.rows.last().unwrap().pending_push.is_none());
+        app.on_event(push(epoch));
+        let row = app.rows.last().unwrap();
+        assert!(row.pending);
+        assert!(matches!(row.value, Value::Empty));
+        assert!(row.pending_push.is_some());
+        let result = if accepted {
+            Ok(ItemInfo {
+                data_type: None,
+                type_id: None,
+                writable: false,
+            })
+        } else {
+            Err(BackendMsg::NoConnection)
+        };
+        app.on_event(Event {
+            owner: session.into(),
+            origin: Origin::Reply(add),
+            kind: EventKind::AddItems {
+                results: vec![(key, result)],
+            },
+        });
+        app.drain_read_observations();
+        let row = app.rows.last().unwrap();
+        assert!(!row.pending);
+        assert!(row.pending_push.is_none());
+        if accepted {
+            assert!(matches!(row.value, Value::I64(42)));
+            assert!(matches!(
+                row.last_read.as_ref().map(|o| &o.terminal.status),
+                Some(crate::bff::model::ReadTerminalStatus::InitialPush { .. })
+            ));
+        } else {
+            assert!(matches!(row.value, Value::Empty));
+            assert!(matches!(row.quality, RowQuality::Error(_)));
+            assert!(row.last_read.is_none());
+        }
+    }
+}
