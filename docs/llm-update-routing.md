@@ -1,6 +1,6 @@
 # Входной документ для LLM: маршруты обновления OPCLook
 
-Дата обновления: 2026-10-31. ID: R2.ROUTE. Область: получение значений OPC UA/DA.
+Дата обновления: 2026-11-01. ID: R2.ROUTE. Область: получение значений OPC UA/DA.
 Поручение владельца: продолжать оставшийся план парами GPT-6.1 Terra High.
 [Очередь и правила пар](remaining-work.md) уточняют текущий пакет, зависимости
 и внешние гейты; старые незакрытые чекбоксы не заменяют проверку кода и status.
@@ -8,11 +8,14 @@
 Это входное задание для нового чата. Маршруты направляют к существующим механизмам; текущий частичный runtime срез
 ExplicitRefresh и CLI opt-in WriteReadback описан в status.md. Полный R2 не завершён.
 
-Последний принятый exact code head — `266c683d`, все9 jobs; generic test-only
+Последний принятый exact code head — `5fcaab98`, все9 jobs; generic test-only
 Async fixture прошёл обе i686 COM matrix. SDK readiness/racefix/drain — отдельный
 reviewed research packet, без production pin/App change, только одна subscription
 в ReactivatedSession. Актуальные scope/gaps и следующая пара находятся в
 [remaining-work](remaining-work.md) и [UA ledger](testing/ua-sdk-acceptance-ledger.md).
+Пара31: excess data Read возвращает явную ошибку; test-only SDK admission
+S_FALSE/OPC_E_BADRIGHTS прошёл оба COM inputs. Exact5fcaab98 принят9/9;
+[очередь следующей пары](remaining-work.md) отделена от выполненных проверок.
 Исторические snapshots ниже не заменяют текущий status.
 Пара28 приняла test-only Gateway Async fixture в обоих Win32 COM inputs и
 [namespace source audit](testing/ua-sdk-namespace-cache-audit.md), без принятого

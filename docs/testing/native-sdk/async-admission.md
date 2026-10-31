@@ -35,7 +35,13 @@ python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture
 python docs/testing/native-sdk/test-async-admission-source.py --sdk <pinned-sdk-root>
 ```
 
-Win32 SDK execution and strict fixture cleanup are pending CI. The local source
-guard compiles the actual fixture access selector and checks the pinned SDK
-source path; it is not a COM test. The case does not cover other servers,
+Exact code `5fcaab98df0183ad61f7034e9f9198f8131db954` passed the live test1/1
+in both i686 COM inputs (SDK0.03s, official-MIT0.03s) with strict cleanup PASS.
+Both logs measured `flags=0x7`, `submit=0x1`, `item=0xc0040006`: SDK call attempted
+and returned, per-item admission failure known, no matching callback observed
+at retirement. Source expectations are now checked against these local actual
+SDK calls, not generalized to other servers.
+[COM run](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41232803478).
+The local source guard separately compiles the actual fixture access selector
+and checks the pinned SDK source path; it is not a COM test. The case does not cover other servers,
 Async Write, cancellation, remote interoperability or production lifecycle.

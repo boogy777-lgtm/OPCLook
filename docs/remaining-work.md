@@ -1,13 +1,13 @@
 # OPCLook — оставшаяся работа и выполнение парами
 
-Дата: 2026-10-31. Поручение владельца: продолжать все оставшиеся задачи плана
+Дата: 2026-11-01. Поручение владельца: продолжать все оставшиеся задачи плана
 парами исполнителей GPT-6.1 Terra High. Это рабочая очередь существующих
 планов, не новый функциональный scope и не утверждение о завершении миграции.
 
 ## Последний подтверждённый срез
 
-Latest exact code266c683d passed9/9, including repaired Windows deadline test.
-Pair31 source/local acceptance is ready; its own Windows admission gate pending.
+Latest exact code5fcaab98 passed9/9, including Read cardinality, repaired
+Windows deadline and both COM admission gates. Pair31 accepted; next pair below.
 
 
 `22a1348` прошёл все9 jobs (SDK4/COM2/App2/package1). Forced DA2 иDA3
@@ -93,7 +93,7 @@ SDK readiness/drain Engine research остаётся на frozen9ba source; не
 | 28 | SDK namespace-cache identity audit, test-only native Async Gateway correlation | Namespace source-only risk, no measured fix; Gateway mock54/49-nohooks, Linux typecheck and both f787 COM live gates passed; no production Async claim |
 | 29 | Negotiated DA2/DA3 Sync routes, SDK Publish per-ACK results | DA source/mock54, pinned fragments and both22a COM live gates passed; SDK fixed3+ACK2+recovery16 and full40-file/path guards passed as research |
 | 30 | UA Read OperationLimits, native Async failure/quality facts | Original Read5/limit3 fails, O18/O19 live and root backend268+1knownignored pass; native54/source pass, both656COM accepted; full head deadline repair pending |
-| 31 | UA data Read excess response, native Async admission | Source before/fail after/pass, normal live O18/O19 2/2; native54/source pass, admission both COM pending |
+| 31 | UA data Read excess response, native Async admission | Source before/fail after/pass, normal live O18/O19 2/2; native54/source pass, admission both5fca COM accepted; exact5fca all9 accepted |
 
 Пара 01 исправила начальное состояние fixture после честного отрицательного
 NOCONFIG verdict на `a004b226`. Проверка на `36fa668` подтвердила
@@ -105,6 +105,19 @@ RUNNING → FAILED → RUNNING во всех трёх процессах и read
 SDK per-ACK results проверены in-process в disposable library overlay; остаются
 wire/server variations и production observability/adoption, namespace scope,
 multiple subscriptions, transfer/secure cases. Production Async/N4 не включены.
+
+## Следующая пара: source-reviewed candidates, ещё не выполнены
+
+После exact-head приёмки пары31:
+
+| Ветка | Узкий следующий gate | Доказательство и границы |
+| --- | --- | --- |
+| UA O18/O19 | Cardinality одноключевого MaxNodesPerRead metadata Read | `advertised_read_chunk` сейчас берёт first даже при excess; требовать ровно один положительный Good UInt32, иначе существующий bounded fallback. Нужен actual-source before/fail/after и обычные O18/O19. Низкая серьёзность: выбранный cap уже bounded и TooManyOperations адаптивен; malformed wire/timeout/revision этим не доказаны. |
+| DA O26 | Forced DA2/DA3 именно Async Read | SDK `asyncReadImpl` выбирает AsyncIO2 Read или AsyncIO3 ReadMaxAge. Потребуются test-only started/advise setup и отдельный SDK request-kind counter, correlated callback и cleanup в обоих COM inputs. Existing forced-version gate inactive и доказывает Sync, его нельзя переименовать в Async proof. Local forced route не physical DA2-only server и не числовая свежесть. |
+
+Это рекомендации по прочитанному коду, не новые измеренные passes или production
+capability. SDK transport/recovery/COM owner и pins сохраняются. Namespace
+blocked diagnostic не возобновлять; frozen Engine research9ba не переписывать.
 
 ## Очередь по зависимостям
 

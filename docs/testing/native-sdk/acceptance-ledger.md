@@ -244,3 +244,19 @@ Receipt 2026-11-01 Asia/Yekaterinburg: exact repaired code
 `266c683d303f396b67a9e69e054bb27f62c8248d` passed9/9 jobs
 (SDK41231426756, COM41231426901, App41231426880, package41231426739).
 The new pair31 admission/cardinality packet needs its own exact-head CI.
+
+## Pair31 — actual local admission accepted (2026-11-01 Asia/Yekaterinburg)
+
+Exact5fcaab98 passed1/1 in both COM inputs,0.03s each, strict cleanup PASS.
+Both measured flags0x7/submit1/item0xc0040006, no invented sample fields and no
+matching callback observed at retirement. [Proof](async-admission.md).
+This closes the dedicated local per-item admission case, not production Async
+or a general promise that no later callback can ever arrive. Full-head CI
+acceptance is recorded separately in status/packet.
+
+Final receipt2026-11-01 Asia/Yekaterinburg: exact code
+`5fcaab98df0183ad61f7034e9f9198f8131db954` passed9/9:
+SDK41232803418, COM41232803478, App41232803411, package41232803483.
+Actual-source excess regression and ordinary O18/O19 passed Windows. Both
+local SDK admission tests and strict cleanup passed; this does not add a
+malformed wire/metadata-cap/recovery or production Async acceptance.
