@@ -139,9 +139,15 @@ Actual-source excess regression and ordinary O18/O19 passed Windows. Both
 local SDK admission tests and strict cleanup passed; this does not add a
 malformed wire/metadata-cap/recovery or production Async acceptance.
 
-## Pair32 — metadata cap cardinality, Windows pending
+## Pair32 — metadata cap cardinality source scope (pre-CI)
 
 [Read proof](ua-read-limits-proof.md) requires exactly one cap metadata result.
 Source before/fail and after2/2, ordinary live O18/O19 2/2 passed; malformed
 wire, cap-query timeout/revision and SDK recovery remain separate. No SDK pin
 or frozen9ba receipt changes.
+
+Final receipt2026-11-01 Asia/Yekaterinburg: exact84396da7 passed9/9
+(SDK41237089913, COM41237090071, App41237090037, package41237090066).
+Windows metadata cardinality regression and O18/O19 passed; backend317/0/1
+known ignored/1 isolated filtered249.56s. No malformed wire, new cap-query
+timeout/revision race or SDK recovery adoption claim. Root270/0/1 in74.38s.

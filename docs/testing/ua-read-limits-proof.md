@@ -102,3 +102,9 @@ Root integrated backend confirmed270passed/0failed/1knownignored in74.38s.
 A first attempt returned0 without the final harness receipt and was not used
 as acceptance. The repeated subprocess runner required both Cargo exit0 and
 an explicit final test-result line before accepting this full run.
+
+Final receipt2026-11-01 Asia/Yekaterinburg: exact84396da7 passed9/9
+(SDK41237089913, COM41237090071, App41237090037, package41237090066).
+Windows metadata cardinality regression and O18/O19 passed; backend317/0/1
+known ignored/1 isolated filtered249.56s. No malformed wire, new cap-query
+timeout/revision race or SDK recovery adoption claim. Root270/0/1 in74.38s.

@@ -8,7 +8,7 @@
 Это входное задание для нового чата. Маршруты направляют к существующим механизмам; текущий частичный runtime срез
 ExplicitRefresh и CLI opt-in WriteReadback описан в status.md. Полный R2 не завершён.
 
-Последний принятый exact code head — `5fcaab98`, все9 jobs; generic test-only
+Последний принятый exact code head — `84396da7`, все9 jobs; generic test-only
 Async fixture прошёл обе i686 COM matrix. SDK readiness/racefix/drain — отдельный
 reviewed research packet, без production pin/App change, только одна subscription
 в ReactivatedSession. Актуальные scope/gaps и следующая пара находятся в
@@ -16,9 +16,10 @@ reviewed research packet, без production pin/App change, только одн�
 Пара31: excess data Read возвращает явную ошибку; test-only SDK admission
 S_FALSE/OPC_E_BADRIGHTS прошёл оба COM inputs. Exact5fcaab98 принят9/9;
 [очередь следующей пары](remaining-work.md) отделена от выполненных проверок.
-Пара32: single-result metadata cap guard и test-only forced DA2/DA3 Async
-route prepared; свой Windows CI pending. Подробные scope и результаты в status
-и обоих ledgers; source guards не заменяют actual COM.
+Пара32 принята9/9 на84396da7: single-result metadata cap guard и test-only
+forced DA2/DA3 Async routes прошли Windows, оба COM/cleanup. Следующая33
+в remaining-work — source candidates, не выполненные tests. Подробные scope
+и результаты в status и обоих ledgers.
 Исторические snapshots ниже не заменяют текущий status.
 Пара28 приняла test-only Gateway Async fixture в обоих Win32 COM inputs и
 [namespace source audit](testing/ua-sdk-namespace-cache-audit.md), без принятого

@@ -261,7 +261,7 @@ Actual-source excess regression and ordinary O18/O19 passed Windows. Both
 local SDK admission tests and strict cleanup passed; this does not add a
 malformed wire/metadata-cap/recovery or production Async acceptance.
 
-## Pair32 — forced DA2/DA3 Async route, Windows pending
+## Pair32 — forced DA2/DA3 Async source scope (pre-CI)
 
 [Dedicated proof](async-version-routes.md) uses started/advise group and SDK
 request-creation counters on one target tag. DA2 expects asyncDevice delta1/0,
@@ -273,3 +273,16 @@ Pair32 source receipt:551e8769 failed the old counter extractor's incomplete
 SDK stubs. The repaired actual-creator stand passed increments, exclusions,
 saturation and old Sync checks. New-head CI pending; no native source change
 or retrospective acceptance of551. [Details](async-version-routes.md).
+
+## Pair32 — actual forced Async routes accepted locally
+
+Exact84396da7 passed1/1 in both COM inputs, SDK0.08s/MIT0.07s, strict cleanup
+PASS. Forced=selected512/768 and started groups were observed; dedicated deltas
+DA2(1,0),DA3(0,1), flags0xf, submit/itemS_OK and sample42 passed. Source uses
+max_age0; numeric wire age/physical freshness, other age policies and production
+Async remain unaccepted. [Exact proof](async-version-routes.md).
+
+Pair32 full acceptance: exact84396da7 passed9/9, SDK41237089913/
+COM41237090071/App41237090037/package41237090066. Windows317/0/1ignored/
+1isolatedfiltered passed. The final Markdown receipt preserves this code.
+Production Async/N4/remote/physical/license gates remain open.

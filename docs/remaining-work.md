@@ -6,13 +6,13 @@
 
 ## Последний подтверждённый срез
 
-Пара32 выполняется: metadata cap cardinality и forced Async DA2/DA3.
-Root backend270/0/1knownignored74.38с, native54/source accepted; собственный
-exact-head Windows CI pending.
+Пара32 принята: exact84396da7 прошёл9/9, включая metadata cap guard и оба
+forced Async DA2/DA3 COM inputs. Root backend270/0/1knownignored74.38с.
+Следующая пара33 ниже ещё не выполнена.
 
 
-Latest exact code5fcaab98 passed9/9, including Read cardinality, repaired
-Windows deadline and both COM admission gates. Pair31 accepted; next pair below.
+Preceding pair31 code5fcaab98 passed9/9, including data Read cardinality,
+repaired deadline and both COM admission gates. Latest843 acceptance is above.
 
 
 `22a1348` прошёл все9 jobs (SDK4/COM2/App2/package1). Forced DA2 иDA3
@@ -97,9 +97,9 @@ SDK readiness/drain Engine research остаётся на frozen9ba source; не
 | 27 | Native generic CI acceptance, SDK shared recovery guard and scoped drain | 6c all9green; SDK16+ACK2 and fresh Engine15.45с/Closed30.93с research accepted; one-subscription ReactivatedSession only |
 | 28 | SDK namespace-cache identity audit, test-only native Async Gateway correlation | Namespace source-only risk, no measured fix; Gateway mock54/49-nohooks, Linux typecheck and both f787 COM live gates passed; no production Async claim |
 | 29 | Negotiated DA2/DA3 Sync routes, SDK Publish per-ACK results | DA source/mock54, pinned fragments and both22a COM live gates passed; SDK fixed3+ACK2+recovery16 and full40-file/path guards passed as research |
-| 30 | UA Read OperationLimits, native Async failure/quality facts | Original Read5/limit3 fails, O18/O19 live and root backend268+1knownignored pass; native54/source pass, both656COM accepted; full head deadline repair pending |
+| 30 | UA Read OperationLimits, native Async failure/quality facts | Original Read5/limit3 fails, O18/O19 live and root backend268+1knownignored pass; native facts both COM accepted; repaired266 all9 accepted |
 | 31 | UA data Read excess response, native Async admission | Source before/fail after/pass, normal live O18/O19 2/2; native54/source pass, admission both5fca COM accepted; exact5fca all9 accepted |
-| 32 | UA metadata-cap cardinality, forced Async DA2/DA3 | Source before/fail after2/2, ordinary O18/O19 2/2; native source/stand pass, own Windows gates pending |
+| 32 | UA metadata-cap cardinality, forced Async DA2/DA3 | Source before/fail after2/2; Windows317/0/1+1filtered, both843 COM routes/cleanup accepted, all9 passed |
 
 Пара 01 исправила начальное состояние fixture после честного отрицательного
 NOCONFIG verdict на `a004b226`. Проверка на `36fa668` подтвердила
@@ -112,18 +112,28 @@ SDK per-ACK results проверены in-process в disposable library overlay;
 wire/server variations и production observability/adoption, namespace scope,
 multiple subscriptions, transfer/secure cases. Production Async/N4 не включены.
 
-## Пара32: выбранные gates, собственная CI приёмка pending
+## Пара32: выполненные gates
 
-Пара31 принята. Пара32 реализует следующие source-reviewed gates:
+Exact84396da7 прошёл9/9. Metadata cap требует ровно один валидный result,
+иначе bounded fallback; malformed wire и cap-query races отдельно.
+[UA proof](testing/ua-read-limits-proof.md). Forced DA2/DA3 Async routes прошли
+оба COM inputs, callback/deltas/cleanup подтверждены; это client force на
+локальном multi-version server, source max_age0, не physical/freshness proof.
+[Native proof](testing/native-sdk/async-version-routes.md).
 
-| Ветка | Узкий следующий gate | Доказательство и границы |
+## Следующая пара33: source-reviewed candidates, не выполнены
+
+Пара32 принята; перед реализацией проверить locks/owners и условия
+воспроизведения, не считать гипотезы найденными production defects.
+
+| Ветка | Следующий bounded gate | Точный scope и границы |
 | --- | --- | --- |
-| UA O18/O19 | Cardinality одноключевого MaxNodesPerRead metadata Read | `advertised_read_chunk` сейчас берёт first даже при excess; требовать ровно один положительный Good UInt32, иначе существующий bounded fallback. Нужен actual-source before/fail/after и обычные O18/O19. Низкая серьёзность: выбранный cap уже bounded и TooManyOperations адаптивен; malformed wire/timeout/revision этим не доказаны. |
-| DA O26 | Forced DA2/DA3 именно Async Read | SDK `asyncReadImpl` выбирает AsyncIO2 Read или AsyncIO3 ReadMaxAge. Потребуются test-only started/advise setup и отдельный SDK request-kind counter, correlated callback и cleanup в обоих COM inputs. Existing forced-version gate inactive и доказывает Sync, его нельзя переименовать в Async proof. Local forced route не physical DA2-only server и не числовая свежесть. |
+| Native N3.LIFETIME/A08 | Held subscription callback через Disconnect/new Connect epoch того же SessionId | Existing `sdk_late_callback_live`/`opcl_da_test_late_*` barrier держит старое88. Router detaches old worker на Disconnect; требуются новый Connected/registration пока callback held, затем release, отсутствие88 в новом epoch и новый99/fresh Read, strict cleanup. Existing A08 remove/re-add same epoch и Async reconnect after retirement это не доказывают. Если SDK locks блокируют interleaving — recorded blocked/fail, не post-retirement pass. Event deadlines и release-on-drop обязательны; это subscription, не Async Read callback или remote proof. |
+| UA R07/O11–O12 research | Multiple subscriptions / mutation во время SDK readiness drain | Disposable SDK-only actual-source stand: initial2 subscriptions → UnsupportedSubscriptions; held in-flight Publish + create/delete/replacement → проверить scope до Complete/Normal, baseline single-sub/ACK/cancellation. Patch проверяет len==1 перед await, public SDK Create/Delete async позволяют исследовать interleaving; это source hypothesis, не измеренный defect. Review serialization и identity, не только count. Один SDK Publish owner, bounded budget/calls, history uncertainty; frozen9ba Engine receipts не менять, App/pin adoption не подразумевается. |
 
-Исходные рекомендации ниже не заменяют текущие source/local результаты и
-не являются Windows/production capability. SDK transport/recovery/COM owner и pins сохраняются. Namespace
-blocked diagnostic не возобновлять; frozen Engine research9ba не переписывать.
+Native pending Async lease `mem::forget` не превращать в cleanup proof; не
+создавать новый owner/worker ради теста. Не возобновлять namespace/Cancel2 crash
+diagnostics. Remote/secure/physical/vendor и production/legal/N4 gates отдельно.
 
 ## Очередь по зависимостям
 

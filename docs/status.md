@@ -1,5 +1,34 @@
 # Текущий статус
 
+## 2026-11-01 — пара32 принята: exact code84396da7,9/9
+
+Exact `84396da7c815f3c1d2b911120eb5eaac58011724` прошёл9/9:
+[SDK4](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41237089913),
+[COM2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41237090071),
+[App2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41237090037),
+[package1](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41237090066).
+Windows backend317/0/1knownignored/1isolatedfiltered за249.56с, включая новый
+metadata cardinality guard и обычные O18/O19. Linux root270/0/1knownignored74.38с,
+native stand54/54 hooks и owner48/48 nohooks. Неполный первый Linux log не зачтён.
+
+Оба COM inputs прошли forced DA2/DA3 Async Read1/1, SDK0.08с/MIT0.07с,
+strict cleanup PASS. Forced=selected512/768, started groups, deltaDA2(1,0),
+DA3(0,1), flags0xf, submit/itemS_OK и sample42 подтверждены. Source max_age0;
+числовая wire freshness/age и physical DA2-only server не измерялись.
+
+551e8769 завершился6success/1failure/2cancelled: source counter stand не содержал
+новые SDK stub declarations, App jobs отменены новым push. Этот head не принят.
+Исправлены отсутствовавшие заглушки и добавлены actual-creator assertions;
+продуктовый/native runtime code при этом не менялся. Собственный843 CI принят.
+
+Следующая пара33 — только source-reviewed candidates: held subscription callback
+через Disconnect/new Connect и SDK-only subscription-set mutation during drain.
+Это не выполненные tests или verified defects. Production Async Unsupported,
+N4/default DA/pins и frozen9ba research сохранены; namespace/Cancel2 crash
+diagnostics не возобновлялись. Итоговый Markdown receipt не меняет код843.
+Дата приёмки — Asia/Yekaterinburg.
+
+
 ## 2026-11-01 — пара32: восстановлен fixture counter stand
 
 На551e8769 Linux source-probe выявил stale SDK stubs в существующем
