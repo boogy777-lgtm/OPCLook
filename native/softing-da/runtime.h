@@ -90,6 +90,11 @@ int32_t opcl_da_test_write_exception_state(void);
 int32_t opcl_da_test_queue_bounds(void);
 int32_t opcl_da_test_codec_bounds(void);
 int32_t opcl_da_test_ephemeral_worker(uint32_t guarded);
+/* SDK async read callback probe; not a production async acquisition mode. */
+int32_t opcl_da_test_async_callback_state(void);
+int32_t opcl_da_test_async_prepare(OpclDaSession* session);
+int32_t opcl_da_test_async_read_i4(OpclDaSession* session, OpclDaItem* item, uint32_t max_age,
+                                    uint32_t timeout_ms, OpclDaReadI4* out);
 #endif
 int32_t opcl_da_read_i4(OpclDaSession* session, OpclDaItem* item, uint32_t max_age,
                         OpclDaReadI4* out);

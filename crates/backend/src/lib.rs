@@ -71,11 +71,12 @@ pub enum AcquisitionError {
     StreamUnsupported,
     FreshnessUnsupported,
     ReadbackUnsupported,
+    DaAsyncUnsupported,
 }
 pub fn validate_acquisition(
     endpoint: &opclook_contract::model::EndpointSpec,
 ) -> Result<(), AcquisitionError> {
-    use opclook_contract::model::{PollFreshness, UpdateMode};
+    use opclook_contract::model::{DaReadMethod, PollFreshness, UpdateMode};
     let Some(config) = &endpoint.acquisition else {
         return Ok(());
     };
@@ -84,6 +85,9 @@ pub fn validate_acquisition(
         .contains(&config.interval_ms)
     {
         return Err(AcquisitionError::Interval);
+    }
+    if config.da_read_method == DaReadMethod::Async {
+        return Err(AcquisitionError::DaAsyncUnsupported);
     }
     let capabilities = acquisition_capabilities(endpoint.protocol);
     if !capabilities.subscription && config.update_mode == UpdateMode::Subscription {
@@ -129,6 +133,18 @@ mod acquisition_tests {
         assert_eq!(validate_acquisition(&restored), Ok(()));
         assert_eq!(restored.acquisition, Some(legacy));
     }
+    #[test]
+    fn async_da_method_is_not_advertised_before_live_proof() {
+        let mut endpoint = EndpointSpec::da("", "test");
+        let mut config = AcquisitionConfig::da_available();
+        config.da_read_method = opclook_contract::model::DaReadMethod::Async;
+        endpoint.acquisition = Some(config);
+        assert_eq!(
+            validate_acquisition(&endpoint),
+            Err(AcquisitionError::DaAsyncUnsupported)
+        );
+    }
+
     #[test]
     fn validates_known_adapter_capabilities_and_interval_boundaries() {
         let mut endpoint = EndpointSpec::ua("opc.tcp://localhost:4840");

@@ -183,6 +183,42 @@ static int live_fixture() {
     std::printf("live SDK C ABI fixture %s (hr=%08lx item=%08lx)\n", ok ? "PASS" : "FAIL", hr, write_result);
     return ok ? 0 : 32;
 }
+static int live_async_fixture() {
+    const OpclDaGuid clsid = {0x7d4bd1b1, 0x7422, 0x48c0,
+                              {0xad, 0x58, 0x60, 0x1b, 0x70, 0x14, 0x49, 0xc6}};
+    OpclDaHost* host = nullptr;
+    OpclDaSession* session = nullptr;
+    OpclDaItem* item = nullptr;
+    uint16_t type = 0; uint32_t rights = 0, revised = 0;
+    OpclDaReadI4 value{};
+    HRESULT hr = opcl_da_host_create(&host);
+    if (FAILED(hr)) return 41;
+    hr = opcl_da_session_open(host, "OPCLook.NativeDaFixture.1", "localhost", &clsid,
+                              1, 1000, 100000, &revised, &session);
+    bool ok = SUCCEEDED(hr);
+    if (ok) {
+        hr = opcl_da_test_async_prepare(session);
+        ok = SUCCEEDED(hr);
+    }
+    if (ok) {
+        hr = opcl_da_item_add(session, "Fixture.DeviceValue", 1, 0, &item, &type, &rights);
+        ok = SUCCEEDED(hr);
+    }
+    if (ok) {
+        hr = opcl_da_test_async_read_i4(session, item, 0, 10000, &value);
+        ok = SUCCEEDED(hr) && SUCCEEDED(value.service_result) && SUCCEEDED(value.item_result) &&
+             value.vartype == VT_I4 && value.value == 42 && (value.quality & 0xc0) == 0xc0 &&
+             (value.filetime_low || value.filetime_high);
+    }
+    if (ok) {
+        hr = opcl_da_test_async_read_i4(session, item, 0, 10000, &value);
+        ok = SUCCEEDED(hr) && SUCCEEDED(value.service_result) && SUCCEEDED(value.item_result) && value.value == 42;
+    }
+    if (session) { hr = opcl_da_session_close(session); ok = ok && SUCCEEDED(hr); }
+    hr = opcl_da_host_destroy(host); ok = ok && SUCCEEDED(hr);
+    std::printf("SDK async read callback fixture %s (hr=%08lx)\n", ok ? "PASS" : "FAIL", static_cast<unsigned long>(hr));
+    return ok ? 0 : 42;
+}
 static int run_callbacks() {
     phase("create-group");
     CaptureGroup* group = new CaptureGroup;
@@ -248,6 +284,7 @@ int main(int argc, char** argv) {
     if (FAILED(opcl_da_test_queue_bounds())) return 23;
     if (!::GetModuleHandle(nullptr)) return 9;
     if (argc == 2 && std::strcmp(argv[1], "--live") == 0) return live_fixture();
+    if (argc == 2 && std::strcmp(argv[1], "--live-async") == 0) return live_async_fixture();
     const bool baseline = argc == 2 && std::strcmp(argv[1], "--expect-existing-defect") == 0;
     phase("common-init");
     initSOCmn();
@@ -261,8 +298,12 @@ int main(int argc, char** argv) {
             phase("entry-init");
             if (entry->initialize(COINIT_MULTITHREADED)) {
                 phase("callbacks");
-                result = run_callbacks();
-                if (!baseline && result == 3 && adapter_test() != 0) result = 21;
+                if (FAILED(opcl_da_test_async_callback_state())) {
+                    result = 25;
+                } else {
+                    result = run_callbacks();
+                    if (!baseline && result == 3 && adapter_test() != 0) result = 21;
+                }
             }
             phase("disconnect");
             entry->disconnect();

@@ -441,6 +441,7 @@ fn sdk_gateway_live() {
         interval_ms: 100,
         read_after_write: false,
         poll_freshness: PollFreshness::CacheAllowed,
+        da_read_method: opclook_contract::model::DaReadMethod::Sync,
     });
     assert!(matches!(
         command(&gateway, 120, CommandKind::Connect { endpoint }).kind,

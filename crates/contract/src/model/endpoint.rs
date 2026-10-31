@@ -50,6 +50,17 @@ pub enum PollFreshness {
     CacheAllowed,
     FreshSource,
 }
+/// DA read transport selection. The absent legacy field means synchronous.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DaReadMethod {
+    #[default]
+    Sync,
+    Async,
+}
+fn da_read_method_is_sync(method: &DaReadMethod) -> bool {
+    *method == DaReadMethod::Sync
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AcquisitionConfig {
     pub update_mode: UpdateMode,
@@ -57,6 +68,8 @@ pub struct AcquisitionConfig {
     pub interval_ms: u64,
     pub read_after_write: bool,
     pub poll_freshness: PollFreshness,
+    #[serde(default, skip_serializing_if = "da_read_method_is_sync")]
+    pub da_read_method: DaReadMethod,
 }
 impl AcquisitionConfig {
     pub fn ua_default() -> Self {
@@ -65,6 +78,7 @@ impl AcquisitionConfig {
             interval_ms: 1000,
             read_after_write: true,
             poll_freshness: PollFreshness::FreshSource,
+            da_read_method: DaReadMethod::Sync,
         }
     }
     pub fn da_available() -> Self {
@@ -73,6 +87,7 @@ impl AcquisitionConfig {
             interval_ms: 1000,
             read_after_write: false,
             poll_freshness: PollFreshness::CacheAllowed,
+            da_read_method: DaReadMethod::Sync,
         }
     }
 }
@@ -294,6 +309,29 @@ pub struct UaNetworkInfo {
 #[cfg(test)]
 mod acquisition_tests {
     use super::*;
+    #[test]
+    fn da_read_method_defaults_sync_and_roundtrips_async() {
+        let sync = AcquisitionConfig::da_available();
+        let old = serde_json::to_value(&sync).unwrap();
+        assert!(old.get("da_read_method").is_none());
+        assert_eq!(
+            serde_json::from_value::<AcquisitionConfig>(old.clone())
+                .unwrap()
+                .da_read_method,
+            DaReadMethod::Sync
+        );
+        let mut asynchronous = old;
+        asynchronous["da_read_method"] = serde_json::json!("async");
+        assert_eq!(
+            serde_json::from_value::<AcquisitionConfig>(asynchronous.clone())
+                .unwrap()
+                .da_read_method,
+            DaReadMethod::Async
+        );
+        asynchronous["da_read_method"] = serde_json::json!("unknown");
+        assert!(serde_json::from_value::<AcquisitionConfig>(asynchronous).is_err());
+    }
+
     #[test]
     fn legacy_none_roundtrip_and_unknown_or_partial_profiles_fail() {
         // Use the actual serialized protocol spelling so this stays tied to the contract.

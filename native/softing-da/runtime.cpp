@@ -14,6 +14,8 @@
 #include <cstring>
 #ifdef OPCL_DA_TESTING
 #include <cstdio>
+#include <condition_variable>
+#include <chrono>
 // Test process only: 0=idle, 1=armed, 2=consumed. The SDK worker executes
 // the throw after a real successful syncWrite; no item ID or retry is involved.
 static std::atomic<int32_t> test_write_exception{0};
@@ -72,10 +74,30 @@ struct PushState {
     std::deque<PendingPush> pending;
     size_t pending_bytes = 0;
     bool overflow = false;
+#ifdef OPCL_DA_TESTING
+    // One test-only callback slot; no SDK object or caller buffer is retained.
+    std::condition_variable async_ready;
+    uint32_t async_next = 1;
+    uint32_t async_pending = 0;
+    OPCHANDLE async_handle = 0;
+    bool async_done = false;
+    HRESULT async_result = E_FAIL;
+    OpclDaReadI4 async_value{};
+#endif
 };
 class RuntimeGroup : public SODaCComGroupDefault {
 public:
     std::shared_ptr<PushState> push;
+#ifdef OPCL_DA_TESTING
+    bool test_has_correlated_callback() const { return m_dataCallback != nullptr; }
+    std::atomic<bool> test_disable_initial_read{false};
+protected:
+    BOOL performStateTransitionAction(DWORD action) override {
+        if (test_disable_initial_read.load() && action == SODAC_ITEM_ACTION_INITIAL_READ) return FALSE;
+        return SODaCComGroupDefault::performStateTransitionAction(action);
+    }
+public:
+#endif
     void onReadAdvise(BYTE mode, DWORD transaction, HRESULT master_quality,
                       HRESULT master_error, DWORD n, SODaCItem** items,
                       SOCmnVariant* values, WORD* qualities, SOCmnDateTime* times,
@@ -669,7 +691,40 @@ void RuntimeGroup::onReadAdvise(BYTE mode, DWORD transaction, HRESULT master_qua
                                 SOCmnVariant* values, WORD* qualities, SOCmnDateTime* times,
                                 HRESULT* errors) {
     std::shared_ptr<PushState> state = push;
-    if (!state || mode == 0) return; // ReadComplete is not a stream update.
+    if (!state) return;
+#ifdef OPCL_DA_TESTING
+    if (mode == 0) {
+        try {
+            std::lock_guard<std::mutex> lock(state->mutex);
+            if (!state->async_pending || state->async_pending != transaction || state->async_done) return;
+            state->async_value = {};
+            state->async_value.service_result = master_error;
+            state->async_value.item_result = E_FAIL;
+            state->async_result = FAILED(master_error) ? master_error : E_FAIL;
+            if (n == 1 && items && items[0] && values && qualities && times && errors &&
+                items[0]->getClientHandle() == state->async_handle) {
+                state->async_value.item_result = errors[0];
+                state->async_value.vartype = values[0].vt;
+                state->async_value.quality = qualities[0];
+                FILETIME ft{}; times[0].get(&ft);
+                state->async_value.filetime_low = ft.dwLowDateTime;
+                state->async_value.filetime_high = ft.dwHighDateTime;
+                if (FAILED(master_error)) state->async_result = master_error;
+                else if (FAILED(errors[0])) state->async_result = errors[0];
+                else if (values[0].vt != VT_I4) state->async_result = DISP_E_TYPEMISMATCH;
+                else {
+                    state->async_value.value = values[0].lVal;
+                    state->async_result = S_OK;
+                }
+            }
+            state->async_done = true;
+            state->async_ready.notify_one();
+        } catch (...) { /* caller observes a bounded timeout, never a false value */ }
+        return;
+    }
+#else
+    if (mode == 0) return; // ReadComplete is not a stream update.
+#endif
     try {
         std::lock_guard<std::mutex> lock(state->mutex);
         if (mode != 1 || transaction != 0 || n > 256 ||
@@ -726,6 +781,125 @@ extern "C" int32_t opcl_da_take_push(OpclDaSession* session, OpclDaPush* out, ch
     }
     return S_OK;
 } catch (...) { return E_UNEXPECTED; }
+#ifdef OPCL_DA_TESTING
+// Probe only: stop SDK-generated initial async reads before registering an item,
+// so their auto-generated transaction IDs cannot collide with the test ID.
+extern "C" int32_t opcl_da_test_async_prepare(OpclDaSession* session) try {
+    if (!session || !session->push || !session->items.empty()) return E_INVALIDARG;
+    auto group = static_cast<RuntimeGroup*>(session->group);
+    if (!group->test_has_correlated_callback()) return E_NOINTERFACE;
+    group->test_disable_initial_read.store(true);
+    return S_OK;
+} catch (...) { return E_UNEXPECTED; }
+// The SDK submits AsyncIO on its own worker; the session caller waits for the
+// SDK callback without retaining pointers to caller-owned memory.
+class TestAsyncReadTask : public SOCltTask {
+public:
+    TestAsyncReadTask(SODaCGroup* group, SODaCItem* item, DWORD age, DWORD transaction)
+        : SOCltTask(group), group_(group), item_(item), age_(age), transaction_(transaction) {}
+    void execute() override try {
+        ran_ = true;
+        SODaCItem* items[] = {item_};
+        const HRESULT hr = group_->asyncRead(1, items, age_, transaction_, &cancel_, &item_result_);
+        setResult(hr);
+    } catch (...) { setResult(E_UNEXPECTED); }
+    bool ran_ = false;
+    HRESULT item_result_ = E_FAIL;
+    DWORD cancel_ = 0;
+private:
+    SODaCGroup* group_; SODaCItem* item_; DWORD age_; DWORD transaction_;
+};
+extern "C" int32_t opcl_da_test_async_read_i4(OpclDaSession* session, OpclDaItem* item,
+                                               uint32_t max_age, uint32_t timeout_ms,
+                                               OpclDaReadI4* out) try {
+    if (!out || !owns(session, item) || !timeout_ms || timeout_ms > 30000) return E_INVALIDARG;
+    *out = {}; out->service_result = E_FAIL; out->item_result = E_FAIL;
+    auto state = session->push;
+    auto group = static_cast<RuntimeGroup*>(session->group);
+    if (!state || !group->test_has_correlated_callback() || !group->test_disable_initial_read.load()) return E_NOINTERFACE;
+    uint32_t token = 0;
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        if (state->async_pending) return E_PENDING;
+        // Reserved SDK IDs and wrap must never be reused in this group's life.
+        if (!state->async_next || state->async_next >= SODACITEM_TRANSACTIONID_ASYNC_NOT_STARTED) return E_OUTOFMEMORY;
+        const OPCHANDLE handle = item->sdk->getClientHandle();
+        if (!handle) return E_INVALIDARG;
+        token = state->async_next++;
+        state->async_pending = token;
+        state->async_handle = handle;
+        state->async_done = false;
+    }
+    TestAsyncReadTask* task = new (std::nothrow) TestAsyncReadTask(session->group, item->sdk, max_age, token);
+    if (!task) { std::lock_guard<std::mutex> lock(state->mutex); state->async_pending = 0; return E_OUTOFMEMORY; }
+    HRESULT submit = E_UNEXPECTED;
+    try { submit = session->group->executeTask(task); }
+    catch (...) {
+        task->release();
+        std::lock_guard<std::mutex> lock(state->mutex);
+        state->async_pending = 0;
+        throw;
+    }
+    const HRESULT item_result = task->item_result_;
+    const bool ran = task->ran_;
+    task->release();
+    out->service_result = submit;
+    out->item_result = item_result;
+    if (!ran || FAILED(submit) || FAILED(item_result)) {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        state->async_pending = 0;
+        return FAILED(submit) ? submit : (!ran ? E_UNEXPECTED : item_result);
+    }
+    std::unique_lock<std::mutex> lock(state->mutex);
+    const bool received = state->async_ready.wait_for(lock, std::chrono::milliseconds(timeout_ms),
+        [&] { return state->async_done; });
+    state->async_pending = 0;
+    if (!received) return HRESULT_FROM_WIN32(WAIT_TIMEOUT);
+    *out = state->async_value;
+    return state->async_result;
+} catch (...) { return E_UNEXPECTED; }
+extern "C" int32_t opcl_da_test_async_callback_state(void) try {
+    auto state = std::make_shared<PushState>();
+    RuntimeGroup* group = new (std::nothrow) RuntimeGroup();
+    if (!group) return E_OUTOFMEMORY;
+    SODaCItem* item = group->addItem(_T("N2.async.probe"));
+    if (!item) { group->release(); return E_FAIL; }
+    group->push = state;
+    state->async_pending = 7; state->async_handle = item->getClientHandle();
+    SODaCItem* items[] = {item}; SOCmnVariant value; value.setI4(42);
+    WORD quality = OPC_QUALITY_GOOD; SOCmnDateTime time; time.now(); HRESULT error = S_OK;
+    FILETIME expected_time{}; time.get(&expected_time);
+    group->onReadAdvise(0, 6, S_OK, S_OK, 1, items, &value, &quality, &time, &error);
+    bool ok = !state->async_done;
+    group->onReadAdvise(0, 7, S_OK, S_OK, 1, items, &value, &quality, &time, &error);
+    ok = ok && state->async_done && state->async_result == S_OK && state->async_value.value == 42 &&
+         state->async_value.quality == quality && state->async_value.vartype == VT_I4 &&
+         state->async_value.filetime_low == expected_time.dwLowDateTime &&
+         state->async_value.filetime_high == expected_time.dwHighDateTime;
+    value.setI4(99);
+    group->onReadAdvise(0, 7, S_OK, S_OK, 1, items, &value, &quality, &time, &error);
+    ok = ok && state->async_value.value == 42;
+    state->async_pending = 0; state->async_done = false;
+    group->onReadAdvise(0, 7, S_OK, S_OK, 1, items, &value, &quality, &time, &error);
+    ok = ok && !state->async_done;
+    state->async_pending = 8; state->async_done = false;
+    error = E_INVALIDARG;
+    group->onReadAdvise(0, 8, S_OK, S_OK, 1, items, &value, &quality, &time, &error);
+    ok = ok && state->async_done && state->async_result == E_INVALIDARG &&
+         state->async_value.service_result == S_OK && state->async_value.item_result == E_INVALIDARG;
+    state->async_pending = 9; state->async_done = false; error = S_OK;
+    group->onReadAdvise(0, 9, S_OK, E_ACCESSDENIED, 1, items, &value, &quality, &time, &error);
+    ok = ok && state->async_done && state->async_result == E_ACCESSDENIED &&
+         state->async_value.service_result == E_ACCESSDENIED && state->async_value.item_result == S_OK;
+    state->async_pending = 10; state->async_done = false; value.clear();
+    group->onReadAdvise(0, 10, S_OK, S_OK, 1, items, &value, &quality, &time, &error);
+    ok = ok && state->async_done && state->async_result == DISP_E_TYPEMISMATCH &&
+         state->async_value.vartype == VT_EMPTY;
+    item->release(); group->release();
+    return ok ? S_OK : E_FAIL;
+} catch (...) { return E_UNEXPECTED; }
+#endif
+
 class ReadScalarTask : public SOCltTask {
 public:
     ReadScalarTask(SODaCGroup* group, SODaCItem* item, DWORD age, OpclDaScalar* out, char* text, uint32_t capacity)

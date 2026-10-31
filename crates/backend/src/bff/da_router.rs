@@ -262,6 +262,19 @@ impl<H: DaHost> Router<H> {
             ));
             return;
         }
+        if let CommandKind::Connect { endpoint } = &command.kind
+            && endpoint
+                .acquisition
+                .as_ref()
+                .is_some_and(|config| config.da_read_method == super::model::DaReadMethod::Async)
+        {
+            self.send(error_event(
+                &command,
+                Operation::Connect,
+                BackendMsg::raw("DA asynchronous read is not yet available"),
+            ));
+            return;
+        }
         match route {
             Route::Ignored => {}
             Route::Unsupported(operation, text) => {
@@ -694,6 +707,32 @@ mod tests {
     }
     fn is_kind(event: &Event, request_id: u64) -> bool {
         event_id(event) == request_id
+    }
+
+    #[test]
+    fn direct_async_connect_is_rejected_before_session_start() {
+        let (host, _r, _d) = MockHost::new();
+        let (mut router, rx) = router_with(host);
+        let mut endpoint = EndpointSpec::da("", "test");
+        let mut config = super::super::model::AcquisitionConfig::da_available();
+        config.da_read_method = super::super::model::DaReadMethod::Async;
+        endpoint.acquisition = Some(config);
+        router.dispatch(command(
+            44,
+            sid(1).into(),
+            CommandKind::Connect { endpoint },
+        ));
+        let event = next(&rx);
+        assert!(is_kind(&event, 44));
+        assert!(matches!(
+            event.kind,
+            EventKind::Error {
+                operation: Operation::Connect,
+                ..
+            }
+        ));
+        assert_eq!(router.session_count(), 0);
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

@@ -1,0 +1,5 @@
+--- a/development/core/src/SODaC/SODaCComGroup.cpp
++++ b/development/core/src/SODaC/SODaCComGroup.cpp
+@@ -3646 +3646 @@
+-		res = asyncIO2->Cancel2(cancelID);
++		res = (!!asyncIO3) ? asyncIO3->Cancel2(cancelID) : asyncIO2->Cancel2(cancelID);
