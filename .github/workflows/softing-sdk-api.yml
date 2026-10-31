@@ -38,6 +38,7 @@ jobs:
           python3 docs/testing/native-sdk/verify-license-closure.py "$SOFTING_SDK_ROOT"
           python3 docs/testing/native-sdk/test-license-closure.py
           python3 docs/testing/native-sdk/test-package-preview.py
+          python3 docs/testing/native-sdk/test-collect-cargo-notices.py
           python3 scripts/test-ci-preview.py
           python3 docs/testing/native-sdk/test-opcf-mit-inputs.py
           python3 docs/testing/native-sdk/test-generate-opcf-midl.py

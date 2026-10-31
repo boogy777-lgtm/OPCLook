@@ -4,12 +4,14 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import shutil
 import struct
 import subprocess
 import sys
+import tarfile
 import tempfile
 
 HERE = Path(__file__).resolve().parent
@@ -90,7 +92,8 @@ def normal_build_licenses(metadata):
         raise ValueError(f"backend features are not a non-test native preview: {features}")
     return sorted(({"name": packages[x]["name"], "version": packages[x]["version"],
                     "id": x, "source": packages[x].get("source"),
-                    "license": packages[x].get("license"), "license_file": packages[x].get("license_file")}
+                    "license": packages[x].get("license"), "license_file": packages[x].get("license_file"),
+                    "manifest_path": packages[x].get("manifest_path")}
                    for x in seen), key=lambda p: (p["name"], p["version"], p["id"]))
 
 
@@ -166,6 +169,18 @@ def verify_include_trace(log, sdk, generated):
                  "opcda_i.c", "opccomn_i.c", "OpcEnum_i.c", "opc_ae_i.c", "opcSec_i.c"])
 
 
+def collect_notice_evidence(output, metadata, licenses, workspace, cargo_home):
+    notice_spec = importlib.util.spec_from_file_location("cargo_notices", HERE / "collect-cargo-notices.py")
+    notices = importlib.util.module_from_spec(notice_spec)
+    notice_spec.loader.exec_module(notices)
+    manifest = notices.collect(metadata, licenses, workspace, cargo_home, output / "notices/cargo")
+    (output / "evidence/cargo-notice-summary.json").write_text(json.dumps({
+        "package_count": len(manifest["packages"]), "missing": manifest["missing"],
+        "unique_files": manifest["unique_files"], "unique_bytes": manifest["unique_bytes"]
+    }, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return manifest
+
+
 def assemble(args):
     if args.output.exists():
         raise ValueError("output already exists")
@@ -203,6 +218,7 @@ def assemble(args):
     copies = {
         "bin/opclook-cli.exe": args.cli,
         "notices/OPCLook-LICENSE.txt": ROOT / "LICENSE",
+        "notices/softing-sdk-LICENSE.txt": args.sdk / "LICENSE",
         "notices/THIRD-PARTY-NOTICES.txt": HERE / "THIRD-PARTY-NOTICES.txt",
         "evidence/Cargo.lock": ROOT / "Cargo.lock",
         "evidence/cargo-metadata.json": args.metadata,
@@ -212,6 +228,9 @@ def assemble(args):
         "evidence/toolchain.log": args.toolchain_log,
         "evidence/CMakeCache.txt": args.bridge / "CMakeCache.txt",
         "evidence/license-sdk-tree.json": HERE / "license-sdk-tree.json",
+        "evidence/package-preview.py": HERE / "package-preview.py",
+        "evidence/collect-cargo-notices.py": HERE / "collect-cargo-notices.py",
+        "evidence/upstream-notices/async-opcua-0.19.0-LICENSE.md": HERE / "upstream-notices/async-opcua-0.19.0-LICENSE.md",
         "evidence/softing-expat.gitsha": HERE / "softing-expat.gitsha",
         "evidence/softing-status-alignment.patch": HERE / "softing-status-alignment.patch",
         "evidence/softing-com-balance.patch": HERE / "softing-com-balance.patch",
@@ -231,10 +250,13 @@ def assemble(args):
         shutil.copyfile(source, target)
     (args.output / "evidence/bridge-symbols.txt").write_text(symbols, encoding="utf-8")
     (args.output / "evidence/cargo-declared-licenses.json").write_text(json.dumps(licenses, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    cargo_home = Path(os.environ.get("CARGO_HOME", str(Path.home() / ".cargo")))
+    collect_notice_evidence(args.output, metadata, licenses, ROOT, cargo_home)
     (args.output / "README.txt").write_text(
         "Private engineering preview only; not release or legal clearance.\n"
         "The Cargo normal/build license inventory is a declared-metadata superset,\n"
         "not a PE link map or a complete rights and redistribution review.\n"
+        "Cargo notice texts and explicit missing items are in notices/cargo/manifest.json.\n"
         "Review notices, toolchains, dependencies and distribution before release.\n", encoding="utf-8")
     record = {"opclook_commit": revision, "softing_commit": SDK_PIN, "opcf_commit": OPCF_PIN,
               "target": "i686-pc-windows-msvc", "profile": "Release; native-da-preview; no test hooks",
@@ -252,7 +274,7 @@ def main():
     args = parser.parse_args()
     try:
         assemble(args)
-    except (OSError, ValueError, KeyError, subprocess.CalledProcessError, json.JSONDecodeError) as error:
+    except (OSError, ValueError, KeyError, subprocess.CalledProcessError, json.JSONDecodeError, tarfile.TarError) as error:
         print(f"private preview packaging FAILED: {error}", file=sys.stderr)
         return 1
     print(f"Private engineering preview assembled at {args.output}; release/legal clearance NOT established")

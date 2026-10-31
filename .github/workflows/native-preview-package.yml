@@ -40,6 +40,8 @@ jobs:
           if errorlevel 1 exit /b 1
           python opclook/docs/testing/native-sdk/test-package-preview.py
           if errorlevel 1 exit /b 1
+          python opclook/docs/testing/native-sdk/test-collect-cargo-notices.py
+          if errorlevel 1 exit /b 1
           python opclook/docs/testing/native-sdk/stage-opcf-mit-inputs.py --repo opc-core --output opcf-staged
           if errorlevel 1 exit /b 1
           python opclook/docs/testing/native-sdk/generate-opcf-midl.py --source opcf-staged --output opcf-generated
