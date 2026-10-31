@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Negative gates for the private-preview packager, without claiming Win32 interop."""
+import contextlib
 import importlib.util
 from pathlib import Path
 import struct
@@ -28,6 +29,27 @@ def meta():
 
 
 class PreviewPackagingTests(unittest.TestCase):
+    def test_relative_trace_roots_resolve_without_accepting_wrong_inputs(self):
+        required = ["opcda.h", "opccomn.h", "OpcEnum.h", "opc_ae.h", "opcSec.h", "opcerror.h",
+                    "opcda_i.c", "opccomn_i.c", "OpcEnum_i.c", "opc_ae_i.c", "opcSec_i.c"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            project = root / "project"
+            project.mkdir()
+            generated = root / "generated"
+            sdk = root / "sdk"
+            log = "\n".join("Note: including file: " + str(generated / name) for name in required)
+            with contextlib.chdir(project):
+                preview.verify_include_trace(log, Path("../sdk"), Path("../generated"))
+                with self.assertRaisesRegex(ValueError, "old SDK OPC"):
+                    preview.verify_include_trace(log + "\n" + str(sdk / "development/core/src/opc/opcda.h"),
+                                                 Path("../sdk"), Path("../generated"))
+                with self.assertRaisesRegex(ValueError, "required generated"):
+                    preview.verify_include_trace(log.replace(str(generated / "opcda.h"), ""),
+                                                 Path("../sdk"), Path("../generated"))
+                with self.assertRaisesRegex(ValueError, "required generated"):
+                    preview.verify_include_trace(log, Path("../sdk"), Path("../other"))
+
     def test_real_dependency_kinds_and_unresolved_license_are_preserved(self):
         rows = preview.normal_build_licenses(meta())
         self.assertEqual({row["name"] for row in rows}, {"opclook-cli", "opclook-engine", "opclook-backend", "compiler-helper"})

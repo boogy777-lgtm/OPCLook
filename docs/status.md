@@ -817,3 +817,21 @@ patch bytes и передача через stdin для reverse verification, б
 SDK inputs, dependencies или notices. Обновлён только этот SHA-256.
 Все profile hashes локально совпадают; 4 inventory и 7 package tests проходят.
 COM cache-release fix и полная упаковка пока не проверены новым Win32 runtime.
+
+
+## 2026-10-31 — N1 absolute build-trace roots; 96fd624: 8/9 jobs
+
+Exact head 96fd6249eeac06bd0e3bd039cd15e189f460f328 passed App Linux/Windows
+(41158256649), SDK4 (41158256627) and COM2 (41158256863). Both native matrix
+variants now pass strict fixture cleanup, Device/Fresh, Engine readback,
+blocked-write isolation/shutdown/host-reuse and write-exception gates. These are
+local fixture results, not remote/other-server or production-switch acceptance.
+
+The remaining preview-package job 41158256861 compiled the no-hook bridge and
+x86 release CLI and passed reverse SDK patch verification. It then rejected
+required include paths: CLI arguments were relative while MSVC /showIncludes
+reported absolute paths. The packager now resolves both verified roots before
+the existing strict trace check; missing generated inputs and old SDK headers
+still fail. Real temporary-path regression fails before and passes after this
+change; package tests8/8 and inventory tests4/4 pass, with the reviewed profile
+hash updated. The packaged executable has not yet passed its real CLI read.

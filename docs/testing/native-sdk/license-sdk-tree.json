@@ -302,6 +302,6 @@
     "docs/testing/native-sdk/check-opcf-include-trace.py": "bdd5436d6324bfb5558a6fc7280c08ad20464e29402a2676aa192c50bceb1d9b",
     "docs/testing/native-sdk/core-probe/opcf-mit-inputs.cmake": "1b0708198d3f586563b4e000e1231569ebfdd717b34213c4b52efd84e0d6c334",
     "docs/testing/native-sdk/server-fixture/proxy-list-mit.c": "89c8b4943ad1d0fd15b9d05fbc35d374986f92c0c17d7b18f0f79c8713e5b560",
-    "docs/testing/native-sdk/package-preview.py": "3d6296cfd1bef23ea033533cd7e4c829bd1485180fd5ef0924ae5a282ce12c26"
+    "docs/testing/native-sdk/package-preview.py": "c8874799890e5d7bd2d36e8230e2bce9d169af44968c3d81f1d81b4d6c0772e1"
   }
 }

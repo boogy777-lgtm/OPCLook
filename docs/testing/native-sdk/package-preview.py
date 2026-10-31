@@ -157,6 +157,15 @@ def verify_toolchain(log):
             raise ValueError(f"missing toolchain version: {name}")
 
 
+def verify_include_trace(log, sdk, generated):
+    trace_spec = importlib.util.spec_from_file_location("opcf_trace", HERE / "check-opcf-include-trace.py")
+    trace = importlib.util.module_from_spec(trace_spec)
+    trace_spec.loader.exec_module(trace)
+    trace.check(log, (sdk / "development/core/src/opc").resolve(), generated.resolve(),
+                ["opcda.h", "opccomn.h", "OpcEnum.h", "opc_ae.h", "opcSec.h", "opcerror.h",
+                 "opcda_i.c", "opccomn_i.c", "OpcEnum_i.c", "opc_ae_i.c", "opcSec_i.c"])
+
+
 def assemble(args):
     if args.output.exists():
         raise ValueError("output already exists")
@@ -185,12 +194,7 @@ def assemble(args):
     toolchain_log = args.toolchain_log.read_text(encoding="utf-8", errors="replace")
     if "runtime.cpp" not in bridge_log.lower() or "opcl_da_testing" in bridge_log.lower():
         raise ValueError("bridge log must show runtime compilation without OPCL_DA_TESTING")
-    trace_spec = importlib.util.spec_from_file_location("opcf_trace", HERE / "check-opcf-include-trace.py")
-    trace = importlib.util.module_from_spec(trace_spec)
-    trace_spec.loader.exec_module(trace)
-    trace.check(bridge_log, args.sdk / "development/core/src/opc", args.generated,
-                ["opcda.h", "opccomn.h", "OpcEnum.h", "opc_ae.h", "opcSec.h", "opcerror.h",
-                 "opcda_i.c", "opccomn_i.c", "OpcEnum_i.c", "opc_ae_i.c", "opcSec_i.c"])
+    verify_include_trace(bridge_log, args.sdk, args.generated)
     verify_cargo_log(cargo_log, (args.bridge / "Release").resolve())
     verify_toolchain(toolchain_log)
     run("git", "-C", ROOT, "diff", "--quiet", "HEAD", "--")
