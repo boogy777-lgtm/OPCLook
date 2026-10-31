@@ -1947,6 +1947,101 @@ fn p1_too_many_operations_per_call_shrinks_the_call() {
     assert_eq!(changed, 300);
 }
 
+#[test]
+fn o18_read_respects_server_operation_limit() {
+    let server = TestServer::start_limited(free_port(), |limits| {
+        limits.operational.max_nodes_per_read = 3;
+    });
+    let mut app = Harness::new();
+    let session = SessionId::new(1).unwrap();
+    app.connect(session, Harness::endpoint(&server.url))
+        .expect("connect");
+    let items: Vec<_> = (1..=5)
+        .map(|n| (ItemKey::new(n).unwrap(), server.node("Level")))
+        .collect();
+    let added = app.add_items(session, &items);
+    assert!(added.iter().all(|(_, result)| result.is_ok()), "{added:?}");
+    let id = app.send(
+        session.into(),
+        CommandKind::Read {
+            keys: items.iter().map(|(key, _)| *key).collect(),
+        },
+    );
+    let reply = app.reply(id, Duration::from_secs(10)).expect("read reply");
+    let EventKind::Values { values } = reply.kind else {
+        panic!("unexpected read reply")
+    };
+    assert_eq!(values.len(), items.len());
+    assert!(
+        values.iter().all(|(_, value)| value.reason.is_none()),
+        "{values:?}"
+    );
+    app.disconnect(session);
+}
+
+#[test]
+fn o19_read_retries_only_whole_service_size_rejection() {
+    use opcua::types::{
+        AttributeId, NumericRange, QualifiedName, ReadValueId, StatusCode, TimestampsToReturn,
+    };
+    let server = TestServer::start_limited(free_port(), |limits| {
+        limits.operational.max_nodes_per_read = 3;
+    });
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let (tx, _rx) = channel();
+        let mut session = super::session::connect(
+            SessionId::new(1).unwrap(),
+            None,
+            Harness::endpoint(&server.url),
+            &tokio_util::sync::CancellationToken::new(),
+            &tx,
+        )
+        .await
+        .unwrap();
+        let revision = session.identity_revision().unwrap();
+        let requests: Vec<_> = ["Level", "Missing", "Counter", "Flag", "Label"]
+            .iter()
+            .map(|name| ReadValueId {
+                node_id: NodeId::new(server.ns, *name),
+                attribute_id: AttributeId::Value as u32,
+                index_range: NumericRange::None,
+                data_encoding: QualifiedName::null(),
+            })
+            .collect();
+        let first = session
+            .read_values_chunked_scoped(
+                &requests[..1],
+                TimestampsToReturn::Both,
+                0.0,
+                Some(revision),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(
+            session.read_chunk,
+            Some((revision, 3)),
+            "server limit was read"
+        );
+        // Model absent or outdated metadata while leaving the normal SDK server intact.
+        session.read_chunk = Some((revision, 5));
+        let values = session
+            .read_values_chunked_scoped(&requests, TimestampsToReturn::Both, 0.0, Some(revision))
+            .await
+            .unwrap();
+        assert_eq!(values.len(), 5);
+        assert_eq!(values[0].value, Some(Variant::Double(1.0)));
+        assert_eq!(values[1].status, Some(StatusCode::BadNodeIdUnknown));
+        assert_eq!(values[2].value, Some(Variant::Int32(0)));
+        assert_eq!(session.read_chunk, Some((revision, 2)));
+        session.close().await;
+    });
+}
+
 /// P1: when no subscription can take more items (one subscription of 200
 /// allowed), the rest is reported poll-only, never left silent.
 #[test]

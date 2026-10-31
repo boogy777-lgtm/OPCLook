@@ -89,6 +89,8 @@ pub(super) struct UaSession {
     /// P1: items per `CreateMonitoredItems` call; halved when the server
     /// answers `BadTooManyOperations`.
     pub(super) monitor_chunk: usize,
+    /// Read limit learned for one SDK connection revision, never shared with monitoring.
+    pub(super) read_chunk: Option<(u64, usize)>,
     /// Items monitored WITHOUT the deadband filter because the server refused it
     /// for their attribute/type (for example a Boolean or String node).
     pub(super) unfiltered: HashSet<ItemKey>,

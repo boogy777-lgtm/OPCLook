@@ -407,6 +407,7 @@ pub(in crate::bff::ua) async fn connect(
         monitored: HashMap::new(),
         poll_only: HashSet::new(),
         monitor_chunk: READ_MAX_ITEMS_PER_CALL,
+        read_chunk: None,
         unfiltered: HashSet::new(),
         timed_out: false,
         identity_quarantined: None,

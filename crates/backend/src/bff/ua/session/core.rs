@@ -30,6 +30,21 @@ fn bounded_struct_type_label(name: &str, type_id: &NodeId) -> Option<String> {
     (label.len() <= MAX_TYPE_NAME_BYTES).then_some(label)
 }
 
+fn advertised_read_chunk(values: &[UaDataValue]) -> usize {
+    let limit = values.first().and_then(|value| {
+        if value.status.is_some_and(|status| !status.is_good()) {
+            return None;
+        }
+        match value.value.as_ref()? {
+            opcua::types::Variant::UInt32(n) if *n > 0 => Some(*n as usize),
+            _ => None,
+        }
+    });
+    limit
+        .unwrap_or(READ_MAX_ITEMS_PER_CALL.max(1))
+        .min(READ_MAX_ITEMS_PER_CALL.max(1))
+}
+
 impl UaSession {
     /// Capture the remote-session revision only while namespace identity is ready.
     /// A later check rejects replies from a session which was lost or replaced.
@@ -282,27 +297,107 @@ impl UaSession {
         max_age: f64,
         revision: Option<u64>,
     ) -> Result<Vec<UaDataValue>, BackendMsg> {
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
         let stale = || BackendMsg::UaIdentityChanged {
             service: crate::bff::model::UaService::Read,
         };
+        let scope = revision.or_else(|| self.identity_revision());
+        if let Some(scope) = scope {
+            if self.read_chunk.is_none_or(|(cached, _)| cached != scope) {
+                if !self.identity_is_current(scope) {
+                    return Err(stale());
+                }
+                // Standard ServerCapabilities.OperationLimits.MaxNodesPerRead.
+                let limit_node = ReadValueId {
+                    node_id: opcua::types::VariableId::Server_ServerCapabilities_OperationLimits_MaxNodesPerRead.into(),
+                    attribute_id: super::AttributeId::Value as u32,
+                    index_range: super::NumericRange::None,
+                    data_encoding: super::QualifiedName::null(),
+                };
+                let result = timeout_drain(
+                    self.session
+                        .read(&[limit_node], TimestampsToReturn::Neither, 0.0),
+                    IO_TIMEOUT,
+                )
+                .await;
+                if result.is_err()
+                    || result.as_ref().is_ok_and(|result| {
+                        result
+                            .as_ref()
+                            .is_err_and(|error| error.status() == super::StatusCode::BadTimeout)
+                    })
+                {
+                    self.timed_out = true;
+                }
+                if !self.identity_is_current(scope) {
+                    return Err(stale());
+                }
+                let Ok(result) = result else {
+                    return Err(BackendMsg::TimeoutRead);
+                };
+                if result
+                    .as_ref()
+                    .is_err_and(|error| error.status() == super::StatusCode::BadTimeout)
+                {
+                    return Err(BackendMsg::TimeoutRead);
+                }
+                let limit = advertised_read_chunk(result.as_deref().unwrap_or(&[]));
+                self.read_chunk = Some((scope, limit));
+            }
+        }
+        let mut chunk_size = self
+            .read_chunk
+            .filter(|(cached, _)| Some(*cached) == scope)
+            .map_or(READ_MAX_ITEMS_PER_CALL.max(1), |(_, size)| size.max(1));
         let mut values = Vec::with_capacity(requests.len());
-        for chunk in requests.chunks(READ_MAX_ITEMS_PER_CALL.max(1)) {
-            if revision.is_some_and(|revision| !self.identity_is_current(revision)) {
+        let mut start = 0usize;
+        while start < requests.len() {
+            let size = chunk_size.min(requests.len() - start);
+            let Some(chunk) = requests.get(start..start + size) else {
+                break;
+            };
+            if scope.is_some_and(|revision| !self.identity_is_current(revision)) {
                 return Err(stale());
             }
             let chunk_result =
                 timeout_drain(self.session.read(chunk, timestamps, max_age), IO_TIMEOUT).await;
-            if chunk_result.is_err() {
+            if chunk_result.is_err()
+                || chunk_result.as_ref().is_ok_and(|result| {
+                    result
+                        .as_ref()
+                        .is_err_and(|error| error.status() == super::StatusCode::BadTimeout)
+                })
+            {
                 self.timed_out = true;
             }
-            if revision.is_some_and(|revision| !self.identity_is_current(revision)) {
+            if scope.is_some_and(|revision| !self.identity_is_current(revision)) {
                 return Err(stale());
             }
             let Ok(chunk_result) = chunk_result else {
                 return Err(BackendMsg::TimeoutRead);
             };
             match chunk_result {
-                Ok(mut chunk_values) => values.append(&mut chunk_values),
+                Ok(mut chunk_values) => {
+                    let complete = chunk_values.len() == size;
+                    chunk_values.truncate(size);
+                    values.append(&mut chunk_values);
+                    // Do not shift later results onto missing keys.
+                    if !complete {
+                        break;
+                    }
+                    start += size;
+                }
+                Err(e) if super::is_too_many_operations(e.status()) && size > 1 => {
+                    chunk_size = (size / 2).max(1);
+                    if let Some(scope) = scope {
+                        self.read_chunk = Some((scope, chunk_size));
+                    }
+                }
+                Err(e) if e.status() == super::StatusCode::BadTimeout => {
+                    return Err(BackendMsg::TimeoutRead);
+                }
                 Err(e) => {
                     return Err(BackendMsg::UaServiceError {
                         service: crate::bff::model::UaService::Read,
@@ -319,6 +414,20 @@ impl UaSession {
 mod struct_label_tests {
     use super::*;
     use opcua::types::{ByteString, Identifier};
+
+    #[test]
+    fn read_limit_absent_zero_bad_and_positive_are_bounded() {
+        use opcua::types::{StatusCode, Variant};
+        let value = |n| UaDataValue::new_now(Variant::UInt32(n));
+        let fallback = READ_MAX_ITEMS_PER_CALL.max(1);
+        assert_eq!(advertised_read_chunk(&[]), fallback);
+        assert_eq!(advertised_read_chunk(&[value(0)]), fallback);
+        assert_eq!(advertised_read_chunk(&[value(2)]), 2.min(fallback));
+        assert_eq!(advertised_read_chunk(&[value(u32::MAX)]), fallback);
+        let mut bad = value(2);
+        bad.status = Some(StatusCode::BadNodeIdUnknown);
+        assert_eq!(advertised_read_chunk(&[bad]), fallback);
+    }
 
     #[test]
     fn unnamed_structure_uses_bounded_canonical_identifier() {
