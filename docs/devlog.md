@@ -1502,3 +1502,15 @@ phase diagnostics; independent live gates не скрываются за чуж�
 SDK source force setter online allowed; server negotiation happens at connect.
 CEC оба COM stop exit62/zeros, точная failing stage пока неизвестна; cleanuppass.
 Shared-impl/source regression + runtime52/52 passed; новый Win результат pending.
+
+## 2026-10-31 — 81f accepted; generic async N+1
+
+81f exact all9 success; новые5 native gates passed в обоих inputs, cleanupstrict.
+Class N2 single-slot SDK async conversion/admission. Inv: existing SDK owner,
+I4/generic shared submit, only attested flags, no lease retirement on unknown
+SDK acceptance. N+1: same bounded Sync codec, no new COM/transaction engine.
+Defect: local throw after entering SDK call is not proof of rejection; attempted
+flag keeps pending, caller error once/late cleanupACK. Modeled actual-source
+before/after passes; runtime53/53, new Win generic execution pending. Source
+SDK Sync normal return assigns item outputs; no unnecessary sentinel patch there.
+Production Async stays Unsupported and callback-never-arrives quarantine remains.

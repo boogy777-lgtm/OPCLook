@@ -6,11 +6,10 @@
 
 ## Последний подтверждённый срез
 
-`94773fa` прошёл все9 jobs, включая обе COM matrix с новыми primitive arrays
-и manager lease и nohook packaged CLI read42
+`81feb138` прошёл все9 jobs, включая обе COM matrix с пятью новыми native
+gates, primitive arrays/manager lease и nohook packaged CLI
 с cleanup. Это заменяет pending verdict старых строк ниже только для уже вошедшего
-в тот head кода. Новые async two-session/callback/order-fix live gates ожидают
-собственного Windows CI. SDK replay patches остаются research; Engine gate/snapshot
+в тот head кода. Generic async-value extension требует нового Windows CI. SDK replay patches остаются research; Engine gate/snapshot
 boundary проверен отдельно, secure/Transfer/full history ещё открыты.
 
 ## Правило исполнения
@@ -63,7 +62,8 @@ boundary проверен отдельно, secure/Transfer/full history ещё 
 | 22 | Native async two-session isolation, secured UA reconnect | Mock51/51; real secure1/1 + fresh runner1/1 NewSession; found/fixed SDK base-destruction retirement order, new Win CI pending |
 | 23 | A08 late SDK callback, TransferSubscriptions acceptance | Held actual-callback gate prepared, Win pending; public secure Transfer Good raw observer1/1+fresh1/1, destination mapped state still absent |
 | 24 | O23 active subscription + Sync one-shot, secure token renewal | Engine/SDK request-counter gate prepared, Win pending; original SDK verified secure token1→2, same Session/sub/item,1/1+fresh1/1 |
-| 25 | A09 actual item/quality failures, SDK bounded readiness handoff | A09 fixture/source/mock52 prepared, Win pending; SDK readiness candidate real wire2/2 + unit7/7 being finalized, product pins/Async unchanged |
+| 25 | A09 actual item/quality failures, SDK bounded readiness handoff | A09 passed both81f COM; readiness candidate fixes under independent review, no production pin/Async switch |
+| 26 | Forced SDK DA1 source route, generic single-slot Async values | DA1 passed both81f COM; generic extension/source/mock53 prepared, new Win pending; no physical DA1/productionAsync claim |
 
 Пара 01 исправила начальное состояние fixture после честного отрицательного
 NOCONFIG verdict на `a004b226`. Проверка на `36fa668` подтвердила
