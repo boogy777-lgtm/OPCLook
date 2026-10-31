@@ -31,7 +31,11 @@ fn bounded_struct_type_label(name: &str, type_id: &NodeId) -> Option<String> {
 }
 
 fn advertised_read_chunk(values: &[UaDataValue]) -> usize {
-    let limit = values.first().and_then(|value| {
+    let limit = (match values {
+        [value] => Some(value),
+        _ => None,
+    })
+    .and_then(|value| {
         if value.status.is_some_and(|status| !status.is_good()) {
             return None;
         }
@@ -464,6 +468,22 @@ mod struct_label_tests {
         let mut bad = value(2);
         bad.status = Some(StatusCode::BadNodeIdUnknown);
         assert_eq!(advertised_read_chunk(&[bad]), fallback);
+    }
+
+    #[test]
+    fn read_limit_requires_exactly_one_valid_result() {
+        use opcua::types::Variant;
+        let value = |n| UaDataValue::new_now(Variant::UInt32(n));
+        let fallback = READ_MAX_ITEMS_PER_CALL.max(1);
+        assert!(
+            fallback > 1,
+            "the regression needs a distinct advertised cap"
+        );
+        assert_eq!(advertised_read_chunk(&[value(1), value(2)]), fallback);
+        assert_eq!(
+            advertised_read_chunk(&[UaDataValue::new_now(Variant::Int32(1))]),
+            fallback
+        );
     }
 
     #[test]
