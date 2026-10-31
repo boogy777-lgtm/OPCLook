@@ -51,3 +51,10 @@ all its WORK_BLOBS; this Read-loop change does not. Use a separate clean linked
 worktree from that commit to reproduce its historical proof. Do not merely
 rewrite its hashes to accept the new adapter: an actual port and fresh acceptance
 are needed before combining the research handoff with this production change.
+
+
+The656 Windows backend also passed both O18/O19 tests before a separate old
+`timeout_drain` regression failed. The [deadline repair](ua-deadline-proof.md)
+enforces late-observed timeout classification, with a second parent full Linux
+run268/0/1knownignored in77.54s. Complete repaired-head Windows CI is pending;
+656's other8 successful jobs are not a9/9 receipt.

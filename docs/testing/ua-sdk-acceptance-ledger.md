@@ -111,3 +111,11 @@ receipts. Parent static verification found all final drain WORK_BLOBS match
 state and live-test blobs. Keep those historical proofs reproducible on frozen
 9ba. Combining this production adapter change with that experimental handoff
 requires an actual port and fresh SDK/Engine acceptance; no hash-only update.
+
+
+The656 Windows backend passed the new Read-limit cases, but its existing
+late-result timeout regression failed. A [controlled deadline repair](ua-deadline-proof.md)
+now rejects results first observed at/after budget, without repolling completed
+futures and retaining bounded drain/quarantine. Root backend268/0/1knownignored
+passed again. This does not determine a remote completion instant or remove
+frozen-source research limitations; repaired Windows CI is pending.

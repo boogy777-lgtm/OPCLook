@@ -28,7 +28,14 @@ cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features 
 python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- python scripts/ci-cargo-live.py -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_async_facts_live -- --nocapture
 ```
 
-The Win32 execution and strict fixture cleanup are pending CI. Local
+On exact6564157 the fixture passed1/1 in both i686 COM variants
+([SDK124620379923](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41229453737/job/124620379923),0.07s;
+[official-MIT124620379817](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41229453737/job/124620379817),0.08s),
+with both strict server/proxy cleanups PASS. All four cases showed flags0xf,
+submitS_OK and known admission itemS_OK. ReadDenied therefore completed through
+the matched callback with E_ACCESSDENIED, without sample facts. Immediate
+admission rejection was not observed in these live cases. Full656 CI was8/1
+because a separate pre-existing deadline regression failed in Windows App. Local
 `test-async-facts-source.py` exercises the actual snapshot with deterministic
 stubs; the existing generic handoff and empty callback source checks also pass.
 The repository Rust runtime stand passes 54/54 with test hooks. These local

@@ -21,9 +21,14 @@ metadata-ready ACK → SDK replay/drain → snapshot53.5 → push54.5; history u
 Production SDK pin/App не меняются; общий порядок Push/Read, NewSession,
 несколько subscriptions и secure recovery этим кандидатом не приняты.
 
+Пара30 на656 получила8/1: native facts прошли оба COM и O18/O19 прошли Windows
+backend, но выявлен старый deadline contract gap. Controlled repair и root
+backend268/0/1knownignored прошли; await нового Windows head, не считать6569/9.
+[Deadline proof](testing/ua-deadline-proof.md).
+
 Пара30 исправляет production adapter Read batching для O18/O19; root backend
-268/0/1knownignored прошёл. Новый native Async failure/quality live gate ждёт
-своего exact-head Windows результата. [Read proof](testing/ua-read-limits-proof.md)
+268/0/1knownignored прошёл. Native Async failure/quality live gate прошёл оба COM inputs на656;
+полный исправленный head ждёт отдельной приёмки. [Read proof](testing/ua-read-limits-proof.md)
 фиксирует scope: SDK type-loader и unscoped identity/новые timeout races отдельно.
 SDK readiness/drain Engine research остаётся на frozen9ba source; не считать
 его автоматически совместимым с новым Read-loop и не менять receipts без port.
@@ -83,7 +88,7 @@ SDK readiness/drain Engine research остаётся на frozen9ba source; не
 | 27 | Native generic CI acceptance, SDK shared recovery guard and scoped drain | 6c all9green; SDK16+ACK2 and fresh Engine15.45с/Closed30.93с research accepted; one-subscription ReactivatedSession only |
 | 28 | SDK namespace-cache identity audit, test-only native Async Gateway correlation | Namespace source-only risk, no measured fix; Gateway mock54/49-nohooks, Linux typecheck and both f787 COM live gates passed; no production Async claim |
 | 29 | Negotiated DA2/DA3 Sync routes, SDK Publish per-ACK results | DA source/mock54, pinned fragments and both22a COM live gates passed; SDK fixed3+ACK2+recovery16 and full40-file/path guards passed as research |
-| 30 | UA Read OperationLimits, native Async failure/quality facts | Original Read5/limit3 fails, O18/O19 live and root backend268+1knownignored pass; native54/source pass, new both-COM gate pending |
+| 30 | UA Read OperationLimits, native Async failure/quality facts | Original Read5/limit3 fails, O18/O19 live and root backend268+1knownignored pass; native54/source pass, both656COM accepted; full head deadline repair pending |
 
 Пара 01 исправила начальное состояние fixture после честного отрицательного
 NOCONFIG verdict на `a004b226`. Проверка на `36fa668` подтвердила

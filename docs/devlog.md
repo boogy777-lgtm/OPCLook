@@ -1,3 +1,21 @@
+## 2026-10-31 — пара30: Windows deadline repair, native facts accepted locally
+
+Exact6564157 завершился8success/1failure. Оба COM inputs прошли новый Async
+facts test1/1 со strict cleanup (SDK0.07с,official-MIT0.08с): все четыре cases
+дали flags0xf, submitS_OK и admission itemS_OK; ReadDenied получил E_ACCESSDENIED
+в callback без sample quality/time/VT. Это callback failure, не измеренный
+immediate-admission rejection. В Windows backend O18/O19 тоже прошли, но один
+старый deadline test вернулOk42 вместоRequestTimeout (314passed/1failed/1ignored).
+Полный656 не считается принятым.
+
+[Deadline proof](testing/ua-deadline-proof.md): Tokio value-first polling может
+вернуть result, впервые замеченный после budget. Controlled before/fail и
+проверка elapsed послеReady исправляют контракт; завершённый future повторно
+не poll-ится, pending future по-прежнему drain-ится в bounded grace. Физическое
+время remote completion неизвестно; Windows scheduling cause не установлена.
+Root repaired backend268/0/1knownignored прошёл за77.54с; точечный regression
+прошёл, включая ZERO/MAX budgets и no-repoll guards. Новый Windows head pending.
+
 ## 2026-10-31 — пара30: UA Read limits и native Async failure facts
 
 Последний опубликованный9ba4db1 прошёл все workflow. Новый production UA Read

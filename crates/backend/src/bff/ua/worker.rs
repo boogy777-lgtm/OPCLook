@@ -1420,28 +1420,78 @@ mod initial_load_regression {
 
     #[test]
     fn timeout_drains_same_future_and_discards_late_result() {
+        use std::cell::Cell;
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()
             .unwrap();
         runtime.block_on(async {
-            let completed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let flag = completed.clone();
-            let result = timeout_drain(
-                async move {
-                    tokio::time::sleep(Duration::from_millis(30)).await;
-                    flag.store(true, std::sync::atomic::Ordering::SeqCst);
-                    42
-                },
-                Duration::from_millis(5),
-            )
-            .await;
-            assert_eq!(result, Err(RequestTimeout));
-            assert!(completed.load(std::sync::atomic::Ordering::SeqCst));
+            let ready = Cell::new(false);
+            let completed = Cell::new(false);
+            let request = poll_fn(|_| {
+                if ready.get() {
+                    assert!(!completed.replace(true), "completed future polled twice");
+                    Poll::Ready(42)
+                } else {
+                    Poll::Pending
+                }
+            });
+            let mut operation = Box::pin(timeout_drain(request, Duration::from_millis(5)));
+            assert!(
+                poll_fn(|cx| Poll::Ready(operation.as_mut().poll(cx)))
+                    .await
+                    .is_pending()
+            );
+            // Let the deadline pass without polling the operation, then make
+            // the request ready: both the deadline and request are now ready.
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            ready.set(true);
+            assert_eq!(
+                poll_fn(|cx| Poll::Ready(operation.as_mut().poll(cx))).await,
+                Poll::Ready(Err(RequestTimeout))
+            );
+            assert!(completed.get());
+
+            let ready = Cell::new(false);
+            let completed = Cell::new(false);
+            let request = poll_fn(|_| {
+                if ready.get() {
+                    assert!(!completed.replace(true), "completed future polled twice");
+                    Poll::Ready(42)
+                } else {
+                    Poll::Pending
+                }
+            });
+            let mut operation = Box::pin(timeout_drain(request, Duration::from_millis(5)));
+            assert!(
+                poll_fn(|cx| Poll::Ready(operation.as_mut().poll(cx)))
+                    .await
+                    .is_pending()
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            // Observe the elapsed budget while the request is still pending.
+            assert!(
+                poll_fn(|cx| Poll::Ready(operation.as_mut().poll(cx)))
+                    .await
+                    .is_pending()
+            );
+            ready.set(true);
+            assert_eq!(
+                poll_fn(|cx| Poll::Ready(operation.as_mut().poll(cx))).await,
+                Poll::Ready(Err(RequestTimeout))
+            );
+            assert!(completed.get());
             assert_eq!(
                 timeout_drain(async { 7 }, Duration::from_secs(1)).await,
                 Ok(7)
             );
+            assert_eq!(
+                timeout_drain(async { 7 }, Duration::ZERO).await,
+                Err(RequestTimeout)
+            );
+            assert_eq!(timeout_drain(async { 7 }, Duration::MAX).await, Ok(7));
         });
     }
 

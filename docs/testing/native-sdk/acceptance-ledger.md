@@ -217,7 +217,7 @@ DA3:1/0/0 each. All9 jobs for22a passed.
 This is Sync route evidence, not Async version/cancellation admission or N4.
 
 
-### Prepared Async error/quality facts (pair30)
+### Measured Async error/quality facts (pair30)
 
 [Async facts probe](async-facts.md) reuses the SDK task/slot/lease and decoder.
 Ordinary fixture Good/Uncertain/Bad samples preserve value, raw quality and time;
@@ -225,6 +225,9 @@ ReadDenied must retain available service/item failure without inventing sample
 quality/FILETIME/VT. A read-only same-mutex snapshot separates call attempt,
 SDK return, known submit-item status and matched callback. It is test-only and
 not a production outcome contract. Root runtime/mock54/54 and source guards,
-including the task/destructor guard, passed. Actual i686 execution, ABI and
-strict cleanup of the new fixture are pending both COM inputs. No Async method,
+including the task/destructor guard, passed. On exact656, i686 ABI/execution
+and strict cleanup passed1/1 in both COM inputs (SDK0.07s, official-MIT0.08s).
+All cases observed flags0xf, submitS_OK/known itemS_OK; denial was a matched
+callback failure, not observed initial rejection. Full656 was8/1 due to the
+separate Windows App deadline test; repaired-head acceptance is pending. No Async method,
 cancellation, network failure, DA1 or remote acceptance follows from it.

@@ -24,7 +24,9 @@ namespace fix или production Async. Не восстанавливать эт�
 ACK-specific uncertainty не заменяет recovery history flag или App events.
 Пара30: [O18/O19 Read limits](testing/ua-read-limits-proof.md) использует SDK Read
 и bounded adapter split; [Async facts](testing/native-sdk/async-facts.md) — новый
-test-only fixture (Win pending), production Async не включён. Historical SDK
+test-only fixture (оба656COM прошли), production Async не включён.
+656 в целом8/1 из-за deadline gap; controlled repair прошёл Linux backend,
+отдельная Windows приёмка исправленного head pending. Historical SDK
 drain Engine stand требует frozen9ba receipts, не текущий изменённый Read-loop.
 
 

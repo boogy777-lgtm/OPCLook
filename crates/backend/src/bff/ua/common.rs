@@ -92,8 +92,13 @@ pub(super) async fn timeout_drain<T>(
     future: impl Future<Output = T>,
     budget: Duration,
 ) -> Result<T, RequestTimeout> {
+    let started = tokio::time::Instant::now();
     tokio::pin!(future);
     match tokio::time::timeout(budget, &mut future).await {
+        // Tokio polls the request first when both it and the timer are ready.
+        // A completion first observed after the budget is still a timeout;
+        // it has already drained, so it must not be polled a second time.
+        Ok(_) if started.elapsed() >= budget => Err(RequestTimeout),
         Ok(value) => Ok(value),
         Err(_) => {
             let _ = tokio::time::timeout(GRACEFUL_CLOSE_TIMEOUT, &mut future).await;
