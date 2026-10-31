@@ -731,9 +731,25 @@ fn time_tooltip_exposes_distinct_ua_facts_and_origin() {
     let mut app = App::new_test(&egui::Context::default());
     app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
     app.seed_row(sid(1), "ns=2;s=Clock", "Clock", Value::I64(1));
-    let now = chrono::Utc::now();
+    for column in opclook::columns::ColumnId::ALL {
+        app.settings.view.columns.set_visible(
+            column,
+            matches!(
+                column,
+                opclook::columns::ColumnId::FullName
+                    | opclook::columns::ColumnId::Value
+                    | opclook::columns::ColumnId::Quality
+                    | opclook::columns::ColumnId::Time
+            ),
+        );
+    }
+    let now = chrono::DateTime::parse_from_rfc3339("2026-10-31T12:34:56Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let server = now + chrono::Duration::milliseconds(5);
+    let received = now + chrono::Duration::milliseconds(12);
     let row = &mut app.rows_mut_for_test()[0];
-    row.times = ValueTimes::ua(Some(now), Some(now), now, ValueOrigin::Read);
+    row.times = ValueTimes::ua(Some(now), Some(server), received, ValueOrigin::Read);
     row.timestamp = row.times.primary();
     let text = row.timestamp_text();
     let mut h = harness(app);
@@ -747,6 +763,16 @@ fn time_tooltip_exposes_distinct_ua_facts_and_origin() {
     );
     assert!(
         h.query_all_by_label_contains("Время сервера")
+            .next()
+            .is_some()
+    );
+    assert!(
+        h.query_all_by_label_contains(&server.to_rfc3339())
+            .next()
+            .is_some()
+    );
+    assert!(
+        h.query_all_by_label_contains(&received.to_rfc3339())
             .next()
             .is_some()
     );
