@@ -3930,6 +3930,7 @@ fn p2_oversized_action_is_visible_and_never_dispatched() {
                 Protocol::OpcUa,
                 CommandKind::Browse {
                     node_id: "x".repeat(ACTION_MAX_BYTES + 1),
+                    filter: crate::bff::model::NodeClassFilter::All,
                     view_id: None,
                 },
             )
