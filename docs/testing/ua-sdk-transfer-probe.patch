@@ -1,0 +1,69 @@
+diff --git a/crates/backend/src/bff/ua/live_tests.rs b/crates/backend/src/bff/ua/live_tests.rs
+index ca034b4..9ad2c19 100644
+--- a/crates/backend/src/bff/ua/live_tests.rs
++++ b/crates/backend/src/bff/ua/live_tests.rs
+@@ -3584,0 +3585,64 @@ fn sdk_callback_reports_synthetic_publish_sequence_gap_and_still_delivers_value(
++
++#[test]
++fn sdk_secure_transfer_moves_existing_server_subscription() {
++    use crate::bff::model::{RequestId, UaProtection};
++    use opcua::client::{DataChangeCallback, MonitoredItemMap, OnSubscriptionNotificationCore, Subscription};
++    use opcua::types::{match_extension_object_owned, AttributeId, MonitoredItemCreateRequest, MonitoringMode, MonitoringParameters, NotificationMessage, ReadValueId, TimestampsToReturn};
++    struct RawObserver(std::sync::mpsc::Sender<(u32, Option<Variant>, bool)>);
++    impl OnSubscriptionNotificationCore for RawObserver {
++        fn on_subscription_notification(&mut self, n: NotificationMessage, items: MonitoredItemMap<'_>) {
++            for object in n.notification_data.unwrap_or_default() {
++                match_extension_object_owned!(object, v: opcua::types::DataChangeNotification => {
++                    for item in v.monitored_items.unwrap_or_default() {
++                        let present = items.get(item.client_handle).is_some();
++                        let _ = self.0.send((item.client_handle, item.value.value, present));
++                    }
++                }, _ => {});
++            }
++        }
++    }
++    let server=TestServer::start(free_port());
++    let trusted=trusted_copy_of_server_cert(&server);
++    std::fs::create_dir_all(trusted.parent().unwrap()).unwrap();
++    std::fs::copy(server.dir.join("own/cert.der"),&trusted).unwrap();
++    struct RemoveCert(PathBuf);
++    impl Drop for RemoveCert { fn drop(&mut self) {let _=std::fs::remove_file(&self.0);} }
++    let _trust=RemoveCert(trusted);
++    let rt=tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
++    rt.block_on(async {
++        let (events,_rx)=channel();let cancel=tokio_util::sync::CancellationToken::new();
++        let endpoint=secure_endpoint(&server,false);
++        let mut a=super::session::connect(SessionId::new(1).unwrap(),Some(RequestId::new(1).unwrap()),endpoint.clone(),&cancel,&events).await.expect("secure session A");
++        let mut b=super::session::connect(SessionId::new(2).unwrap(),Some(RequestId::new(2).unwrap()),endpoint,&cancel,&events).await.expect("secure session B");
++        assert_ne!(a.session.server_session_id(),b.session.server_session_id(),"must have distinct remote Sessions");
++        for info in [&a.info,&b.info] {assert!(matches!(info,BackendMsg::UaConnected {policy,mode,protection: UaProtection::SignAndEncrypt,..} if policy=="Basic256Sha256" && mode=="SignAndEncrypt"));}
++        let (a_tx,a_rx)=channel();let callback=DataChangeCallback::new(move |v:DataValue,_|{let _=a_tx.send(v);});
++        let sub=a.session.create_subscription(Duration::from_millis(100),100,20,1000,0,true,callback).await.unwrap();
++        let item=a.session.create_monitored_items(sub,TimestampsToReturn::Both,vec![MonitoredItemCreateRequest {item_to_monitor:ReadValueId {node_id:NodeId::new(server.ns,"Level"),attribute_id:AttributeId::Value as u32,..Default::default()},monitoring_mode:MonitoringMode::Reporting,requested_parameters:MonitoringParameters {client_handle:1,sampling_interval:0.0,queue_size:10,discard_oldest:true,..Default::default()}}]).await.unwrap();
++        assert!(item[0].result.status_code.is_good());let item_id=item[0].result.monitored_item_id;
++        a_rx.recv_timeout(Duration::from_secs(15)).expect("initial callback");
++        server.set("Level",Variant::Double(45.5));
++        let limit=Instant::now()+Duration::from_secs(15);let mut first=false;while Instant::now()<limit {let Ok(v)=a_rx.recv_timeout(limit.saturating_duration_since(Instant::now())) else {break};if v.value==Some(Variant::Double(45.5)){first=true;break}}
++        assert!(first,"A must receive before transfer");
++        let result=b.session.transfer_subscriptions(&[sub],true).await.expect("TransferSubscriptions service");
++        assert_eq!(result.len(),1);assert_eq!(result[0].status_code,opcua::types::StatusCode::Good,"per-subscription raw status");
++        assert!(b.session.subscription_state.lock().get(sub).is_none(),"public SDK transfer unexpectedly populated destination client map");
++        // Test-only local observer; this does not create or recreate any server
++        // subscription or monitored item. Raw SDK notification still identifies
++        // the original client handle; missing item map is explicitly recorded.
++        let (raw_tx,raw_rx)=channel();
++        b.session.subscription_state.lock().add_subscription(Subscription::new(sub,Duration::from_millis(100),100,20,1000,0,true,Box::new(RawObserver(raw_tx))));
++        b.session.trigger_publish_now();
++        server.set("Level",Variant::Double(46.5));
++        let limit=Instant::now()+Duration::from_secs(20);let mut transferred=false;
++        while Instant::now()<limit {let Ok((handle,value,mapped))=raw_rx.recv_timeout(limit.saturating_duration_since(Instant::now())) else {break};if value==Some(Variant::Double(46.5)){assert_eq!(handle,1);assert!(!mapped,"destination SDK item map was not migrated");transferred=true;break}}
++        assert!(transferred,"B must receive changed value from retained subscription");
++        let until=Instant::now()+Duration::from_secs(1);
++        while let Ok(v)=a_rx.recv_timeout(until.saturating_duration_since(Instant::now())) {
++            assert_ne!(v.value,Some(Variant::Double(46.5)),"A must not receive new value after transfer");
++            if Instant::now() >= until { break; }
++        }
++        eprintln!("OBSERVED transfer=Good retained_subscription={sub} original_monitored_item={item_id} handle=1 before=45.5 after=46.5 destination_item_map=missing secure=SignAndEncrypt");
++        b.close().await;a.close().await;
++    });
++}

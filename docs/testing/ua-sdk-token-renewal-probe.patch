@@ -1,0 +1,117 @@
+diff --git a/crates/backend/src/bff/ua/live_tests.rs b/crates/backend/src/bff/ua/live_tests.rs
+index ca034b4..ab97cd2 100644
+--- a/crates/backend/src/bff/ua/live_tests.rs
++++ b/crates/backend/src/bff/ua/live_tests.rs
+@@ -178,0 +179,4 @@ impl TestServer {
++        Self::start_with_token_cap(port, limits, None)
++    }
++
++    fn start_with_token_cap(port: u16, limits: impl Fn(&mut opcua::server::Limits), token_cap_ms: Option<u32>) -> Self {
+@@ -185 +189 @@ impl TestServer {
+-            match Self::try_start(port, &limits) {
++            match Self::try_start(port, &limits, token_cap_ms) {
+@@ -198 +202 @@ impl TestServer {
+-    fn try_start(port: u16, limits: &impl Fn(&mut opcua::server::Limits)) -> Result<Self, u16> {
++    fn try_start(port: u16, limits: &impl Fn(&mut opcua::server::Limits), token_cap_ms: Option<u32>) -> Result<Self, u16> {
+@@ -211,0 +216 @@ impl TestServer {
++        if let Some(cap) = token_cap_ms { builder = builder.max_secure_channel_token_lifetime_ms(cap); }
+@@ -3584,0 +3590,99 @@ fn sdk_callback_reports_synthetic_publish_sequence_gap_and_still_delivers_value(
++
++/// Opaque encrypted TCP proxy; inspect only standard unencrypted MSG headers.
++struct SecureTokenProxy {
++    url: String,
++    frames: Receiver<(u64,u32,u32)>,
++    stop: Option<tokio::sync::oneshot::Sender<()>>,
++    thread: Option<std::thread::JoinHandle<()>>,
++}
++impl SecureTokenProxy {
++    fn start(server: &TestServer) -> Self {
++        let listener=std::net::TcpListener::bind(("127.0.0.1",0)).unwrap();
++        listener.set_nonblocking(true).unwrap();
++        let port=listener.local_addr().unwrap().port();let target=server.port;
++        let (tx,frames)=channel();let (stop,stopped)=tokio::sync::oneshot::channel();
++        let thread=std::thread::spawn(move || {
++            use tokio::io::{AsyncReadExt,AsyncWriteExt};
++            let rt=tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
++            rt.block_on(async move {
++                let listener=tokio::net::TcpListener::from_std(listener).unwrap();let mut tasks=tokio::task::JoinSet::new();let mut next=0u64;tokio::pin!(stopped);
++                loop { tokio::select! {
++                    _=&mut stopped=>break,
++                    accept=listener.accept()=>{
++                        let Ok((client,_))=accept else {break};next+=1;let socket=next;let tx=tx.clone();
++                        tasks.spawn(async move {
++                            let Ok(server)=tokio::net::TcpStream::connect(("127.0.0.1",target)).await else {return};
++                            let (mut cr,mut cw)=client.into_split();let (mut sr,mut sw)=server.into_split();
++                            let forward=async move {loop {
++                                let mut h=[0u8;8];if cr.read_exact(&mut h).await.is_err(){break}
++                                let n=u32::from_le_bytes([h[4],h[5],h[6],h[7]]) as usize;
++                                if !(8..=1_048_576).contains(&n){break}let mut frame=vec![0;n];frame[..8].copy_from_slice(&h);if cr.read_exact(&mut frame[8..]).await.is_err(){break}
++                                if &h[..3]==b"MSG" && n>=16 {
++                                    let channel=u32::from_le_bytes(frame[8..12].try_into().unwrap());
++                                    let token=u32::from_le_bytes(frame[12..16].try_into().unwrap());
++                                    let _=tx.send((socket,channel,token));
++                                }
++                                if sw.write_all(&frame).await.is_err(){break}
++                            }};
++                            let backward=async move {let _=tokio::io::copy(&mut sr,&mut cw).await;};
++                            tokio::select!{_ = forward=>{},_ = backward=>{}}
++                        });
++                    }
++                }}tasks.abort_all();while tasks.join_next().await.is_some(){}
++            });
++        });
++        Self {url:format!("opc.tcp://127.0.0.1:{port}/"),frames,stop:Some(stop),thread:Some(thread)}
++    }
++}
++impl Drop for SecureTokenProxy {fn drop(&mut self){if let Some(stop)=self.stop.take(){let _=stop.send(());}if let Some(thread)=self.thread.take(){let _=thread.join();}}}
++
++#[test]
++fn sdk_secure_channel_token_renews_without_losing_session() {
++    use crate::bff::model::{Origin, RequestId, UaProtection, UaRecoveryState};
++    use opcua::client::DataChangeCallback;
++    use opcua::types::{AttributeId,MonitoredItemCreateRequest,MonitoringMode,MonitoringParameters,ReadValueId,TimestampsToReturn};
++    let server=TestServer::start_with_token_cap(free_port(),|_|{},Some(5000));
++    let proxy=SecureTokenProxy::start(&server);
++    let trusted=trusted_copy_of_server_cert(&server);std::fs::create_dir_all(trusted.parent().unwrap()).unwrap();std::fs::copy(server.dir.join("own/cert.der"),&trusted).unwrap();
++    struct RemoveCert(PathBuf);impl Drop for RemoveCert {fn drop(&mut self){let _=std::fs::remove_file(&self.0);}}
++    let _trust=RemoveCert(trusted);
++    let rt=tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
++    rt.block_on(async {
++        let (events,event_rx)=channel();let cancel=tokio_util::sync::CancellationToken::new();
++        let mut endpoint=Harness::endpoint(&proxy.url);endpoint.ua_security_policy=UaSecurityPolicy::Basic256Sha256;endpoint.ua_security_mode=UaSecurityMode::SignAndEncrypt;endpoint.ua_trust_server_cert=false;
++        let epoch=RequestId::FIRST;
++        let mut adapter=super::session::connect(SessionId::FIRST,Some(epoch),endpoint,&cancel,&events).await.expect("verified secure session");
++        assert!(matches!(&adapter.info,BackendMsg::UaConnected {policy,mode,protection:UaProtection::SignAndEncrypt,..} if policy=="Basic256Sha256" && mode=="SignAndEncrypt"));
++        let remote=adapter.session.server_session_id();
++        while proxy.frames.try_recv().is_ok() {}
++        let node=ReadValueId {node_id:NodeId::new(server.ns,"Level"),attribute_id:AttributeId::Value as u32,..Default::default()};
++        let before=adapter.session.read(&[node.clone()],TimestampsToReturn::Both,0.0).await.expect("initial secured Read");assert_eq!(before[0].value,Some(Variant::Double(1.0)));
++        let (socket,channel_id,first_token)=proxy.frames.recv_timeout(Duration::from_secs(5)).expect("secured MSG token header");assert_ne!(channel_id,0);assert_ne!(first_token,0);
++        let (tx,rx)=channel();let callback=DataChangeCallback::new(move |v:DataValue,_|{let _=tx.send(v);});
++        let sub=adapter.session.create_subscription(Duration::from_millis(100),100,20,1000,0,true,callback).await.unwrap();
++        let items=adapter.session.create_monitored_items(sub,TimestampsToReturn::Both,vec![MonitoredItemCreateRequest {item_to_monitor:node.clone(),monitoring_mode:MonitoringMode::Reporting,requested_parameters:MonitoringParameters {client_handle:1,sampling_interval:0.0,queue_size:10,discard_oldest:true,..Default::default()}}]).await.unwrap();
++        assert!(items[0].result.status_code.is_good());let monitored_id=items[0].result.monitored_item_id;
++        rx.recv_timeout(Duration::from_secs(15)).expect("initial secured subscription value");
++        let until=Instant::now()+Duration::from_secs(30);let mut next_token=None;
++        while Instant::now()<until && next_token.is_none() {
++            let read=adapter.session.read(&[node.clone()],TimestampsToReturn::Both,0.0).await.expect("Read during renewal");assert_eq!(read[0].value,Some(Variant::Double(1.0)));
++            while let Ok((sock,ch,token))=proxy.frames.try_recv() {if sock==socket && ch==channel_id && token!=first_token && token!=0 {next_token=Some(token);break}}
++            tokio::time::sleep(Duration::from_millis(200)).await;
++        }
++        let second_token=next_token.expect("SDK did not send a renewed token on original channel");
++        assert_ne!(first_token,second_token);assert_eq!(adapter.session.server_session_id(),remote);
++        {
++            let state=adapter.session.subscription_state.lock();
++            let subscription=state.get(sub).expect("same SDK subscription after token renewal");
++            assert!(subscription.monitored_items().any(|item| item.id()==monitored_id && item.client_handle()==1), "same SDK monitored item after token renewal");
++        }
++        server.set("Level",Variant::Double(54.5));let limit=Instant::now()+Duration::from_secs(15);let mut pushed=false;
++        while Instant::now()<limit {let Ok(v)=rx.recv_timeout(limit.saturating_duration_since(Instant::now())) else {break};if v.value==Some(Variant::Double(54.5)){pushed=true;break}}
++        assert!(pushed,"same SDK subscription did not deliver after token change");
++        let after=adapter.session.read(&[node],TimestampsToReturn::Both,0.0).await.expect("secured Read after renewal");assert_eq!(after[0].value,Some(Variant::Double(54.5)));
++        assert_eq!(adapter.session.server_session_id(),remote);
++        assert!(!event_rx.try_iter().any(|e|matches!((e.origin,e.kind),(Origin::UaSession {connection,..},EventKind::UaRecovery {state:UaRecoveryState::ConnectionLost {..}}) if connection==epoch)),"unexpected loss during renewal");
++        eprintln!("OBSERVED policy=Basic256Sha256 mode=SignAndEncrypt verify=true channel={channel_id} token_before={first_token} token_after={second_token} same_session=true sub={sub} item={monitored_id} fresh=54.5 push=54.5");
++        adapter.close().await;
++    });
++}
