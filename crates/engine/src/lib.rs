@@ -5470,6 +5470,7 @@ mod tests {
         engine.test_skip_dispatch = true;
         let mut view = SessionRuntime::new(EndpointSpec::ua("opc.tcp://localhost:4840"), now);
         view.state = SessionState::Connected;
+        view.connection_id = Some(rid(77));
         view.force_poll = true;
         view.items.insert(key(1), false);
         view.pending_initial.insert(key(1), now);
@@ -5502,6 +5503,7 @@ mod tests {
         engine.test_skip_dispatch = true;
         let mut view = SessionRuntime::new(endpoint.clone(), now);
         view.state = SessionState::Connected;
+        view.connection_id = Some(rid(77));
         view.force_poll = true;
         view.items.insert(key(1), false);
         engine.sessions.insert(sid(1), view);
@@ -5616,6 +5618,7 @@ mod tests {
             engine.test_skip_dispatch = true;
             let mut view = SessionRuntime::new(EndpointSpec::ua("opc.tcp://localhost:4840"), now);
             view.state = SessionState::Connected;
+            view.connection_id = Some(rid(77));
             view.subscription = state;
             view.items.insert(key(1), true);
             view.pending_initial.insert(key(1), now);
@@ -5655,6 +5658,7 @@ mod tests {
         engine.test_skip_dispatch = true;
         let mut view = SessionRuntime::new(EndpointSpec::ua("opc.tcp://localhost:4840"), now);
         view.state = SessionState::Connected;
+        view.connection_id = Some(rid(77));
         view.subscription = SubscriptionState::Active;
         view.items.insert(key(1), false);
         engine.sessions.insert(sid(1), view);
@@ -5717,6 +5721,7 @@ mod tests {
         engine.test_skip_dispatch = true;
         let mut view = SessionRuntime::new(EndpointSpec::ua("opc.tcp://localhost:4840"), now);
         view.state = SessionState::Connected;
+        view.connection_id = Some(rid(77));
         view.subscription = SubscriptionState::Failed;
         view.items.insert(key(1), false);
         engine.sessions.insert(sid(1), view);
@@ -6136,6 +6141,7 @@ mod tests {
             engine.test_skip_dispatch = true;
             let mut view = SessionRuntime::new(EndpointSpec::ua("opc.tcp://127.0.0.1:4840"), now);
             view.state = SessionState::Connected;
+            view.connection_id = Some(rid(77));
             view.force_poll = true;
             view.items.insert(ItemKey::FIRST, false);
             engine.sessions.insert(sid(1), view);
