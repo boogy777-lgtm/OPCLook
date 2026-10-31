@@ -192,18 +192,24 @@ static int live_da1_inactive_fixture() {
     OpclDaItem *target = nullptr, *cache_count = nullptr, *device_count = nullptr;
     uint16_t type = 0; uint32_t rights = 0, revised = 0; HRESULT hr = opcl_da_host_create(&host);
     if (FAILED(hr)) return 61;
-    hr = opcl_da_session_open(host, "OPCLook.NativeDaFixture.1", "localhost", &clsid,
-                              0, 1000, 100000, &revised, &session);
+    hr = opcl_da_test_da1_open(host, "OPCLook.NativeDaFixture.1", "localhost", &clsid, &revised, &session);
+    std::printf("DA1 open inactive hr=%08lx\n", static_cast<unsigned long>(hr));
     bool ok = SUCCEEDED(hr);
-    if (ok) { hr = opcl_da_test_da1_inactive(session); ok = SUCCEEDED(hr); }
     auto add = [&](const char* id, uint32_t registration, OpclDaItem** item) {
-        return SUCCEEDED(opcl_da_item_add(session, id, registration, 0, item, &type, &rights));
+        const HRESULT result = opcl_da_item_add(session, id, registration, 0, item, &type, &rights);
+        std::printf("DA1 add %s hr=%08lx type=%u rights=%lu\n", id, static_cast<unsigned long>(result), type, static_cast<unsigned long>(rights));
+        return SUCCEEDED(result);
     };
     if (ok) ok = add("Fixture.DeviceValue", 1, &target) && add("Fixture.SyncCacheKindCount", 2, &cache_count) &&
                  add("Fixture.SyncDeviceKindCount", 3, &device_count);
-    if (ok) ok = SUCCEEDED(opcl_da_test_da1_is_inactive(session));
+    if (ok) { hr = opcl_da_test_da1_is_inactive(session); std::printf("DA1 inactive after add hr=%08lx\n", static_cast<unsigned long>(hr)); ok = SUCCEEDED(hr); }
     auto read = [&](OpclDaItem* item, uint32_t max_age, OpclDaReadI4& out) {
         HRESULT result = opcl_da_read_i4(session, item, max_age, &out);
+        std::printf("DA1 read source=%s hr=%08lx service=%08lx item=%08lx vt=%u value=%ld quality=%04x time=%08lx:%08lx\n",
+                    max_age == UINT32_MAX ? "cache" : "device", static_cast<unsigned long>(result),
+                    static_cast<unsigned long>(out.service_result), static_cast<unsigned long>(out.item_result),
+                    out.vartype, static_cast<long>(out.value), out.quality,
+                    static_cast<unsigned long>(out.filetime_high), static_cast<unsigned long>(out.filetime_low));
         return SUCCEEDED(result) && SUCCEEDED(out.service_result) && SUCCEEDED(out.item_result) &&
                out.vartype == VT_I4 && (out.filetime_low || out.filetime_high);
     };

@@ -94,9 +94,10 @@ int32_t opcl_da_item_remove(OpclDaSession* session, OpclDaItem* item);
 int32_t opcl_da_take_push(OpclDaSession* session, OpclDaPush* out, char* payload,
                           uint32_t capacity, uint32_t* count, uint32_t* overflow);
 #ifdef OPCL_DA_TESTING
-// Fixture-only: reconnect an empty non-subscription group with DA 1.0 forced,
-// then retain it connected but inactive. Does not report physical server version.
-int32_t opcl_da_test_da1_inactive(OpclDaSession* session);
+// Fixture-only: force DA 1.0 before SDK server connection and connect an inactive group.
+// Does not report physical server version.
+int32_t opcl_da_test_da1_open(OpclDaHost* host, const char* name, const char* node,
+                              const OpclDaGuid* id, uint32_t* revised_rate_ms, OpclDaSession** out);
 int32_t opcl_da_test_da1_is_inactive(OpclDaSession* session);
 /* Test-only one-shot injection: state 0 idle, 1 armed, 2 consumed. */
 int32_t opcl_da_test_arm_write_exception(void);
