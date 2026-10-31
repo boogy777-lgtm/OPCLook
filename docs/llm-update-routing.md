@@ -8,14 +8,13 @@
 Это входное задание для нового чата. Маршруты направляют к существующим механизмам; текущий частичный runtime срез
 ExplicitRefresh и CLI opt-in WriteReadback описан в status.md. Полный R2 не завершён.
 
-Текущий проверенный runtime: `690a830` в PR #18; все8 CI jobs прошли.
-Пары03/04 подтвердили wire UA maxAge, SDK revised parameters, official MIT
-Win32 inputs и host reuse при pending write в обеих native matrix. Пары01/02
-ранее проверили native Test, isolation и bounded pending shutdown.
-Пара05 df2bf1d: SDK4/COM2/Linux success, N2L10Unknown/noRetry реально прошёл;
-Windows integration PKI isolation-test failure, loopback driver fix pending.
-Пара06 добавляет terminal API и P4 с новым GUI/counterfactual/PNG gate pending;
-пара07 — E02/front consumers и preferred MIT/no-hook package. Общий R2/N4 открыт. Дополнительно
+Полностью принятый runtime: `690a830` (8/8 jobs). На `cb3da7d` SDK4/COM2
+прошли; App build/shared/library прошли, две exact menu-label assertions
+исправлены отдельным `47e6558`, новый CI pending. Пара07 E02/front consumers
+и preferred MIT/no-hook package reviewed privately. Пара08 раздельные времена
+и native Device adapter reviewed privately; пара09 выполняет Engine integration
+и actual package/CI proof. Не называть новые private code heads принятым runtime.
+Общий R2/N4 открыт. Дополнительно
 [locked UA SDK source audit](testing/ua-sdk-0.19-recovery-audit.md) уточняет
 готовые recovery/Publish API и ещё отсутствующую adapter observability.
 Native DA preview имеет реальный SDK → C ABI → Rust → Gateway путь.
@@ -82,7 +81,7 @@ Routing — навигация, а не новый источник проток
 | R06-UA-QUEUE | Потеря переходов, Overflow, обещание полной истории | SDK monitored queue; latest-view и history completeness раздельны | OF03; F04 | ua/session/mod.rs; ua/values.rs; contract/quality.rs; contract/value.rs; src/ui/status.rs | O06–O07; A03 |
 | R07-UA-RECOVERY | Разрыв связи, missing sequence, Republish/Transfer/ResendData | SDK recovery owner; gap остаётся виден; Engine не второй Publish loop | R00; OF05/OF12; F01/F02/F14 | ua/session/connection.rs; ua/session/subscription.rs; ua/worker.rs; sdk locked source | O10–O13; O27–O28 |
 | R08-WRITE | Ok без нового значения, Uncertain, async completion, timeout | Raw per-item write outcome + read-back intent; unknown не success | OF06; F06/F07 | ua/io.rs; bff/da.rs; contract/event.rs; contract/message.rs; crates/engine/src/lib.rs (send_write_with_readback); crates/cli/src/main.rs; src/app/events.rs | O14–O17; C23–C24; S17–S18 |
-| R09-DA-METHOD | DA Sync/Async, Cache/Device, Subscription + Sync | DA library/adapter strategy; method отдельно от UpdateMode | R00; OF10/OF11; F12/F13 | bff/da.rs; bff/com.rs; opc/bindings/da.rs; bff/da_variant.rs | C03–C07; O23–O26; A04–A10 |
+| R09-DA-METHOD | DA Sync/Async, Cache/Device, Subscription + Sync | DA library/adapter strategy; method отдельно от UpdateMode | R00; OF10/OF11; F12/F13 | bff/softing_da.rs; bff/softing_runtime.rs; native-sdk/core/runtime.cpp; Engine permit mapping | C03–C07; O23–O26; A04–A10 |
 | R10-LIMITS | Большая пачка, TooManyOperations, partial reply | Existing bounded/adaptive chunker; key outcomes сохранены | OF07; F08 | ua/session/core.rs; ua/session/mod.rs; ua/session/subscription.rs; ua/io.rs | O18–O19; E11/E19/E20 |
 | R11-ALIASES | RegisterNodes, NodeId alias, reconnect reuse | SDK/adapter scoped aliases; canonical identity отдельно | OF08; F09 | ua/session/items.rs; ua/session/core.rs; contract/ids.rs; contract/endpoint.rs | O20–O21 |
 | R12-INITIAL | Early push, AddItems success без Good data, grace timeout | Registration outcome и snapshot outcome различны | OF09; F10; R02 | ua/session/items.rs; ua/session/subscription.rs; crates/engine/src/lib.rs | O22; E01–E03 |

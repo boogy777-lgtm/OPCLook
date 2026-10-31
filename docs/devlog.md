@@ -1308,3 +1308,21 @@ fullGUI/counterfactual/PNGpendingCI. СредаудалилаoldsessionGitdb/cac
 recoveredexactpublishedtree89b4/362blobsвcurrentdirectory,06sources/07WIP
 сохранены, remotehistoryнепереписана. FuturelocalSHAsновые,remoteheaddf2
 осталсяparentдлянефорсирующейпубликации. Пара07frontendE02/packageвработе.
+
+## 2026-10-31 — continuation парами07/08/09
+
+- Class: read result consumers/time facts/native source intent/build closure.
+  Inv: нет раннего Good до AddOK; ровно один terminal projection; unknown clocks
+  не сравниваются; SDK владеет Device и COM; production legacy до N4.
+  N+1: early push+AddErr, late older after idle/equal conflict, cached poll+refresh,
+  inactive --check-cfg features, packaged executable vs test-hook library.
+- Reviewed07/08 code: E02/bounded GUI+CLI consumers, ValueTimes/TimeSelection,
+  SDK Device route и preferred MIT/nohook packager. Измеренные локальные результаты
+  и непроверенный Windows/full-Cargo/GPU scope указаны в status; cache утрачен,
+  direct real-source stands с mock boundary не объявлены actual SDK.
+- cb3da7d: SDK4/COM2 success; App build/shared/library и252 GUI tests/platform
+  success, два menu exact-label assertions fail. Upstream egui0.37 Button объединяет
+  shortcut atoms с accessible label. Исправлен test query с сохранением action
+  assertions и видимого Ctrl+P (47e6558); новый CI ещё ожидается.
+- Пара09 выполняет native Fresh/readback capability/permit integration и отдельный
+  actual nohook packaged CLI build/fixture read. External/legal/N4 gates открыты.

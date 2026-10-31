@@ -35,8 +35,10 @@
 | 03 | R2 UA CacheAllowed/maxAge, N1 official MIT OPC Core build inputs | `690a830`: все8 jobs success, wire1234/0 и обе Win32/COM matrix прошли |
 | 04 | R2 negotiated subscription facts, N2L09 SDK host reuse | `690a830`: sample1000→2000 и host reuse в обоих native matrix прошли; UI/recovery ещё open |
 | 05 | R2 legacy profile migration M03/M04, N2L10 Write-task exception | df2bf1d: SDK4+COM2+Linux success; Windows PKI isolation-test failure, bounded driver fix pending |
-| 06 | R2 per-key Read terminal API, P4 typed palette/epoch guards | Reviewed;14 Engine tests, actions/locale/runner checks прошли; actual GUI/counterfactual/4PNG pendingCI |
-| 07 | E02+GUI/CLI read-outcome consumers, preferred MIT/no-hook preview package | Два исполнителя работают изолированно; новый build/runtime результат ещё не принят |
+| 06 | R2 per-key Read terminal API, P4 typed palette/epoch guards | cb3: SDK4/COM2 success; App252 library tests/platform прошли, menu-label assertions fixed47e6558; actual counterfactual/4PNG pendingCI |
+| 07 | E02+GUI/CLI read-outcome consumers, preferred MIT/no-hook preview package | Code reviewed;6 Engine+2 buffer tests и7 packaging+4 license tests локально; actual app/package pendingCI |
+| 08 | R2.T distinct time facts/ordering, N2 Device/Fresh read | Code reviewed;5 time policy+1 propagation и43 native mock tests; integration/Win32/GPU pending |
+| 09 | Engine native Fresh/readback integration, CI/nohook packaged CLI proof | Выполняются двумя Terra High; ownership разделён между Engine/backend и workflows/scripts |
 
 Пара 01 исправила начальное состояние fixture после честного отрицательного
 NOCONFIG verdict на `a004b226`. Проверка на `36fa668` подтвердила
@@ -64,9 +66,10 @@ RUNNING → FAILED → RUNNING во всех трёх процессах и read
 | N4 | Production native DA и удаление прежнего OPC COM data-plane | Native SDK capability, interop/lifetime/license gates закрыты; системный WinAPI/helper не удалён как OPC code |
 | R2.6 / N6 | Полная матрица G/D/E/S/T/C/U/M/A/O, упаковка и согласование планов | Доказательства по стабильным ID, точный code head, итоговые настройки/документы и CI; число строк CSV не число пройденных тестов |
 
-После пары 03 — UA negotiated parameters и миграция профилей либо другой
-независимый готовый срез согласно результатам review/CI. Дальнейшие пары выбирать
-по готовности контрактов и непересекающемуся владению файлами.
+После текущего integration/CI — P2 payload limits и независимый P3/P5 UI срез,
+затем UA SDK recovery observer/reconciliation и оставшиеся DA method/capability
+срезы по результатам SDK audit. Подтверждённые regressions исправлять перед новым
+функциональным пакетом. Дальнейшие пары выбирать по фактическим зависимостям.
 
 ## Внешние гейты
 

@@ -3,6 +3,50 @@
 Режим продолжения по поручению владельца: все оставшиеся задачи выполнять
 парами Terra High; [очередь и зависимости](remaining-work.md).
 
+## 2026-10-31 — пары07/08 подготовлены, интеграция09
+
+На `cb3da7d` SDK4/4 и COM2/2 прошли: [SDK](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41146777682),
+[COM](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41146777679).
+[App](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41146777690) обеих платформ
+прошёл build/shared/library (252 GUI library tests каждый), но остановился на
+двух query-by-exact-label assertions в keyboard_header_footer. egui0.37 включает
+shortcut_text в accessible label кнопки; проверки переведены на contains,
+сохранены Enter→palette, Tab→close и проверка отображаемого Ctrl+P. Исправление
+`47e6558` опубликовано отдельно, новый CI ожидается. Это не green всего head;
+P4 actual counterfactual/PNG и PKI test пока не объявлены принятыми.
+
+Пара07 code reviewed: E02 InitialPush отдаётся только после успешной Add,
+GUI хранит один pending push без преждевременного Good; terminal metadata
+потребляют GUI/CLI через bounded latest buffer без I/O в sink. CLI single JSON
+дополняется read_observations после shutdown; старые data/readback поля остаются.
+6 targeted real-Engine/mock tests и2 buffer tests прошли; GUI/CLI реальные tests
+ожидают CI. Drop без explicit shutdown и отдельные coalesced predispatch Write IDs
+не закрыты этим срезом.
+
+N1 code reviewed: official MIT OPC inputs предпочтительны, probes выключены
+по умолчанию, legacy OPC headers только явный test control. Packager проверяет
+pinned patched SDK, x86 PE, no-test-hook symbols, Cargo active features и
+reachable license inventory, clean include trace и CLI link map. Disabled
+features в --check-cfg не считаются включёнными. 7 packaging и4 license guard
+теста прошли локально. Новый Windows job должен собрать чистый bridge/CLI,
+упаковать notices/receipts/evidence и прочитать42 именно упакованным executable.
+Это инженерный private preview, не полная license/distribution clearance.
+
+Пара08 code reviewed: ValueTimes разносит UA source/server, DA timestamp,
+received_at и origin. SourceClockId даётся только при реальном attestation;
+SDK его не предоставляет, поэтому production ordering остаётся Unknown.
+TimeSelection сравнивает Good только для того же известного clock/type;
+5с неоднозначности отсчитываются с первого отклонённого older, equal conflict
+и Bad не скрываются. 5 policy tests и Engine propagation stand прошли;
+новые UI tooltip, CLI mapping и sample-UA timestamps ещё ожидают полного CI.
+
+Native DA ReadFresh использует готовый SDK maxAge0/Device, ReadCached — Cache;
+fixture DeviceReadCount различает реальные device calls. 43 native mock tests,
+legacy route и launcher checks прошли; actual Win32 Device/readback test
+pending. Пара09 интегрирует capabilities/Engine permit/readback/time mapping
+и готовит CI07/08. Production DA по-прежнему legacy; N4, remote/other-server,
+реальные UAC/IME и legal gates остаются открытыми.
+
 ## 2026-10-31 — пара05:7/8jobs; пара06 подготовлена
 
 Head `df2bf1d55d35a38d0156894099436b1e1e4449a4`:
