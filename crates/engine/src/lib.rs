@@ -255,6 +255,8 @@ pub struct SessionRuntime {
     poll_defer_since: HashMap<ItemKey, Instant>,
     used_keys: HashSet<ItemKey>,
     reserved_read: Option<(ReadPermit, Vec<ItemKey>)>,
+    /// Last caller-provided legacy polling interval; never invent a default.
+    last_due_interval: Option<Duration>,
     force_poll: bool,
     connection_id: Option<RequestId>,
 }
@@ -278,12 +280,45 @@ impl SessionRuntime {
             poll_defer_since: HashMap::new(),
             used_keys: HashSet::new(),
             reserved_read: None,
+            last_due_interval: None,
             force_poll: false,
             connection_id: None,
         }
     }
 }
 impl SessionRuntime {
+    fn initial_due(
+        &self,
+        key: ItemKey,
+        since: Instant,
+        now: Instant,
+        fallback: Option<Duration>,
+    ) -> bool {
+        let configured_poll = self
+            .endpoint
+            .acquisition
+            .as_ref()
+            .map(|c| c.update_mode == opclook_contract::model::UpdateMode::Poll);
+        let wait_for_push = configured_poll.map(|poll| !poll).unwrap_or(
+            !self.force_poll
+                && self.endpoint.protocol == Protocol::OpcUa
+                && !self.items.get(&key).copied().unwrap_or(false),
+        );
+        if !wait_for_push {
+            return true;
+        }
+        let grace = self
+            .revised_interval_for(key)
+            .map(Duration::from_millis)
+            .or_else(|| {
+                self.endpoint
+                    .acquisition
+                    .as_ref()
+                    .map(|c| Duration::from_millis(c.interval_ms))
+            })
+            .or(fallback);
+        grace.is_none_or(|grace| now.saturating_duration_since(since) >= grace)
+    }
     fn revised_interval_for(&self, key: ItemKey) -> Option<u64> {
         self.ua_subscriptions.iter().find_map(|sub| {
             let revised = sub.revised.as_ref().filter(|r| r.valid)?;
@@ -338,6 +373,7 @@ pub enum ActionUnavailable {
     SessionMissing,
     SessionNotConnected,
     ProtocolMismatch,
+    ReadPending,
 }
 
 pub struct RouteOptions {
@@ -937,6 +973,27 @@ impl<C> Engine<C> {
             } => (*session, *protocol, true),
         };
         self.session_action_unavailable(session, protocol, write)
+            .or_else(|| {
+                (!write && self.browse_deferred_at(session, Instant::now()))
+                    .then_some(ActionUnavailable::ReadPending)
+            })
+    }
+
+    /// A Browse must yield to an occupied Read slot or an already due strong
+    /// demand. Ordinary periodic polls do not prevent browsing.
+    pub fn browse_deferred_at(&self, session: SessionId, now: Instant) -> bool {
+        let Some(view) = self.sessions.get(&session) else {
+            return false;
+        };
+        if view.state != SessionState::Connected || view.connection_id.is_none() {
+            return false;
+        }
+        view.read_in_flight
+            || !view.pending_demands.is_empty()
+            || view
+                .pending_initial
+                .iter()
+                .any(|(&key, &since)| view.initial_due(key, since, now, view.last_due_interval))
     }
 
     pub fn write_session_unavailable(
@@ -1224,6 +1281,14 @@ impl<C> Engine<C> {
             }
             return Err(DispatchError::Exhausted);
         };
+        if matches!(&kind, CommandKind::Browse { .. })
+            && let Some(session) = session
+            && self.browse_deferred_at(session, Instant::now())
+        {
+            return Err(DispatchError::ActionUnavailable(
+                ActionUnavailable::ReadPending,
+            ));
+        }
         match &kind {
             CommandKind::Browse {
                 node_id, view_id, ..
@@ -1961,6 +2026,7 @@ impl<C> Engine<C> {
                     let interval = profile
                         .map(|c| Duration::from_millis(c.interval_ms))
                         .unwrap_or(interval);
+                    view.last_due_interval = Some(interval);
                     let configured_poll =
                         profile.map(|c| c.update_mode == opclook_contract::model::UpdateMode::Poll);
                     let busy = self.requests.iter().any(|(&(sid, _), p)| {
@@ -1976,18 +2042,7 @@ impl<C> Engine<C> {
                             .pending_initial
                             .iter()
                             .filter_map(|(&key, &since)| {
-                                let wait_for_push = configured_poll.map(|poll| !poll).unwrap_or(
-                                    !view.force_poll
-                                        && view.endpoint.protocol == Protocol::OpcUa
-                                        && !view.items.get(&key).copied().unwrap_or(false),
-                                );
-                                // Unknown negotiation uses the existing fallback delay;
-                                // it is not recorded as a revised SDK value.
-                                let grace = view
-                                    .revised_interval_for(key)
-                                    .map(Duration::from_millis)
-                                    .unwrap_or(interval);
-                                (!wait_for_push || now.saturating_duration_since(since) >= grace)
+                                view.initial_due(key, since, now, Some(interval))
                                     .then_some(key)
                             })
                             .collect();
@@ -2467,6 +2522,7 @@ impl<C> Engine<C> {
             session.reserved_poll = old.reserved_poll.clone();
             session.poll_defer_since = old.poll_defer_since.clone();
             session.reserved_read = old.reserved_read.clone();
+            session.last_due_interval = old.last_due_interval;
             session.used_keys = old.used_keys.clone();
         } else {
             session.connection_id = Some(RequestId::FIRST);

@@ -3980,3 +3980,61 @@ fn p2_oversized_action_is_visible_and_never_dispatched() {
         assert_eq!(app.status, tr(lang, Tr::ActionPayloadInvalid));
     }
 }
+
+#[test]
+fn deferred_add_children_keeps_exact_item_until_read_reply() {
+    let (_ctx, mut app, _) = profile_fixture();
+    let session = SessionId::FIRST;
+    complete_profile_fixture_browse(&mut app);
+    let key = app.seed_row(session, "tag", "Tag", Value::I64(10));
+    app.sync_fixture_sessions();
+    app.seed_tree_item(session, None, 0, branch_node("duplicate", "first", true));
+    let selected = app.seed_tree_item(session, None, 0, branch_node("duplicate", "second", true));
+    app.engine.request_refresh(session, key).unwrap();
+    let due = app
+        .engine
+        .due(Instant::now(), Duration::from_secs(60), None);
+    let [opclook_engine::Due::Read { keys, permit, .. }] = due.as_slice() else {
+        panic!("read due")
+    };
+    let read = app
+        .engine
+        .send_due_read(
+            session,
+            Protocol::OpcUa,
+            keys.clone(),
+            *permit,
+            PendingCtx::None,
+        )
+        .unwrap();
+    let before = app.dispatched_for_test().len();
+    app.set_tree_focus(session, selected);
+    app.add_selected_children();
+    let job = app.add_children.as_ref().expect("deferred job retained");
+    assert_eq!(job.queue.front().map(String::as_str), Some("duplicate"));
+    assert_eq!(job.initial_item_id, Some(selected));
+    assert!(job.in_flight.is_empty());
+    assert_eq!(app.dispatched_for_test().len(), before);
+    app.on_event(Event {
+        owner: session.into(),
+        origin: Origin::Reply(read),
+        kind: EventKind::Values { values: vec![] },
+    });
+    let job = app.add_children.as_ref().expect("job resumed");
+    let browse = *job.in_flight.keys().next().expect("one browse issued");
+    assert!(job.queue.is_empty());
+    app.on_event(Event {
+        owner: session.into(),
+        origin: Origin::Reply(browse),
+        kind: EventKind::Browse {
+            node_id: "duplicate".into(),
+            children: vec![item_node("child", "child")],
+        },
+    });
+    let view = app.session(session).unwrap();
+    assert!(
+        view.tree
+            .iter()
+            .any(|item| item.parent == Some(selected) && item.node.node_id == "child")
+    );
+}

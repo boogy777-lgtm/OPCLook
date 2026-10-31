@@ -93,6 +93,7 @@ impl App {
                 }
             }
         }
+        self.pump_add_children();
     }
 }
 

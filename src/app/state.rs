@@ -53,6 +53,8 @@ pub struct CsvImportJob {
 pub struct AddChildrenJob {
     /// Session whose tree is being walked.
     pub session: SessionId,
+    pub epoch: Option<RequestId>,
+    pub initial_item_id: Option<u64>,
     /// Branch `node_id`s still to browse (BFS/DFS queue).
     pub queue: std::collections::VecDeque<String>,
     /// Branch `node_id`s already queued/browsed (guards cycles and duplicates).

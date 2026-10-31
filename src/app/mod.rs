@@ -198,6 +198,12 @@ fn owner_label(lang: Lang, owner: Owner) -> String {
     }
 }
 
+enum SendOutcome {
+    Sent(RequestId),
+    Deferred,
+    Failed,
+}
+
 impl App {
     pub(super) fn session(&self, id: SessionId) -> Option<&SessionView> {
         self.sessions.iter().find(|view| view.id == id)
@@ -748,6 +754,21 @@ impl App {
         ctx: PendingCtx,
         permit: Option<opclook_engine::ReadPermit>,
     ) -> Option<RequestId> {
+        match self.send_with_permit_inner(owner, protocol, kind, ctx, permit, false) {
+            SendOutcome::Sent(id) => Some(id),
+            SendOutcome::Deferred | SendOutcome::Failed => None,
+        }
+    }
+
+    fn send_with_permit_inner(
+        &mut self,
+        owner: impl Into<Owner>,
+        protocol: Protocol,
+        kind: CommandKind,
+        ctx: PendingCtx,
+        permit: Option<opclook_engine::ReadPermit>,
+        defer_browse: bool,
+    ) -> SendOutcome {
         let owner = owner.into();
         let operation = kind.operation();
         let dispatch = match (owner, kind) {
@@ -756,7 +777,7 @@ impl App {
                     Some(permit) => self
                         .engine
                         .send_due_read(session, protocol, keys, permit, ctx),
-                    None => return None,
+                    None => return SendOutcome::Failed,
                 }
             }
             (
@@ -793,43 +814,46 @@ impl App {
             Err(DispatchError::InvalidActionPayload(_)) => {
                 self.journal.error_l(Tr::ActionPayloadInvalid, &[]);
                 self.status = tr(self.lang(), Tr::ActionPayloadInvalid).to_string();
-                return None;
+                return SendOutcome::Failed;
             }
             Err(DispatchError::InvalidAcquisition(_)) => {
                 self.journal.error_l(Tr::AcquisitionInvalid, &[]);
                 self.status = tr(self.lang(), Tr::AcquisitionInvalid).to_string();
-                return None;
+                return SendOutcome::Failed;
             }
             Err(DispatchError::Exhausted) => {
                 self.journal.error_l(Tr::RequestIdsExhausted, &[]);
                 self.status = tr(self.lang(), Tr::RequestIdsExhausted).to_string();
-                return None;
+                return SendOutcome::Failed;
             }
             Err(DispatchError::ReadBusy) => {
                 self.journal.error_l(Tr::ReadBusy, &[]);
                 self.status = tr(self.lang(), Tr::ReadBusy).to_string();
-                return None;
+                return SendOutcome::Failed;
             }
             Err(DispatchError::ReadEmpty) => {
                 self.journal.error_l(Tr::ReadEmpty, &[]);
                 self.status = tr(self.lang(), Tr::ReadEmpty).to_string();
-                return None;
+                return SendOutcome::Failed;
             }
             Err(DispatchError::ItemKeyReused) => {
                 self.journal.error_l(Tr::ItemKeyReused, &[]);
                 self.status = tr(self.lang(), Tr::ItemKeyReused).to_string();
-                return None;
+                return SendOutcome::Failed;
             }
             Err(DispatchError::ItemKeyLimit) => {
                 self.journal.error_l(Tr::ItemKeyLimit, &[]);
                 self.status = tr(self.lang(), Tr::ItemKeyLimit).to_string();
-                return None;
+                return SendOutcome::Failed;
             }
+            Err(DispatchError::ActionUnavailable(
+                opclook_engine::ActionUnavailable::ReadPending,
+            )) if defer_browse => return SendOutcome::Deferred,
             Err(DispatchError::ActionUnavailable(reason)) => {
                 let key = actions::action_unavailable_tr(reason);
                 self.journal.error_l(key, &[]);
                 self.status = tr(self.lang(), key).to_string();
-                return None;
+                return SendOutcome::Failed;
             }
             Err(DispatchError::SessionLimit) => {
                 self.journal.error_l(
@@ -841,7 +865,7 @@ impl App {
                     Tr::UaSessionLimitReached,
                     &[&crate::constants::MAX_UA_SESSIONS.to_string()],
                 );
-                return None;
+                return SendOutcome::Failed;
             }
             Err(DispatchError::Closed { request_id, cause }) => (
                 request_id,
@@ -880,9 +904,9 @@ impl App {
             }
         }
         if failure.is_some() {
-            None
+            SendOutcome::Failed
         } else {
-            Some(request_id)
+            SendOutcome::Sent(request_id)
         }
     }
 

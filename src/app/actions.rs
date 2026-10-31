@@ -60,6 +60,7 @@ pub(super) fn action_unavailable_tr(reason: opclook_engine::ActionUnavailable) -
     match reason {
         opclook_engine::ActionUnavailable::RequestIdsExhausted => Tr::RequestIdsExhausted,
         opclook_engine::ActionUnavailable::SessionMissing => Tr::ActionSessionMissing,
+        opclook_engine::ActionUnavailable::ReadPending => Tr::ActionReadPending,
         opclook_engine::ActionUnavailable::SessionNotConnected => Tr::ActionSessionNotConnected,
         opclook_engine::ActionUnavailable::ProtocolMismatch => Tr::ActionProtocolMismatch,
     }

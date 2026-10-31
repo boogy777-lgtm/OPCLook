@@ -303,8 +303,10 @@ impl App {
         // unsolicited pushes and worker runtime errors have no request token.
         self.engine
             .set_auto_reconnect(self.settings.view.options.auto_reconnect);
+        let mut completed_read = false;
         let ctx = match self.engine.accept(&event) {
             Ok(Some(pending)) => {
+                completed_read = pending.operation == Operation::Read;
                 if self.settings.view.options.diagnostic_trace {
                     let latency = pending.sent.elapsed().as_millis();
                     self.journal.info_l(
@@ -339,6 +341,9 @@ impl App {
                 return;
             }
         };
+        if completed_read {
+            self.pump_add_children();
+        }
         let request_id = match event.origin {
             Origin::Reply(id) => Some(id),
             Origin::Unsolicited | Origin::Session(_) => None,

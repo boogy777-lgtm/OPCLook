@@ -373,6 +373,9 @@ fn dispatch_error(error: DispatchError) -> String {
                 opclook_engine::ActionUnavailable::RequestIdsExhausted => {
                     opclook_locale::Tr::RequestIdsExhausted
                 }
+                opclook_engine::ActionUnavailable::ReadPending => {
+                    opclook_locale::Tr::ActionReadPending
+                }
                 opclook_engine::ActionUnavailable::SessionMissing => {
                     opclook_locale::Tr::ActionSessionMissing
                 }
@@ -1496,6 +1499,35 @@ mod tests {
             },
         );
         assert_eq!(result.unwrap_err(), "Session not found");
+    }
+    #[test]
+    fn browse_reports_pending_read_before_dispatch() {
+        use opclook_contract::model::{
+            CommandKind, EndpointSpec, ItemKey, NodeClassFilter, Protocol, SessionId,
+        };
+        let mut engine = opclook_engine::Engine::<()>::default();
+        let mut session = opclook_engine::SessionRuntime::new(
+            EndpointSpec::ua("opc.tcp://localhost:4840"),
+            std::time::Instant::now(),
+        );
+        session.state = opclook_engine::SessionState::Connected;
+        session.items.insert(ItemKey::FIRST, false);
+        engine.seed_session_for_test(SessionId::FIRST, session);
+        engine
+            .request_refresh(SessionId::FIRST, ItemKey::FIRST)
+            .unwrap();
+        let error = super::send(
+            &mut engine,
+            Protocol::OpcUa,
+            CommandKind::Browse {
+                node_id: String::new(),
+                filter: NodeClassFilter::All,
+                view_id: None,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error, "A read is pending for this session");
+        assert!(engine.pending_ids_for_test(SessionId::FIRST).is_empty());
     }
     #[test]
     fn unavailable_write_diagnostic_does_not_expose_value() {
