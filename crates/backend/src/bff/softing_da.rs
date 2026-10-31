@@ -288,7 +288,11 @@ fn drain_push(
                 fact.value.vartype
             )))
         } else {
-            super::softing_scalar::decode((fact.value, fact.text)).unwrap_or_else(DataValue::bad)
+            super::softing_scalar::decode_with_origin(
+                (fact.value, fact.text),
+                super::model::ValueOrigin::Subscription,
+            )
+            .unwrap_or_else(DataValue::bad)
         };
         values.push((*key, value));
     }
@@ -582,7 +586,12 @@ impl DaHost for NativeHost {
                                     s.read_scalar(*reg, max_age)
                                         .map_err(|e| message(format!("DA read: {e:?}")))
                                 })
-                                .and_then(super::softing_scalar::decode);
+                                .and_then(|value| {
+                                    super::softing_scalar::decode_with_origin(
+                                        value,
+                                        super::model::ValueOrigin::Read,
+                                    )
+                                });
                             (*key, result.unwrap_or_else(DataValue::bad))
                         })
                         .collect();

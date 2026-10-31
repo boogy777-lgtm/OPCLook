@@ -1218,7 +1218,7 @@ impl App {
         // Empty by design: no persistence restores host/port/URL into the
         // fields. The servers list is what the user picks from.
         d.ua_acquisition = Some(crate::bff::model::AcquisitionConfig::ua_default());
-        d.da_acquisition = Some(crate::bff::model::AcquisitionConfig::da_available());
+        d.da_acquisition = Some(opclook_engine::recommended_acquisition(Protocol::OpcDa));
         d.da_host.clear();
         d.da_manual.clear();
         // Keep previously discovered DA results and their source hosts

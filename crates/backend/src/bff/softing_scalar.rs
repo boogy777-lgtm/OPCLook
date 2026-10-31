@@ -1,11 +1,20 @@
 //! Mapping for SDK scalars, strings, and bounded one-dimensional UI1/I4 arrays.
 //! The SDK retains all VARIANT and SAFEARRAY ownership.
 use super::da_convert::{convert_float, convert_int, convert_uint, da_range};
-use super::model::{BackendMsg, DataValue, Quality, Value};
+use super::model::{BackendMsg, DataValue, Quality, Value, ValueOrigin, ValueTimes};
 use super::softing_runtime::ReadScalar;
 
 pub fn decode(value: (ReadScalar, Option<Vec<u8>>)) -> Result<DataValue, BackendMsg> {
-    decode_inner(value, 0)
+    decode_with_origin(value, ValueOrigin::Unknown)
+}
+
+pub fn decode_with_origin(
+    value: (ReadScalar, Option<Vec<u8>>),
+    origin: ValueOrigin,
+) -> Result<DataValue, BackendMsg> {
+    let mut decoded = decode_inner(value, 0)?;
+    decoded.times = ValueTimes::da(decoded.timestamp, chrono::Utc::now(), origin);
+    Ok(decoded)
 }
 fn decode_inner(
     (raw, text): (ReadScalar, Option<Vec<u8>>),
@@ -49,6 +58,7 @@ fn decode_inner(
         value,
         quality: Quality::from_da(raw.quality),
         timestamp: super::filetime::ticks_to_utc(ticks),
+        times: ValueTimes::default(),
         reason: None,
     })
 }
@@ -382,6 +392,33 @@ pub fn encode(value: &Value, hint: Option<u16>) -> Result<(u16, u64), BackendMsg
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn da_timestamp_and_origin_are_separate_from_ua_facts() {
+        let ticks = 116_444_736_010_000_000u64;
+        for origin in [ValueOrigin::Read, ValueOrigin::Subscription] {
+            let value = decode_with_origin(
+                (
+                    ReadScalar {
+                        vartype: 3,
+                        bits_low: 42,
+                        filetime_low: ticks as u32,
+                        filetime_high: (ticks >> 32) as u32,
+                        ..Default::default()
+                    },
+                    None,
+                ),
+                origin,
+            )
+            .unwrap();
+            assert_eq!(value.times.origin, origin);
+            assert_eq!(value.times.da_timestamp, value.timestamp);
+            assert!(value.timestamp.is_some());
+            assert!(value.times.received_at.is_some());
+            assert_eq!(value.times.ua_source, None);
+            assert_eq!(value.times.ua_server, None);
+            assert_eq!(value.times.source_clock, None);
+        }
+    }
     #[test]
     fn bounded_arrays_are_lossless_and_validate_elements() {
         let data = Value::Array(vec![Value::I64(-2), Value::I64(0), Value::I64(42)]);

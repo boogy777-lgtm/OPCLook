@@ -36,11 +36,30 @@ pub fn acquisition_capabilities(
         Protocol::OpcDa => AcquisitionCapabilities {
             subscription: cfg!(all(windows, feature = "native-da-preview")),
             cache_allowed: true,
-            fresh_source: false,
-            read_after_write: false,
+            fresh_source: cfg!(all(windows, feature = "native-da-preview")),
+            read_after_write: cfg!(all(windows, feature = "native-da-preview")),
         },
     }
 }
+/// Defaults for a new GUI connection; migration and CLI compatibility use
+/// their explicit baseline constructors instead.
+pub fn recommended_acquisition(
+    protocol: opclook_contract::model::Protocol,
+) -> opclook_contract::model::AcquisitionConfig {
+    use opclook_contract::model::{AcquisitionConfig, PollFreshness, Protocol};
+    match protocol {
+        Protocol::OpcUa => AcquisitionConfig::ua_default(),
+        Protocol::OpcDa => {
+            let mut config = AcquisitionConfig::da_available();
+            if acquisition_capabilities(protocol).fresh_source {
+                config.poll_freshness = PollFreshness::FreshSource;
+                config.read_after_write = true;
+            }
+            config
+        }
+    }
+}
+
 pub fn supports_fresh_source(protocol: opclook_contract::model::Protocol) -> bool {
     acquisition_capabilities(protocol).fresh_source
 }
@@ -86,7 +105,30 @@ pub fn validate_acquisition(
 #[cfg(test)]
 mod acquisition_tests {
     use super::*;
-    use opclook_contract::model::{AcquisitionConfig, EndpointSpec, PollFreshness, UpdateMode};
+    use opclook_contract::model::{
+        AcquisitionConfig, EndpointSpec, PollFreshness, Protocol, UpdateMode,
+    };
+    #[test]
+    fn recommended_da_is_capability_gated_without_changing_legacy_profile() {
+        let legacy = AcquisitionConfig::da_available();
+        let recommended = recommended_acquisition(Protocol::OpcDa);
+        assert_eq!(legacy.poll_freshness, PollFreshness::CacheAllowed);
+        assert!(!legacy.read_after_write);
+        let capable = acquisition_capabilities(Protocol::OpcDa).fresh_source;
+        assert_eq!(recommended.read_after_write, capable);
+        assert_eq!(
+            recommended.poll_freshness,
+            if capable {
+                PollFreshness::FreshSource
+            } else {
+                PollFreshness::CacheAllowed
+            }
+        );
+        let mut restored = EndpointSpec::da("", "test");
+        restored.acquisition = Some(legacy.clone());
+        assert_eq!(validate_acquisition(&restored), Ok(()));
+        assert_eq!(restored.acquisition, Some(legacy));
+    }
     #[test]
     fn validates_known_adapter_capabilities_and_interval_boundaries() {
         let mut endpoint = EndpointSpec::ua("opc.tcp://localhost:4840");
@@ -127,7 +169,11 @@ mod acquisition_tests {
         da.acquisition = Some(config);
         assert_eq!(
             validate_acquisition(&da),
-            Err(AcquisitionError::ReadbackUnsupported)
+            if cfg!(all(windows, feature = "native-da-preview")) {
+                Ok(())
+            } else {
+                Err(AcquisitionError::ReadbackUnsupported)
+            }
         );
     }
 }

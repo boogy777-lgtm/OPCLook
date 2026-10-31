@@ -165,6 +165,10 @@ pub fn reconnect_delay(attempt: u32, base: Duration, max: Duration) -> Duration 
 }
 /// Current backend adapter capability, not a negotiated server guarantee.
 pub use opclook_backend::{AcquisitionCapabilities, AcquisitionError, acquisition_capabilities};
+pub fn recommended_acquisition(protocol: Protocol) -> opclook_contract::model::AcquisitionConfig {
+    opclook_backend::recommended_acquisition(protocol)
+}
+
 pub fn validate_acquisition(endpoint: &EndpointSpec) -> Result<(), AcquisitionError> {
     opclook_backend::validate_acquisition(endpoint)
 }
@@ -1099,7 +1103,10 @@ impl<C> Engine<C> {
     ) -> Result<RequestId, DispatchError> {
         // Only this engine may turn a validated reservation into a cached
         // transport read. Public callers cannot bypass reservation checks.
-        if matches!(&kind, CommandKind::ReadCached { .. }) {
+        if matches!(
+            &kind,
+            CommandKind::ReadCached { .. } | CommandKind::ReadFresh { .. }
+        ) {
             return Err(DispatchError::ReadBusy);
         }
         if let CommandKind::Connect { endpoint } = &kind {
@@ -1316,38 +1323,58 @@ impl<C> Engine<C> {
         // profile, so any covered demand forces maxAge=0 for the whole Read.
         // Subscription snapshots use only valid SDK-reported per-item rates;
         // when any rate is unknown, the whole batch stays fresh.
-        let cached_age =
-            if permit.is_some() && covered_demands.is_empty() && protocol == Protocol::OpcUa {
-                session
-                    .and_then(|id| self.sessions.get(&id))
-                    .and_then(|view| {
-                        let config = view.endpoint.acquisition.as_ref()?;
-                        if config.poll_freshness
-                            != opclook_contract::model::PollFreshness::CacheAllowed
-                        {
-                            return None;
+        let cached_age = if permit.is_some()
+            && covered_demands.is_empty()
+            && (protocol == Protocol::OpcUa || opclook_backend::supports_fresh_source(protocol))
+        {
+            session
+                .and_then(|id| self.sessions.get(&id))
+                .and_then(|view| {
+                    let config = view.endpoint.acquisition.as_ref()?;
+                    if config.poll_freshness != opclook_contract::model::PollFreshness::CacheAllowed
+                    {
+                        return None;
+                    }
+                    let age = match config.update_mode {
+                        opclook_contract::model::UpdateMode::Poll => config.interval_ms,
+                        opclook_contract::model::UpdateMode::Subscription => {
+                            let CommandKind::Read { keys } = &kind else {
+                                return None;
+                            };
+                            keys.iter()
+                                .map(|key| view.revised_interval_for(*key))
+                                .collect::<Option<Vec<_>>>()?
+                                .into_iter()
+                                .min()?
                         }
-                        let age = match config.update_mode {
-                            opclook_contract::model::UpdateMode::Poll => config.interval_ms,
-                            opclook_contract::model::UpdateMode::Subscription => {
-                                let CommandKind::Read { keys } = &kind else {
-                                    return None;
-                                };
-                                keys.iter()
-                                    .map(|key| view.revised_interval_for(*key))
-                                    .collect::<Option<Vec<_>>>()?
-                                    .into_iter()
-                                    .min()?
-                            }
-                        };
-                        u32::try_from(age).ok()
-                    })
-            } else {
-                None
-            };
+                    };
+                    u32::try_from(age).ok()
+                })
+        } else {
+            None
+        };
+        // Unqualified UA Read already requests source freshness. DA keeps
+        // its historical cache default, so supported explicit fresh goals
+        // need a transport command that selects the SDK device source.
+        // A legacy profile-less periodic DA read keeps its cache baseline.
+        let fresh_goal = permit.is_none()
+            || !covered_demands.is_empty()
+            || session
+                .and_then(|id| self.sessions.get(&id))
+                .and_then(|view| view.endpoint.acquisition.as_ref())
+                .is_some_and(|config| {
+                    config.poll_freshness == opclook_contract::model::PollFreshness::FreshSource
+                });
         let kind = match (kind, cached_age) {
             (CommandKind::Read { keys }, Some(max_age_ms)) => {
                 CommandKind::ReadCached { keys, max_age_ms }
+            }
+            (CommandKind::Read { keys }, None)
+                if protocol == Protocol::OpcDa
+                    && fresh_goal
+                    && opclook_backend::supports_fresh_source(protocol) =>
+            {
+                CommandKind::ReadFresh { keys }
             }
             (kind, _) => kind,
         };
@@ -2502,6 +2529,167 @@ mod tests {
         engine
             .send_due_read(sid(1), Protocol::OpcUa, keys.clone(), *permit, ())
             .unwrap()
+    }
+
+    #[test]
+    fn native_da_cache_poll_refresh_and_direct_read_keep_permit_and_freshness() {
+        use opclook_contract::model::{AcquisitionConfig, PollFreshness};
+        if !supports_fresh_source(Protocol::OpcDa) {
+            return;
+        }
+        let now = Instant::now();
+        let mut engine = cached_poll_engine(now);
+        let view = engine.sessions.get_mut(&sid(1)).unwrap();
+        view.endpoint = EndpointSpec::da("", "test");
+        view.endpoint.acquisition = Some(AcquisitionConfig::da_available());
+        let due = engine.due(now, Duration::from_secs(60), None);
+        let [Due::Read { keys, permit, .. }] = due.as_slice() else {
+            panic!("poll due")
+        };
+        let (keys, permit) = (keys.clone(), *permit);
+        let id = engine
+            .send_due_read(sid(1), Protocol::OpcDa, keys.clone(), permit, ())
+            .unwrap();
+        assert!(matches!(
+            &engine.test_commands.borrow().last().unwrap().kind,
+            CommandKind::ReadCached {
+                max_age_ms: 1000,
+                ..
+            }
+        ));
+        engine
+            .accept_at(
+                &Event {
+                    owner: owner(1),
+                    origin: Origin::Reply(id),
+                    kind: EventKind::Values { values: vec![] },
+                },
+                now,
+            )
+            .unwrap();
+        assert!(matches!(
+            engine.send_due_read(sid(1), Protocol::OpcDa, keys, permit, ()),
+            Err(DispatchError::ReadBusy)
+        ));
+        assert!(matches!(
+            engine.send(
+                sid(1),
+                Protocol::OpcDa,
+                CommandKind::ReadFresh { keys: vec![key(1)] },
+                ()
+            ),
+            Err(DispatchError::ReadBusy)
+        ));
+        engine.request_refresh(sid(1), key(1)).unwrap();
+        let due = engine.due(now + Duration::from_secs(2), Duration::from_secs(60), None);
+        let [Due::Read { keys, permit, .. }] = due.as_slice() else {
+            panic!("refresh due")
+        };
+        assert!(keys.contains(&key(1)) && keys.contains(&key(2)));
+        let id = engine
+            .send_due_read(sid(1), Protocol::OpcDa, keys.clone(), *permit, ())
+            .unwrap();
+        assert!(matches!(
+            &engine.test_commands.borrow().last().unwrap().kind,
+            CommandKind::ReadFresh { .. }
+        ));
+        engine
+            .accept_at(
+                &Event {
+                    owner: owner(1),
+                    origin: Origin::Reply(id),
+                    kind: EventKind::Values { values: vec![] },
+                },
+                now,
+            )
+            .unwrap();
+        engine
+            .send(
+                sid(1),
+                Protocol::OpcDa,
+                CommandKind::Read { keys: vec![key(1)] },
+                (),
+            )
+            .unwrap();
+        assert!(matches!(
+            &engine.test_commands.borrow().last().unwrap().kind,
+            CommandKind::ReadFresh { .. }
+        ));
+        assert_eq!(
+            AcquisitionConfig::da_available().poll_freshness,
+            PollFreshness::CacheAllowed
+        );
+    }
+
+    #[test]
+    fn native_da_accepted_profile_write_schedules_fresh_readback() {
+        use opclook_contract::model::{AcquisitionConfig, Value, WriteOutcome, WriteRequest};
+        if !supports_fresh_source(Protocol::OpcDa) {
+            return;
+        }
+        let now = Instant::now();
+        let mut engine = cached_poll_engine(now);
+        let view = engine.sessions.get_mut(&sid(1)).unwrap();
+        let mut endpoint = EndpointSpec::da("", "test");
+        let mut profile = AcquisitionConfig::da_available();
+        profile.read_after_write = true;
+        endpoint.acquisition = Some(profile);
+        view.endpoint = endpoint;
+        let id = engine
+            .send(
+                sid(1),
+                Protocol::OpcDa,
+                CommandKind::Write {
+                    request: WriteRequest {
+                        key: key(1),
+                        value: Value::I64(7),
+                        type_hint: None,
+                    },
+                },
+                (),
+            )
+            .unwrap();
+        engine
+            .accept_at(
+                &Event {
+                    owner: owner(1),
+                    origin: Origin::Reply(id),
+                    kind: EventKind::Wrote {
+                        key: key(1),
+                        result: Ok(WriteOutcome::from_da(0, "ok")),
+                    },
+                },
+                now,
+            )
+            .unwrap();
+        let due = engine.due(now, Duration::from_secs(60), None);
+        let [Due::Read { keys, permit, .. }] = due.as_slice() else {
+            panic!("readback due")
+        };
+        let id = engine
+            .send_due_read(sid(1), Protocol::OpcDa, keys.clone(), *permit, ())
+            .unwrap();
+        assert!(matches!(
+            &engine.test_commands.borrow().last().unwrap().kind,
+            CommandKind::ReadFresh { .. }
+        ));
+        let pending = engine
+            .accept_at(
+                &Event {
+                    owner: owner(1),
+                    origin: Origin::Reply(id),
+                    kind: EventKind::Values { values: vec![] },
+                },
+                now,
+            )
+            .unwrap()
+            .unwrap();
+        assert!(pending.read_terminals.iter().any(|terminal| {
+            terminal.key == key(1)
+                && terminal
+                    .needs
+                    .contains(&opclook_contract::model::ReadNeed::WriteReadback)
+        }));
     }
 
     #[test]
@@ -4970,15 +5158,17 @@ mod tests {
             value: Value::I64(1),
             type_hint: None,
         };
-        assert!(matches!(
-            engine.request_refresh(sid(1), key(1)),
-            Err(DemandError::UnsupportedFreshness)
-        ));
-        assert!(matches!(
-            engine.send_write_with_readback(sid(1), Protocol::OpcDa, request.clone(), ()),
-            Err(DemandWriteError::Demand(DemandError::UnsupportedFreshness))
-        ));
-        assert!(engine.requests.is_empty());
+        if !supports_fresh_source(Protocol::OpcDa) {
+            assert!(matches!(
+                engine.request_refresh(sid(1), key(1)),
+                Err(DemandError::UnsupportedFreshness)
+            ));
+            assert!(matches!(
+                engine.send_write_with_readback(sid(1), Protocol::OpcDa, request.clone(), ()),
+                Err(DemandWriteError::Demand(DemandError::UnsupportedFreshness))
+            ));
+            assert!(engine.requests.is_empty());
+        }
         engine.sessions.get_mut(&sid(1)).unwrap().endpoint =
             EndpointSpec::ua("opc.tcp://localhost:4840");
         engine.sessions.get_mut(&sid(1)).unwrap().subscription = SubscriptionState::Active;
