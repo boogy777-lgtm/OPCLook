@@ -37,6 +37,8 @@ jobs:
           set -euo pipefail
           python3 docs/testing/native-sdk/verify-license-closure.py "$SOFTING_SDK_ROOT"
           python3 docs/testing/native-sdk/test-license-closure.py
+          python3 docs/testing/native-sdk/test-package-preview.py
+          python3 scripts/test-ci-preview.py
           python3 docs/testing/native-sdk/test-opcf-mit-inputs.py
           python3 docs/testing/native-sdk/test-generate-opcf-midl.py
           python3 docs/testing/native-sdk/test-opcf-include-trace.py
@@ -134,9 +136,9 @@ jobs:
           $env:SOFTING_SDK_ROOT = "${{ github.workspace }}/softing-sdk"
           python opclook/docs/testing/native-sdk/verify-softing-sdk.py --core-clean
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $opcfArgs = @()
+          $opcfArgs = @("-DOPCL_USE_LEGACY_OPC=ON")
           if ("${{ matrix.opc_inputs }}" -eq "official-mit") { $opcfArgs = @("-DOPCF_MIT_STAGED=${{ github.workspace }}/opcf-staged", "-DOPCF_MIT_GENERATED=${{ github.workspace }}/opcf-generated") }
-          cmake -S opclook/docs/testing/native-sdk/core-probe -B softing-build -A Win32 "-DSOFTING_SDK_ROOT=${{ github.workspace }}/softing-sdk" @opcfArgs
+          cmake -S opclook/docs/testing/native-sdk/core-probe -B softing-build -A Win32 -DOPCL_BUILD_PROBES=ON "-DSOFTING_SDK_ROOT=${{ github.workspace }}/softing-sdk" @opcfArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build and reproduce with original SDK core
         shell: pwsh

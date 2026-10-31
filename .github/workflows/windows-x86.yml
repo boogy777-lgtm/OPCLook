@@ -69,6 +69,8 @@ jobs:
       # On failure, compiler errors, failing tests and their panic output are
       # emitted as one error annotation (scripts/ci-test.sh), readable from the
       # checks API without downloading the full job log.
+      - name: Isolated headless settings and PKI loopback regression
+        run: cargo test --locked -p opclook --test test_isolation --target i686-pc-windows-msvc -- --nocapture
       - name: Run integration tests
         shell: bash
         run: scripts/ci-test.sh "Integration tests failed" -p opclook --tests --target i686-pc-windows-msvc
@@ -113,6 +115,24 @@ jobs:
           chmod 700 "$XDG_RUNTIME_DIR"
           cargo test --locked --target x86_64-unknown-linux-gnu --features ui-snapshots --test ui_snapshots p4_palette_browse_ru -- --ignored --nocapture
           python3 scripts/ci-p4-png.py
+      - name: Render time-source tooltip for visual review
+        shell: bash
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          WGPU_BACKEND: vulkan
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/opclook-xdg"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          cargo test --locked --target x86_64-unknown-linux-gnu --features ui-snapshots --test ui_snapshots t08_value_time_tooltip_ru -- --ignored --nocapture
+          python3 scripts/ci-t08-png.py
+      - name: Preserve time tooltip visual evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t08-value-time-tooltip
+          path: docs/screenshots/t08-value-time-tooltip-ru.png
+          if-no-files-found: warn
       - name: Preserve P4 rendered visual evidence
         if: always()
         uses: actions/upload-artifact@v4

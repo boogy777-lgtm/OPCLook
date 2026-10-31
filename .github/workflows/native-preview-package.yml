@@ -1,0 +1,85 @@
+name: Native DA private CLI preview
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  preview-win32:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: opclook
+      - uses: actions/checkout@v4
+        with:
+          repository: SoftingIndustrial/OPC-Classic-SDK
+          ref: 5130e763998189c822882434c43e6be2eb0174cf
+          path: softing-sdk
+      - uses: actions/checkout@v4
+        with:
+          repository: OPCF-Members/OPC-Classic-CoreComponents
+          ref: efe0d1d1ea86a8a727bf26a501a261765e836766
+          path: opc-core
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: i686-pc-windows-msvc
+      - name: Build isolated official-input bridge and private CLI bundle
+        shell: cmd
+        run: |
+          @echo off
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSROOT=%%i"
+          if not defined VSROOT exit /b 1
+          call "%VSROOT%\VC\Auxiliary\Build\vcvarsall.bat" x86
+          if errorlevel 1 exit /b 1
+          python opclook/scripts/ci-preview-toolchain.py preview-toolchain.log
+          if errorlevel 1 exit /b 1
+          python opclook/docs/testing/native-sdk/verify-license-closure.py softing-sdk
+          if errorlevel 1 exit /b 1
+          python opclook/docs/testing/native-sdk/test-package-preview.py
+          if errorlevel 1 exit /b 1
+          python opclook/docs/testing/native-sdk/stage-opcf-mit-inputs.py --repo opc-core --output opcf-staged
+          if errorlevel 1 exit /b 1
+          python opclook/docs/testing/native-sdk/generate-opcf-midl.py --source opcf-staged --output opcf-generated
+          if errorlevel 1 exit /b 1
+          cmake -S opclook/docs/testing/native-sdk/server-fixture -B fixture-build -A Win32 "-DSOFTING_SDK_ROOT=%CD%/softing-sdk" "-DOPCF_MIT_STAGED=%CD%/opcf-staged" "-DOPCF_MIT_GENERATED=%CD%/opcf-generated"
+          if errorlevel 1 exit /b 1
+          cmake --build fixture-build --config Release --parallel 2
+          if errorlevel 1 exit /b 1
+          python -c "import pathlib,subprocess; r=pathlib.Path('softing-sdk'); [(r / p).write_bytes(subprocess.check_output(['git','-C',str(r),'cat-file','blob',sha])) for p,sha in [('development/core/src/SODaC/SODaCCallback.cpp','59205bb9b6e32641c966d334589fe355bafe273f'),('development/core/src/SOClt/SOCltEntry.cpp','9e5304ddd9dd7d1131ebdcf5b05c88a0bac6b8ff'),('development/core/src/include/SOCltEntry.h','c2470da726a608e6242285b97d9156bc2885cecc')]]"
+          if errorlevel 1 exit /b 1
+          python opclook/docs/testing/native-sdk/softing_patch.py softing-sdk
+          if errorlevel 1 exit /b 1
+          cmake -S opclook/docs/testing/native-sdk/core-probe -B preview-bridge -A Win32 -DOPCL_BUILD_PROBES=OFF "-DSOFTING_SDK_ROOT=%CD%/softing-sdk" "-DOPCF_MIT_STAGED=%CD%/opcf-staged" "-DOPCF_MIT_GENERATED=%CD%/opcf-generated"
+          if errorlevel 1 exit /b 1
+          cmake --build preview-bridge --config Release --target softing_da_bridge --verbose --parallel 1 > preview-bridge.log 2>&1
+          if errorlevel 1 (type preview-bridge.log & exit /b 1)
+          set "SOFTING_RUNTIME_LIB_DIR=%CD%/preview-bridge/Release"
+          set "CARGO_TARGET_DIR=%CD%/preview-target"
+          set "CARGO_BUILD_JOBS=1"
+          set "CARGO_INCREMENTAL=0"
+          set "RUSTFLAGS=-C link-arg=/MAP:%CD%/preview-cli.map"
+          pushd opclook
+          cargo build --locked --release -p opclook-cli -p opclook-backend --features opclook-backend/native-da-preview --target i686-pc-windows-msvc -vv > ../preview-cargo.log 2>&1
+          if errorlevel 1 (type ..\preview-cargo.log & exit /b 1)
+          cargo metadata --locked --format-version 1 --filter-platform i686-pc-windows-msvc --features opclook-backend/native-da-preview > ../preview-metadata.json
+          if errorlevel 1 exit /b 1
+          python docs/testing/native-sdk/package-preview.py --sdk ../softing-sdk --staged ../opcf-staged --generated ../opcf-generated --bridge ../preview-bridge --cli ../preview-target/i686-pc-windows-msvc/release/opclook-cli.exe --metadata ../preview-metadata.json --bridge-log ../preview-bridge.log --cargo-log ../preview-cargo.log --toolchain-log ../preview-toolchain.log --link-map ../preview-cli.map --output ../preview-package
+          if errorlevel 1 exit /b 1
+          python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- python scripts/ci-preview-cli.py ../preview-package/bin/opclook-cli.exe
+          if errorlevel 1 exit /b 1
+          popd
+      - name: Preserve private preview artifact and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-da-private-cli-preview-win32
+          path: |
+            preview-package/**
+            preview-bridge.log
+            preview-cargo.log
+            preview-toolchain.log
+            preview-cli.map
+          if-no-files-found: warn
