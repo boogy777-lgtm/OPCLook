@@ -9,7 +9,7 @@ candidate remains opt-in; production DA is still legacy.
 
 * Softing [SDK root MIT notice](https://github.com/SoftingIndustrial/OPC-Classic-SDK/blob/5130e763998189c822882434c43e6be2eb0174cf/LICENSE), Git blob `8e099ed5018feb4a67fb8e1d8f2ef397c4fcc240`, is reproduced in [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt). Pinned commit is `5130e763998189c822882434c43e6be2eb0174cf`. Its complete recursive Git tree returned 3,940 entries, `truncated=false`; the manifest selects 271 blobs in candidate and fixture source/include regions, including a deliberately broad header/demo superset. Git blob IDs in `license-sdk-tree.json` bind their contents to this tree, not to a moving release.
 * The source directly includes separately attributed OPC Foundation material.
-  [OPCDA.IDL](https://github.com/SoftingIndustrial/OPC-Classic-SDK/blob/5130e763998189c822882434c43e6be2eb0174cf/development/core/src/opc/OPCDA.IDL) (`fe590c3ac946944ffc71914310b1aeca58983ace`) and [OPCCOMN.IDL](https://github.com/SoftingIndustrial/OPC-Classic-SDK/blob/5130e763998189c822882434c43e6be2eb0174cf/development/core/src/opc/OPCCOMN.IDL) (`2a1cffe53f549e7fb409e733e72dd639ce7a27b5`) state OPC Foundation copyright, all rights reserved, and refer to the License Grant in the relevant specification. [OpcEnum.idl](https://github.com/SoftingIndustrial/OPC-Classic-SDK/blob/5130e763998189c822882434c43e6be2eb0174cf/development/core/src/opc/OpcEnum.idl) and [opcSec.idl](https://github.com/SoftingIndustrial/OPC-Classic-SDK/blob/5130e763998189c822882434c43e6be2eb0174cf/development/core/src/opc/opcSec.idl), plus [opc_ae.idl](https://github.com/SoftingIndustrial/OPC-Classic-SDK/blob/5130e763998189c822882434c43e6be2eb0174cf/development/core/src/opc/opc_ae.idl), contain similar statements. Their generated headers/IID sources participate in the build; the test proxy is generated from the first two IDLs. An attribution is added to notices, not an assertion of grant.
+  [OPCDA.IDL](https://github.com/SoftingIndustrial/OPC-Classic-SDK/blob/5130e763998189c822882434c43e6be2eb0174cf/development/core/src/opc/OPCDA.IDL) (`fe590c3ac946944ffc71914310b1aeca58983ace`) and [OPCCOMN.IDL](https://github.com/SoftingIndustrial/OPC-Classic-SDK/blob/5130e763998189c822882434c43e6be2eb0174cf/development/core/src/opc/OPCCOMN.IDL) (`2a1cffe53f549e7fb409e733e72dd639ce7a27b5`) state OPC Foundation copyright, all rights reserved, and refer to the License Grant in the relevant specification. [OpcEnum.idl](https://github.com/SoftingIndustrial/OPC-Classic-SDK/blob/5130e763998189c822882434c43e6be2eb0174cf/development/core/src/opc/OpcEnum.idl) and [opcSec.idl](https://github.com/SoftingIndustrial/OPC-Classic-SDK/blob/5130e763998189c822882434c43e6be2eb0174cf/development/core/src/opc/opcSec.idl), plus [opc_ae.idl](https://github.com/SoftingIndustrial/OPC-Classic-SDK/blob/5130e763998189c822882434c43e6be2eb0174cf/development/core/src/opc/opc_ae.idl), contain similar statements. Their generated headers/IID sources participate only in the explicit legacy control build; its test proxy uses the first two IDLs. An attribution is added to notices, not an assertion of grant.
 * The [OPC Foundation Classic Data Access page](https://opcfoundation.org/developer-tools/specifications-classic/data-access/) describes the specifications and sample interface code, identifies the Specifications Agreement and paid-member access; the published [agreement](https://opcfoundation.org/license/specifications/1.15/) describes conditions for authorized licensees. We did not download a specification or accept terms, and did not establish that this current agreement is the exact grant referenced by the older IDL headers.
 * The Foundation's [Core Components page](https://opcfoundation.org/developer-tools/samples-and-tools-classic/core-components/) says its current package is under OPC MIT. Its official [Core Components repository at `efe0d1d1ea86a8a727bf26a501a261765e836766`](https://github.com/OPCF-Members/OPC-Classic-CoreComponents/tree/efe0d1d1ea86a8a727bf26a501a261765e836766) contains MIT-labelled corresponding IDLs. A comparison of full files from the first `import` onward, normalizing CRLF to LF, stripping trailing spaces per line and leading/trailing whitespace, produced equal bodies for DA, Common, OpcEnum, Security and A&E; headers and Git blobs differ. The official repo README also describes the archive and its EOL status. This is relevant primary evidence, not an automatic determination of the grant for the exact older Softing copies or their generated files.
 
@@ -28,7 +28,7 @@ candidate remains opt-in; production DA is still legacy.
 
 | Scope | Inputs and configuration | Evidence / limit |
 | --- | --- | --- |
-| Native DA candidate | `core-probe/CMakeLists.txt`: globs `SOCmn/*.cpp`, `SOClt/*.cpp`, `SODaC/*.cpp`, `opc/*_i.c`; excludes `SOCmnExpat.cpp` and builds `xmlrole.c`, `xmltok.c`, `xmlparse.c` separately as `softing_expat`. `softing_da_bridge` adds OPCLook `adapter.cpp`, `runtime.cpp`. `core-probe/stdafx.h` enables DCOM, SOCLT, SODAC, static/no forced SDK libs; disables SOAP default, Watch and XML methods, but common XML remains enabled. | Candidate static libraries `softing_da_bridge` and `softing_expat` are linked by `crates/backend/build.rs` for Windows + `native-da-preview`. CMake glob is the source-list evidence, not a measured final linker map. Generated OPC IID C files are included even if a feature is unused. |
+| Native DA candidate | `core-probe/CMakeLists.txt`: globs `SOCmn/*.cpp`, `SOClt/*.cpp`, `SODaC/*.cpp`, five MIDL-generated official OPCF IID sources (legacy control: `opc/*_i.c`); excludes `SOCmnExpat.cpp` and builds `xmlrole.c`, `xmltok.c`, `xmlparse.c` separately as `softing_expat`. `softing_da_bridge` adds OPCLook `adapter.cpp`, `runtime.cpp`. `core-probe/stdafx.h` enables DCOM, SOCLT, SODAC, static/no forced SDK libs; disables SOAP default, Watch and XML methods, but common XML remains enabled. | Candidate static libraries `softing_da_bridge` and `softing_expat` are linked by `crates/backend/build.rs` for Windows + `native-da-preview`. CMake glob is the source-list evidence, not a measured final linker map. Generated OPC IID C files are included even if a feature is unused. |
 | SDK changes | `softing-status-alignment.patch` and `softing-com-balance.patch`, applied by `softing_patch.py` to exact original Git blobs before the bridge build. | Patches modify SDK source; retain applicable upstream notices. They do not supply an additional grant for OPC Foundation files. |
 | Local test only | `server-fixture/CMakeLists.txt` additionally compiles `SOSrv`, `SODaS`, `SOSAllocHelpers.cpp`, `SOProxy_i.c`; independent test client and proxy. MIDL generates OPCDA/OPCCOMN `_p.c`, `_i.c` and headers from pinned IDL. | Fixture server/client/proxy are test artifacts, not shown to ship in the product. If their distribution changes, reassess separately. The generated RPC code does not establish independent rights in the input IDL. |
 | Platform and tools | Candidate links `ole32`, `oleaut32`, `uuid`, `advapi32`, `ws2_32`, `mpr`, `rpcrt4`; Rust build also lists `user32`, `gdi32`, `shell32`. Fixture proxy links `rpcrt4`, `oleaut32`, `uuid`. MSVC/Windows SDK headers, ATL, MIDL, system IDL imports, CMake, Python, Rust/Cargo are platform/build dependencies. | System import libraries and tool installations are not an assertion of redistributable runtime DLLs. Exact Windows SDK/MSVC/runtime and release packaging/redistribution terms must be recorded for the actual release build; `windows-latest` is not a toolchain pin. |
@@ -80,13 +80,14 @@ checker tests use temporary Git repositories, not a real Windows SDK build.
 Do not mark N1.LICENSE or N4 closed until these facts and the OPC grant are
 resolved and the intended release's notices are verified.
 
-## Experimental MIT-labelled input build
+## Official MIT-labelled input build
 
-The **default** build still compiles Softing `src/opc` headers and `*_i.c` and
-generates its fixture proxy from Softing IDL. The applicable grant for these
-exact older copies remains open. An opt-in CMake path below selects the official
-MIT-labelled inputs; it has not been built or tested on Windows here and is not
-proof of drop-in ABI or release readiness.
+The default bridge and fixture require the pinned official MIT-labelled OPCF
+inputs. The older SDK copies are available only as an explicit legacy control
+using `-DOPCL_USE_LEGACY_OPC=ON`; their applicable grant remains open. The
+previous integration CI exercised the official path with MIDL, include traces,
+three Gateway processes and lifetime checks. That evidence does not establish
+release readiness or validate the new no-probe preview profile.
 
 A source scan of all 86 complete pinned `SOCmn`, `SOClt`, `SODaC`, `SOSrv`,
 and `SODaS` top-level `.cpp` files found references to `opcerror.h` and
@@ -102,7 +103,7 @@ in addition to the five IDLs. The two error-header bodies differ from the SDK
 copies, though their literal `#define` lines matched in the source comparison;
 that comparison does not establish full compile or runtime equivalence.
 
-To prepare an experimental isolated MIDL output on Windows from an existing
+To prepare isolated MIDL output on Windows from an existing
 Git checkout of the official repo (no installer or license acceptance), set up
 an x86 Developer Command Prompt and run from the OPCLook repository:
 
@@ -125,7 +126,7 @@ Configure the existing core-probe and fixture in **separate clean build
 folders**, passing both absolute paths:
 
 ```cmd
-cmake -S docs\testing\native-sdk\core-probe -B ..\softing-mit-build -A Win32 -DSOFTING_SDK_ROOT=C:/path/softing-sdk -DOPCF_MIT_STAGED=C:/path/opcf-staged -DOPCF_MIT_GENERATED=C:/path/opcf-generated
+cmake -S docs\testing\native-sdk\core-probe -B ..\softing-mit-build -A Win32 -DSOFTING_SDK_ROOT=C:/path/softing-sdk -DOPCF_MIT_STAGED=C:/path/opcf-staged -DOPCF_MIT_GENERATED=C:/path/opcf-generated -DOPCL_BUILD_PROBES=ON
 cmake -S docs\testing\native-sdk\server-fixture -B ..\fixture-mit-build -A Win32 -DSOFTING_SDK_ROOT=C:/path/softing-sdk -DOPCF_MIT_STAGED=C:/path/opcf-staged -DOPCF_MIT_GENERATED=C:/path/opcf-generated
 ```
 
@@ -148,8 +149,59 @@ the log captures every compilation or that another copy exists under a
 different directory, nor that IID objects and link inputs came from the new
 source. Preserve full clean-build command lines, compiler include traces and
 linker/library inputs; verify the generated source list and final link map,
-then rerun the strict x86 Gateway, state and isolation live checks. ABI and
-feature-guard differences in MIDL output must be resolved before changing
-CMake defaults. No Windows MIDL, compiler trace or live interoperability for
-this candidate has been measured here. Notice packaging and the wider license
-and N4 gates remain open.
+then rerun the strict x86 Gateway, state and isolation live checks. The previous integration evidence applies to its tested revision and profile.
+The new no-probe preview package requires its own Windows CI run. Notice and
+wider license and N4 release gates remain open.
+
+
+## Private CLI preview package
+
+Use a fresh x86 Visual Studio environment and clean build directories. The SDK
+checkout must be at `5130e763998189c822882434c43e6be2eb0174cf`; stage and
+generate the pinned OPCF inputs as above. Run the SDK inventory verifier before
+patching, then `softing_patch.py` on the SDK checkout. Configure core-probe
+with both official input paths, `-DOPCL_BUILD_PROBES=OFF`, and build
+`softing_da_bridge` in Release with `--verbose --parallel 1`, retaining the
+complete UTF-8 output as `preview-bridge.log`. This profile omits
+`OPCL_DA_TESTING`; the packager rejects every `opcl_da_test_` symbol. The
+internal static bridge status entry point is `opcl_da_server_status`; this
+internal ABI is built together with Rust and is not a promised external ABI. Strict existing
+probe/live jobs instead explicitly set `-DOPCL_BUILD_PROBES=ON`; the legacy
+control also explicitly sets `-DOPCL_USE_LEGACY_OPC=ON` on core and fixture.
+Never pass OPCF directories in the legacy control.
+
+Set `SOFTING_RUNTIME_LIB_DIR` to the absolute `preview-bridge/Release` path and
+`CARGO_TARGET_DIR` to a fresh absolute `preview-target`, and set `RUSTFLAGS` to
+`-C link-arg=/MAP:<absolute-path>/preview-cli.map`. From the OPCLook
+root run and retain complete UTF-8 verbose output as `preview-cargo.log`:
+
+```sh
+cargo build --locked --release -p opclook-cli -p opclook-backend --features opclook-backend/native-da-preview --target i686-pc-windows-msvc -vv
+cargo metadata --locked --format-version 1 --filter-platform i686-pc-windows-msvc --features opclook-backend/native-da-preview > preview-metadata.json
+```
+
+Capture real version strings as UTF-8 `preview-toolchain.log`, one nonempty
+line per label `rustc:`, `cargo:`, `cmake:`, `msvc:`, `midl:` and
+`windows-sdk:` (obtain them from `rustc -Vv`, `cargo -V`, `cmake --version`,
+`cl`, `midl /?`, and the selected Windows SDK environment). On PowerShell use
+UTF-8 without truncating native output and preserve each command's exit status.
+After a clean committed OPCLook checkout and successful builds, run:
+
+```sh
+python docs/testing/native-sdk/package-preview.py --sdk ../softing-sdk --staged ../opcf-staged --generated ../opcf-generated --bridge ../preview-bridge --cli ../preview-target/i686-pc-windows-msvc/release/opclook-cli.exe --metadata preview-metadata.json --bridge-log ../preview-bridge.log --cargo-log ../preview-cargo.log --toolchain-log ../preview-toolchain.log --link-map ../preview-cli.map --output ../preview-package
+```
+
+The packager rejects an existing output directory, wrong source pins or patch
+contents, stale generated receipts, legacy/mixed inputs, test-hook symbols,
+missing include traces, a CLI link map without the bridge and required symbols,
+and non-x86 PE files. It stores `bin/opclook-cli.exe`,
+notices, source and generated inputs, patched files, libraries, logs, Cargo
+metadata and declared normal/build dependency licenses under `evidence`, and
+SHA-256 hashes in `manifest.json`. The Cargo traversal is a resolved declared
+metadata superset, not a full license audit; the retained map is link evidence,
+not a complete rights or dependency inventory; missing
+license declarations remain visible. Tool versions are recorded, not pinned
+or independently authenticated. This is a private engineering artifact, not
+a release clearance. Review actual distribution contents, native/Rust
+dependencies, platform/runtime redistribution and applicable notices before
+any release. The no-probe build and package have not yet run in Windows CI.

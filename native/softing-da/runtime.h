@@ -76,7 +76,7 @@ int32_t opcl_da_session_open(OpclDaHost* host, const char* name, const char* nod
 int32_t opcl_da_session_close(OpclDaSession* session);
 /* Uses the SDK server worker. On success, state is the raw OPCSERVERSTATE;
    zero also represents an absent status output and must not mean Running. */
-int32_t opcl_da_test_status(OpclDaSession* session, int32_t* state);
+int32_t opcl_da_server_status(OpclDaSession* session, int32_t* state);
 int32_t opcl_da_item_add(OpclDaSession* session, const char* item_id, uint32_t registration_low,
                          uint32_t registration_high, OpclDaItem** out,
                          uint16_t* canonical_type, uint32_t* access_rights);

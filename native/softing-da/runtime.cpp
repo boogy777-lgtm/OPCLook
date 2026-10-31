@@ -335,7 +335,7 @@ private:
     int32_t* state_;
     bool ran_;
 };
-extern "C" int32_t opcl_da_test_status(OpclDaSession* session, int32_t* state) try {
+extern "C" int32_t opcl_da_server_status(OpclDaSession* session, int32_t* state) try {
     if (!session || !state) return E_INVALIDARG;
     *state = 0;
     TestStatusTask* task = new (std::nothrow) TestStatusTask(session->server, state);

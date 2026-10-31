@@ -1,4 +1,4 @@
-# Opt-in experimental source selection. The legacy SDK path remains the default.
+# Official OPCF input selection; historical SDK OPC input requires explicit control.
 # Call after find_package(Python3); guard runs both at configure and before build.
 function(opcf_mit_inputs out_sources out_include)
   if(NOT IS_ABSOLUTE "${OPCF_MIT_STAGED}" OR NOT IS_ABSOLUTE "${OPCF_MIT_GENERATED}")

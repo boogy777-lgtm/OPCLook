@@ -163,7 +163,7 @@ unsafe extern "C" {
         out: *mut *mut c_void,
     ) -> i32;
     fn opcl_da_session_close(session: *mut c_void) -> i32;
-    fn opcl_da_test_status(session: *mut c_void, state: *mut i32) -> i32;
+    fn opcl_da_server_status(session: *mut c_void, state: *mut i32) -> i32;
     fn opcl_da_item_add(
         session: *mut c_void,
         id: *const c_char,
@@ -447,7 +447,7 @@ impl Session {
         let mut state = 0;
         // SAFETY: this owner serializes access to its live session, and the
         // output remains valid until the SDK worker call returns.
-        check(unsafe { opcl_da_test_status(self.ptr.as_ptr(), &mut state) })?;
+        check(unsafe { opcl_da_server_status(self.ptr.as_ptr(), &mut state) })?;
         Ok(state)
     }
 
@@ -847,7 +847,7 @@ mod tests {
         0
     }
     #[unsafe(no_mangle)]
-    unsafe extern "C" fn opcl_da_test_status(session: *mut c_void, state: *mut i32) -> i32 {
+    unsafe extern "C" fn opcl_da_server_status(session: *mut c_void, state: *mut i32) -> i32 {
         let outcome = statuses()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

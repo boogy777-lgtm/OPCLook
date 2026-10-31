@@ -286,11 +286,11 @@
     "development/core/src/opc/opcerror.h": "61ce11e48acaee9a3aba36f34c1a00c91d039fff"
   },
   "profile_sha256": {
-    "docs/testing/native-sdk/core-probe/CMakeLists.txt": "92cfc76edc9a76293ea2b8463f40625b3c1c07cd76df92a1ba920688d29bf150",
+    "docs/testing/native-sdk/core-probe/CMakeLists.txt": "5cbbc79fd056587a029bb081ad3f91877dce08996806fa2af4a1e9d2a474dc45",
     "docs/testing/native-sdk/core-probe/stdafx.h": "19d9dd022762a8029e96d3495110367d5a3449864b6dcfd840541ceabbadafab",
     "docs/testing/native-sdk/core-probe/filter-embedded-expat.cmake": "8242f90ee9c1378d092ea2a4655a486a1086bc70ffb86977e616dceac075ff65",
     "docs/testing/native-sdk/core-probe/normalize-sdk-path.cmake": "d67afe1b276dcb1873ba8b9322c38235c340c01b03332c96e011f35889dda895",
-    "docs/testing/native-sdk/server-fixture/CMakeLists.txt": "7604bf25a7217a03d3b3aff7e29001c983e27511bb563382fe09687ada19c030",
+    "docs/testing/native-sdk/server-fixture/CMakeLists.txt": "28dedd7325cc02bf8891e9b955a143d30573895d4e1a1ec2923f32f269ff2de1",
     "docs/testing/native-sdk/server-fixture/stdafx.h": "6439bdc29380bb1d07aec9dddcbeaa9572f3abb1663d9bcfd548ff7ab7f4aa81",
     "crates/backend/build.rs": "a14e0753fb7f13b4a0ee10608c3c3b0ca9d61aa6c0778c38a937f8bf2eedaeb0",
     "docs/testing/native-sdk/softing_patch.py": "dfb850ed3307f5afed681e9831988ec018f542ac53d56e28c01b0ef76002e4e9",
@@ -300,7 +300,8 @@
     "docs/testing/native-sdk/stage-opcf-mit-inputs.py": "8b881fabbd3dce1c0e883e13a080c4dc299fbe0f475c948d3bdc7e5386de0557",
     "docs/testing/native-sdk/generate-opcf-midl.py": "d5d41cd193741d3e30b05884c8f80670d714652322d36ee922153314dc89edbe",
     "docs/testing/native-sdk/check-opcf-include-trace.py": "bdd5436d6324bfb5558a6fc7280c08ad20464e29402a2676aa192c50bceb1d9b",
-    "docs/testing/native-sdk/core-probe/opcf-mit-inputs.cmake": "4f7d92de2630668d6781a45bb7180dd8830b63caeffc37fbe77675b703d5dee1",
-    "docs/testing/native-sdk/server-fixture/proxy-list-mit.c": "89c8b4943ad1d0fd15b9d05fbc35d374986f92c0c17d7b18f0f79c8713e5b560"
+    "docs/testing/native-sdk/core-probe/opcf-mit-inputs.cmake": "1b0708198d3f586563b4e000e1231569ebfdd717b34213c4b52efd84e0d6c334",
+    "docs/testing/native-sdk/server-fixture/proxy-list-mit.c": "89c8b4943ad1d0fd15b9d05fbc35d374986f92c0c17d7b18f0f79c8713e5b560",
+    "docs/testing/native-sdk/package-preview.py": "7c785d659057876b8dc7a27bef51aa0bf4a7b21bc3a22e2e20df6c61567f91d3"
   }
 }
