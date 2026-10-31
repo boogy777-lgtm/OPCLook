@@ -1,5 +1,49 @@
 //! Small UI primitives: rendering only, with no application or backend access.
 
+/// Render supporting text with the current theme's subdued text style.
+/// The caller owns the content and any behavior attached to the response.
+pub(super) fn hint(ui: &mut egui::Ui, text: impl Into<String>) -> egui::Response {
+    ui.label(egui::RichText::new(text).weak())
+}
+
+/// Render a checkbox without applying a keyboard-generated IME candidate.
+/// `Response::changed` is egui's raw event; compare the value after this call.
+pub(super) fn checkbox(
+    ui: &mut egui::Ui,
+    value: &mut bool,
+    text: impl Into<String>,
+) -> egui::Response {
+    let previous = *value;
+    let response = ui.checkbox(value, text.into());
+    if super::ime_blocks_keys(ui.ctx())
+        && response.changed()
+        && !response.clicked_by(egui::PointerButton::Primary)
+    {
+        *value = previous;
+    }
+    response
+}
+
+/// Keep an IME candidate key from changing an embedded selection; pointer
+/// selection remains deliberate. The enclosing popup still owns its lifetime.
+/// `Response::changed` is egui's raw event; compare the value after this call.
+pub(super) fn selectable_value<T: Copy + PartialEq>(
+    ui: &mut egui::Ui,
+    value: &mut T,
+    selected: T,
+    text: impl Into<String>,
+) -> egui::Response {
+    let previous = *value;
+    let response = ui.selectable_value(value, selected, text.into());
+    if super::ime_blocks_keys(ui.ctx())
+        && response.changed()
+        && !response.clicked_by(egui::PointerButton::Primary)
+    {
+        *value = previous;
+    }
+    response
+}
+
 /// Render a button with an optional reason exposed on hover and to accessibility.
 /// `enabled` remains independent of `reason`: some disabled states have no reason.
 pub(super) fn button_with_reason(
@@ -53,6 +97,49 @@ mod tests {
                     ..Default::default()
                 },
             )
+    }
+
+    #[test]
+    fn ime_candidate_does_not_change_choice_but_pointer_can() {
+        let mut h = Harness::builder()
+            .with_size([320.0, 120.0])
+            .with_accessibility_check(false)
+            .build_ui_state(
+                |ui, value: &mut u8| {
+                    super::super::update_ime_state(ui.ctx());
+                    selectable_value(ui, value, 1, "First");
+                    selectable_value(ui, value, 2, "Second");
+                },
+                1u8,
+            );
+        h.run_steps(2);
+        h.get_by_label("Second").focus();
+        h.run_steps(1);
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit {
+            text: "a".into(),
+            active_range_chars: None,
+        }));
+        h.key_press(egui::Key::Space);
+        h.run_steps(2);
+        assert_eq!(*h.state(), 1);
+        h.get_by_label("Second").click();
+        h.run_steps(2);
+        assert_eq!(*h.state(), 2);
+    }
+
+    #[test]
+    fn subdued_hint_retains_accessible_text() {
+        let mut h = Harness::builder()
+            .with_size([320.0, 120.0])
+            .with_accessibility_check(false)
+            .build_ui_state(
+                |ui, _: &mut ()| {
+                    hint(ui, "Supporting hint");
+                },
+                (),
+            );
+        h.run_steps(2);
+        assert!(h.query_all_by_label("Supporting hint").next().is_some());
     }
 
     #[test]

@@ -499,3 +499,53 @@ fn t08_value_time_tooltip_ru() {
         .save("docs/screenshots/t08-value-time-tooltip-ru.png")
         .unwrap();
 }
+
+#[test]
+#[ignore = "manual visual QA requiring a headless wgpu renderer"]
+fn p3_columns_focused_control_ru() {
+    use egui_kittest::kittest::NodeT;
+    use opclook::columns::ColumnId;
+    let mut app = base(Lang::Ru);
+    app.dialogs.columns.open = true;
+    let mut h = Harness::builder()
+        .with_size([1200.0, 900.0])
+        .with_accessibility_check(false)
+        .with_render_cursor(false)
+        .with_context_setup(|ctx| {
+            assert!(opclook::app::install_fonts(ctx).is_some());
+        })
+        .build_ui_state(|ui, app: &mut App| app.update(ui), app);
+    h.run_steps(6);
+    let order = h.state().settings.resolved_order();
+    let index = order
+        .iter()
+        .position(|column| *column == ColumnId::FullName)
+        .unwrap();
+    h.query_all_by_label("↓")
+        .nth(index)
+        .expect("column down button")
+        .focus();
+    h.run_steps(4);
+    std::fs::create_dir_all("docs/screenshots").unwrap();
+    h.render()
+        .unwrap()
+        .save("docs/screenshots/p3-columns-focus-ru.png")
+        .unwrap();
+}
+
+#[test]
+#[ignore = "manual visual QA requiring a headless wgpu renderer"]
+fn p5_options_hints_ru() {
+    let mut app = base(Lang::Ru);
+    app.open_options_dialog();
+    save("p5-options-hints-ru", app);
+}
+
+#[test]
+#[ignore = "manual visual QA requiring a headless wgpu renderer"]
+fn p2_action_payload_error_ru() {
+    let mut app = base(Lang::Ru);
+    // Synthetic rendering fixture; App dispatch validation is tested separately.
+    app.status = opclook::i18n::tr(Lang::Ru, opclook::i18n::Tr::ActionPayloadInvalid).to_string();
+    save("p2-action-payload-error-ru", app);
+}

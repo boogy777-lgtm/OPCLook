@@ -91,11 +91,7 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
                         .selected_text(selected)
                         .show_ui(ui, |ui| {
                             for (index, choice) in choices.iter().enumerate() {
-                                let previous = dialog.type_index;
-                                let response = ui.selectable_value(&mut dialog.type_index, index, choice.label);
-                                if crate::ui::ime_blocks_keys(ui.ctx()) && response.changed() && !response.ime_safe_clicked() {
-                                    dialog.type_index = previous;
-                                }
+                                super::super::components::selectable_value(ui, &mut dialog.type_index, index, choice.label);
                             }
                         });
                 });

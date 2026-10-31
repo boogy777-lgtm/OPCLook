@@ -9,14 +9,6 @@ use crate::i18n::{Tr, tr};
 use crate::settings::Theme;
 use crate::ui::ImeSafeClick;
 
-fn ime_safe_checkbox(ui: &mut egui::Ui, value: &mut bool, label: &str) {
-    let previous = *value;
-    let response = ui.checkbox(value, label);
-    if crate::ui::ime_blocks_keys(ui.ctx()) && response.changed() && !response.ime_safe_clicked() {
-        *value = previous;
-    }
-}
-
 pub(super) fn options_dialog(app: &mut App, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     if !app.dialogs.options.open {
@@ -57,10 +49,10 @@ pub(super) fn options_dialog(app: &mut App, ui: &mut egui::Ui) {
                             slider.request_focus();
                             app.dialogs.options.focus_pending = false;
                         }
-                        ui.label(egui::RichText::new(tr(lang, Tr::RecommendedOneSec)).weak());
+                        super::super::components::hint(ui, tr(lang, Tr::RecommendedOneSec));
                         ui.separator();
                         ui.heading(tr(lang, Tr::AutoReconnectTitle));
-                        ime_safe_checkbox(
+                        super::super::components::checkbox(
                             ui,
                             &mut draft.auto_reconnect,
                             tr(lang, Tr::AutoReconnectCheck),
@@ -80,13 +72,13 @@ pub(super) fn options_dialog(app: &mut App, ui: &mut egui::Ui) {
                                 ui.selectable_value(&mut draft.theme, value, tr(lang, key));
                             }
                         });
-                        ui.label(egui::RichText::new(tr(lang, Tr::ThemeHint)).weak());
-                        ime_safe_checkbox(
+                        super::super::components::hint(ui, tr(lang, Tr::ThemeHint));
+                        super::super::components::checkbox(
                             ui,
                             &mut draft.show_colors,
                             tr(lang, Tr::ShowColorsCheck),
                         );
-                        ime_safe_checkbox(
+                        super::super::components::checkbox(
                             ui,
                             &mut draft.confirm_write,
                             tr(lang, Tr::ConfirmWriteCheck),
@@ -111,13 +103,13 @@ pub(super) fn options_dialog(app: &mut App, ui: &mut egui::Ui) {
                                 .speed(0.1),
                         );
                         ui.label(tr(lang, Tr::DeadbandLabel));
-                        ui.label(egui::RichText::new(tr(lang, Tr::DeadbandHint)).weak());
-                        ime_safe_checkbox(
+                        super::super::components::hint(ui, tr(lang, Tr::DeadbandHint));
+                        super::super::components::checkbox(
                             ui,
                             &mut draft.diagnostic_trace,
                             tr(lang, Tr::DiagnosticTraceCheck),
                         );
-                        ui.label(egui::RichText::new(tr(lang, Tr::DiagnosticTraceHint)).weak());
+                        super::super::components::hint(ui, tr(lang, Tr::DiagnosticTraceHint));
                     });
                 ui.separator();
                 ui.horizontal(|ui| {

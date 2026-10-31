@@ -8391,3 +8391,102 @@ fn p4_palette_actions_are_pure_and_localized_for_disabled_context() {
         assert!(h.state().dispatched_for_test().is_empty());
     }
 }
+
+#[test]
+fn p3_columns_focused_control_owns_enter_before_dialog_apply() {
+    with_settings_lock(|| {
+        use opclook::columns::ColumnId;
+        let mut app = App::new_test(&egui::Context::default());
+        seed_table(&mut app, &[("a", "SigA", 1)]);
+        app.dialogs.columns.open = true;
+        let mut h = harness(app);
+        h.run_steps(3);
+        let before = h.state().settings.resolved_order();
+        let index = before
+            .iter()
+            .position(|column| *column == ColumnId::FullName)
+            .unwrap();
+        assert!(index + 1 < before.len());
+        let down = h
+            .query_all_by_label("↓")
+            .nth(index)
+            .expect("column down button");
+        down.focus();
+        h.run_steps(2);
+        h.key_press(Key::Enter);
+        h.run_steps(3);
+        assert!(
+            h.state().dialogs.columns.open,
+            "Enter must not also close the dialog"
+        );
+        assert_eq!(
+            h.state().settings.resolved_order()[index + 1],
+            ColumnId::FullName
+        );
+        let after = h.state().settings.resolved_order();
+        h.query_all_by_label("↓")
+            .nth(index + 1)
+            .expect("moved column down button")
+            .focus();
+        h.run_steps(1);
+        h.input_mut().events.push(egui::Event::Key {
+            key: Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: true,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(2);
+        assert!(h.state().dialogs.columns.open);
+        assert_eq!(
+            h.state().settings.resolved_order(),
+            after,
+            "repeat must not move or close"
+        );
+        h.get_by_label("Применить").click();
+        h.run_steps(3);
+        assert!(!h.state().dialogs.columns.open);
+    });
+}
+
+#[test]
+fn p3_ime_candidate_does_not_switch_add_signal_session() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.seed_session(sid(1), EndpointSpec::da("", "First"));
+    app.seed_session(sid(2), EndpointSpec::da("", "Second"));
+    app.dialogs.add_signal.open = true;
+    app.dialogs.add_signal.session = Some(sid(1));
+    let sessions = app.active_sessions();
+    let current = sessions
+        .iter()
+        .find(|(id, _)| *id == sid(1))
+        .unwrap()
+        .1
+        .clone();
+    let target = sessions
+        .iter()
+        .find(|(id, _)| *id == sid(2))
+        .unwrap()
+        .1
+        .clone();
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.query_all_by_value(&current)
+        .last()
+        .expect("session combo")
+        .click();
+    h.run_steps(3);
+    h.get_all_by_label(&target)
+        .last()
+        .expect("other session option")
+        .focus();
+    h.run_steps(1);
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit {
+        text: "a".into(),
+        active_range_chars: None,
+    }));
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    assert_eq!(h.state().dialogs.add_signal.session, Some(sid(1)));
+    assert!(h.state().dialogs.add_signal.open);
+}
