@@ -98,3 +98,20 @@ Windows**. They are preparatory evidence only. Per-request terminal behavior
 through Gateway, pending writes, timeout during blocked SDK submit, two-session
 isolation, remote negotiation and final cleanup still require real tests before
 async can be advertised.
+
+## Bounded submission: pinned SDK source gate
+
+The public [`SOCltElement::executeTask`](https://github.com/SoftingIndustrial/OPC-Classic-SDK/blob/5130e763998189c822882434c43e6be2eb0174cf/development/core/src/SOClt/SOCltElement.cpp#L353) has `SOCLT_EXEC_ASYNC`. When the caller is outside an existing SDK worker it calls that worker's `addTask` and returns `S_OK` for a successful enqueue, not the task's I/O result. However, when there is no worker or the caller is on the worker itself, the same method directly calls `task->execute()` before returning, irrespective of that flag. The worker's [`addTask`](https://github.com/SoftingIndustrial/OPC-Classic-SDK/blob/5130e763998189c822882434c43e6be2eb0174cf/development/core/src/SOClt/SOCltThread.cpp#L98) adds to a synchronized SDK list; the exposed call has no deadline or try-lock contract. Thus checking `SOCLT_EXEC_ASYNC` alone does not establish a bounded submission. This is a source-level API limitation, not a measured queue-lock hang.
+
+[`SOCltTask` retains the element](https://github.com/SoftingIndustrial/OPC-Classic-SDK/blob/5130e763998189c822882434c43e6be2eb0174cf/development/core/src/SOClt/SOCltTask.cpp#L16), and the worker normally takes a task reference and calls `reportCompletion` after execution. But [`shutdown`](https://github.com/SoftingIndustrial/OPC-Classic-SDK/blob/5130e763998189c822882434c43e6be2eb0174cf/development/core/src/SOClt/SOCltThread.cpp#L38) removes the task queue before stopping the worker, without reporting completion for those removed tasks. A separate `cleanUp` reports `E_ABORT` for tasks still present, but cannot report tasks already discarded by `shutdown`. The group reference is not proof that the host wrapper or SDK entry remains alive, nor that each accepted task has a terminal outcome.
+
+`test-async-submit-source.py` verifies the exact Git blobs of these three SDK files and compiles the **unaltered** `executeTask` body against explicitly synthetic SDK stubs. A deterministic event barrier shows the external-worker async branch returns after enqueue without executing the task, while both own-worker and absent-worker branches remain in the task until the barrier is released. It also source-checks the shutdown ordering and task element reference. Measured on Linux with C++17: all three branches passed. The test does not execute the real SDK queue, Windows COM, or an OPC server, and does not test the latency of a real lock.
+
+```sh
+python docs/testing/native-sdk/test-async-submit-source.py \
+  --element-source <pinned-sdk>/development/core/src/SOClt/SOCltElement.cpp \
+  --thread-source <pinned-sdk>/development/core/src/SOClt/SOCltThread.cpp \
+  --task-source <pinned-sdk>/development/core/src/SOClt/SOCltTask.cpp
+```
+
+A bounded prototype still needs a library-owned admission primitive that rejects missing/own worker and can fail within a defined deadline while synchronizing against shutdown, plus a single completion-or-abort notification for each accepted task, including shutdown queue retirement. A candidate SDK patch should expose a checked, bounded/try-enqueue operation on the existing worker and drain accepted tasks with `E_ABORT` exactly once before releasing them, notifying outside the queue lock; it must not execute a user task inline. The wrapper must separately retain the host/entry, group, item registration and heap result state until the SDK task and any callback are retired, enforce one pending request and non-reused transaction IDs per group, and ignore late callbacks after timeout. Such a patch needs SDK-owner review, pinned-source/closure update, a controlled source regression and real i686 SDK fixture barriers for queued, executing, timed-out and shutdown paths before enabling production Async. No implementation or runtime bound is claimed by this source gate.

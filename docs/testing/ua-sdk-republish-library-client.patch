@@ -1,0 +1,59 @@
+--- a/src/session/connect.rs
++++ b/src/session/connect.rs
+@@ -121,0 +122,5 @@
++        if matches!(reconnect, SessionConnectMode::ReactivatedSession(_)) {
++            if tokio::time::timeout(std::time::Duration::from_secs(5), self.inner.recovery_republish_prototype()).await.is_err() {
++                tracing::warn!("Republish prototype deadline exceeded; history uncertain");
++            }
++        }
+--- a/src/session/services/subscriptions/service.rs
++++ b/src/session/services/subscriptions/service.rs
+@@ -2382,0 +2383,26 @@
++    // Experimental owner-only bounded replay; see OPCLook diagnostic, not production ready.
++    pub(crate) async fn recovery_republish_prototype(&self) {
++        const MAX_MESSAGES: usize = 256;
++        let cursors = { trace_lock!(self.subscription_state).recovery_cursors() };
++        let mut remaining = MAX_MESSAGES;
++        for (id, last) in cursors {
++            let mut seq = if last == u32::MAX { 1 } else { last + 1 };
++            while remaining > 0 {
++                remaining -= 1;
++                match Republish::new(id, seq, self).send(&self.channel).await {
++                    Ok(response) if response.notification_message.sequence_number == seq => {
++                        trace_lock!(self.subscription_state).handle_notification(id, response.notification_message);
++                        seq = if seq == u32::MAX { 1 } else { seq + 1 };
++                    }
++                    Ok(_) => { session_warn!(self, "Republish sequence mismatch; history uncertain"); break; }
++                    Err(error) if error.status() == StatusCode::BadMessageNotAvailable => break,
++                    Err(error) => { session_warn!(self, "Republish failed: {:?}; history uncertain", error.status()); break; }
++                }
++            }
++            if remaining == 0 {
++                session_warn!(self, "Republish prototype budget exhausted; history uncertain");
++                break;
++            }
++        }
++    }
++
+--- a/src/session/services/subscriptions/state.rs
++++ b/src/session/services/subscriptions/state.rs
+@@ -15,0 +16 @@
++    delivered_sequences: HashMap<u32, u32>,
+@@ -36,0 +38 @@
++            delivered_sequences: HashMap::new(),
+@@ -144,0 +147 @@
++        self.delivered_sequences.remove(&subscription_id);
+@@ -218,0 +222,4 @@
++    pub(crate) fn recovery_cursors(&self) -> Vec<(u32, u32)> {
++        self.delivered_sequences.iter().map(|(&id, &seq)| (id, seq)).collect()
++    }
++
+@@ -228,0 +236,8 @@
++            if self.subscriptions.contains_key(&subscription_id) {
++                let seq = notification.sequence_number;
++                match self.delivered_sequences.get_mut(&subscription_id) {
++                    None => { self.delivered_sequences.insert(subscription_id, seq); }
++                    Some(last) if seq == if *last == u32::MAX { 1 } else { *last + 1 } => *last = seq,
++                    Some(_) => (),
++                }
++            }
