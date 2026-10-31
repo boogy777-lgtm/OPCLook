@@ -8460,7 +8460,15 @@ fn p3_columns_focused_control_owns_enter_before_dialog_apply() {
             .expect("column down button");
         down.focus();
         h.run_steps(2);
-        h.key_press(Key::Enter);
+        // Keep Enter physically held so egui recognizes the next press as a
+        // repeat; `key_press` would also enqueue a release.
+        h.event(egui::Event::Key {
+            key: Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
         h.run_steps(3);
         assert!(
             h.state().dialogs.columns.open,
@@ -8490,6 +8498,14 @@ fn p3_columns_focused_control_owns_enter_before_dialog_apply() {
             after,
             "repeat must not move or close"
         );
+        h.event(egui::Event::Key {
+            key: Key::Enter,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(1);
         h.get_by_label("Применить").click();
         h.run_steps(3);
         assert!(!h.state().dialogs.columns.open);
