@@ -27,6 +27,66 @@ enum HostRequest {
 #[cfg(feature = "native-da-test-hooks")]
 static HOST_ACQUISITIONS: Mutex<(Option<usize>, usize, bool)> = Mutex::new((None, 0, true));
 
+// Test-only, bounded to one armed request in this process. Never selected by
+// acquisition configuration and never carries an SDK pointer.
+#[cfg(feature = "native-da-test-hooks")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GatewayAsyncProbe {
+    pub owner: SessionId,
+    pub epoch: super::model::RequestId,
+    pub request: super::model::RequestId,
+    pub key: ItemKey,
+    pub timeout_ms: u32,
+    pub registration: u64,
+    pub token: u32,
+    pub dispatched: bool,
+}
+#[cfg(feature = "native-da-test-hooks")]
+static GATEWAY_ASYNC_PROBE: Mutex<Option<GatewayAsyncProbe>> = Mutex::new(None);
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_gateway_async_arm(
+    owner: SessionId,
+    epoch: super::model::RequestId,
+    request: super::model::RequestId,
+    key: ItemKey,
+    timeout_ms: u32,
+) -> Result<(), &'static str> {
+    if timeout_ms == 0 || timeout_ms > 30_000 {
+        return Err("invalid timeout");
+    }
+    let mut slot = GATEWAY_ASYNC_PROBE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if slot.is_some() {
+        return Err("probe already armed");
+    }
+    *slot = Some(GatewayAsyncProbe {
+        owner,
+        epoch,
+        request,
+        key,
+        timeout_ms,
+        registration: 0,
+        token: 0,
+        dispatched: false,
+    });
+    Ok(())
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_gateway_async_observation() -> Option<GatewayAsyncProbe> {
+    *GATEWAY_ASYNC_PROBE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_gateway_async_clear() {
+    *GATEWAY_ASYNC_PROBE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = None;
+}
 /// Snapshot actual manager acquisitions in this test process, in manager order.
 #[cfg(feature = "native-da-test-hooks")]
 #[doc(hidden)]
@@ -560,6 +620,8 @@ impl DaHost for NativeHost {
         let mut items: HashMap<ItemKey, u64> = HashMap::new();
         let mut registrations: HashMap<u64, ItemKey> = HashMap::new();
         let mut subscription_epoch = None;
+        #[cfg(feature = "native-da-test-hooks")]
+        let mut probe_lease: Option<super::softing_runtime::TestAsyncSessionLease> = None;
         loop {
             if let (Some(epoch), Some(s)) = (subscription_epoch, session.as_mut()) {
                 if let Err(error) = drain_push(s, &registrations, id.into(), epoch, events) {
@@ -605,6 +667,53 @@ impl DaHost for NativeHost {
             let owner = command.owner;
             let request_id = command.request_id;
             let mut done = false;
+            // An explicit Test command after releasing the fixture barrier joins
+            // the existing SDK operation; it emits only this Test's reply.
+            #[cfg(feature = "native-da-test-hooks")]
+            if matches!(command.kind, CommandKind::Test) && probe_lease.is_some() {
+                let mut lease = match probe_lease.take() {
+                    Some(lease) => lease,
+                    None => continue,
+                };
+                match lease.wait_retire(1_000) {
+                    Ok((hr, _)) if hr == 0 => match lease.into_session() {
+                        Ok(restored) => session = Some(restored),
+                        Err(lease) => {
+                            probe_lease = Some(lease);
+                            failure(events, &command, Operation::Test, BackendMsg::TimeoutRead);
+                            continue;
+                        }
+                    },
+                    _ => {
+                        probe_lease = Some(lease);
+                        failure(events, &command, Operation::Test, BackendMsg::TimeoutRead);
+                        continue;
+                    }
+                }
+            }
+            #[cfg(feature = "native-da-test-hooks")]
+            if probe_lease.is_some() && matches!(command.kind, CommandKind::Disconnect) {
+                // Logical Gateway session ends; Drop quarantines the still-live SDK owner.
+                send(
+                    events,
+                    owner,
+                    request_id,
+                    EventKind::Disconnected {
+                        reason: BackendMsg::TimeoutRead,
+                    },
+                );
+                break;
+            }
+            #[cfg(feature = "native-da-test-hooks")]
+            if probe_lease.is_some() {
+                failure(
+                    events,
+                    &command,
+                    command.kind.operation(),
+                    BackendMsg::NoConnection,
+                );
+                continue;
+            }
             match &command.kind {
                 CommandKind::Connect { endpoint } => {
                     let profile = endpoint.acquisition.as_ref();
@@ -645,6 +754,44 @@ impl DaHost for NativeHost {
                     };
                     match result {
                         Ok((open, revised)) => {
+                            #[cfg(feature = "native-da-test-hooks")]
+                            let open = {
+                                let selected = GATEWAY_ASYNC_PROBE
+                                    .lock()
+                                    .unwrap_or_else(PoisonError::into_inner)
+                                    .is_some_and(|probe| {
+                                        probe.owner == id
+                                            && Some(probe.epoch) == request_id
+                                            && subscription
+                                    });
+                                if selected {
+                                    let mut lease =
+                                        super::softing_runtime::TestAsyncSessionLease::new(open);
+                                    if let Err(error) = lease.prepare() {
+                                        failure(
+                                            events,
+                                            &command,
+                                            Operation::Connect,
+                                            message(format!("DA test async prepare: {error:?}")),
+                                        );
+                                        break;
+                                    }
+                                    match lease.into_session() {
+                                        Ok(open) => open,
+                                        Err(_) => {
+                                            failure(
+                                                events,
+                                                &command,
+                                                Operation::Connect,
+                                                BackendMsg::NoConnection,
+                                            );
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    open
+                                }
+                            };
                             session = Some(open);
                             send(
                                 events,
@@ -746,6 +893,88 @@ impl DaHost for NativeHost {
                     } else {
                         u32::MAX
                     };
+                    #[cfg(feature = "native-da-test-hooks")]
+                    {
+                        let selected = *GATEWAY_ASYNC_PROBE
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner);
+                        if let Some(probe) = selected.filter(|probe| {
+                            !probe.dispatched
+                                && probe.owner == id
+                                && Some(probe.epoch) == subscription_epoch
+                                && Some(probe.request) == request_id
+                                && keys.as_slice() == [probe.key]
+                                && matches!(&command.kind, CommandKind::ReadFresh { .. })
+                        }) {
+                            if let Some((registration, open)) =
+                                items.get(&probe.key).copied().and_then(|registration| {
+                                    session.take().map(|open| (registration, open))
+                                })
+                            {
+                                let mut lease =
+                                    super::softing_runtime::TestAsyncSessionLease::new(open);
+                                let previous = lease.last_token().unwrap_or(0);
+                                let outcome =
+                                    lease.read_value(registration, max_age, probe.timeout_ms);
+                                let token = lease.last_token().unwrap_or(0);
+                                if token > previous {
+                                    let mut slot = GATEWAY_ASYNC_PROBE
+                                        .lock()
+                                        .unwrap_or_else(PoisonError::into_inner);
+                                    if let Some(current) =
+                                        slot.as_mut().filter(|current| **current == probe)
+                                    {
+                                        current.dispatched = true;
+                                        current.registration = registration;
+                                        current.token = token;
+                                    }
+                                }
+                                match outcome {
+                                    Ok(raw) if raw.adapter_result >= 0 => {
+                                        send(
+                                            events,
+                                            owner,
+                                            request_id,
+                                            EventKind::Values {
+                                                values: vec![(
+                                                    probe.key,
+                                                    super::softing_scalar::decode_read_outcome(raw),
+                                                )],
+                                            },
+                                        );
+                                    }
+                                    Ok(raw) if raw.adapter_result == 0x80070102_u32 as i32 => {
+                                        failure(
+                                            events,
+                                            &command,
+                                            Operation::Read,
+                                            BackendMsg::TimeoutRead,
+                                        )
+                                    }
+                                    Ok(raw) => {
+                                        let value = super::softing_scalar::decode_read_outcome(raw);
+                                        failure(
+                                            events,
+                                            &command,
+                                            Operation::Read,
+                                            value.reason.unwrap_or(BackendMsg::NoConnection),
+                                        );
+                                    }
+                                    Err(error) => failure(
+                                        events,
+                                        &command,
+                                        Operation::Read,
+                                        message(format!("DA test async: {error:?}")),
+                                    ),
+                                }
+                                match lease.into_session() {
+                                    Ok(open) => session = Some(open),
+                                    Err(lease) => probe_lease = Some(lease),
+                                }
+                                continue;
+                            }
+                        }
+                    }
                     let values = keys
                         .iter()
                         .map(|key| {
@@ -1055,6 +1284,171 @@ mod tests {
         assert_eq!(blocked.retire(10).unwrap(), (0, 0));
         blocked.close().unwrap();
         finish_native_sdk(Duration::from_secs(3)).unwrap();
+    }
+    #[cfg(feature = "native-da-test-hooks")]
+    #[test]
+    fn gateway_async_probe_scope_and_timeout_with_mock_ffi() {
+        const CHILD: &str = "OPCLOOK_GATEWAY_ASYNC_MOCK_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            for mode in ["retire", "disconnect", "shutdown", "wrong_epoch"] {
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "bff::da::tests::gateway_async_probe_scope_and_timeout_with_mock_ffi",
+                        "--nocapture",
+                    ])
+                    .env(CHILD, mode)
+                    .output()
+                    .unwrap();
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                assert!(
+                    output.status.success() && stdout.contains("1 passed"),
+                    "{mode} child failed: {stdout} {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            return;
+        }
+        use super::super::model::{
+            AcquisitionConfig, DaReadMethod, Origin, PollFreshness, UpdateMode,
+        };
+        let mode = std::env::var(CHILD).unwrap();
+        let id = SessionId::FIRST;
+        let epoch = RequestId::new(10).unwrap();
+        let request_id = RequestId::new(12).unwrap();
+        let key = ItemKey::FIRST;
+        test_gateway_async_arm(id, epoch, request_id, key, 100).unwrap();
+        assert!(test_gateway_async_arm(id, epoch, request_id, key, 100).is_err());
+        let (events, rx) = std::sync::mpsc::channel();
+        let mut worker = spawn(events);
+        let sender = worker.tx.take().unwrap();
+        let request = |request: u64, kind| {
+            sender
+                .send(Command {
+                    protocol: Protocol::OpcDa,
+                    owner: id.into(),
+                    request_id: RequestId::new(request),
+                    kind,
+                })
+                .unwrap();
+            loop {
+                let event = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                if let Origin::Reply(actual) = event.origin {
+                    assert_eq!(actual, RequestId::new(request).unwrap());
+                    assert_eq!(event.owner, Owner::Session(id));
+                    return event.kind;
+                }
+            }
+        };
+        let mut endpoint = EndpointSpec::da("localhost", "7D4BD1B1-7422-48C0-AD58-601B701449C6");
+        endpoint.acquisition = Some(AcquisitionConfig {
+            update_mode: UpdateMode::Subscription,
+            interval_ms: 100,
+            read_after_write: false,
+            poll_freshness: PollFreshness::CacheAllowed,
+            da_read_method: DaReadMethod::Sync,
+        });
+        assert!(matches!(
+            request(
+                if mode == "wrong_epoch" { 9 } else { 10 },
+                CommandKind::Connect { endpoint }
+            ),
+            EventKind::Connected { .. }
+        ));
+        assert!(
+            matches!(request(11,CommandKind::AddItems{items:vec![ItemSpec{key,item_id:"Fixture.Value".into()}]}),EventKind::AddItems{results} if results[0].1.is_ok())
+        );
+        if mode == "wrong_epoch" {
+            assert!(
+                matches!(request(12,CommandKind::ReadFresh{keys:vec![key]}),EventKind::Values{values} if values[0].1.value==Value::I64(43))
+            );
+            assert!(!test_gateway_async_observation().unwrap().dispatched);
+            assert!(matches!(
+                request(14, CommandKind::Disconnect),
+                EventKind::Disconnected { .. }
+            ));
+            drop(sender);
+            worker.join.take().unwrap().join().unwrap();
+            test_gateway_async_clear();
+            finish_native_sdk(Duration::from_secs(3)).unwrap();
+            return;
+        }
+        assert!(
+            matches!(request(13,CommandKind::ReadFresh{keys:vec![key]}),EventKind::Values{values} if values[0].1.value==Value::I64(43))
+        );
+        assert!(!test_gateway_async_observation().unwrap().dispatched);
+        assert!(matches!(
+            request(12, CommandKind::ReadFresh { keys: vec![key] }),
+            EventKind::Error {
+                operation: Operation::Read,
+                message: BackendMsg::TimeoutRead
+            }
+        ));
+        let observation = test_gateway_async_observation().unwrap();
+        assert!(observation.dispatched && observation.registration > 0 && observation.token > 0);
+        assert_eq!(
+            (
+                observation.owner,
+                observation.epoch,
+                observation.request,
+                observation.key
+            ),
+            (id, epoch, request_id, key)
+        );
+        if mode != "retire" {
+            if mode == "disconnect" {
+                assert!(matches!(
+                    request(14, CommandKind::Disconnect),
+                    EventKind::Disconnected {
+                        reason: BackendMsg::TimeoutRead
+                    }
+                ));
+            }
+            drop(sender);
+            assert_eq!(
+                worker.join.take().unwrap().join().unwrap(),
+                super::super::ShutdownOutcome::Joined
+            );
+            assert_eq!(
+                finish_native_sdk(Duration::from_secs(3)).unwrap_err(),
+                "SDK sessions still running"
+            );
+            return; // quarantined session intentionally retained until this child process exits
+        }
+        let refused = request(14, CommandKind::RemoveItems { keys: vec![key] });
+        assert!(
+            matches!(
+                refused,
+                EventKind::Error {
+                    operation: Operation::RemoveItems,
+                    ..
+                }
+            ),
+            "{refused:?}"
+        );
+        assert!(matches!(
+            request(15, CommandKind::Test),
+            EventKind::Log {
+                message: BackendMsg::DaStateOk
+            }
+        ));
+        assert!(
+            matches!(request(16,CommandKind::ReadFresh{keys:vec![key]}),EventKind::Values{values} if values[0].1.value==Value::I64(43))
+        );
+        assert!(matches!(
+            request(17, CommandKind::Disconnect),
+            EventKind::Disconnected { .. }
+        ));
+        drop(sender);
+        worker.join.take().unwrap().join().unwrap();
+        while let Ok(event) = rx.try_recv() {
+            assert!(
+                !matches!(event.origin, Origin::Reply(_)),
+                "unexpected duplicate reply: {event:?}"
+            );
+        }
+        test_gateway_async_clear();
+        finish_native_sdk(Duration::from_secs(5)).unwrap();
     }
     #[test]
     fn test_command_reports_sdk_state_and_native_error_through_router() {

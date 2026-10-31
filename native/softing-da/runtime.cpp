@@ -1083,6 +1083,13 @@ extern "C" int32_t opcl_da_test_async_is_pending(OpclDaSession* session, uint32_
     std::lock_guard<std::mutex> lock(session->push->mutex);
     *pending = session->push->async_pending ? 1 : 0; return S_OK;
 } catch (...) { return E_UNEXPECTED; }
+// Diagnostic only: transaction IDs are never reused during this SDK group.
+extern "C" int32_t opcl_da_test_async_last_token(OpclDaSession* session, uint32_t* token) try {
+    if (!session || !session->push || !token) return E_INVALIDARG;
+    std::lock_guard<std::mutex> lock(session->push->mutex);
+    *token = session->push->async_next - 1;
+    return S_OK;
+} catch (...) { return E_UNEXPECTED; }
 extern "C" int32_t opcl_da_test_async_wait_retire(OpclDaSession* session, uint32_t timeout_ms, OpclDaReadI4* out, uint32_t* retired) try {
     if (!session || !session->push || !out || !retired || !timeout_ms || timeout_ms > 30000) return E_INVALIDARG;
     *retired = 0;

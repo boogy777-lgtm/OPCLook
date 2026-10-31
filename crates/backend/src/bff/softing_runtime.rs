@@ -294,6 +294,8 @@ unsafe extern "C" {
         retired: *mut u32,
     ) -> i32;
     #[cfg(feature = "native-da-test-hooks")]
+    fn opcl_da_test_async_last_token(session: *mut c_void, token: *mut u32) -> i32;
+    #[cfg(feature = "native-da-test-hooks")]
     fn opcl_da_test_async_is_pending(session: *mut c_void, pending: *mut u32) -> i32;
     #[cfg(feature = "native-da-test-hooks")]
     fn opcl_da_test_arm_write_exception() -> i32;
@@ -600,6 +602,13 @@ impl TestAsyncSessionLease {
         } else {
             self.session.as_mut()
         }
+    }
+    pub fn last_token(&self) -> Result<u32, Error> {
+        let session = self.session.as_ref().ok_or(Error::InvalidHandle)?;
+        let mut token = 0;
+        // SAFETY: the lease retains the session; the SDK slot serializes token access.
+        check(unsafe { opcl_da_test_async_last_token(session.ptr.as_ptr(), &mut token) })?;
+        Ok(token)
     }
     pub fn prepare(&mut self) -> Result<(), Error> {
         let session = self.session.as_ref().ok_or(Error::InvalidHandle)?;
@@ -1359,17 +1368,20 @@ mod tests {
         0
     }
     #[cfg(feature = "native-da-test-hooks")]
+    static MOCK_ASYNC_TOKEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    #[cfg(feature = "native-da-test-hooks")]
     #[unsafe(no_mangle)]
     unsafe extern "C" fn opcl_da_test_async_read_value(
         _: *mut c_void,
         _: *mut c_void,
         age: u32,
-        _: u32,
+        timeout: u32,
         out: *mut NativeReadOutcome,
         payload: *mut c_char,
         capacity: u32,
     ) -> i32 {
-        if age == 123 {
+        MOCK_ASYNC_TOKEN.fetch_add(1, Ordering::SeqCst);
+        if age == 123 || timeout == 100 {
             return 0x80070102_u32 as i32;
         }
         assert!(capacity >= 2);
@@ -1409,6 +1421,15 @@ mod tests {
         unsafe {
             (*out).value = 0;
             *retired = 1;
+        }
+        0
+    }
+    #[cfg(feature = "native-da-test-hooks")]
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn opcl_da_test_async_last_token(_: *mut c_void, token: *mut u32) -> i32 {
+        // SAFETY: the mock caller supplies a writable token.
+        unsafe {
+            *token = MOCK_ASYNC_TOKEN.load(Ordering::SeqCst);
         }
         0
     }
