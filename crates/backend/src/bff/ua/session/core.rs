@@ -45,6 +45,25 @@ fn advertised_read_chunk(values: &[UaDataValue]) -> usize {
         .min(READ_MAX_ITEMS_PER_CALL.max(1))
 }
 
+fn append_read_chunk(
+    values: &mut Vec<UaDataValue>,
+    mut chunk_values: Vec<UaDataValue>,
+    size: usize,
+) -> Result<bool, BackendMsg> {
+    if chunk_values.len() > size {
+        return Err(BackendMsg::UaServiceError {
+            service: crate::bff::model::UaService::Read,
+            detail: format!(
+                "Read returned {} results for {size} operations",
+                chunk_values.len()
+            ),
+        });
+    }
+    let complete = chunk_values.len() == size;
+    values.append(&mut chunk_values);
+    Ok(complete)
+}
+
 impl UaSession {
     /// Capture the remote-session revision only while namespace identity is ready.
     /// A later check rejects replies from a session which was lost or replaced.
@@ -379,10 +398,8 @@ impl UaSession {
                 return Err(BackendMsg::TimeoutRead);
             };
             match chunk_result {
-                Ok(mut chunk_values) => {
-                    let complete = chunk_values.len() == size;
-                    chunk_values.truncate(size);
-                    values.append(&mut chunk_values);
+                Ok(chunk_values) => {
+                    let complete = append_read_chunk(&mut values, chunk_values, size)?;
                     // Do not shift later results onto missing keys.
                     if !complete {
                         break;
@@ -414,6 +431,26 @@ impl UaSession {
 mod struct_label_tests {
     use super::*;
     use opcua::types::{ByteString, Identifier};
+
+    #[test]
+    fn read_chunk_excess_is_an_error_and_short_keeps_only_returned_prefix() {
+        use opcua::types::Variant;
+        let value = |n| UaDataValue::new_now(Variant::Int32(n));
+        let mut values = vec![value(10)];
+        assert!(matches!(
+            append_read_chunk(&mut values, vec![value(20), value(30), value(40)], 2),
+            Err(BackendMsg::UaServiceError {
+                service: crate::bff::model::UaService::Read,
+                ..
+            })
+        ));
+        assert_eq!(values.len(), 1, "malformed chunk must not be appended");
+        assert!(!append_read_chunk(&mut values, vec![value(20)], 2).unwrap());
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[1].value, Some(Variant::Int32(20)));
+        assert!(append_read_chunk(&mut values, vec![value(30), value(40)], 2).unwrap());
+        assert_eq!(values.len(), 4);
+    }
 
     #[test]
     fn read_limit_absent_zero_bad_and_positive_are_bounded() {
