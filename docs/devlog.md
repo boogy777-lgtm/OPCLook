@@ -1365,3 +1365,14 @@ blob bytes независимо от checkout CRLF. N+1: обе matrix и releas
 Git regression, после stdin normalization7/7; actual Windows повтор pending.
 Root не смешивает этот repair с UA private recovery scopes; N4/remote/license
 и полный Async/первая post-recovery notification остаются отдельными gates.
+
+
+## 2026-10-31 — N1 inventory после CRLF repair
+
+На c7ff4dc native jobs остановились до компиляции: verifier честно обнаружил
+изменённый package-preview.py, чей profile hash не был обновлён вместе с
+исправлением LF/CRLF. Повторно просмотрен точный diff: только нормализация
+patch bytes и передача через stdin для reverse verification, без изменения
+SDK inputs, dependencies или notices. Обновлён только этот SHA-256.
+Все profile hashes локально совпадают; 4 inventory и 7 package tests проходят.
+COM cache-release fix и полная упаковка пока не проверены новым Win32 runtime.
