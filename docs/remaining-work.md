@@ -6,6 +6,11 @@
 
 ## Последний подтверждённый срез
 
+Пара32 выполняется: metadata cap cardinality и forced Async DA2/DA3.
+Root backend270/0/1knownignored74.38с, native54/source accepted; собственный
+exact-head Windows CI pending.
+
+
 Latest exact code5fcaab98 passed9/9, including Read cardinality, repaired
 Windows deadline and both COM admission gates. Pair31 accepted; next pair below.
 
@@ -94,6 +99,7 @@ SDK readiness/drain Engine research остаётся на frozen9ba source; не
 | 29 | Negotiated DA2/DA3 Sync routes, SDK Publish per-ACK results | DA source/mock54, pinned fragments and both22a COM live gates passed; SDK fixed3+ACK2+recovery16 and full40-file/path guards passed as research |
 | 30 | UA Read OperationLimits, native Async failure/quality facts | Original Read5/limit3 fails, O18/O19 live and root backend268+1knownignored pass; native54/source pass, both656COM accepted; full head deadline repair pending |
 | 31 | UA data Read excess response, native Async admission | Source before/fail after/pass, normal live O18/O19 2/2; native54/source pass, admission both5fca COM accepted; exact5fca all9 accepted |
+| 32 | UA metadata-cap cardinality, forced Async DA2/DA3 | Source before/fail after2/2, ordinary O18/O19 2/2; native source/stand pass, own Windows gates pending |
 
 Пара 01 исправила начальное состояние fixture после честного отрицательного
 NOCONFIG verdict на `a004b226`. Проверка на `36fa668` подтвердила
@@ -106,17 +112,17 @@ SDK per-ACK results проверены in-process в disposable library overlay;
 wire/server variations и production observability/adoption, namespace scope,
 multiple subscriptions, transfer/secure cases. Production Async/N4 не включены.
 
-## Следующая пара: source-reviewed candidates, ещё не выполнены
+## Пара32: выбранные gates, собственная CI приёмка pending
 
-После exact-head приёмки пары31:
+Пара31 принята. Пара32 реализует следующие source-reviewed gates:
 
 | Ветка | Узкий следующий gate | Доказательство и границы |
 | --- | --- | --- |
 | UA O18/O19 | Cardinality одноключевого MaxNodesPerRead metadata Read | `advertised_read_chunk` сейчас берёт first даже при excess; требовать ровно один положительный Good UInt32, иначе существующий bounded fallback. Нужен actual-source before/fail/after и обычные O18/O19. Низкая серьёзность: выбранный cap уже bounded и TooManyOperations адаптивен; malformed wire/timeout/revision этим не доказаны. |
 | DA O26 | Forced DA2/DA3 именно Async Read | SDK `asyncReadImpl` выбирает AsyncIO2 Read или AsyncIO3 ReadMaxAge. Потребуются test-only started/advise setup и отдельный SDK request-kind counter, correlated callback и cleanup в обоих COM inputs. Existing forced-version gate inactive и доказывает Sync, его нельзя переименовать в Async proof. Local forced route не physical DA2-only server и не числовая свежесть. |
 
-Это рекомендации по прочитанному коду, не новые измеренные passes или production
-capability. SDK transport/recovery/COM owner и pins сохраняются. Namespace
+Исходные рекомендации ниже не заменяют текущие source/local результаты и
+не являются Windows/production capability. SDK transport/recovery/COM owner и pins сохраняются. Namespace
 blocked diagnostic не возобновлять; frozen Engine research9ba не переписывать.
 
 ## Очередь по зависимостям

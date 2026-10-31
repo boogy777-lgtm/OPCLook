@@ -16,6 +16,9 @@ reviewed research packet, без production pin/App change, только одн�
 Пара31: excess data Read возвращает явную ошибку; test-only SDK admission
 S_FALSE/OPC_E_BADRIGHTS прошёл оба COM inputs. Exact5fcaab98 принят9/9;
 [очередь следующей пары](remaining-work.md) отделена от выполненных проверок.
+Пара32: single-result metadata cap guard и test-only forced DA2/DA3 Async
+route prepared; свой Windows CI pending. Подробные scope и результаты в status
+и обоих ledgers; source guards не заменяют actual COM.
 Исторические snapshots ниже не заменяют текущий status.
 Пара28 приняла test-only Gateway Async fixture в обоих Win32 COM inputs и
 [namespace source audit](testing/ua-sdk-namespace-cache-audit.md), без принятого

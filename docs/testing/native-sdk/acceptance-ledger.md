@@ -260,3 +260,11 @@ SDK41232803418, COM41232803478, App41232803411, package41232803483.
 Actual-source excess regression and ordinary O18/O19 passed Windows. Both
 local SDK admission tests and strict cleanup passed; this does not add a
 malformed wire/metadata-cap/recovery or production Async acceptance.
+
+## Pair32 — forced DA2/DA3 Async route, Windows pending
+
+[Dedicated proof](async-version-routes.md) uses started/advise group and SDK
+request-creation counters on one target tag. DA2 expects asyncDevice delta1/0,
+DA3 asyncMaxAge0/1, with matching callback/submit facts, sample42 and strict
+cleanup. Both CI inputs wired. Source/stub review passes are not actual COM
+or physical older-server/numeric freshness/production Async acceptance.

@@ -85,3 +85,20 @@ SDK41232803418, COM41232803478, App41232803411, package41232803483.
 Actual-source excess regression and ordinary O18/O19 passed Windows. Both
 local SDK admission tests and strict cleanup passed; this does not add a
 malformed wire/metadata-cap/recovery or production Async acceptance.
+
+## Pair32: single-node metadata response cardinality
+
+`advertised_read_chunk` now requires exactly one metadata result before using
+a positive Good UInt32 as a bounded cap. Empty, excess, bad, zero or wrong-type
+responses use the existing nonzero local fallback. Before/fail actual-source
+regression selected1 instead of fallback100; after read_limit filters passed2/2
+and ordinary sample-server O18/O19 passed2/2 in8.53s. Existing data Read excess
+error and revision/timeout paths are unchanged. This is a source-level malformed
+metadata case, not malformed wire/server or new timeout/revision race proof.
+The old result remained bounded and adaptive service rejection was available;
+no production misread or unbounded allocation is claimed. Windows CI pending.
+
+Root integrated backend confirmed270passed/0failed/1knownignored in74.38s.
+A first attempt returned0 without the final harness receipt and was not used
+as acceptance. The repeated subprocess runner required both Cargo exit0 and
+an explicit final test-result line before accepting this full run.
