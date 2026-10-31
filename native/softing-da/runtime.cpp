@@ -254,6 +254,22 @@ extern "C" int32_t opcl_da_session_open(OpclDaHost* host, const char* name, cons
     OPCL_DISCOVERY_TRACE("session open returned");
     return S_OK;
 } catch (...) { return E_UNEXPECTED; }
+#ifdef OPCL_DA_TESTING
+extern "C" int32_t opcl_da_test_da1_is_inactive(OpclDaSession* s) try {
+    if (!s || s->subscription || s->server->getForcedOPCVersion() != SODAC_VERSION_OPC_DAV10A ||
+        !s->group->isConnected() || s->group->isStarted()) return E_FAIL;
+    return S_OK;
+} catch (...) { return E_UNEXPECTED; }
+extern "C" int32_t opcl_da_test_da1_inactive(OpclDaSession* s) try {
+    if (!s || s->subscription || !s->items.empty()) return E_INVALIDARG;
+    HRESULT hr = s->group->disconnect();
+    if (FAILED(hr)) return hr;
+    if (!s->server->forceOPCVersion(SODAC_VERSION_OPC_DAV10A)) return E_FAIL;
+    hr = s->group->connect(FALSE);
+    if (FAILED(hr)) return hr;
+    return opcl_da_test_da1_is_inactive(s);
+} catch (...) { return E_UNEXPECTED; }
+#endif
 extern "C" int32_t opcl_da_item_add(OpclDaSession* s, const char* id, uint32_t registration_low,
                                      uint32_t registration_high, OpclDaItem** out,
                                      uint16_t* type, uint32_t* rights) try {

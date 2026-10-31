@@ -22,6 +22,8 @@ static std::atomic<unsigned> sync_device_read_count{0};
 // callback count. The SDK still creates and owns every request.
 static SOCmnPointer<SODaSCache> sync_read_request_count_cache;
 static std::atomic<unsigned> sync_read_request_count{0};
+static SOCmnPointer<SODaSCache> da1_cache_count_cache, da1_device_count_cache;
+static std::atomic<unsigned> da1_cache_count{0}, da1_device_count{0};
 
 static const CLSID fixture_clsid = {0x7d4bd1b1, 0x7422, 0x48c0, {0xad, 0x58, 0x60, 0x1b, 0x70, 0x14, 0x49, 0xc6}};
 
@@ -140,6 +142,16 @@ public:
             } while (!sync_read_request_count.compare_exchange_weak(before, before + 1));
             SOCmnVariant count; count.setI4(static_cast<LONG>(before + 1));
             if (!sync_read_request_count_cache->setValue(count)) { request->release(); return nullptr; }
+            if (type == SODaSRequest::syncCache || type == SODaSRequest::syncDevice) {
+                auto& counter = type == SODaSRequest::syncCache ? da1_cache_count : da1_device_count;
+                auto& cache = type == SODaSRequest::syncCache ? da1_cache_count_cache : da1_device_count_cache;
+                unsigned previous = counter.load();
+                do {
+                    if (previous >= 1000 || !cache.isNotNull()) { request->release(); return nullptr; }
+                } while (!counter.compare_exchange_weak(previous, previous + 1));
+                SOCmnVariant kinds; kinds.setI4(static_cast<LONG>(previous + 1));
+                if (!cache->setValue(kinds)) { request->release(); return nullptr; }
+            }
         }
         return request;
     }
@@ -264,6 +276,8 @@ static int run(int argc, char** argv) {
             tags = add_tag(node, _T("DeviceReadCount"), value, false, false, false, std::addressof(device_read_count_cache)) && tags;
             tags = add_tag(node, _T("SyncDeviceReadCount"), value, false, false, false, std::addressof(sync_device_read_count_cache)) && tags;
             tags = add_tag(node, _T("SyncReadRequestCount"), value, false, false, false, std::addressof(sync_read_request_count_cache)) && tags;
+            tags = add_tag(node, _T("SyncCacheKindCount"), value, false, false, false, std::addressof(da1_cache_count_cache)) && tags;
+            tags = add_tag(node, _T("SyncDeviceKindCount"), value, false, false, false, std::addressof(da1_device_count_cache)) && tags;
             value.setI4(42);
             tags = add_tag(node, _T("DeviceValue"), value, false, false, false, nullptr, true) && tags;
             tags = add_tag(node, _T("ReadDenied"), value, false, false, false, nullptr, false, false, OPC_QUALITY_GOOD, E_ACCESSDENIED) && tags;
@@ -313,6 +327,8 @@ static int run(int argc, char** argv) {
         device_read_count_cache.release();
         sync_device_read_count_cache.release();
         sync_read_request_count_cache.release();
+        da1_cache_count_cache.release();
+        da1_device_count_cache.release();
         if (isolation_entered) CloseHandle(isolation_entered);
         if (isolation_release) CloseHandle(isolation_release);
     } else result = 19;

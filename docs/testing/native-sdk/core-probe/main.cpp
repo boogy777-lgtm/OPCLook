@@ -183,6 +183,49 @@ static int live_fixture() {
     std::printf("live SDK C ABI fixture %s (hr=%08lx item=%08lx)\n", ok ? "PASS" : "FAIL", hr, write_result);
     return ok ? 0 : 32;
 }
+// Local SDK server/SDK client proof only; forcing the SDK route does not
+// establish that the server is physically limited to DA 1.0.
+static int live_da1_inactive_fixture() {
+    const OpclDaGuid clsid = {0x7d4bd1b1, 0x7422, 0x48c0,
+                              {0xad, 0x58, 0x60, 0x1b, 0x70, 0x14, 0x49, 0xc6}};
+    OpclDaHost* host = nullptr; OpclDaSession* session = nullptr;
+    OpclDaItem *target = nullptr, *cache_count = nullptr, *device_count = nullptr;
+    uint16_t type = 0; uint32_t rights = 0, revised = 0; HRESULT hr = opcl_da_host_create(&host);
+    if (FAILED(hr)) return 61;
+    hr = opcl_da_session_open(host, "OPCLook.NativeDaFixture.1", "localhost", &clsid,
+                              0, 1000, 100000, &revised, &session);
+    bool ok = SUCCEEDED(hr);
+    if (ok) { hr = opcl_da_test_da1_inactive(session); ok = SUCCEEDED(hr); }
+    auto add = [&](const char* id, uint32_t registration, OpclDaItem** item) {
+        return SUCCEEDED(opcl_da_item_add(session, id, registration, 0, item, &type, &rights));
+    };
+    if (ok) ok = add("Fixture.DeviceValue", 1, &target) && add("Fixture.SyncCacheKindCount", 2, &cache_count) &&
+                 add("Fixture.SyncDeviceKindCount", 3, &device_count);
+    if (ok) ok = SUCCEEDED(opcl_da_test_da1_is_inactive(session));
+    auto read = [&](OpclDaItem* item, uint32_t max_age, OpclDaReadI4& out) {
+        HRESULT result = opcl_da_read_i4(session, item, max_age, &out);
+        return SUCCEEDED(result) && SUCCEEDED(out.service_result) && SUCCEEDED(out.item_result) &&
+               out.vartype == VT_I4 && (out.filetime_low || out.filetime_high);
+    };
+    OpclDaReadI4 before_cache{}, before_device{}, after_cache{}, after_device{}, sample_cache{}, sample_device{};
+    if (ok) ok = read(cache_count, 0, before_cache) && read(device_count, 0, before_device);
+    if (ok) ok = read(target, UINT32_MAX, sample_cache);
+    if (ok) ok = read(cache_count, 0, after_cache) && read(device_count, 0, after_device) &&
+                 after_cache.value == before_cache.value + 1 && after_device.value == before_device.value &&
+                 sample_cache.value == 42 && sample_cache.quality == OPC_QUALITY_OUT_OF_SERVICE;
+    before_cache = after_cache; before_device = after_device;
+    if (ok) ok = read(target, 0, sample_device);
+    if (ok) ok = read(cache_count, 0, after_cache) && read(device_count, 0, after_device) &&
+                 after_cache.value == before_cache.value && after_device.value == before_device.value + 1 &&
+                 sample_device.value == 42 && sample_device.quality == OPC_QUALITY_GOOD &&
+                 SUCCEEDED(opcl_da_test_da1_is_inactive(session));
+    std::printf("forced SDK DA1 inactive cache/device %s cache=%04x device=%04x paths=%ld/%ld\n",
+                ok ? "PASS" : "FAIL", sample_cache.quality, sample_device.quality,
+                static_cast<long>(after_cache.value), static_cast<long>(after_device.value));
+    if (session) { hr = opcl_da_session_close(session); ok = SUCCEEDED(hr) && ok; }
+    hr = opcl_da_host_destroy(host); ok = SUCCEEDED(hr) && ok;
+    return ok ? 0 : 62;
+}
 static int live_async_fixture() {
     const OpclDaGuid clsid = {0x7d4bd1b1, 0x7422, 0x48c0,
                               {0xad, 0x58, 0x60, 0x1b, 0x70, 0x14, 0x49, 0xc6}};
@@ -303,6 +346,7 @@ int main(int argc, char** argv) {
     if (!::GetModuleHandle(nullptr)) return 9;
     if (argc == 2 && std::strcmp(argv[1], "--live") == 0) return live_fixture();
     if (argc == 2 && std::strcmp(argv[1], "--live-async") == 0) return live_async_fixture();
+    if (argc == 2 && std::strcmp(argv[1], "--live-da1-inactive") == 0) return live_da1_inactive_fixture();
     const bool baseline = argc == 2 && std::strcmp(argv[1], "--expect-existing-defect") == 0;
     phase("common-init");
     initSOCmn();
