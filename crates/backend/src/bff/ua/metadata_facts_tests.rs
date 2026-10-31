@@ -1,5 +1,5 @@
 //! Live SDK attributes through the real Gateway; no mock UA data plane.
-use super::live_tests::{Harness, TestServer};
+use super::live_tests::{Harness, PreparedMetadataServer, TestServer};
 use crate::bff::{Gateway, model::*};
 use opcua::server::address_space::{AccessLevel, VariableBuilder};
 use opcua::server::node_manager::memory::SimpleNodeManager;
@@ -106,6 +106,9 @@ fn gateway_recovery_reloads_metadata_in_new_sdk_revision() {
     let server = TestServer::start(48693);
     let port = server.port;
     let endpoint = Harness::endpoint(&server.url);
+    // Generate replacement keys and namespace while the old server remains
+    // online. Starting its listener still waits for the real Lost barrier.
+    let prepared = PreparedMetadataServer::prepare(port);
     let session = SessionId::FIRST;
     let mut gateway = Gateway::new();
     let connect = RequestId::new(1).unwrap();
@@ -142,35 +145,54 @@ fn gateway_recovery_reloads_metadata_in_new_sdk_revision() {
     // A fast replacement can bind before the SDK observes the disconnect.
     // Wait for the real Lost event before starting it; no timing guess proves it.
     let lost_deadline = Instant::now() + Duration::from_secs(45);
-    let mut seen_lost = false;
+    let mut lost_revision = None;
+    let mut transitions = Vec::new();
     while Instant::now() < lost_deadline {
         if let Some(event) = gateway.try_recv() {
-            if matches!(event.origin, Origin::UaSession { connection, revision } if connection == connect && revision > 0)
-                && matches!(
-                    event.kind,
-                    EventKind::UaRecovery {
-                        state: UaRecoveryState::ConnectionLost { .. }
-                    }
-                )
+            if let (
+                Origin::UaSession {
+                    connection,
+                    revision,
+                },
+                EventKind::UaRecovery { state },
+            ) = (&event.origin, &event.kind)
+                && *connection == connect
             {
-                seen_lost = true;
-                break;
+                if transitions.len() < 16 {
+                    transitions.push((*revision, format!("{state:?}")));
+                }
+                if matches!(state, UaRecoveryState::ConnectionLost { .. }) && *revision > 0 {
+                    lost_revision = Some(*revision);
+                    break;
+                }
             }
         } else {
             std::thread::sleep(Duration::from_millis(10));
         }
     }
-    assert!(seen_lost, "SDK did not observe the stopped sample server");
-    let replacement = TestServer::start(port);
+    let lost_revision = lost_revision.expect("SDK did not observe the stopped sample server");
+    let replacement = prepared.start();
     assert_eq!(
         replacement.port, port,
         "recovery fixture must retain endpoint"
     );
     let deadline = Instant::now() + Duration::from_secs(60);
-    let mut seen_reconnect = false;
+    let mut reconnect_revision = None;
     let mut recovered = None;
     while Instant::now() < deadline {
         if let Some(event) = gateway.try_recv() {
+            if let (
+                Origin::UaSession {
+                    connection,
+                    revision,
+                },
+                EventKind::UaRecovery { state },
+            ) = (&event.origin, &event.kind)
+                && *connection == connect
+                && transitions.len() < 16
+            {
+                transitions.push((*revision, format!("{state:?}")));
+            }
             match (event.origin, event.kind) {
                 (
                     Origin::UaSession {
@@ -180,27 +202,40 @@ fn gateway_recovery_reloads_metadata_in_new_sdk_revision() {
                     EventKind::UaRecovery {
                         state: UaRecoveryState::Reconnected { .. },
                     },
-                ) if connection == connect && revision > 0 => seen_reconnect = true,
+                ) if connection == connect && revision > lost_revision => {
+                    reconnect_revision = Some(revision)
+                }
                 (
                     Origin::UaSession {
                         connection,
                         revision,
                     },
                     EventKind::UaItemMetadata { facts },
-                ) if connection == connect && revision > 0 => {
+                ) if connection == connect && Some(revision) == reconnect_revision => {
                     if let Some(fact) = facts.into_iter().find(|fact| fact.key == ItemKey::FIRST) {
                         recovered = Some(fact);
                         break;
                     }
                 }
+                (
+                    Origin::UaSession { connection, .. },
+                    EventKind::UaRecovery {
+                        state: UaRecoveryState::Stopped { .. },
+                    },
+                ) if connection == connect => break,
                 _ => {}
             }
         } else {
             std::thread::sleep(Duration::from_millis(10));
         }
     }
-    assert!(seen_reconnect, "missing actual SDK recovery transition");
-    let fact = recovered.expect("missing scoped post-recovery metadata");
+    assert!(
+        reconnect_revision.is_some(),
+        "missing actual SDK recovery transition; observed {transitions:?}"
+    );
+    let fact = recovered.unwrap_or_else(|| {
+        panic!("missing scoped post-recovery metadata; observed {transitions:?}")
+    });
     assert_eq!(fact.user_access_level, Some(3));
     assert_eq!(fact.data_type.as_deref(), Some("Double"));
     let _ = gateway.shutdown();

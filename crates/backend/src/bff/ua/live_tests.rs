@@ -52,6 +52,123 @@ pub(super) struct TestServer {
     dir: PathBuf,
 }
 
+/// Replacement whose keypair and namespace exist before the old listener stops.
+/// The prepared SDK server binds only when `start` invokes `Server::run`.
+pub(super) struct PreparedMetadataServer {
+    rt: tokio::runtime::Runtime,
+    server: opcua::server::Server,
+    handle: ServerHandle,
+    nm: Arc<SimpleNodeManager>,
+    url: String,
+    port: u16,
+    ns: u16,
+    dir: PathBuf,
+}
+
+impl PreparedMetadataServer {
+    pub fn prepare(port: u16) -> Self {
+        init_pki();
+        let dir = std::env::temp_dir().join(format!(
+            "opclook-ua-metadata-prepared-{}-{port}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let url = format!("opc.tcp://127.0.0.1:{port}/");
+        let guard = rt.enter();
+        let (server, handle) = ServerBuilder::new_sample()
+            .host("127.0.0.1")
+            .port(port)
+            .pki_dir(&dir)
+            .trust_client_certs(true)
+            .discovery_urls(vec![url.clone()])
+            .with_node_manager(simple_node_manager(
+                NamespaceMetadata {
+                    namespace_uri: NS_URI.to_string(),
+                    ..Default::default()
+                },
+                "opclook-live-tests",
+            ))
+            .build()
+            .expect("prepare sample server");
+        drop(guard);
+        let ns = handle
+            .get_namespace_index(NS_URI)
+            .expect("namespace registered");
+        let nm = handle
+            .node_managers()
+            .get_of_type::<SimpleNodeManager>()
+            .expect("node manager");
+        {
+            let space = nm.address_space();
+            let mut space = space.write();
+            let folder = NodeId::new(ns, "Plant");
+            space.add_folder(&folder, "Plant", "Plant", &ObjectId::ObjectsFolder.into());
+            let rw = AccessLevel::CURRENT_READ | AccessLevel::CURRENT_WRITE;
+            let variable = VariableBuilder::new(&NodeId::new(ns, "Level"), "Level", "Level")
+                .data_type(DataTypeId::Double)
+                .value(Variant::Double(1.0))
+                .access_level(rw)
+                .user_access_level(rw)
+                .build();
+            space.add_variables(vec![variable], &folder);
+        }
+        Self {
+            rt,
+            server,
+            handle,
+            nm,
+            url,
+            port,
+            ns,
+            dir,
+        }
+    }
+
+    pub fn start(self) -> TestServer {
+        let Self {
+            rt,
+            server,
+            handle,
+            nm,
+            url,
+            port,
+            ns,
+            dir,
+        } = self;
+        let running = rt.spawn(server.run());
+        let deadline = Instant::now() + Duration::from_secs(90);
+        while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+            assert!(
+                !running.is_finished(),
+                "prepared replacement failed to bind original port {port}"
+            );
+            assert!(
+                Instant::now() < deadline,
+                "prepared replacement did not listen on {port}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !running.is_finished(),
+            "prepared replacement exited before startup"
+        );
+        TestServer {
+            rt,
+            handle,
+            nm,
+            url,
+            port,
+            ns,
+            dir,
+        }
+    }
+}
+
 impl TestServer {
     pub fn start(port: u16) -> Self {
         Self::start_limited(port, |_| {})
