@@ -8266,7 +8266,10 @@ fn p4_keyboard_palette_typed_browse_and_unknown_result() {
     h.event(egui::Event::Text("2001".into()));
     h.run_steps(3);
     assert!(h.state().dispatched_for_test().is_empty());
-    h.get_by_label("NodeId ветки (пусто — корень)").focus();
+    h.query_all_by_label("NodeId ветки (пусто — корень)")
+        .find(|node| node.accesskit_node().role() == egui::accesskit::Role::TextInput)
+        .expect("named Browse text input")
+        .focus();
     h.run_steps(1);
     h.event(egui::Event::Text("ns=2;s=Unknown".into()));
     h.run_steps(2);
@@ -8320,7 +8323,12 @@ fn p4_browse_parameter_has_a_localized_accessible_name() {
             .allow_missing_glyphs()
             .build_ui_state(|ui, app| opclook::ui::draw(app, ui), app);
         h.run_steps(4);
-        let node = h.get_by_label(tr(lang, Tr::PaletteBrowseNode));
+        let inputs: Vec<_> = h
+            .query_all_by_label(tr(lang, Tr::PaletteBrowseNode))
+            .filter(|node| node.accesskit_node().role() == egui::accesskit::Role::TextInput)
+            .collect();
+        assert_eq!(inputs.len(), 1, "one named Browse input per language");
+        let node = &inputs[0];
         assert_eq!(
             node.accesskit_node().role(),
             egui::accesskit::Role::TextInput
