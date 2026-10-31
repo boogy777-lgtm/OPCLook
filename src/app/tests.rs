@@ -3730,6 +3730,32 @@ fn p4_palette_captures_connection_when_opened() {
     );
 }
 
+// Connected App fixtures start a real root Browse. Complete its correlated
+// reply before expecting a Read; Browse and Read intentionally share the gate.
+fn complete_profile_fixture_browse(app: &mut App) {
+    let browses: Vec<_> = app
+        .dispatched_for_test()
+        .into_iter()
+        .filter_map(|command| match (command.request_id, command.kind) {
+            (Some(request), CommandKind::Browse { node_id, .. }) => {
+                Some((command.owner, request, node_id))
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(!browses.is_empty(), "initial App root Browse");
+    for (owner, request, node_id) in browses {
+        app.on_event(Event {
+            owner,
+            origin: Origin::Reply(request),
+            kind: EventKind::Browse {
+                node_id,
+                children: vec![],
+            },
+        });
+    }
+}
+
 #[test]
 fn read_terminal_missing_is_visible_on_correct_row_once() {
     use crate::journal::JournalMessage;
@@ -3738,6 +3764,13 @@ fn read_terminal_missing_is_visible_on_correct_row_once() {
     let key = app.seed_row(session, "tag", "Tag", Value::I64(10));
     app.sync_fixture_sessions();
     app.engine.request_refresh(session, key).unwrap();
+    assert!(
+        app.engine
+            .due(Instant::now(), Duration::from_secs(60), None)
+            .is_empty(),
+        "root Browse retains read demand"
+    );
+    complete_profile_fixture_browse(&mut app);
     let due = app
         .engine
         .due(Instant::now(), Duration::from_secs(60), None);
@@ -3799,6 +3832,13 @@ fn removed_row_is_not_restored_by_late_terminal_projection() {
     let key = app.seed_row(session, "tag", "Tag", Value::I64(10));
     app.sync_fixture_sessions();
     app.engine.request_refresh(session, key).unwrap();
+    assert!(
+        app.engine
+            .due(Instant::now(), Duration::from_secs(60), None)
+            .is_empty(),
+        "root Browse retains read demand"
+    );
+    complete_profile_fixture_browse(&mut app);
     let due = app
         .engine
         .due(Instant::now(), Duration::from_secs(60), None);
