@@ -416,6 +416,21 @@ impl<C> Default for Engine<C> {
         }
     }
 }
+
+impl<C> Drop for Engine<C> {
+    fn drop(&mut self) {
+        // Drain logical needs before fields are dropped. Gateway's existing
+        // owner remains responsible for transport shutdown.
+        let sessions: Vec<_> = self.sessions.keys().copied().collect();
+        for session in sessions {
+            self.cancel_reads(
+                session,
+                None,
+                opclook_contract::model::ReadCancelReason::Cancelled,
+            );
+        }
+    }
+}
 impl<C> Engine<C> {
     /// Observe read terminals synchronously on the calling thread. The sink is
     /// opt-in and is responsible for returning promptly. No event queue or
@@ -6459,3 +6474,7 @@ mod tests {
 #[cfg(test)]
 #[path = "acquisition_matrix_tests.rs"]
 mod acquisition_matrix_tests;
+
+#[cfg(test)]
+#[path = "drop_lifecycle_tests.rs"]
+mod drop_lifecycle_tests;
