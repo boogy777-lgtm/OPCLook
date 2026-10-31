@@ -1956,7 +1956,7 @@ impl<C> Engine<C> {
                             && view.endpoint.protocol == Protocol::OpcUa
                             && view.subscription == SubscriptionState::Active,
                     );
-                    if !view.read_in_flight && !busy {
+                    if view.connection_id.is_some() && !view.read_in_flight && !busy {
                         let mut keys: Vec<_> = view
                             .pending_initial
                             .iter()
@@ -6449,3 +6449,7 @@ mod tests {
         assert_eq!(engine.connection_id(sid(1)), Some(connect));
     }
 }
+
+#[cfg(test)]
+#[path = "acquisition_matrix_tests.rs"]
+mod acquisition_matrix_tests;
