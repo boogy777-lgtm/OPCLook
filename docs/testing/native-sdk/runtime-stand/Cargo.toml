@@ -3,7 +3,9 @@ name = "da-runtime-stand"
 version = "0.1.0"
 edition = "2024"
 [features]
-native-da-test-hooks = []
+default = ["native-da-preview"]
+native-da-preview = []
+native-da-test-hooks = ["native-da-preview"]
 [workspace]
 [dependencies]
 opclook-contract = { path = "../../../../crates/contract" }

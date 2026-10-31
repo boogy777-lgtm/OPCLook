@@ -11,6 +11,8 @@ static HANDLE isolation_release = nullptr;
 // SDK cache is owned until server stop; this counts writes on one fixture tag.
 static SOCmnPointer<SODaSCache> exception_count_cache;
 static std::atomic<unsigned> exception_write_count{0};
+static SOCmnPointer<SODaSCache> device_read_count_cache;
+static std::atomic<unsigned> device_read_count{0};
 
 static const CLSID fixture_clsid = {0x7d4bd1b1, 0x7422, 0x48c0, {0xad, 0x58, 0x60, 0x1b, 0x70, 0x14, 0x49, 0xc6}};
 
@@ -18,13 +20,28 @@ static const CLSID fixture_clsid = {0x7d4bd1b1, 0x7422, 0x48c0, {0xad, 0x58, 0x6
 // SDK complete() performs cache updates and OPC request completion.
 class FixtureTag : public SODaSTagDefault {
 public:
-    FixtureTag(LPCTSTR name, VARTYPE type, bool delayed = false, bool state = false, bool counted = false) : SODaSTagDefault(name), delayed_(delayed), state_(state), counted_(counted) {
+    FixtureTag(LPCTSTR name, VARTYPE type, bool delayed = false, bool state = false, bool counted = false, bool count_reads = false) : SODaSTagDefault(name), delayed_(delayed), state_(state), counted_(counted), count_reads_(count_reads) {
         setNativeDatatype(type);
         setAccessRights(OPC_READABLE | OPC_WRITEABLE);
         setDeviceIOMode(SODaSItemTag::direct);
     }
     void handleRequest(SODaSRequest* request) override {
         if (!request) return;
+        if (count_reads_ && request->getOperation() == SODaSRequest::read) {
+            unsigned before = device_read_count.load();
+            do {
+                if (before >= 1000 || !device_read_count_cache.isNotNull()) {
+                    request->complete(E_FAIL, FALSE, OPC_QUALITY_UNCERTAIN, FALSE, FALSE);
+                    return;
+                }
+            } while (!device_read_count.compare_exchange_weak(before, before + 1));
+            SOCmnVariant count;
+            count.setI4(static_cast<LONG>(before + 1));
+            if (!device_read_count_cache->setValue(count)) {
+                request->complete(E_FAIL, FALSE, OPC_QUALITY_UNCERTAIN, FALSE, FALSE);
+                return;
+            }
+        }
         if (delayed_ && request->getOperation() == SODaSRequest::write) {
             if (!isolation_entered || !isolation_release || !SetEvent(isolation_entered) ||
                 WaitForSingleObject(isolation_release, 60000) != WAIT_OBJECT_0) {
@@ -76,11 +93,12 @@ private:
     bool delayed_;
     bool state_;
     bool counted_;
+    bool count_reads_;
 };
 
 static bool add_tag(SODaSNode* node, LPCTSTR name, SOCmnVariant& value, bool delayed = false, bool state = false, bool counted = false,
-                    SOCmnPointer<SODaSCache>* saved_cache = nullptr) {
-    SOCmnPointer<SODaSTag> tag = new FixtureTag(name, value.vt, delayed, state, counted);
+                    SOCmnPointer<SODaSCache>* saved_cache = nullptr, bool count_reads = false) {
+    SOCmnPointer<SODaSTag> tag = new FixtureTag(name, value.vt, delayed, state, counted, count_reads);
     if (!node->addLeaf(tag)) return false;
     SOCmnPointer<SODaSCache> cache = tag->getCache();
     if (saved_cache) *saved_cache = cache;
@@ -172,7 +190,9 @@ static int run(int argc, char** argv) {
             bool tags = add_tag(node, _T("Value"), value);
             value.setI4(0);
             tags = add_tag(node, _T("ExceptionCount"), value, false, false, false, std::addressof(exception_count_cache)) && tags;
+            tags = add_tag(node, _T("DeviceReadCount"), value, false, false, false, std::addressof(device_read_count_cache)) && tags;
             value.setI4(42);
+            tags = add_tag(node, _T("DeviceValue"), value, false, false, false, nullptr, true) && tags;
             tags = add_tag(node, _T("ExceptionValue"), value, false, false, true) && tags;
             if (argc == 4) tags = add_tag(node, _T("Delayed"), value, true) && tags;
             value.setI4(1);

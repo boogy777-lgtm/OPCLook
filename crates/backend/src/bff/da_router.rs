@@ -62,10 +62,16 @@ pub fn route_of(kind: &CommandKind) -> Route {
             Route::Unsupported(kind.operation(), BackendMsg::DaNoUaNetworkSearch)
         }
         CommandKind::BrowseViews => Route::Unsupported(kind.operation(), BackendMsg::DaNoViews),
-        CommandKind::ReadCached { .. } => Route::Unsupported(
-            kind.operation(),
-            BackendMsg::raw("UA maxAge read is not supported by the DA adapter"),
-        ),
+        CommandKind::ReadFresh { .. } | CommandKind::ReadCached { .. }
+            if !cfg!(feature = "native-da-preview") =>
+        {
+            Route::Unsupported(
+                kind.operation(),
+                BackendMsg::raw(
+                    "Explicit cache/device read is not supported by the legacy DA adapter",
+                ),
+            )
+        }
         CommandKind::ResolveBrowsePath { .. } => {
             Route::Unsupported(kind.operation(), BackendMsg::DaNoBrowsePath)
         }
@@ -79,6 +85,8 @@ pub fn route_of(kind: &CommandKind) -> Route {
         | CommandKind::AddItems { .. }
         | CommandKind::RemoveItems { .. }
         | CommandKind::Read { .. }
+        | CommandKind::ReadFresh { .. }
+        | CommandKind::ReadCached { .. }
         | CommandKind::Write { .. }
         | CommandKind::Test => Route::Session,
     }
@@ -105,7 +113,9 @@ pub fn no_connection_reply(command: &Command) -> Option<Event> {
                 .map(|item| (item.key, Err(BackendMsg::NoConnection)))
                 .collect(),
         },
-        CommandKind::Read { keys } => EventKind::Values {
+        CommandKind::Read { keys }
+        | CommandKind::ReadFresh { keys }
+        | CommandKind::ReadCached { keys, .. } => EventKind::Values {
             values: keys
                 .iter()
                 .map(|key| (*key, DataValue::bad(BackendMsg::NoConnection)))
@@ -473,6 +483,31 @@ mod tests {
     use crate::bff::model::{EndpointSpec, ItemKey, ItemSpec, Protocol};
     use std::sync::Mutex;
     use std::sync::mpsc::{Receiver, channel};
+
+    #[test]
+    fn explicit_reads_only_route_to_native_preview() {
+        let fresh = CommandKind::ReadFresh {
+            keys: vec![ItemKey::FIRST],
+        };
+        let cached = CommandKind::ReadCached {
+            keys: vec![ItemKey::FIRST],
+            max_age_ms: 1,
+        };
+        for kind in [fresh, cached] {
+            if cfg!(feature = "native-da-preview") {
+                assert_eq!(route_of(&kind), Route::Session);
+            } else {
+                assert!(matches!(
+                    route_of(&kind),
+                    Route::Unsupported(Operation::Read, _)
+                ));
+            }
+        }
+        assert_eq!(
+            route_of(&CommandKind::Read { keys: vec![] }),
+            Route::Session
+        );
+    }
 
     const WAIT: Duration = Duration::from_secs(5);
 

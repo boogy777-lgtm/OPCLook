@@ -747,7 +747,10 @@ impl CommandQueue {
 pub(super) fn is_control_command(kind: &CommandKind) -> bool {
     !matches!(
         kind,
-        CommandKind::Read { .. } | CommandKind::ReadCached { .. } | CommandKind::Test
+        CommandKind::Read { .. }
+            | CommandKind::ReadFresh { .. }
+            | CommandKind::ReadCached { .. }
+            | CommandKind::Test
     )
 }
 
@@ -1029,7 +1032,9 @@ impl Actor {
                 }
                 Flow::Continue
             }
-            CommandKind::Read { keys } => self.read_command(request_id, keys, 0.0).await,
+            CommandKind::Read { keys } | CommandKind::ReadFresh { keys } => {
+                self.read_command(request_id, keys, 0.0).await
+            }
             CommandKind::ReadCached { keys, max_age_ms } => {
                 self.read_command(request_id, keys, f64::from(max_age_ms))
                     .await

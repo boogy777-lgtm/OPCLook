@@ -938,7 +938,7 @@ mod tests {
     unsafe extern "C" fn opcl_da_read_scalar(
         _: *mut c_void,
         _: *mut c_void,
-        _: u32,
+        max_age: u32,
         out: *mut ReadScalar,
         _: *mut c_char,
         _: u32,
@@ -946,7 +946,13 @@ mod tests {
         // SAFETY: the wrapper passes a valid output pointer.
         unsafe {
             (*out).vartype = 3;
-            (*out).bits_low = 42;
+            (*out).bits_low = if max_age == 0 {
+                43
+            } else if max_age == u32::MAX {
+                42
+            } else {
+                44
+            };
         }
         0
     }

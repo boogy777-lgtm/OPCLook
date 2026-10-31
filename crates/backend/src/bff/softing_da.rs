@@ -563,7 +563,14 @@ impl DaHost for NativeHost {
                         );
                     }
                 }
-                CommandKind::Read { keys } => {
+                CommandKind::Read { keys }
+                | CommandKind::ReadFresh { keys }
+                | CommandKind::ReadCached { keys, .. } => {
+                    let max_age = if matches!(&command.kind, CommandKind::ReadFresh { .. }) {
+                        0
+                    } else {
+                        u32::MAX
+                    };
                     let values = keys
                         .iter()
                         .map(|key| {
@@ -572,7 +579,7 @@ impl DaHost for NativeHost {
                                 .zip(items.get(key))
                                 .ok_or(BackendMsg::SignalNotSubscribed)
                                 .and_then(|(s, reg)| {
-                                    s.read_scalar(*reg, u32::MAX)
+                                    s.read_scalar(*reg, max_age)
                                         .map_err(|e| message(format!("DA read: {e:?}")))
                                 })
                                 .and_then(super::softing_scalar::decode);
@@ -936,6 +943,21 @@ mod tests {
         });
         assert!(
             matches!(recv(), EventKind::Values { values } if values[0].1.value == Value::I64(42))
+        );
+        send(CommandKind::ReadFresh {
+            keys: vec![ItemKey::FIRST],
+        });
+        assert!(
+            matches!(recv(), EventKind::Values { values } if values[0].1.value == Value::I64(43)),
+            "fresh uses maxAge=0"
+        );
+        send(CommandKind::ReadCached {
+            keys: vec![ItemKey::FIRST],
+            max_age_ms: 1234,
+        });
+        assert!(
+            matches!(recv(), EventKind::Values { values } if values[0].1.value == Value::I64(42)),
+            "DA cache uses maxAge=MAX"
         );
         send(CommandKind::Write {
             request: WriteRequest {
