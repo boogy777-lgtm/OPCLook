@@ -1492,3 +1492,13 @@ Win execution pending. UA Transfer real1/1+fresh1/1, stock secure token1/1+fresh
 94773fa завершил все9 jobs, в обоих COM inputs actual array/manager lease1/1 иcleanup;
 новый retirement fix/late callback/O23 не приписываются историческому run.
 Пара25 A09 отрицательные facts и SDK readiness candidate в работе.
+
+## 2026-10-31 — cec DA1 setup repair
+
+Class N3/O24 test setup. Inv: принудительная версия выбирается до SDK connect,
+а доказательство маршрута строится на real fixture request types, не getter.
+N+1: production open(false) unchanged, explicit inactive open(true), bounded
+phase diagnostics; independent live gates не скрываются за чужим failure.
+SDK source force setter online allowed; server negotiation happens at connect.
+CEC оба COM stop exit62/zeros, точная failing stage пока неизвестна; cleanuppass.
+Shared-impl/source regression + runtime52/52 passed; новый Win результат pending.
