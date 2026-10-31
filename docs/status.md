@@ -1,5 +1,57 @@
 # Текущий статус
 
+## 2026-10-31 — b94303f: все 9 jobs; следующий SDK packet
+
+Точный опубликованный `b94303fa0c2e6c43e46787bea08805935049b068` прошёл
+[App2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41165883248),
+[SDK4](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41165883316),
+[COM2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41165883270) и
+[package1](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41165883409).
+Оба COM inputs прошли actual SDK I4 callback и bounded-codec failure facts.
+Упакованный nohook x86 CLI прочитал42; строгая COM cleanup прошла.
+Скачанный artifact13029128702 имеет SHA256
+`93ac804372c92ed6b5a1080e7f90a388d3c7910b0a58988fe492a0eb201b9f2c`, совпадающий
+с Actions digest. Проверенный Windows notice-manifest:183 packages,94 texts,
+295875bytes,missing0. Разница21bytes с Linux inventory295854 — CRLF в общем
+workspace LICENSE:1077 против1098bytes, нормализованный текст совпадает.
+Manifest ссылается на PR merge commit3869df3, построенный для headb94303f.
+Это dependency superset, не PE link-set или юридическое разрешение.
+
+Новый пакет отдельно проверяет test-only native Async lifetime: SDK task/item/group
+и Session/SharedHost удерживаются после timeout; поздняя retirement — cleanup ACK,
+не второе значение. Session нельзя вынуть через mutable accessor при pending.
+Matching empty failed-master callback завершает request без выдуманных sample facts.
+Реальный manager-backed fixture требует Busy до retirement и успешный finish после;
+manager не хранит JoinHandle, поэтому это не независимое наблюдение thread join.
+Drop pending lease намеренно карантинирует ownership без срока; production Async
+остаётся Unsupported. Windows lifetime/array gates ещё не приняты этим baseline.
+
+Source audit подтвердил, что fixed-width R8/BOOL/I8/UI8 arrays уже реализованы:
+новый runtime fix только отвергает noncanonical VARIANT_BOOL bytes до SDK dispatch.
+Новые fixture tests проверяют точные read/write/readback, 64-bit extrema и >2^53,
+readonly и invalid-conversion rejection. BSTR/nested/multidimensional coverage
+этим не заявлена. Оба новых Rust integration tests подключены к обоим COM inputs
+с precompile вне fixture и nonzero-test guard. Root Linux all-target check6packages passed6.74s; Linux mock runtime stand50/50 и
+оба actual-source C++ stub regressions прошли; это не Win32 execution.
+
+UA research: real SDK fault probes измерили Deadline+late response rejection,
+transport-cut cancellation и потерю intermediate watch state; isolated SDK sticky
+uncertainty переживает последующие значения. Real Engine/Gateway probe показал:
+replay52.5 дошёл до закрытого identity gate, Engine его не принял; после Reconciled
+ровно один RecoverySnapshot53.5, затем push54.5 с сохранением unknown history.
+Это Engine consumer, не GUI; old in-flight Read cancellation отдельно не измерена.
+SDK failure-visibility gate: реальный None-wire seq2→72 дал SequenceUncertain,
+Republish0, последующий callback68.25 и sticky unknown. Guard-only counterfactual
+дал ожидаемый FAIL (MessageNotAvailable вместо SequenceUncertain); fresh runner
+повторил FAIL17.90s и PASS13.90s. Это SDK watch, текущий adapter не экспортирует
+этот typed outcome отдельным product event. См.
+[failure visibility](testing/ua-sdk-republish-wide-gap-proof.md).
+Production Cargo pin, registry и App gate не изменены. Исследовательские patches
+не закрывают secure/Transfer/full-history, remote/other-server, physical Windows,
+legal или N4 gates. Подробности: [lease](testing/native-sdk/async-session-lease.md),
+[faults](testing/ua-sdk-republish-fault-proof.md),
+[Engine boundary](testing/ua-sdk-replay-engine-proof.md).
+
 ## 2026-10-31 — 77d8a42: 7/9 jobs; portable fixture and prepared recovery repairs
 
 SDK4 (41163828310), COM2 (41163828217) and Windows App (41163828213) passed.

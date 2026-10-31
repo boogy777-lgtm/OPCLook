@@ -1448,3 +1448,23 @@ the existing strict trace check; missing generated inputs and old SDK headers
 still fail. Real temporary-path regression fails before and passes after this
 change; package tests8/8 and inventory tests4/4 pass, with the reviewed profile
 hash updated. The packaged executable has not yet passed its real CLI read.
+
+
+## 2026-10-31 — SDK lifetime, arrays и replay boundary
+
+Class: N2/N3 ownership/shape acceptance и R07 SDK replay evidence.
+Inv: SDK владеет task/COM/recovery; timeout не освобождает accepted task;
+retire не выдаёт второй outcome; unknown history не исчезает от свежего snapshot.
+N+1: mutable Session escape, zero-item failed-master callback, >2^53/extrema,
+readonly/invalid writes, поздний RepublishResponse и watch overwrite.
+Defect: pending mutable accessor позволял заменить Session; empty failed-master
+callback игнорировался; raw BOOL array принимал неканонические bytes. Для каждого
+есть actual-source before-fail/after-pass regression. Общие primitive array codecs
+уже существовали, повторная реализация не добавлена.
+
+Native Linux runtime stand50/50 и две C++ source/stub regressions прошли;
+оба live Rust gates подключены к обоим COM inputs, Windows результат pending.
+Research Engine/Gateway replay:1/1 targeted12.06s и fresh runner1/1 18.24s;
+SDK delayed response1/1 17.02s, cut1/1 9.08s, watch overwrite unit1/1.
+Исторический exactb94303f прошёл все9 jobs; проверенный package manifest183/94/
+295875bytes/missing0 и executable42+strictcleanup. Все ограничения в status.

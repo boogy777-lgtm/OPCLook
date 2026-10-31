@@ -4,6 +4,14 @@
 парами исполнителей GPT-6.1 Terra High. Это рабочая очередь существующих
 планов, не новый функциональный scope и не утверждение о завершении миграции.
 
+## Последний подтверждённый срез
+
+`b94303f` прошёл все9 jobs, включая обе COM matrix и nohook packaged CLI read42
+с cleanup. Это заменяет pending verdict старых строк ниже только для уже вошедшего
+в тот head кода. Новые async lease/manager и primitive-array live gates ожидают
+собственного Windows CI. SDK replay patches остаются research; Engine gate/snapshot
+boundary проверен отдельно, secure/Transfer/full history ещё открыты.
+
 ## Правило исполнения
 
 1. Выбирать две независимые доступные задачи с учётом зависимостей и фактического
@@ -47,7 +55,11 @@
 | 15 | UA per-key metadata/negotiated UI, SDK notification facts | Linux Engine93/App268/backend264+1knownignored; real SDK access/restart/gap/overflow and panel render passed; new WinCI pending |
 | 16 | SDK first-notification and Republish evidence, DA failure facts | Server defect and client gap isolated; DA mock47/48 and typed facts; i686 strict test pending |
 | 17 | N1 verified notice texts, SDK-only replay prototypes | Inventory183/94/295854bytes/missing0; library before/after stand; production pins unchanged |
-| 18 | Initial Connect/recovery scope, SDK checked Async lifetime | Two Terra High active; do not count proposed/stand behavior as production acceptance |
+| 18 | Initial Connect/recovery scope, SDK checked Async lifetime | Initial scope accepted in b94303f; checked lease remains test-only, own Win gates pending |
+| 19 | Native session/manager lease, SDK fault probes | Linux runtime50/50; Deadline/cut/watch evidence recorded; new i686 lease execution pending |
+| 20 | Primitive arrays coverage/BOOL validation, Engine SDK replay boundary | Existing codecs reused; before/after BOOL regression; Engine1/1 + fresh runner1/1; Win arrays pending |
+| 21 | Actual native CI wiring, SDK failure-visibility gate | Both COM inputs wired; actual SDK window guard PASS + guard-only counterfactual FAIL, fresh runner reproduced |
+| 22 | Native async two-session isolation, secured UA reconnect | Terra High pair active; Windows/live results not assumed |
 
 Пара 01 исправила начальное состояние fixture после честного отрицательного
 NOCONFIG verdict на `a004b226`. Проверка на `36fa668` подтвердила
@@ -75,9 +87,9 @@ RUNNING → FAILED → RUNNING во всех трёх процессах и read
 | N4 | Production native DA и удаление прежнего OPC COM data-plane | Native SDK capability, interop/lifetime/license gates закрыты; системный WinAPI/helper не удалён как OPC code |
 | R2.6 / N6 | Полная матрица G/D/E/S/T/C/U/M/A/O, упаковка и согласование планов | Доказательства по стабильным ID, точный code head, итоговые настройки/документы и CI; число строк CSV не число пройденных тестов |
 
-После текущего integration/CI — P2 payload limits и независимый P3/P5 UI срез,
-затем UA SDK recovery observer/reconciliation и оставшиеся DA method/capability
-срезы по результатам SDK audit. Подтверждённые regressions исправлять перед новым
+После текущего integration/CI — оставшиеся DA method/capability и UA SDK replay
+acceptance срезы по фактическому source audit. P2 и автоматизируемые P3/P4 gates
+уже выполнены; physical Windows и N4 нельзя закрыть локальными mock/fixtures. Подтверждённые regressions исправлять перед новым
 функциональным пакетом. Дальнейшие пары выбирать по фактическим зависимостям.
 
 ## Внешние гейты
