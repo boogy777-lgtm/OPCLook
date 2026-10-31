@@ -214,6 +214,24 @@ static int live_async_fixture() {
         hr = opcl_da_test_async_read_i4(session, item, 0, 10000, &value);
         ok = SUCCEEDED(hr) && SUCCEEDED(value.service_result) && SUCCEEDED(value.item_result) && value.value == 42;
     }
+    // Hold the actual SDK worker before asyncRead: caller times out while
+    // the real session and host remain pinned until release and completion.
+    bool gate = false;
+    if (ok) { hr = opcl_da_test_async_gate_arm(); gate = SUCCEEDED(hr); ok = gate; }
+    if (ok) {
+        hr = opcl_da_test_async_read_i4(session, item, 0, 100, &value);
+        ok = hr == HRESULT_FROM_WIN32(WAIT_TIMEOUT) &&
+             SUCCEEDED(opcl_da_test_async_gate_entered(10000)) &&
+             opcl_da_session_close(session) == E_PENDING &&
+             opcl_da_host_destroy(host) == E_PENDING;
+    }
+    if (gate) {
+        const HRESULT released = opcl_da_test_async_gate_release();
+        uint32_t terminal = 0;
+        const HRESULT retired = opcl_da_test_async_wait_retire(session, 30000, &value, &terminal);
+        if (terminal) opcl_da_test_async_gate_close();
+        ok = ok && SUCCEEDED(released) && SUCCEEDED(retired) && terminal == 1 && value.value == 0;
+    }
     if (session) { hr = opcl_da_session_close(session); ok = ok && SUCCEEDED(hr); }
     hr = opcl_da_host_destroy(host); ok = ok && SUCCEEDED(hr);
     std::printf("SDK async read callback fixture %s (hr=%08lx)\n", ok ? "PASS" : "FAIL", static_cast<unsigned long>(hr));

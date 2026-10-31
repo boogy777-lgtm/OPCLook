@@ -102,6 +102,13 @@ int32_t opcl_da_test_codec_bounds(void);
 int32_t opcl_da_test_ephemeral_worker(uint32_t guarded);
 /* SDK async read callback probe; not a production async acquisition mode. */
 int32_t opcl_da_test_async_callback_state(void);
+int32_t opcl_da_test_async_retire(OpclDaSession* session, OpclDaReadI4* out);
+int32_t opcl_da_test_async_wait_retire(OpclDaSession* session, uint32_t timeout_ms, OpclDaReadI4* out, uint32_t* retired);
+int32_t opcl_da_test_async_is_pending(OpclDaSession* session, uint32_t* pending);
+int32_t opcl_da_test_async_gate_arm(void);
+int32_t opcl_da_test_async_gate_entered(uint32_t timeout_ms);
+int32_t opcl_da_test_async_gate_release(void);
+int32_t opcl_da_test_async_gate_close(void);
 int32_t opcl_da_test_async_prepare(OpclDaSession* session);
 int32_t opcl_da_test_async_read_i4(OpclDaSession* session, OpclDaItem* item, uint32_t max_age,
                                     uint32_t timeout_ms, OpclDaReadI4* out);

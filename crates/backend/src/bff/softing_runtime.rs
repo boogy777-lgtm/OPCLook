@@ -238,6 +238,33 @@ unsafe extern "C" {
         result: *mut i32,
     ) -> i32;
     #[cfg(feature = "native-da-test-hooks")]
+    fn opcl_da_test_async_gate_arm() -> i32;
+    #[cfg(feature = "native-da-test-hooks")]
+    fn opcl_da_test_async_gate_entered(timeout: u32) -> i32;
+    #[cfg(feature = "native-da-test-hooks")]
+    fn opcl_da_test_async_gate_release() -> i32;
+    #[cfg(feature = "native-da-test-hooks")]
+    fn opcl_da_test_async_gate_close() -> i32;
+    #[cfg(feature = "native-da-test-hooks")]
+    fn opcl_da_test_async_prepare(session: *mut c_void) -> i32;
+    #[cfg(feature = "native-da-test-hooks")]
+    fn opcl_da_test_async_read_i4(
+        session: *mut c_void,
+        item: *mut c_void,
+        age: u32,
+        timeout: u32,
+        out: *mut ReadI4,
+    ) -> i32;
+    #[cfg(feature = "native-da-test-hooks")]
+    fn opcl_da_test_async_wait_retire(
+        session: *mut c_void,
+        timeout: u32,
+        out: *mut ReadI4,
+        retired: *mut u32,
+    ) -> i32;
+    #[cfg(feature = "native-da-test-hooks")]
+    fn opcl_da_test_async_is_pending(session: *mut c_void, pending: *mut u32) -> i32;
+    #[cfg(feature = "native-da-test-hooks")]
     fn opcl_da_test_arm_write_exception() -> i32;
     #[cfg(feature = "native-da-test-hooks")]
     fn opcl_da_test_write_exception_state() -> i32;
@@ -465,6 +492,103 @@ pub struct Session {
     push_buffer: Vec<u8>,
     closed: bool,
     _thread: PhantomData<Rc<()>>,
+}
+#[cfg(feature = "native-da-test-hooks")]
+pub fn test_async_gate_arm() -> Result<(), Error> {
+    // SAFETY: test-only process event hook takes no pointers; the session owner serializes use.
+    check(unsafe { opcl_da_test_async_gate_arm() })
+}
+#[cfg(feature = "native-da-test-hooks")]
+pub fn test_async_gate_entered(timeout: u32) -> Result<(), Error> {
+    // SAFETY: test-only event remains armed until explicitly closed.
+    check(unsafe { opcl_da_test_async_gate_entered(timeout) })
+}
+#[cfg(feature = "native-da-test-hooks")]
+pub fn test_async_gate_release() -> Result<(), Error> {
+    // SAFETY: test-only event remains armed until explicitly closed.
+    check(unsafe { opcl_da_test_async_gate_release() })
+}
+#[cfg(feature = "native-da-test-hooks")]
+pub fn test_async_gate_close() -> Result<(), Error> {
+    // SAFETY: caller closes the test event only after the SDK task is retired.
+    check(unsafe { opcl_da_test_async_gate_close() })
+}
+/// Test-only quarantine of the actual session and its SharedHost Arc.
+/// Dropping while SDK work is pending intentionally retains both indefinitely.
+#[cfg(feature = "native-da-test-hooks")]
+pub struct TestAsyncSessionLease {
+    session: Option<Session>,
+    pending: bool,
+}
+#[cfg(feature = "native-da-test-hooks")]
+impl TestAsyncSessionLease {
+    pub fn new(session: Session) -> Self {
+        Self {
+            session: Some(session),
+            pending: false,
+        }
+    }
+    pub fn session_mut(&mut self) -> Option<&mut Session> {
+        if self.pending {
+            None
+        } else {
+            self.session.as_mut()
+        }
+    }
+    pub fn prepare(&mut self) -> Result<(), Error> {
+        let session = self.session.as_ref().ok_or(Error::InvalidHandle)?;
+        // SAFETY: the lease uniquely owns the live session and serializes the call.
+        check(unsafe { opcl_da_test_async_prepare(session.ptr.as_ptr()) })
+    }
+    pub fn read(&mut self, key: u64, age: u32, timeout: u32) -> Result<(i32, ReadI4), Error> {
+        if self.pending {
+            return Err(Error::Busy);
+        }
+        let session = self.session.as_ref().ok_or(Error::InvalidHandle)?;
+        let item = session.items.get(&key).ok_or(Error::InvalidHandle)?;
+        let mut out = ReadI4::default();
+        // SAFETY: session and item are uniquely owned and all outputs remain valid during the call.
+        let hr = unsafe {
+            opcl_da_test_async_read_i4(session.ptr.as_ptr(), item.as_ptr(), age, timeout, &mut out)
+        };
+        let mut pending = 1;
+        // SAFETY: the session remains owned and pending is valid for the call.
+        let status = unsafe { opcl_da_test_async_is_pending(session.ptr.as_ptr(), &mut pending) };
+        self.pending = status < 0 || pending != 0;
+        Ok((hr, out))
+    }
+    pub fn wait_retire(&mut self, timeout: u32) -> Result<(i32, ReadI4), Error> {
+        let session = self.session.as_ref().ok_or(Error::InvalidHandle)?;
+        let mut out = ReadI4::default();
+        let mut retired = 0;
+        // SAFETY: the lease keeps the session and host live, and both outputs are valid.
+        let hr = unsafe {
+            opcl_da_test_async_wait_retire(session.ptr.as_ptr(), timeout, &mut out, &mut retired)
+        };
+        if retired == 1 {
+            self.pending = false;
+        }
+        Ok((hr, out))
+    }
+    pub fn into_session(mut self) -> Result<Session, Self> {
+        if self.pending {
+            return Err(self);
+        }
+        match self.session.take() {
+            Some(session) => Ok(session),
+            None => Err(self),
+        }
+    }
+}
+#[cfg(feature = "native-da-test-hooks")]
+impl Drop for TestAsyncSessionLease {
+    fn drop(&mut self) {
+        if self.pending {
+            if let Some(session) = self.session.take() {
+                std::mem::forget(session);
+            }
+        }
+    }
 }
 impl Session {
     pub fn test_status(&mut self) -> Result<i32, Error> {
@@ -1044,6 +1168,91 @@ mod tests {
             *result = 0;
         }
         0
+    }
+    #[cfg(feature = "native-da-test-hooks")]
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn opcl_da_test_async_prepare(_: *mut c_void) -> i32 {
+        0
+    }
+    #[cfg(feature = "native-da-test-hooks")]
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn opcl_da_test_async_read_i4(
+        _: *mut c_void,
+        _: *mut c_void,
+        _: u32,
+        _: u32,
+        _: *mut ReadI4,
+    ) -> i32 {
+        0x80070102_u32 as i32
+    }
+    #[cfg(feature = "native-da-test-hooks")]
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn opcl_da_test_async_wait_retire(
+        _: *mut c_void,
+        timeout: u32,
+        out: *mut ReadI4,
+        retired: *mut u32,
+    ) -> i32 {
+        if timeout == 0 {
+            return 0x80070057_u32 as i32;
+        }
+        // SAFETY: the wrapper supplies a valid output for this mock call.
+        unsafe {
+            (*out).value = 0;
+            *retired = 1;
+        }
+        0
+    }
+    #[cfg(feature = "native-da-test-hooks")]
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn opcl_da_test_async_is_pending(_: *mut c_void, pending: *mut u32) -> i32 {
+        // SAFETY: mock caller supplies a valid writable output.
+        unsafe {
+            *pending = 1;
+        }
+        0
+    }
+    #[cfg(feature = "native-da-test-hooks")]
+    #[test]
+    fn test_async_lease_keeps_real_session_and_shared_host_until_retired() {
+        let host = Host::new().unwrap();
+        let shared = host.shared();
+        let guid = Guid {
+            data1: 1,
+            data2: 2,
+            data3: 3,
+            data4: [0; 8],
+        };
+        let session = shared.open("server", "localhost", &guid).unwrap();
+        drop(shared);
+        let mut lease = TestAsyncSessionLease::new(session);
+        lease.prepare().unwrap();
+        let key = lease.session_mut().unwrap().add("item").unwrap().0;
+        assert_eq!(lease.read(key, 0, 10).unwrap().0, 0x80070102_u32 as i32);
+        assert!(!host.is_idle());
+        assert!(lease.session_mut().is_none());
+        let mut lease = match lease.into_session() {
+            Err(lease) => lease,
+            Ok(_) => panic!("pending lease escaped"),
+        };
+        assert_eq!(lease.wait_retire(0).unwrap().0, 0x80070057_u32 as i32);
+        assert!(!host.is_idle());
+        assert!(lease.session_mut().is_none());
+        let mut lease = match lease.into_session() {
+            Err(lease) => lease,
+            Ok(_) => panic!("failed wait released pending lease"),
+        };
+        let (result, value) = lease.wait_retire(10).unwrap();
+        assert_eq!(result, 0);
+        assert_eq!(value.value, 0);
+        assert!(lease.session_mut().is_some());
+        let session = match lease.into_session() {
+            Ok(session) => session,
+            Err(_) => panic!("retired lease still pending"),
+        };
+        session.close().unwrap();
+        assert!(host.is_idle());
+        host.close().unwrap();
     }
     #[cfg(feature = "native-da-test-hooks")]
     #[unsafe(no_mangle)]

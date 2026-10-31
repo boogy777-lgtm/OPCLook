@@ -2,6 +2,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -20,9 +21,9 @@ static const CLSID fixture_clsid = {0x7d4bd1b1, 0x7422, 0x48c0, {0xad, 0x58, 0x6
 // SDK complete() performs cache updates and OPC request completion.
 class FixtureTag : public SODaSTagDefault {
 public:
-    FixtureTag(LPCTSTR name, VARTYPE type, bool delayed = false, bool state = false, bool counted = false, bool count_reads = false) : SODaSTagDefault(name), delayed_(delayed), state_(state), counted_(counted), count_reads_(count_reads) {
+    FixtureTag(LPCTSTR name, VARTYPE type, bool delayed = false, bool state = false, bool counted = false, bool count_reads = false, bool read_only = false) : SODaSTagDefault(name), delayed_(delayed), state_(state), counted_(counted), count_reads_(count_reads) {
         setNativeDatatype(type);
-        setAccessRights(OPC_READABLE | OPC_WRITEABLE);
+        setAccessRights(read_only ? OPC_READABLE : OPC_READABLE | OPC_WRITEABLE);
         setDeviceIOMode(SODaSItemTag::direct);
     }
     void handleRequest(SODaSRequest* request) override {
@@ -97,8 +98,8 @@ private:
 };
 
 static bool add_tag(SODaSNode* node, LPCTSTR name, SOCmnVariant& value, bool delayed = false, bool state = false, bool counted = false,
-                    SOCmnPointer<SODaSCache>* saved_cache = nullptr, bool count_reads = false) {
-    SOCmnPointer<SODaSTag> tag = new FixtureTag(name, value.vt, delayed, state, counted, count_reads);
+                    SOCmnPointer<SODaSCache>* saved_cache = nullptr, bool count_reads = false, bool read_only = false) {
+    SOCmnPointer<SODaSTag> tag = new FixtureTag(name, value.vt, delayed, state, counted, count_reads, read_only);
     if (!node->addLeaf(tag)) return false;
     SOCmnPointer<SODaSCache> cache = tag->getCache();
     if (saved_cache) *saved_cache = cache;
@@ -134,6 +135,19 @@ static bool add_array_fixtures(SODaSNode* node) {
     const LONG ints[] = {-2, 0, 42};
     if (!make_array(value, VT_I4, 5, 3) || SafeArrayGetElemsize(value.parray) != sizeof(LONG) ||
         !fill_array(value, ints, sizeof(ints)) || !add_tag(node, _T("Ints"), value)) return false;
+    const double floats[] = {-1.25, 0.5, 42.0};
+    if (!make_array(value, VT_R8, -3, 3) || SafeArrayGetElemsize(value.parray) != sizeof(double) ||
+        !fill_array(value, floats, sizeof(floats)) || !add_tag(node, _T("Float64Array"), value)) return false;
+    if (!add_tag(node, _T("Float64ArrayReadOnly"), value, false, false, false, nullptr, false, true)) return false;
+    const VARIANT_BOOL flags[] = {VARIANT_FALSE, VARIANT_TRUE, VARIANT_FALSE};
+    if (!make_array(value, VT_BOOL, 0, 3) || SafeArrayGetElemsize(value.parray) != sizeof(VARIANT_BOOL) ||
+        !fill_array(value, flags, sizeof(flags)) || !add_tag(node, _T("BoolArray"), value)) return false;
+    const LONGLONG signed_values[] = {INT64_MIN, -9007199254740993LL, INT64_MAX};
+    if (!make_array(value, VT_I8, 2, 3) || SafeArrayGetElemsize(value.parray) != sizeof(LONGLONG) ||
+        !fill_array(value, signed_values, sizeof(signed_values)) || !add_tag(node, _T("Int64Array"), value)) return false;
+    const ULONGLONG unsigned_values[] = {0, 9007199254740993ULL, UINT64_MAX};
+    if (!make_array(value, VT_UI8, 0, 3) || SafeArrayGetElemsize(value.parray) != sizeof(ULONGLONG) ||
+        !fill_array(value, unsigned_values, sizeof(unsigned_values)) || !add_tag(node, _T("UInt64Array"), value)) return false;
     // Valid SDK array deliberately exceeds the adapter's 256-element bound.
     // It exercises codec failure after a successful SDK device/cache read.
     LONG many[257]{};

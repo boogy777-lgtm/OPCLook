@@ -131,6 +131,81 @@ pub fn finish_native_sdk(timeout: Duration) -> Result<(), String> {
     result.recv_timeout(timeout).map_err(|e| e.to_string())?
 }
 
+// Test-only facade over the real process manager and its SharedHost. This is
+// not a Gateway acquisition mode and does not create an additional owner.
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub struct TestManagerAsyncLease {
+    lease: super::softing_runtime::TestAsyncSessionLease,
+    key: u64,
+}
+#[cfg(feature = "native-da-test-hooks")]
+impl TestManagerAsyncLease {
+    pub fn open_fixture() -> Result<Self, String> {
+        use super::softing_runtime::TestAsyncSessionLease;
+        let host = acquire_host()?;
+        let guid = Guid {
+            data1: 0x7d4bd1b1,
+            data2: 0x7422,
+            data3: 0x48c0,
+            data4: [0xad, 0x58, 0x60, 0x1b, 0x70, 0x14, 0x49, 0xc6],
+        };
+        let (session, _) = host
+            .open_config("OPCLook.NativeDaFixture.1", "localhost", &guid, true, 1000)
+            .map_err(|e| format!("session open: {e:?}"))?;
+        drop(host);
+        let mut lease = TestAsyncSessionLease::new(session);
+        lease
+            .prepare()
+            .map_err(|e| format!("async prepare: {e:?}"))?;
+        let (key, _, _) = lease
+            .session_mut()
+            .ok_or("missing session")?
+            .add("Fixture.DeviceValue")
+            .map_err(|e| format!("item add: {e:?}"))?;
+        Ok(Self { lease, key })
+    }
+    pub fn read(&mut self, timeout_ms: u32) -> Result<i32, String> {
+        self.lease
+            .read(self.key, 0, timeout_ms)
+            .map(|(hr, _)| hr)
+            .map_err(|e| format!("async read: {e:?}"))
+    }
+    pub fn retire(&mut self, timeout_ms: u32) -> Result<(i32, i32), String> {
+        self.lease
+            .wait_retire(timeout_ms)
+            .map(|(hr, value)| (hr, value.value))
+            .map_err(|e| format!("async retire: {e:?}"))
+    }
+    pub fn close(self) -> Result<(), String> {
+        let session = self
+            .lease
+            .into_session()
+            .map_err(|_| "async lease still pending".to_string())?;
+        session.close().map_err(|e| format!("session close: {e:?}"))
+    }
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_async_gate_arm() -> Result<(), String> {
+    super::softing_runtime::test_async_gate_arm().map_err(|e| format!("{e:?}"))
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_async_gate_entered(timeout: u32) -> Result<(), String> {
+    super::softing_runtime::test_async_gate_entered(timeout).map_err(|e| format!("{e:?}"))
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_async_gate_release() -> Result<(), String> {
+    super::softing_runtime::test_async_gate_release().map_err(|e| format!("{e:?}"))
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_async_gate_close() -> Result<(), String> {
+    super::softing_runtime::test_async_gate_close().map_err(|e| format!("{e:?}"))
+}
+
 struct NativeHost {
     sdk: SharedHost,
     discovered: Mutex<DiscoveredClsids>,
@@ -771,6 +846,40 @@ mod tests {
     use super::super::model::{EndpointSpec, ItemSpec, Protocol, RequestId, Value, WriteRequest};
     use super::*;
     use std::time::Duration;
+    #[cfg(feature = "native-da-test-hooks")]
+    #[test]
+    fn test_manager_async_lease_busy_and_finish_with_mock_ffi() {
+        const CHILD: &str = "OPCLOOK_MANAGER_LEASE_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "bff::da::tests::test_manager_async_lease_busy_and_finish_with_mock_ffi",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "child failed: {stdout} {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        assert_eq!(test_host_acquisitions(), (0, true));
+        let mut lease = TestManagerAsyncLease::open_fixture().unwrap();
+        assert_eq!(test_host_acquisitions(), (1, true));
+        assert_eq!(lease.read(100).unwrap(), 0x80070102_u32 as i32);
+        assert_eq!(
+            finish_native_sdk(Duration::from_secs(3)).unwrap_err(),
+            "SDK sessions still running"
+        );
+        assert_eq!(lease.retire(10).unwrap(), (0, 0));
+        lease.close().unwrap();
+        finish_native_sdk(Duration::from_secs(3)).unwrap();
+    }
     #[test]
     fn test_command_reports_sdk_state_and_native_error_through_router() {
         use super::super::model::Origin;

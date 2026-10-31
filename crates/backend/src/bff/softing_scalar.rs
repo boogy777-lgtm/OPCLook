@@ -1,4 +1,4 @@
-//! Mapping for SDK scalars, strings, and bounded one-dimensional UI1/I4 arrays.
+//! Mapping for SDK scalars, strings, and bounded one-dimensional arrays.
 //! The SDK retains all VARIANT and SAFEARRAY ownership.
 use super::da_convert::{convert_float, convert_int, convert_uint, da_range};
 use super::model::{BackendMsg, DataValue, Quality, Value, ValueOrigin, ValueTimes};
@@ -431,6 +431,66 @@ pub fn encode(value: &Value, hint: Option<u16>) -> Result<(u16, u64), BackendMsg
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn primitive_array_wire_roundtrips_bool_r8_i8_and_ui8_without_precision_loss() {
+        let cases = [
+            (
+                0x200b,
+                Value::Array(vec![Value::Bool(false), Value::Bool(true)]),
+            ),
+            (
+                0x2005,
+                Value::Array(vec![Value::F64(-1.25), Value::F64(0.5)]),
+            ),
+            (
+                0x2014,
+                Value::Array(vec![
+                    Value::I64(i64::MIN),
+                    Value::I64(-9_007_199_254_740_993),
+                    Value::I64(i64::MAX),
+                ]),
+            ),
+            (
+                0x2015,
+                Value::Array(vec![
+                    Value::U64(0),
+                    Value::U64(9_007_199_254_740_993),
+                    Value::U64(u64::MAX),
+                ]),
+            ),
+        ];
+        for (tag, value) in cases {
+            let (encoded, bytes) = encode_array(&value, Some(tag)).unwrap();
+            assert_eq!(encoded, tag);
+            if tag == 0x200b {
+                assert_eq!(bytes, [0, 0, 0xff, 0xff]);
+            }
+            let raw = ReadScalar {
+                vartype: tag,
+                quality: 0xc0,
+                filetime_low: 0xd53e8000,
+                filetime_high: 0x019db1de,
+                ..Default::default()
+            };
+            let read = decode((raw, Some(bytes))).unwrap();
+            assert_eq!(read.value, value);
+            assert_eq!(read.quality.code, 0xc0);
+            assert!(read.timestamp.is_some());
+        }
+        assert!(encode_array(&Value::Array(vec![Value::U64(u64::MAX)]), Some(0x2014)).is_err());
+        assert!(encode_array(&Value::Array(vec![Value::I64(-1)]), Some(0x2015)).is_err());
+        assert!(encode_array(&Value::Array(vec![Value::Bool(true); 257]), Some(0x200b)).is_err());
+        assert!(
+            decode((
+                ReadScalar {
+                    vartype: 0x2005,
+                    ..Default::default()
+                },
+                Some(vec![0; 7])
+            ))
+            .is_err()
+        );
+    }
     #[test]
     fn read_failure_keeps_only_attested_facts_and_never_reports_good() {
         use super::super::softing_runtime::{READ_ITEM, READ_SAMPLE, READ_SERVICE, ReadOutcome};

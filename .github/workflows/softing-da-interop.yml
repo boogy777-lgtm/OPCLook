@@ -12,7 +12,7 @@ jobs:
       matrix:
         opc_inputs: [sdk, official-mit]
     runs-on: windows-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -141,6 +141,34 @@ jobs:
             python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-preview --test sdk_gateway_live -- --nocapture
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+      - name: Native DA primitive array read and write fidelity
+        shell: pwsh
+        working-directory: opclook
+        env:
+          SOFTING_RUNTIME_LIB_DIR: ${{ github.workspace }}/softing-build/Release
+          CARGO_BUILD_JOBS: 1
+          CARGO_PROFILE_DEV_DEBUG: 0
+          CARGO_PROFILE_TEST_DEBUG: 0
+          CARGO_INCREMENTAL: 0
+        run: |
+          cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-preview --test sdk_primitive_arrays_live --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- python scripts/ci-cargo-live.py -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-preview --test sdk_primitive_arrays_live -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: SDK manager finish while async session lease is pending
+        shell: pwsh
+        working-directory: opclook
+        env:
+          SOFTING_RUNTIME_LIB_DIR: ${{ github.workspace }}/softing-build/Release
+          CARGO_BUILD_JOBS: 1
+          CARGO_PROFILE_DEV_DEBUG: 0
+          CARGO_PROFILE_TEST_DEBUG: 0
+          CARGO_INCREMENTAL: 0
+        run: |
+          cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_async_lease_live --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- python scripts/ci-cargo-live.py -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_async_lease_live -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Native DA codec failure preserves SDK read facts
         shell: pwsh
         working-directory: opclook
