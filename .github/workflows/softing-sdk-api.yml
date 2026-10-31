@@ -46,7 +46,11 @@ jobs:
           docs/testing/native-sdk/check-softing-api.sh
           python3 docs/testing/native-sdk/test-core-features.py
           python3 docs/testing/native-sdk/test-async-empty-callback.py
+          python3 docs/testing/native-sdk/test-async-task-destruction.py --task-source "$SOFTING_SDK_ROOT/development/core/src/SOClt/SOCltTask.cpp"
           python3 docs/testing/native-sdk/test-primitive-array-source.py
+          python3 docs/testing/native-sdk/test-late-callback-gate.py
+          python3 docs/testing/native-sdk/test-subscription-counters.py
+          python3 docs/testing/native-sdk/test-partial-read-source.py
           docs/testing/native-sdk/test-expat-link.sh
           cmake -P docs/testing/native-sdk/core-probe/test-normalize-sdk-path.cmake
           python3 docs/testing/native-sdk/test-run-native-probe.py

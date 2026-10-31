@@ -102,11 +102,21 @@ int32_t opcl_da_test_codec_bounds(void);
 int32_t opcl_da_test_ephemeral_worker(uint32_t guarded);
 /* SDK async read callback probe; not a production async acquisition mode. */
 int32_t opcl_da_test_async_callback_state(void);
+/* Test-only: one real SDK group SyncRead of exactly two registered items. */
+int32_t opcl_da_test_mixed_read(OpclDaSession* session, OpclDaItem* first, OpclDaItem* second,
+                                OpclDaReadOutcome out[2]);
+int32_t opcl_da_test_late_arm(int32_t value);
+int32_t opcl_da_test_late_entered(uint32_t timeout_ms);
+int32_t opcl_da_test_late_held(void);
+int32_t opcl_da_test_late_release(void);
+int32_t opcl_da_test_late_processed(uint32_t timeout_ms);
+int32_t opcl_da_test_late_close(void);
 int32_t opcl_da_test_async_retire(OpclDaSession* session, OpclDaReadI4* out);
 int32_t opcl_da_test_async_wait_retire(OpclDaSession* session, uint32_t timeout_ms, OpclDaReadI4* out, uint32_t* retired);
 int32_t opcl_da_test_async_is_pending(OpclDaSession* session, uint32_t* pending);
 int32_t opcl_da_test_async_gate_arm(void);
 int32_t opcl_da_test_async_gate_entered(uint32_t timeout_ms);
+int32_t opcl_da_test_async_gate_held(void);
 int32_t opcl_da_test_async_gate_release(void);
 int32_t opcl_da_test_async_gate_close(void);
 int32_t opcl_da_test_async_prepare(OpclDaSession* session);

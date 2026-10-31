@@ -14,6 +14,14 @@ static SOCmnPointer<SODaSCache> exception_count_cache;
 static std::atomic<unsigned> exception_write_count{0};
 static SOCmnPointer<SODaSCache> device_read_count_cache;
 static std::atomic<unsigned> device_read_count{0};
+// Count only actual synchronous device callback requests, excluding the SDK
+// server's own cyclic subscription refreshes and initial-notify requests.
+static SOCmnPointer<SODaSCache> sync_device_read_count_cache;
+static std::atomic<unsigned> sync_device_read_count{0};
+// Request-creation count also sees cache-served Sync reads, unlike the device
+// callback count. The SDK still creates and owns every request.
+static SOCmnPointer<SODaSCache> sync_read_request_count_cache;
+static std::atomic<unsigned> sync_read_request_count{0};
 
 static const CLSID fixture_clsid = {0x7d4bd1b1, 0x7422, 0x48c0, {0xad, 0x58, 0x60, 0x1b, 0x70, 0x14, 0x49, 0xc6}};
 
@@ -21,13 +29,17 @@ static const CLSID fixture_clsid = {0x7d4bd1b1, 0x7422, 0x48c0, {0xad, 0x58, 0x6
 // SDK complete() performs cache updates and OPC request completion.
 class FixtureTag : public SODaSTagDefault {
 public:
-    FixtureTag(LPCTSTR name, VARTYPE type, bool delayed = false, bool state = false, bool counted = false, bool count_reads = false, bool read_only = false) : SODaSTagDefault(name), delayed_(delayed), state_(state), counted_(counted), count_reads_(count_reads) {
+    FixtureTag(LPCTSTR name, VARTYPE type, bool delayed = false, bool state = false, bool counted = false, bool count_reads = false, bool read_only = false, HRESULT read_result = S_OK) : SODaSTagDefault(name), delayed_(delayed), state_(state), counted_(counted), count_reads_(count_reads), read_result_(read_result) {
         setNativeDatatype(type);
         setAccessRights(read_only ? OPC_READABLE : OPC_READABLE | OPC_WRITEABLE);
         setDeviceIOMode(SODaSItemTag::direct);
     }
     void handleRequest(SODaSRequest* request) override {
         if (!request) return;
+        if (request->getOperation() == SODaSRequest::read && FAILED(read_result_)) {
+            request->complete(read_result_, FALSE, OPC_QUALITY_UNCERTAIN, FALSE, FALSE);
+            return;
+        }
         if (count_reads_ && request->getOperation() == SODaSRequest::read) {
             unsigned before = device_read_count.load();
             do {
@@ -41,6 +53,21 @@ public:
             if (!device_read_count_cache->setValue(count)) {
                 request->complete(E_FAIL, FALSE, OPC_QUALITY_UNCERTAIN, FALSE, FALSE);
                 return;
+            }
+            const auto type = request->getType();
+            if (type == SODaSRequest::syncDevice || type == SODaSRequest::syncMaxAge) {
+                unsigned sync_before = sync_device_read_count.load();
+                do {
+                    if (sync_before >= 1000 || !sync_device_read_count_cache.isNotNull()) {
+                        request->complete(E_FAIL, FALSE, OPC_QUALITY_UNCERTAIN, FALSE, FALSE);
+                        return;
+                    }
+                } while (!sync_device_read_count.compare_exchange_weak(sync_before, sync_before + 1));
+                SOCmnVariant sync_count; sync_count.setI4(static_cast<LONG>(sync_before + 1));
+                if (!sync_device_read_count_cache->setValue(sync_count)) {
+                    request->complete(E_FAIL, FALSE, OPC_QUALITY_UNCERTAIN, FALSE, FALSE);
+                    return;
+                }
             }
         }
         if (delayed_ && request->getOperation() == SODaSRequest::write) {
@@ -95,18 +122,40 @@ private:
     bool state_;
     bool counted_;
     bool count_reads_;
+    HRESULT read_result_;
+};
+
+class FixtureCreator : public SODaSCreator {
+public:
+    SODaSRequest* createRequest(SODaSServer* server, SODaSItem* item, SODaSItemTag* tag,
+                               BYTE operation, WORD type) override {
+        SODaSRequest* request = SODaSCreator::createRequest(server, item, tag, operation, type);
+        if (!request) return nullptr;
+        if (tag && operation == SODaSRequest::read &&
+            (type == SODaSRequest::syncCache || type == SODaSRequest::syncDevice || type == SODaSRequest::syncMaxAge) &&
+            tag->getItemID() == _T("Fixture.DeviceValue")) {
+            unsigned before = sync_read_request_count.load();
+            do {
+                if (before >= 1000 || !sync_read_request_count_cache.isNotNull()) { request->release(); return nullptr; }
+            } while (!sync_read_request_count.compare_exchange_weak(before, before + 1));
+            SOCmnVariant count; count.setI4(static_cast<LONG>(before + 1));
+            if (!sync_read_request_count_cache->setValue(count)) { request->release(); return nullptr; }
+        }
+        return request;
+    }
 };
 
 static bool add_tag(SODaSNode* node, LPCTSTR name, SOCmnVariant& value, bool delayed = false, bool state = false, bool counted = false,
-                    SOCmnPointer<SODaSCache>* saved_cache = nullptr, bool count_reads = false, bool read_only = false) {
-    SOCmnPointer<SODaSTag> tag = new FixtureTag(name, value.vt, delayed, state, counted, count_reads, read_only);
+                    SOCmnPointer<SODaSCache>* saved_cache = nullptr, bool count_reads = false, bool read_only = false,
+                    WORD quality = OPC_QUALITY_GOOD, HRESULT read_result = S_OK) {
+    SOCmnPointer<SODaSTag> tag = new FixtureTag(name, value.vt, delayed, state, counted, count_reads, read_only, read_result);
     if (!node->addLeaf(tag)) return false;
     SOCmnPointer<SODaSCache> cache = tag->getCache();
     if (saved_cache) *saved_cache = cache;
     SOCmnDateTime now;
     now.now();
     return cache.isNotNull() && cache->setValue(value) &&
-           cache->setQuality(OPC_QUALITY_GOOD) && cache->setTimeStamp(now);
+           cache->setQuality(quality) && cache->setTimeStamp(now);
 }
 
 static bool make_array(SOCmnVariant& value, VARTYPE type, LONG lower, ULONG count) {
@@ -193,6 +242,9 @@ static int run(int argc, char** argv) {
     } else if (argc == 2 && std::strcmp(argv[1], "--unregister") == 0) {
         result = FAILED(entry->unregisterServer()) ? 13 : 0;
     } else if (argc == 3 || argc == 4) {
+        SOCmnPointer<FixtureCreator> creator = new FixtureCreator();
+        if (!creator.isNotNull()) result = 22;
+        else entry->setCreator(creator);
         if (argc == 4) {
             const std::string prefix(argv[3]);
             isolation_entered = CreateEventA(nullptr, TRUE, FALSE, (prefix + "-entered").c_str());
@@ -210,8 +262,16 @@ static int run(int argc, char** argv) {
             value.setI4(0);
             tags = add_tag(node, _T("ExceptionCount"), value, false, false, false, std::addressof(exception_count_cache)) && tags;
             tags = add_tag(node, _T("DeviceReadCount"), value, false, false, false, std::addressof(device_read_count_cache)) && tags;
+            tags = add_tag(node, _T("SyncDeviceReadCount"), value, false, false, false, std::addressof(sync_device_read_count_cache)) && tags;
+            tags = add_tag(node, _T("SyncReadRequestCount"), value, false, false, false, std::addressof(sync_read_request_count_cache)) && tags;
             value.setI4(42);
             tags = add_tag(node, _T("DeviceValue"), value, false, false, false, nullptr, true) && tags;
+            tags = add_tag(node, _T("ReadDenied"), value, false, false, false, nullptr, false, false, OPC_QUALITY_GOOD, E_ACCESSDENIED) && tags;
+            value.setI4(51);
+            tags = add_tag(node, _T("ReadUncertain"), value, false, false, false, nullptr, false, false, OPC_QUALITY_UNCERTAIN) && tags;
+            value.setI4(52);
+            tags = add_tag(node, _T("ReadBad"), value, false, false, false, nullptr, false, false, OPC_QUALITY_BAD) && tags;
+            value.setI4(42);
             tags = add_tag(node, _T("ExceptionValue"), value, false, false, true) && tags;
             if (argc == 4) tags = add_tag(node, _T("Delayed"), value, true) && tags;
             value.setI4(1);
@@ -251,6 +311,8 @@ static int run(int argc, char** argv) {
         entry->stop();
         exception_count_cache.release();
         device_read_count_cache.release();
+        sync_device_read_count_cache.release();
+        sync_read_request_count_cache.release();
         if (isolation_entered) CloseHandle(isolation_entered);
         if (isolation_release) CloseHandle(isolation_release);
     } else result = 19;

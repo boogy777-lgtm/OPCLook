@@ -71,3 +71,28 @@ python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture
 A separate-process Linux runtime-stand test exercises the same manager and
 lease code using mock native FFI, including the explicit Busy response and
 final successful finish. It does not replace the Windows SDK fixture.
+
+### SDK task destruction ordering
+
+The pinned SDK [`SOCltTask` destructor](https://github.com/SoftingIndustrial/OPC-Classic-SDK/blob/5130e763998189c822882434c43e6be2eb0174cf/development/core/src/SOClt/SOCltTask.cpp#L30)
+releases its retained element/group in the **base** destructor. The previous
+probe signalled `async_task_done` in the derived destructor, before that SDK
+release. Normal session close generally queues further work on the SDK worker,
+but that does not make the earlier retirement notification a safe invariant
+for failure or queue-removal paths. The derived task now releases the item and
+uses a private first-declared retirement base, whose destructor runs after the
+`SOCltTask` base and its SDK group release. SDK refcount and COM ownership are
+unchanged; [`SOCmnObject`](https://github.com/SoftingIndustrial/OPC-Classic-SDK/blob/5130e763998189c822882434c43e6be2eb0174cf/development/core/src/include/SOCmnObject.h)
+has a virtual destructor and its pinned `release` deletes through that virtual
+base. The SDK worker's normal drain releases a task after dropping the queue
+lock; SDK shutdown may also discard queued tasks while manipulating the queue.
+The completion signal occurs after the SDK base release in both cases, but this
+does not establish a bound on SDK queue locking or worker shutdown.
+
+`test-async-task-destruction.py --task-source <pinned-sdk>/development/core/src/SOClt/SOCltTask.cpp`
+verifies the source Git blob, compiles the actual adapter class and SDK base
+destructor with SDK stubs, and holds group release at a deterministic barrier.
+For both executed and queued-then-discarded tasks, completion must remain unset
+until item and SDK group references have been released. The former task failed
+this assertion; the reordered task passes on Linux. This is a controlled source
+stand, not execution of the Windows SDK or an observation of a live worker join.

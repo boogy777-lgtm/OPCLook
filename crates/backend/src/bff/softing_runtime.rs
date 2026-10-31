@@ -238,11 +238,32 @@ unsafe extern "C" {
         result: *mut i32,
     ) -> i32;
     #[cfg(feature = "native-da-test-hooks")]
+    fn opcl_da_test_mixed_read(
+        session: *mut c_void,
+        first: *mut c_void,
+        second: *mut c_void,
+        out: *mut NativeReadOutcome,
+    ) -> i32;
+    #[cfg(feature = "native-da-test-hooks")]
+    fn opcl_da_test_late_arm(value: i32) -> i32;
+    #[cfg(feature = "native-da-test-hooks")]
+    fn opcl_da_test_late_entered(timeout: u32) -> i32;
+    #[cfg(feature = "native-da-test-hooks")]
+    fn opcl_da_test_late_held() -> i32;
+    #[cfg(feature = "native-da-test-hooks")]
+    fn opcl_da_test_late_release() -> i32;
+    #[cfg(feature = "native-da-test-hooks")]
+    fn opcl_da_test_late_processed(timeout: u32) -> i32;
+    #[cfg(feature = "native-da-test-hooks")]
+    fn opcl_da_test_late_close() -> i32;
+    #[cfg(feature = "native-da-test-hooks")]
     fn opcl_da_test_async_gate_arm() -> i32;
     #[cfg(feature = "native-da-test-hooks")]
     fn opcl_da_test_async_gate_entered(timeout: u32) -> i32;
     #[cfg(feature = "native-da-test-hooks")]
     fn opcl_da_test_async_gate_release() -> i32;
+    #[cfg(feature = "native-da-test-hooks")]
+    fn opcl_da_test_async_gate_held() -> i32;
     #[cfg(feature = "native-da-test-hooks")]
     fn opcl_da_test_async_gate_close() -> i32;
     #[cfg(feature = "native-da-test-hooks")]
@@ -494,6 +515,36 @@ pub struct Session {
     _thread: PhantomData<Rc<()>>,
 }
 #[cfg(feature = "native-da-test-hooks")]
+pub fn test_late_arm(value: i32) -> Result<(), Error> {
+    // SAFETY: the test serializes event lifecycle around the held SDK callback.
+    check(unsafe { opcl_da_test_late_arm(value) })
+}
+#[cfg(feature = "native-da-test-hooks")]
+pub fn test_late_entered(timeout: u32) -> Result<(), Error> {
+    // SAFETY: the test serializes event lifecycle around the held SDK callback.
+    check(unsafe { opcl_da_test_late_entered(timeout) })
+}
+#[cfg(feature = "native-da-test-hooks")]
+pub fn test_late_held() -> Result<(), Error> {
+    // SAFETY: the test serializes event lifecycle around the held SDK callback.
+    check(unsafe { opcl_da_test_late_held() })
+}
+#[cfg(feature = "native-da-test-hooks")]
+pub fn test_late_release() -> Result<(), Error> {
+    // SAFETY: the test serializes event lifecycle around the held SDK callback.
+    check(unsafe { opcl_da_test_late_release() })
+}
+#[cfg(feature = "native-da-test-hooks")]
+pub fn test_late_processed(timeout: u32) -> Result<(), Error> {
+    // SAFETY: the test serializes event lifecycle around the held SDK callback.
+    check(unsafe { opcl_da_test_late_processed(timeout) })
+}
+#[cfg(feature = "native-da-test-hooks")]
+pub fn test_late_close() -> Result<(), Error> {
+    // SAFETY: the test serializes event lifecycle around the held SDK callback.
+    check(unsafe { opcl_da_test_late_close() })
+}
+#[cfg(feature = "native-da-test-hooks")]
 pub fn test_async_gate_arm() -> Result<(), Error> {
     // SAFETY: test-only process event hook takes no pointers; the session owner serializes use.
     check(unsafe { opcl_da_test_async_gate_arm() })
@@ -502,6 +553,11 @@ pub fn test_async_gate_arm() -> Result<(), Error> {
 pub fn test_async_gate_entered(timeout: u32) -> Result<(), Error> {
     // SAFETY: test-only event remains armed until explicitly closed.
     check(unsafe { opcl_da_test_async_gate_entered(timeout) })
+}
+#[cfg(feature = "native-da-test-hooks")]
+pub fn test_async_gate_held() -> Result<(), Error> {
+    // SAFETY: the test owner keeps the event armed until task retirement.
+    check(unsafe { opcl_da_test_async_gate_held() })
 }
 #[cfg(feature = "native-da-test-hooks")]
 pub fn test_async_gate_release() -> Result<(), Error> {
@@ -591,6 +647,31 @@ impl Drop for TestAsyncSessionLease {
     }
 }
 impl Session {
+    #[cfg(feature = "native-da-test-hooks")]
+    pub(super) fn test_mixed_read(
+        &mut self,
+        first: u64,
+        second: u64,
+    ) -> Result<[ReadOutcome; 2], Error> {
+        let first = self.items.get(&first).ok_or(Error::InvalidHandle)?;
+        let second = self.items.get(&second).ok_or(Error::InvalidHandle)?;
+        let mut out = [NativeReadOutcome::default(), NativeReadOutcome::default()];
+        // SAFETY: both registered SDK items and both output records live through the synchronous call.
+        check(unsafe {
+            opcl_da_test_mixed_read(
+                self.ptr.as_ptr(),
+                first.as_ptr(),
+                second.as_ptr(),
+                out.as_mut_ptr(),
+            )
+        })?;
+        Ok(out.map(|raw| ReadOutcome {
+            adapter_result: 0,
+            available: raw.available,
+            value: raw.value,
+            payload: Ok(None),
+        }))
+    }
     pub fn test_status(&mut self) -> Result<i32, Error> {
         let mut state = 0;
         // SAFETY: this owner serializes access to its live session, and the
@@ -1140,6 +1221,54 @@ mod tests {
             (*out).available = READ_SERVICE | READ_ITEM | READ_SAMPLE;
         }
         result
+    }
+    #[cfg(feature = "native-da-test-hooks")]
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn opcl_da_test_mixed_read(
+        _: *mut c_void,
+        _: *mut c_void,
+        _: *mut c_void,
+        out: *mut NativeReadOutcome,
+    ) -> i32 {
+        // SAFETY: the wrapper supplies exactly two writable records.
+        unsafe {
+            (*out).available = READ_SERVICE | READ_ITEM | READ_SAMPLE;
+            (*out).value.service_result = 1;
+            (*out).value.item_result = 0;
+            (*out).value.bits_low = 42;
+            (*out.add(1)).available = READ_SERVICE | READ_ITEM;
+            (*out.add(1)).value.service_result = 1;
+            (*out.add(1)).value.item_result = 0x80070005_u32 as i32;
+        }
+        0
+    }
+    #[cfg(feature = "native-da-test-hooks")]
+    #[test]
+    fn mixed_read_preserves_service_and_item_availability() {
+        let guid = Guid {
+            data1: 1,
+            data2: 2,
+            data3: 3,
+            data4: [0; 8],
+        };
+        let host = Host::new().unwrap();
+        let shared = host.shared();
+        let mut session = shared.open("server", "localhost", &guid).unwrap();
+        let first = session.add("good").unwrap().0;
+        let second = session.add("denied").unwrap().0;
+        let values = session.test_mixed_read(first, second).unwrap();
+        assert_eq!(values[0].available, READ_SERVICE | READ_ITEM | READ_SAMPLE);
+        assert_eq!(values[0].value.service_result, 1);
+        assert_eq!(values[0].value.bits_low, 42);
+        assert_eq!(values[1].available, READ_SERVICE | READ_ITEM);
+        assert_eq!(values[1].value.item_result, 0x80070005_u32 as i32);
+        assert!(matches!(
+            session.test_mixed_read(first, u64::MAX),
+            Err(Error::InvalidHandle)
+        ));
+        session.close().unwrap();
+        drop(shared);
+        host.close().unwrap();
     }
     #[unsafe(no_mangle)]
     unsafe extern "C" fn opcl_da_write_array(

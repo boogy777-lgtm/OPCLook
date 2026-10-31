@@ -714,6 +714,61 @@ extern "C" int32_t opcl_da_test_queue_bounds(void) try {
     return S_OK;
 } catch (...) { return E_UNEXPECTED; }
 #endif
+#ifdef OPCL_DA_TESTING
+// One-shot callback barrier, before adapter registration lookup and mutex.
+// SDK owns the callback stack and item references until onReadAdvise returns.
+static HANDLE test_late_entered = nullptr;
+static HANDLE test_late_release = nullptr;
+static std::atomic<int> test_late_armed{0};
+static std::atomic<LONG> test_late_value{0};
+static std::mutex test_late_mutex;
+static std::condition_variable test_late_cv;
+static bool test_late_processed = false;
+static bool test_late_wait_ok = false;
+extern "C" int32_t opcl_da_test_late_arm(int32_t value) try {
+    std::lock_guard<std::mutex> lock(test_late_mutex);
+    if (test_late_entered || test_late_release) return E_PENDING;
+    test_late_entered = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    test_late_release = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!test_late_entered || !test_late_release) {
+        if (test_late_entered) CloseHandle(test_late_entered);
+        if (test_late_release) CloseHandle(test_late_release);
+        test_late_entered = test_late_release = nullptr; return E_OUTOFMEMORY;
+    }
+    test_late_processed = false; test_late_wait_ok = false;
+    test_late_value.store(value); test_late_armed.store(1); return S_OK;
+} catch (...) { return E_UNEXPECTED; }
+extern "C" int32_t opcl_da_test_late_entered(uint32_t timeout_ms) {
+    if (!timeout_ms || timeout_ms > 30000) return E_INVALIDARG;
+    return test_late_entered && WaitForSingleObject(test_late_entered, timeout_ms) == WAIT_OBJECT_0 ? S_OK : E_FAIL;
+}
+extern "C" int32_t opcl_da_test_late_held(void) {
+    return test_late_release && WaitForSingleObject(test_late_release, 0) == WAIT_TIMEOUT ? S_OK : E_FAIL;
+}
+extern "C" int32_t opcl_da_test_late_release(void) {
+    return test_late_release && SetEvent(test_late_release) ? S_OK : E_FAIL;
+}
+extern "C" int32_t opcl_da_test_late_processed(uint32_t timeout_ms) try {
+    if (!timeout_ms || timeout_ms > 30000) return E_INVALIDARG;
+    std::unique_lock<std::mutex> lock(test_late_mutex);
+    if (!test_late_cv.wait_for(lock, std::chrono::milliseconds(timeout_ms), []{ return test_late_processed; })) return E_PENDING;
+    return test_late_wait_ok ? S_OK : E_FAIL;
+} catch (...) { return E_UNEXPECTED; }
+extern "C" int32_t opcl_da_test_late_close(void) try {
+    std::lock_guard<std::mutex> lock(test_late_mutex);
+    if (!test_late_entered || !test_late_release || !test_late_processed) return E_PENDING;
+    CloseHandle(test_late_entered); CloseHandle(test_late_release);
+    test_late_entered = test_late_release = nullptr; test_late_armed.store(0); return S_OK;
+} catch (...) { return E_UNEXPECTED; }
+struct TestLateCompletion {
+    bool claimed = false, wait_ok = false;
+    ~TestLateCompletion() {
+        if (!claimed) return;
+        std::lock_guard<std::mutex> lock(test_late_mutex);
+        test_late_wait_ok = wait_ok; test_late_processed = true; test_late_cv.notify_all();
+    }
+};
+#endif
 void RuntimeGroup::onReadAdvise(BYTE mode, DWORD transaction, HRESULT master_quality,
                                 HRESULT master_error, DWORD n, SODaCItem** items,
                                 SOCmnVariant* values, WORD* qualities, SOCmnDateTime* times,
@@ -721,6 +776,16 @@ void RuntimeGroup::onReadAdvise(BYTE mode, DWORD transaction, HRESULT master_qua
     std::shared_ptr<PushState> state = push;
     if (!state) return;
 #ifdef OPCL_DA_TESTING
+    TestLateCompletion late;
+    if (mode == 1 && transaction == 0 && n == 1 && items && items[0] && values &&
+        values[0].vt == VT_I4 && values[0].lVal == test_late_value.load()) {
+        int expected = 1;
+        if (test_late_armed.compare_exchange_strong(expected, 2)) {
+            late.claimed = true;
+            if (SetEvent(test_late_entered))
+                late.wait_ok = WaitForSingleObject(test_late_release, 30000) == WAIT_OBJECT_0;
+        }
+    }
     if (mode == 0) {
         try {
             std::lock_guard<std::mutex> lock(state->mutex);
@@ -842,6 +907,9 @@ extern "C" int32_t opcl_da_test_async_gate_arm(void) try {
 extern "C" int32_t opcl_da_test_async_gate_entered(uint32_t timeout_ms) {
     return test_async_entered && WaitForSingleObject(test_async_entered, timeout_ms) == WAIT_OBJECT_0 ? S_OK : E_FAIL;
 }
+extern "C" int32_t opcl_da_test_async_gate_held(void) {
+    return test_async_release && WaitForSingleObject(test_async_release, 0) == WAIT_TIMEOUT ? S_OK : E_FAIL;
+}
 extern "C" int32_t opcl_da_test_async_gate_release(void) {
     return test_async_release && SetEvent(test_async_release) ? S_OK : E_FAIL;
 }
@@ -852,15 +920,13 @@ extern "C" int32_t opcl_da_test_async_gate_close(void) {
 }
 // The SDK submits AsyncIO on its own worker; the session caller waits for the
 // SDK callback without retaining pointers to caller-owned memory.
-class TestAsyncReadTask : public SOCltTask {
+// Bases are destroyed in reverse declaration order. This sentinel runs only
+// after the SDK SOCltTask base has released its retained group reference.
+class TestAsyncRetirement {
 public:
-    TestAsyncReadTask(SODaCGroup* group, SODaCItem* item, DWORD age, DWORD transaction,
-                      std::shared_ptr<PushState> state)
-        : SOCltTask(group), group_(group), item_(item), age_(age), transaction_(transaction), state_(std::move(state)) {
-        item_->addRef();
-    }
-    ~TestAsyncReadTask() override {
-        item_->release();
+    TestAsyncRetirement(std::shared_ptr<PushState> state, DWORD transaction)
+        : state_(std::move(state)), transaction_(transaction) {}
+    ~TestAsyncRetirement() {
         std::lock_guard<std::mutex> lock(state_->mutex);
         if (state_->async_pending == transaction_) {
             if (!state_->async_submit_done) {
@@ -872,6 +938,19 @@ public:
             state_->async_ready.notify_all();
         }
     }
+private:
+    std::shared_ptr<PushState> state_;
+    DWORD transaction_;
+};
+class TestAsyncReadTask : private TestAsyncRetirement, public SOCltTask {
+public:
+    TestAsyncReadTask(SODaCGroup* group, SODaCItem* item, DWORD age, DWORD transaction,
+                      std::shared_ptr<PushState> state)
+        : TestAsyncRetirement(state, transaction), SOCltTask(group), group_(group), item_(item),
+          age_(age), transaction_(transaction), state_(std::move(state)) {
+        item_->addRef();
+    }
+    ~TestAsyncReadTask() override { item_->release(); }
     void execute() override {
         HRESULT hr = E_UNEXPECTED, item_result = E_FAIL;
         try {
@@ -1072,6 +1151,49 @@ public:
 private:
     SODaCGroup* group_; SODaCItem* item_; DWORD age_; OpclDaScalar* out_; char* text_; uint32_t capacity_; uint32_t* available_;
 };
+#ifdef OPCL_DA_TESTING
+// A test-only real SDK group call, not the Gateway's per-key read path.
+class TestMixedReadTask : public SOCltTask {
+public:
+    TestMixedReadTask(SODaCGroup* group, SODaCItem* first, SODaCItem* second, OpclDaReadOutcome* out)
+        : SOCltTask(group), group_(group), first_(first), second_(second), out_(out) {}
+    void execute() override try {
+        ran_ = true;
+        SODaCItem* items[] = {first_, second_}; SOCmnVariant values[2]; SOCmnDateTime times[2];
+        WORD qualities[2]{}; HRESULT errors[2] = {E_FAIL, E_FAIL};
+        const HRESULT service = group_->syncRead(2, items, 0, values, qualities, times, errors);
+        for (unsigned i = 0; i != 2; ++i) {
+            out_[i].value.service_result = service;
+            out_[i].available = OPCL_DA_READ_SERVICE;
+            if (SUCCEEDED(service)) {
+                out_[i].value.item_result = errors[i]; out_[i].available |= OPCL_DA_READ_ITEM;
+                if (SUCCEEDED(errors[i])) {
+                    FILETIME ft{}; times[i].get(&ft);
+                    out_[i].value.filetime_low = ft.dwLowDateTime; out_[i].value.filetime_high = ft.dwHighDateTime;
+                    out_[i].value.quality = qualities[i]; out_[i].value.vartype = values[i].vt;
+                    out_[i].available |= OPCL_DA_READ_SAMPLE;
+                    const HRESULT converted = scalar_copy(values[i], &out_[i].value);
+                    if (FAILED(converted)) { setResult(converted); return; }
+                }
+            }
+        }
+        setResult(S_OK);
+    } catch (...) { setResult(E_UNEXPECTED); }
+    bool ran() const { return ran_; }
+private:
+    bool ran_ = false;
+    SODaCGroup* group_; SODaCItem* first_; SODaCItem* second_; OpclDaReadOutcome* out_;
+};
+extern "C" int32_t opcl_da_test_mixed_read(OpclDaSession* session, OpclDaItem* first,
+                                              OpclDaItem* second, OpclDaReadOutcome out[2]) try {
+    if (!out || !owns(session, first) || !owns(session, second) || first == second) return E_INVALIDARG;
+    for (unsigned i = 0; i != 2; ++i) { out[i] = {}; out[i].value.service_result = E_FAIL; out[i].value.item_result = E_FAIL; }
+    TestMixedReadTask* task = new (std::nothrow) TestMixedReadTask(session->group, first->sdk, second->sdk, out);
+    if (!task) return E_OUTOFMEMORY;
+    const HRESULT hr = session->group->executeTask(task); const bool ran = task->ran(); task->release();
+    return ran || FAILED(hr) ? hr : E_UNEXPECTED;
+} catch (...) { return E_UNEXPECTED; }
+#endif
 class WriteScalarTask : public SOCltTask {
 public:
     WriteScalarTask(SODaCGroup* group, SODaCItem* item, uint16_t vt, uint32_t low, uint32_t high, int32_t* result)

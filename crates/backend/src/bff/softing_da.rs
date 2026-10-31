@@ -187,6 +187,36 @@ impl TestManagerAsyncLease {
 }
 #[cfg(feature = "native-da-test-hooks")]
 #[doc(hidden)]
+pub fn test_late_arm(value: i32) -> Result<(), String> {
+    super::softing_runtime::test_late_arm(value).map_err(|e| format!("{e:?}"))
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_late_entered(timeout: u32) -> Result<(), String> {
+    super::softing_runtime::test_late_entered(timeout).map_err(|e| format!("{e:?}"))
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_late_held() -> Result<(), String> {
+    super::softing_runtime::test_late_held().map_err(|e| format!("{e:?}"))
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_late_release() -> Result<(), String> {
+    super::softing_runtime::test_late_release().map_err(|e| format!("{e:?}"))
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_late_processed(timeout: u32) -> Result<(), String> {
+    super::softing_runtime::test_late_processed(timeout).map_err(|e| format!("{e:?}"))
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_late_close() -> Result<(), String> {
+    super::softing_runtime::test_late_close().map_err(|e| format!("{e:?}"))
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
 pub fn test_async_gate_arm() -> Result<(), String> {
     super::softing_runtime::test_async_gate_arm().map_err(|e| format!("{e:?}"))
 }
@@ -197,6 +227,11 @@ pub fn test_async_gate_entered(timeout: u32) -> Result<(), String> {
 }
 #[cfg(feature = "native-da-test-hooks")]
 #[doc(hidden)]
+pub fn test_async_gate_held() -> Result<(), String> {
+    super::softing_runtime::test_async_gate_held().map_err(|e| format!("{e:?}"))
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
 pub fn test_async_gate_release() -> Result<(), String> {
     super::softing_runtime::test_async_gate_release().map_err(|e| format!("{e:?}"))
 }
@@ -204,6 +239,58 @@ pub fn test_async_gate_release() -> Result<(), String> {
 #[doc(hidden)]
 pub fn test_async_gate_close() -> Result<(), String> {
     super::softing_runtime::test_async_gate_close().map_err(|e| format!("{e:?}"))
+}
+
+/// Raw attested facts from the test-only two-item SDK group read.
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct TestMixedReadFact {
+    pub service: i32,
+    pub item: i32,
+    pub available: u32,
+    pub quality: u16,
+    pub vartype: u16,
+    pub bits_low: u32,
+    pub filetime: u64,
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_sdk_mixed_read_fixture() -> Result<[TestMixedReadFact; 2], String> {
+    let host = acquire_host()?;
+    let guid = Guid {
+        data1: 0x7d4bd1b1,
+        data2: 0x7422,
+        data3: 0x48c0,
+        data4: [0xad, 0x58, 0x60, 0x1b, 0x70, 0x14, 0x49, 0xc6],
+    };
+    let mut session = host
+        .open("OPCLook.NativeDaFixture.1", "localhost", &guid)
+        .map_err(|e| format!("session open: {e:?}"))?;
+    let good = session
+        .add("Fixture.Value")
+        .map_err(|e| format!("good item: {e:?}"))?
+        .0;
+    let denied = session
+        .add("Fixture.ReadDenied")
+        .map_err(|e| format!("denied item: {e:?}"))?
+        .0;
+    let values = session
+        .test_mixed_read(good, denied)
+        .map_err(|e| format!("group read: {e:?}"))?;
+    let facts = values.map(|out| TestMixedReadFact {
+        service: out.value.service_result,
+        item: out.value.item_result,
+        available: out.available,
+        quality: out.value.quality,
+        vartype: out.value.vartype,
+        bits_low: out.value.bits_low,
+        filetime: (u64::from(out.value.filetime_high) << 32) | u64::from(out.value.filetime_low),
+    });
+    session
+        .close()
+        .map_err(|e| format!("session close: {e:?}"))?;
+    Ok(facts)
 }
 
 struct NativeHost {
@@ -878,6 +965,86 @@ mod tests {
         );
         assert_eq!(lease.retire(10).unwrap(), (0, 0));
         lease.close().unwrap();
+        finish_native_sdk(Duration::from_secs(3)).unwrap();
+    }
+    #[cfg(feature = "native-da-test-hooks")]
+    #[test]
+    fn manager_async_lease_allows_another_worker_with_mock_ffi() {
+        const CHILD: &str = "OPCLOOK_ASYNC_ISOLATION_MOCK_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "bff::da::tests::manager_async_lease_allows_another_worker_with_mock_ffi",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "child failed: {stdout} {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let mut blocked = TestManagerAsyncLease::open_fixture().unwrap();
+        assert_eq!(blocked.read(100).unwrap(), 0x80070102_u32 as i32);
+        let (events, rx) = std::sync::mpsc::channel();
+        let mut worker = spawn(events);
+        let sender = worker.tx.take().unwrap();
+        let owner = Owner::Session(SessionId::FIRST);
+        let request = |id, kind| {
+            sender
+                .send(Command {
+                    protocol: Protocol::OpcDa,
+                    owner,
+                    request_id: Some(RequestId::new(id).unwrap()),
+                    kind,
+                })
+                .unwrap();
+            loop {
+                let event = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                if event.origin == super::super::model::Origin::Reply(RequestId::new(id).unwrap()) {
+                    return event.kind;
+                }
+                assert!(!matches!(
+                    event.origin,
+                    super::super::model::Origin::Reply(_)
+                ));
+            }
+        };
+        let address = "7D4BD1B1-7422-48C0-AD58-601B701449C6";
+        assert!(matches!(
+            request(
+                1,
+                CommandKind::Connect {
+                    endpoint: EndpointSpec::da("localhost", address)
+                }
+            ),
+            EventKind::Connected { .. }
+        ));
+        assert_eq!(test_host_acquisitions(), (2, true));
+        let key = ItemKey::FIRST;
+        assert!(
+            matches!(request(2, CommandKind::AddItems { items: vec![ItemSpec { key, item_id: "Fixture.DeviceValue".into() }] }), EventKind::AddItems { results } if results.len()==1 && results[0].1.is_ok())
+        );
+        assert!(
+            matches!(request(3, CommandKind::ReadFresh { keys: vec![key] }), EventKind::Values { values } if values.len()==1 && values[0].1.value==Value::I64(43))
+        );
+        assert!(matches!(
+            request(4, CommandKind::Disconnect),
+            EventKind::Disconnected { .. }
+        ));
+        drop(sender);
+        worker.join.take().unwrap().join().unwrap();
+        assert_eq!(
+            finish_native_sdk(Duration::from_secs(3)).unwrap_err(),
+            "SDK sessions still running"
+        );
+        assert_eq!(blocked.retire(10).unwrap(), (0, 0));
+        blocked.close().unwrap();
         finish_native_sdk(Duration::from_secs(3)).unwrap();
     }
     #[test]
