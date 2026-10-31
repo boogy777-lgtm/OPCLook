@@ -98,6 +98,10 @@ int32_t opcl_da_take_push(OpclDaSession* session, OpclDaPush* out, char* payload
 // Does not report physical server version.
 int32_t opcl_da_test_da1_open(OpclDaHost* host, const char* name, const char* node,
                               const OpclDaGuid* id, uint32_t* revised_rate_ms, OpclDaSession** out);
+// Test-only SDK version constants are passed by the native fixture.
+int32_t opcl_da_test_version_open(OpclDaHost* host, const char* name, const char* node,
+                                  const OpclDaGuid* id, uint32_t version,
+                                  uint32_t* revised_rate_ms, OpclDaSession** out);
 int32_t opcl_da_test_da1_is_inactive(OpclDaSession* session);
 /* Test-only one-shot injection: state 0 idle, 1 armed, 2 consumed. */
 int32_t opcl_da_test_arm_write_exception(void);

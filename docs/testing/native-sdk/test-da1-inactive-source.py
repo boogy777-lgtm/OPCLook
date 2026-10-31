@@ -6,20 +6,20 @@ import tempfile
 root=Path(__file__).resolve().parents[3]
 s=(root/'native/softing-da/runtime.cpp').read_text()
 a=s.index('extern "C" int32_t opcl_da_test_da1_is_inactive(');b=s.index('\n#endif',a); helper=s[a:b]
-a=s.index('    if (test_da1_inactive && !server->forceOPCVersion');b=s.index('    OPCL_DISCOVERY_TRACE("session addGroup");',a); open_prefix=s[a:b]
+a=s.index('    if (test_version && !server->forceOPCVersion');b=s.index('    OPCL_DISCOVERY_TRACE("session addGroup");',a); open_prefix=s[a:b]
 s=(root/'docs/testing/native-sdk/core-probe/main.cpp').read_text()
-a=s.index('static int live_da1_inactive_fixture()');b=s.index('\nstatic int live_async_fixture()',a);driver=s[a:b]
+a=s.index('static int live_da1_inactive_fixture()');b=s.index('\n// Test-only forced versions',a);driver=s[a:b]
 pre=r'''
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <vector>
 #include <cassert>
-using HRESULT=int32_t; constexpr HRESULT S_OK=0,E_FAIL=-1,E_INVALIDARG=-2,E_UNEXPECTED=-3; constexpr int FALSE=0, SODAC_VERSION_OPC_DAV10A=10, VT_I4=3, OPC_QUALITY_OUT_OF_SERVICE=28, OPC_QUALITY_GOOD=192;
+using WORD=uint16_t; using HRESULT=int32_t; constexpr HRESULT S_OK=0,E_FAIL=-1,E_INVALIDARG=-2,E_UNEXPECTED=-3; constexpr int FALSE=0, SODAC_VERSION_OPC_DAV10A=10, VT_I4=3, OPC_QUALITY_OUT_OF_SERVICE=28, OPC_QUALITY_GOOD=192;
 #define SUCCEEDED(x) ((x)>=0)
 #define FAILED(x) ((x)<0)
 #define OPCL_DISCOVERY_TRACE(x) do {} while(0)
-struct Server {int forced=0,selected=30; bool connected=false; int getForcedOPCVersion(){return forced;} int getSupportedOPCVersion(){return selected;} bool forceOPCVersion(int v){forced=v;return true;} HRESULT connect(int){connected=true;selected=forced?forced:30;return S_OK;} bool isConnected(){return connected;} void release(){} };
+struct Server {int forced=0,selected=30; bool connected=false; bool ignore_force=false; uint32_t getForcedOPCVersion(){return static_cast<uint32_t>(forced);} uint32_t getSupportedOPCVersion(){return static_cast<uint32_t>(selected);} bool forceOPCVersion(int v){forced=v;return true;} HRESULT connect(int){connected=true;selected=forced && !ignore_force?forced:30;return S_OK;} bool isConnected(){return connected;} void release(){} };
 struct Entry {void removeBranch(Server*){}};
 struct Group {bool connected=true,started=true; HRESULT disconnect(){connected=false;started=false;return S_OK;} HRESULT connect(int){connected=true;started=false;return S_OK;} bool isConnected(){return connected;} bool isStarted(){return started;}};
 struct OpclDaHost{Entry* entry;}; struct OpclDaItem {int kind;}; struct OpclDaSession {bool subscription=false; Server* server; Group* group; std::vector<int> items;};
@@ -34,17 +34,17 @@ HRESULT opcl_da_read_i4(OpclDaSession*,OpclDaItem* item,uint32_t age,OpclDaReadI
 HRESULT opcl_da_session_close(OpclDaSession*){return S_OK;} HRESULT opcl_da_host_destroy(OpclDaHost*){return S_OK;}
 '''
 open_test = r'''
-int open_prefix_test(OpclDaHost* host, Server* server, bool test_da1_inactive) {
+int open_prefix_test(OpclDaHost* host, Server* server, uint32_t test_version) {
 '''+open_prefix+r'''
  return hr;
 }
 HRESULT opcl_da_test_da1_open(OpclDaHost* host,const char*,const char*,const OpclDaGuid*,uint32_t*,OpclDaSession** p){
  server.forced=0;server.selected=30;server.connected=false; group.connected=true;group.started=false;
- auto hr=open_prefix_test(host,&server,true);if(SUCCEEDED(hr))*p=&session;return hr;
+ auto hr=open_prefix_test(host,&server,SODAC_VERSION_OPC_DAV10A);if(SUCCEEDED(hr))*p=&session;return hr;
 }
 '''
 post=r'''
-int main(){ assert(live_da1_inactive_fixture()==0); assert(cache_count==1 && device_count==1); wrong_path=true; assert(live_da1_inactive_fixture()==62); Server baseline; assert(SUCCEEDED(baseline.connect(FALSE))); assert(baseline.forceOPCVersion(SODAC_VERSION_OPC_DAV10A)); assert(baseline.getSupportedOPCVersion()!=SODAC_VERSION_OPC_DAV10A); Server fixed; assert(SUCCEEDED(open_prefix_test(&global_host,&fixed,true))); assert(fixed.getSupportedOPCVersion()==SODAC_VERSION_OPC_DAV10A); group.started=true; assert(opcl_da_test_da1_is_inactive(&session)==E_FAIL); }
+int main(){ assert(live_da1_inactive_fixture()==0); assert(cache_count==1 && device_count==1); wrong_path=true; assert(live_da1_inactive_fixture()==62); Server baseline; assert(SUCCEEDED(baseline.connect(FALSE))); assert(baseline.forceOPCVersion(SODAC_VERSION_OPC_DAV10A)); assert(baseline.getSupportedOPCVersion()!=SODAC_VERSION_OPC_DAV10A); Server fixed; assert(SUCCEEDED(open_prefix_test(&global_host,&fixed,SODAC_VERSION_OPC_DAV10A))); assert(fixed.getSupportedOPCVersion()==SODAC_VERSION_OPC_DAV10A); Server da2; assert(SUCCEEDED(open_prefix_test(&global_host,&da2,0x200))); assert(da2.getSupportedOPCVersion()==0x200); Server da3; assert(SUCCEEDED(open_prefix_test(&global_host,&da3,0x300))); assert(da3.getSupportedOPCVersion()==0x300); Server mismatch; mismatch.ignore_force=true; assert(FAILED(open_prefix_test(&global_host,&mismatch,0x200))); group.started=true; assert(opcl_da_test_da1_is_inactive(&session)==E_FAIL); }
 '''
 with tempfile.TemporaryDirectory() as d:
  p=Path(d)/'test.cpp';exe=Path(d)/'test';p.write_text(pre+open_test+helper+driver+post)

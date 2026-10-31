@@ -53,6 +53,8 @@ jobs:
           python3 docs/testing/native-sdk/test-subscription-counters.py
           python3 docs/testing/native-sdk/test-partial-read-source.py
           python3 docs/testing/native-sdk/test-da1-inactive-source.py
+          python3 docs/testing/native-sdk/test-version-routes-source.py
+          python3 docs/testing/native-sdk/test-version-sdk-source.py
           docs/testing/native-sdk/test-expat-link.sh
           cmake -P docs/testing/native-sdk/core-probe/test-normalize-sdk-path.cmake
           python3 docs/testing/native-sdk/test-run-native-probe.py

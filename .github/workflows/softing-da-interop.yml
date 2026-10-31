@@ -367,6 +367,18 @@ jobs:
         run: |
           python opclook/docs/testing/native-sdk/server-fixture/run-interop.py --server fixture-build/Release/opcl_da_server.exe --proxy fixture-build/Release/opcl_opcproxy.dll -- ./softing-build/Release/softing_core_probe.exe --live-da1-inactive
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Forced SDK DA2 Cache and Device routes
+        if: ${{ !cancelled() && steps.sdk_bridge.conclusion == 'success' }}
+        shell: pwsh
+        run: |
+          python opclook/docs/testing/native-sdk/server-fixture/run-interop.py --server fixture-build/Release/opcl_da_server.exe --proxy fixture-build/Release/opcl_opcproxy.dll -- ./softing-build/Release/softing_core_probe.exe --live-da2-routes
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Forced SDK DA3 max-age request routes
+        if: ${{ !cancelled() && steps.sdk_bridge.conclusion == 'success' }}
+        shell: pwsh
+        run: |
+          python opclook/docs/testing/native-sdk/server-fixture/run-interop.py --server fixture-build/Release/opcl_da_server.exe --proxy fixture-build/Release/opcl_opcproxy.dll -- ./softing-build/Release/softing_core_probe.exe --live-da3-routes
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Preserve official MIT include and link evidence
         if: always() && matrix.opc_inputs == 'official-mit'
         uses: actions/upload-artifact@v4

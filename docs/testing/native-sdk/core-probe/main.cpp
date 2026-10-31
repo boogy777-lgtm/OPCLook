@@ -232,6 +232,43 @@ static int live_da1_inactive_fixture() {
     hr = opcl_da_host_destroy(host); ok = SUCCEEDED(hr) && ok;
     return ok ? 0 : 62;
 }
+// Test-only forced versions against the newer local SDK fixture.
+static int live_version_routes_fixture(uint32_t version) {
+    const OpclDaGuid clsid = {0x7d4bd1b1, 0x7422, 0x48c0,
+                              {0xad, 0x58, 0x60, 0x1b, 0x70, 0x14, 0x49, 0xc6}};
+    OpclDaHost* host = nullptr; OpclDaSession* session = nullptr;
+    OpclDaItem *target = nullptr, *cache = nullptr, *device = nullptr, *total = nullptr;
+    uint16_t type = 0; uint32_t rights = 0, revised = 0;
+    HRESULT hr = opcl_da_host_create(&host);
+    if (FAILED(hr)) return 71;
+    hr = opcl_da_test_version_open(host, "OPCLook.NativeDaFixture.1", "localhost", &clsid, version, &revised, &session);
+    bool ok = SUCCEEDED(hr);
+    auto add = [&](const char* id, uint32_t registration, OpclDaItem** item) {
+        return SUCCEEDED(opcl_da_item_add(session, id, registration, 0, item, &type, &rights));
+    };
+    if (ok) ok = add("Fixture.DeviceValue", 1, &target) && add("Fixture.SyncCacheKindCount", 2, &cache) &&
+                 add("Fixture.SyncDeviceKindCount", 3, &device) && add("Fixture.SyncReadRequestCount", 4, &total);
+    auto read = [&](OpclDaItem* item, uint32_t age, OpclDaReadI4& value) {
+        HRESULT result = opcl_da_read_i4(session, item, age, &value);
+        return SUCCEEDED(result) && SUCCEEDED(value.service_result) && SUCCEEDED(value.item_result) &&
+               value.vartype == VT_I4 && (value.filetime_low || value.filetime_high);
+    };
+    auto check = [&](uint32_t age, int cache_delta, int device_delta) {
+        OpclDaReadI4 c0{}, d0{}, t0{}, sample{}, c1{}, d1{}, t1{};
+        if (!read(cache, 0, c0) || !read(device, 0, d0) || !read(total, 0, t0) ||
+            !read(target, age, sample) || !read(cache, 0, c1) || !read(device, 0, d1) || !read(total, 0, t1)) return false;
+        std::printf("version=%u age=%lu sample=%ld quality=%04x deltas total/cache/device=%ld/%ld/%ld\n",
+                    version, static_cast<unsigned long>(age), static_cast<long>(sample.value), sample.quality,
+                    static_cast<long>(t1.value-t0.value), static_cast<long>(c1.value-c0.value), static_cast<long>(d1.value-d0.value));
+        return sample.value == 42 && t1.value == t0.value + 1 && c1.value == c0.value + cache_delta && d1.value == d0.value + device_delta;
+    };
+    if (ok && version == SODAC_VERSION_OPC_DAV20) ok = check(UINT32_MAX, 1, 0) && check(0, 0, 1) && check(1234, 0, 1);
+    if (ok && version == SODAC_VERSION_OPC_DAV30) ok = check(UINT32_MAX, 0, 0) && check(0, 0, 0) && check(1234, 0, 0);
+    if (session) { hr = opcl_da_session_close(session); ok = SUCCEEDED(hr) && ok; }
+    hr = opcl_da_host_destroy(host); ok = SUCCEEDED(hr) && ok;
+    std::printf("forced SDK version %u routes %s\n", version, ok ? "PASS" : "FAIL");
+    return ok ? 0 : 72;
+}
 static int live_async_fixture() {
     const OpclDaGuid clsid = {0x7d4bd1b1, 0x7422, 0x48c0,
                               {0xad, 0x58, 0x60, 0x1b, 0x70, 0x14, 0x49, 0xc6}};
@@ -352,6 +389,8 @@ int main(int argc, char** argv) {
     if (!::GetModuleHandle(nullptr)) return 9;
     if (argc == 2 && std::strcmp(argv[1], "--live") == 0) return live_fixture();
     if (argc == 2 && std::strcmp(argv[1], "--live-async") == 0) return live_async_fixture();
+    if (argc == 2 && std::strcmp(argv[1], "--live-da2-routes") == 0) return live_version_routes_fixture(SODAC_VERSION_OPC_DAV20);
+    if (argc == 2 && std::strcmp(argv[1], "--live-da3-routes") == 0) return live_version_routes_fixture(SODAC_VERSION_OPC_DAV30);
     if (argc == 2 && std::strcmp(argv[1], "--live-da1-inactive") == 0) return live_da1_inactive_fixture();
     const bool baseline = argc == 2 && std::strcmp(argv[1], "--expect-existing-defect") == 0;
     phase("common-init");

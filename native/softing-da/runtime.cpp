@@ -210,7 +210,7 @@ extern "C" int32_t opcl_da_host_destroy(OpclDaHost* host) try {
 static int32_t session_open_impl(OpclDaHost* host, const char* name, const char* node,
                                  const OpclDaGuid* id, uint32_t subscription, uint32_t update_rate_ms,
                                  uint32_t registration_budget, uint32_t* revised_rate_ms, OpclDaSession** out,
-                                 bool test_da1_inactive) try {
+                                 uint32_t test_version) try {
     if (!out || !revised_rate_ms) return E_INVALIDARG;
     *out = nullptr; *revised_rate_ms = 0;
     if (!host || !id || subscription > 1 || !registration_budget || !update_rate_ms) return E_INVALIDARG;
@@ -221,17 +221,17 @@ static int32_t session_open_impl(OpclDaHost* host, const char* name, const char*
     OPCL_DISCOVERY_TRACE("session addServer");
     SODaCServer* server = host->entry->addServer(wide_name.data(), wide_node.data(), clsid);
     if (!server) return E_OUTOFMEMORY;
-    if (test_da1_inactive && !server->forceOPCVersion(SODAC_VERSION_OPC_DAV10A)) {
+    if (test_version && !server->forceOPCVersion(static_cast<WORD>(test_version))) {
         host->entry->removeBranch(server); server->release(); return E_FAIL;
     }
     OPCL_DISCOVERY_TRACE("session connect");
     HRESULT hr = server->connect(FALSE);
     OPCL_DISCOVERY_TRACE("session connect returned");
 #ifdef OPCL_DA_TESTING
-    if (test_da1_inactive) std::fprintf(stderr, "DA1 server connect hr=%08lx connected=%d forced=%u selected=%u\n",
+    if (test_version) std::fprintf(stderr, "test version server connect hr=%08lx connected=%d forced=%u selected=%u\n",
         static_cast<unsigned long>(hr), server->isConnected(), server->getForcedOPCVersion(), server->getSupportedOPCVersion());
 #endif
-    if (SUCCEEDED(hr) && (!server->isConnected() || (test_da1_inactive && server->getSupportedOPCVersion() != SODAC_VERSION_OPC_DAV10A))) hr = E_FAIL;
+    if (SUCCEEDED(hr) && (!server->isConnected() || (test_version && (server->getForcedOPCVersion() != test_version || server->getSupportedOPCVersion() != test_version)))) hr = E_FAIL;
     OPCL_DISCOVERY_TRACE("session addGroup");
     SODaCGroup* group = SUCCEEDED(hr) ? server->addGroup(nullptr, update_rate_ms) : nullptr;
     std::shared_ptr<PushState> push;
@@ -245,13 +245,13 @@ static int32_t session_open_impl(OpclDaHost* host, const char* name, const char*
         runtime_group->push = push;
         group->setDataRetrieval(subscription ? SODaCGroup::drAsyncAdvise : SODaCGroup::drPolledRefresh);
         OPCL_DISCOVERY_TRACE("session group start");
-        hr = test_da1_inactive ? group->connect(FALSE) : group->start(FALSE);
+        hr = test_version ? group->connect(FALSE) : group->start(FALSE);
         OPCL_DISCOVERY_TRACE("session group start returned");
 #ifdef OPCL_DA_TESTING
-        if (test_da1_inactive) std::fprintf(stderr, "DA1 group connect hr=%08lx connected=%d started=%d\n",
+        if (test_version) std::fprintf(stderr, "test version group connect hr=%08lx connected=%d started=%d\n",
             static_cast<unsigned long>(hr), group->isConnected(), group->isStarted());
 #endif
-        if (SUCCEEDED(hr) && (test_da1_inactive ? (!group->isConnected() || group->isStarted()) : !group->isStarted())) hr = E_FAIL;
+        if (SUCCEEDED(hr) && (test_version ? (!group->isConnected() || group->isStarted()) : !group->isStarted())) hr = E_FAIL;
         // The SDK must actually retain advise mode; never silently turn the
         // requested stream into its cyclic sync-read fallback.
         if (SUCCEEDED(hr) && subscription && group->getDataRetrieval() != SODaCGroup::drAsyncAdvise) hr = E_NOINTERFACE;
@@ -280,7 +280,13 @@ extern "C" int32_t opcl_da_session_open(OpclDaHost* host, const char* name, cons
 #ifdef OPCL_DA_TESTING
 extern "C" int32_t opcl_da_test_da1_open(OpclDaHost* host, const char* name, const char* node,
                                             const OpclDaGuid* id, uint32_t* revised_rate_ms, OpclDaSession** out) {
-    return session_open_impl(host, name, node, id, 0, 1000, 100000, revised_rate_ms, out, true);
+    return session_open_impl(host, name, node, id, 0, 1000, 100000, revised_rate_ms, out, SODAC_VERSION_OPC_DAV10A);
+}
+extern "C" int32_t opcl_da_test_version_open(OpclDaHost* host, const char* name, const char* node,
+                                                const OpclDaGuid* id, uint32_t version,
+                                                uint32_t* revised_rate_ms, OpclDaSession** out) {
+    if (version != SODAC_VERSION_OPC_DAV20 && version != SODAC_VERSION_OPC_DAV30) return E_INVALIDARG;
+    return session_open_impl(host, name, node, id, 0, 1000, 100000, revised_rate_ms, out, version);
 }
 extern "C" int32_t opcl_da_test_da1_is_inactive(OpclDaSession* s) try {
     if (!s || s->subscription || s->server->getForcedOPCVersion() != SODAC_VERSION_OPC_DAV10A ||
