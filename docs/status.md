@@ -1,5 +1,19 @@
 # Текущий статус
 
+## 2026-11-01 — пара32: восстановлен fixture counter stand
+
+На551e8769 Linux source-probe выявил stale SDK stubs в существующем
+`test-subscription-counters.py`: извлекаемый FixtureCreator уже использует
+asyncMaxAge и новые счётчики, а stand их не объявлял. Это compile failure
+стенда;551 не принимается целиком. Actual native C++/COM результаты отдельно.
+Stand исправлен с сохранением реального извлечённого creator и старых Sync
+assertions. Теперь исполняются asyncDevice/asyncMaxAge increments, исключения
+initial/cyclic/sync/write/other-tag, оба saturation cases и cache release order.
+Before compile-fail и after root pass измерены. Других Python/sh extractors
+FixtureCreator не найдено. Backend/native runtime source не менялись; ранее
+подтверждённые270/0/1knownignored и54 hooks сохранены. Новый exact-head CI pending.
+
+
 ## 2026-11-01 — пара32: metadata Read cardinality и Async DA2/DA3
 
 UA `advertised_read_chunk` принимает cap только из ровно одного Good positive

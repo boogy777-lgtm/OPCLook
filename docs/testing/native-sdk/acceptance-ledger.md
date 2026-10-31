@@ -268,3 +268,8 @@ request-creation counters on one target tag. DA2 expects asyncDevice delta1/0,
 DA3 asyncMaxAge0/1, with matching callback/submit facts, sample42 and strict
 cleanup. Both CI inputs wired. Source/stub review passes are not actual COM
 or physical older-server/numeric freshness/production Async acceptance.
+
+Pair32 source receipt:551e8769 failed the old counter extractor's incomplete
+SDK stubs. The repaired actual-creator stand passed increments, exclusions,
+saturation and old Sync checks. New-head CI pending; no native source change
+or retrospective acceptance of551. [Details](async-version-routes.md).

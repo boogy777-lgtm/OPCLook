@@ -26,3 +26,14 @@ results are pending. Run the new `sdk_async_versions_live` test under
 COM input, requiring strict server and proxy cleanup. This is a local forced
 client route, not a physical DA2-only server, numeric freshness or max-age
 measurement, or production Async capability. Production Async remains unsupported.
+
+## Source stand repair receipt
+
+Head551e8769 failed the existing Linux fixture counter stand: its extracted
+FixtureCreator used the new asyncMaxAge/counter fields absent from its SDK
+stubs. This is a stand compile failure; no full-head acceptance is claimed.
+The repaired stand preserves the actual creator, adds the missing stub
+declarations and executes both Async counters, initial/cyclic/sync/write/other
+exclusions, saturation and cache release order along with previous Sync checks.
+Root reproduced after/pass; native/runtime source is unchanged. Actual COM and
+new exact-head CI remain separate gates.
