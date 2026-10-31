@@ -6,9 +6,10 @@
 
 ## Последний подтверждённый срез
 
-`b94303f` прошёл все9 jobs, включая обе COM matrix и nohook packaged CLI read42
+`94773fa` прошёл все9 jobs, включая обе COM matrix с новыми primitive arrays
+и manager lease и nohook packaged CLI read42
 с cleanup. Это заменяет pending verdict старых строк ниже только для уже вошедшего
-в тот head кода. Новые async lease/manager и primitive-array live gates ожидают
+в тот head кода. Новые async two-session/callback/order-fix live gates ожидают
 собственного Windows CI. SDK replay patches остаются research; Engine gate/snapshot
 boundary проверен отдельно, secure/Transfer/full history ещё открыты.
 
@@ -59,7 +60,10 @@ boundary проверен отдельно, secure/Transfer/full history ещё 
 | 19 | Native session/manager lease, SDK fault probes | Linux runtime50/50; Deadline/cut/watch evidence recorded; new i686 lease execution pending |
 | 20 | Primitive arrays coverage/BOOL validation, Engine SDK replay boundary | Existing codecs reused; before/after BOOL regression; Engine1/1 + fresh runner1/1; Win arrays pending |
 | 21 | Actual native CI wiring, SDK failure-visibility gate | Both COM inputs wired; actual SDK window guard PASS + guard-only counterfactual FAIL, fresh runner reproduced |
-| 22 | Native async two-session isolation, secured UA reconnect | Terra High pair active; Windows/live results not assumed |
+| 22 | Native async two-session isolation, secured UA reconnect | Mock51/51; real secure1/1 + fresh runner1/1 NewSession; found/fixed SDK base-destruction retirement order, new Win CI pending |
+| 23 | A08 late SDK callback, TransferSubscriptions acceptance | Held actual-callback gate prepared, Win pending; public secure Transfer Good raw observer1/1+fresh1/1, destination mapped state still absent |
+| 24 | O23 active subscription + Sync one-shot, secure token renewal | Engine/SDK request-counter gate prepared, Win pending; original SDK verified secure token1→2, same Session/sub/item,1/1+fresh1/1 |
+| 25 | A09 actual item/quality failures, SDK bounded readiness handoff | A09 fixture/source/mock52 prepared, Win pending; SDK readiness candidate real wire2/2 + unit7/7 being finalized, product pins/Async unchanged |
 
 Пара 01 исправила начальное состояние fixture после честного отрицательного
 NOCONFIG verdict на `a004b226`. Проверка на `36fa668` подтвердила

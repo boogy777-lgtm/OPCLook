@@ -1468,3 +1468,27 @@ Research Engine/Gateway replay:1/1 targeted12.06s и fresh runner1/1 18.24s;
 SDK delayed response1/1 17.02s, cut1/1 9.08s, watch overwrite unit1/1.
 Исторический exactb94303f прошёл все9 jobs; проверенный package manifest183/94/
 295875bytes/missing0 и executable42+strictcleanup. Все ограничения в status.
+
+## 2026-10-31 — SDK destruction order и pair22
+
+Class N3/R07. Inv: retirement только после всех SDK task item/group refs;
+независимая sessionB прогрессирует при blockedA; secure mode и certificate
+verification устанавливаются на actual SDK, unknown остаётся после fresh read.
+N+1: queued task removal, SDK base destructor release barrier; rejected-cert
+negative case с последующим явно доверенным cert, NewSession вместо Reactivated.
+Defect: ранний derived destructor notification; actual-source beforeFAIL/afterPASS
+для двух branches. Root runtime stand51/51, secure live1/1 + fresh runner1/1.
+Windows isolation/destruction-fix acceptance pending. SDK947 source/core4/4success;
+остальные jobs ещё идут. Production Async/pins/default не переключены.
+
+## 2026-10-31 — пары23/24 и точный94773fa green
+
+Class A08/O23 и R07 secure Transfer/token. Inv: old callback не меняет новый
+registration; активная subscription не создаёт hidden SyncPoll; SDK owns lifecycle.
+N+1: callback88 held→remove/readd→99, distinct server cyclic vs client Sync read,
+SDK public Transfer Good without destination item map, same-channel token renewal.
+Новые native gates только подготовлены: actual-source C++ guards5/5, runtime51/51;
+Win execution pending. UA Transfer real1/1+fresh1/1, stock secure token1/1+fresh1/1.
+94773fa завершил все9 jobs, в обоих COM inputs actual array/manager lease1/1 иcleanup;
+новый retirement fix/late callback/O23 не приписываются историческому run.
+Пара25 A09 отрицательные facts и SDK readiness candidate в работе.
