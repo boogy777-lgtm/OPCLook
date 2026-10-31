@@ -58,3 +58,23 @@ The656 Windows backend also passed both O18/O19 tests before a separate old
 enforces late-observed timeout classification, with a second parent full Linux
 run268/0/1knownignored in77.54s. Complete repaired-head Windows CI is pending;
 656's other8 successful jobs are not a9/9 receipt.
+
+## Pair31: excess data Read results
+
+The production chunk branch previously appended a truncated prefix of an
+overlong response. A controlled actual-source helper regression reproduced
+three results for two operations as success (before/fail). The adapter now
+returns explicit `UaServiceError(Read)` before appending any malformed chunk;
+the outer error discards earlier collected chunks, preserving explicit
+per-key failure through the existing mapper. Short response prefix/stop and
+missing-key outcomes remain unchanged. Exact/short/excess helper regression
+passed1/1; ordinary sample-server O18/O19 passed2/2 in8.69s.
+This does not establish malformed wire/server behavior, cap-query cardinality,
+or new timeout/revision races. SDK transport and recovery remain unchanged.
+
+Root integrated Linux backend:269passed/0failed/1knownignored in78.38s.
+
+Receipt 2026-11-01 Asia/Yekaterinburg: exact repaired code
+`266c683d303f396b67a9e69e054bb27f62c8248d` passed9/9 jobs
+(SDK41231426756, COM41231426901, App41231426880, package41231426739).
+The new pair31 admission/cardinality packet needs its own exact-head CI.

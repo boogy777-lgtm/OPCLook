@@ -32,3 +32,8 @@ failure; the corrected focused test passed1/1. Parent integrated full Linux
 backend repeated:268passed,0failed,1knownignored in77.54s (parallel), including
 O18/O19 and existing lifecycle regressions. Windows repaired-head acceptance
 is pending. No SDK dependency, transport or recovery owner changed.
+
+Receipt 2026-11-01 Asia/Yekaterinburg: exact repaired code
+`266c683d303f396b67a9e69e054bb27f62c8248d` passed9/9 jobs
+(SDK41231426756, COM41231426901, App41231426880, package41231426739).
+The new pair31 admission/cardinality packet needs its own exact-head CI.

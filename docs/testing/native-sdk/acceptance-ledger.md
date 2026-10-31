@@ -231,3 +231,16 @@ All cases observed flags0xf, submitS_OK/known itemS_OK; denial was a matched
 callback failure, not observed initial rejection. Full656 was8/1 due to the
 separate Windows App deadline test; repaired-head acceptance is pending. No Async method,
 cancellation, network failure, DA1 or remote acceptance follows from it.
+
+## Pair31 — per-item Async admission (Windows pending)
+
+[SDK access-rights proof](async-admission.md) uses an ordinary write-only tag.
+Pinned SDK source excludes it from the transaction with S_FALSE/OPC_E_BADRIGHTS;
+a dedicated test-only live gate checks actual submit facts, no invented sample
+and cleanup in both inputs. Local runtime54/54 and selector/source guard passed.
+This is distinct from pair30 accepted-then-callback failure; no new Win claim yet.
+
+Receipt 2026-11-01 Asia/Yekaterinburg: exact repaired code
+`266c683d303f396b67a9e69e054bb27f62c8248d` passed9/9 jobs
+(SDK41231426756, COM41231426901, App41231426880, package41231426739).
+The new pair31 admission/cardinality packet needs its own exact-head CI.

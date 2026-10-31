@@ -6,6 +6,10 @@
 
 ## Последний подтверждённый срез
 
+Latest exact code266c683d passed9/9, including repaired Windows deadline test.
+Pair31 source/local acceptance is ready; its own Windows admission gate pending.
+
+
 `22a1348` прошёл все9 jobs (SDK4/COM2/App2/package1). Forced DA2 иDA3
 Sync probes прошли в обоих i686 COM inputs со strict cleanup, как и прежние
 native gates. Per-read counter deltas доказывают request kind; числовой max-age
@@ -23,7 +27,7 @@ Production SDK pin/App не меняются; общий порядок Push/Rea
 
 Пара30 на656 получила8/1: native facts прошли оба COM и O18/O19 прошли Windows
 backend, но выявлен старый deadline contract gap. Controlled repair и root
-backend268/0/1knownignored прошли; await нового Windows head, не считать6569/9.
+backend268/0/1knownignored прошли; 266c683d прошёл9/9; не считать6569/9.
 [Deadline proof](testing/ua-deadline-proof.md).
 
 Пара30 исправляет production adapter Read batching для O18/O19; root backend
@@ -89,6 +93,7 @@ SDK readiness/drain Engine research остаётся на frozen9ba source; не
 | 28 | SDK namespace-cache identity audit, test-only native Async Gateway correlation | Namespace source-only risk, no measured fix; Gateway mock54/49-nohooks, Linux typecheck and both f787 COM live gates passed; no production Async claim |
 | 29 | Negotiated DA2/DA3 Sync routes, SDK Publish per-ACK results | DA source/mock54, pinned fragments and both22a COM live gates passed; SDK fixed3+ACK2+recovery16 and full40-file/path guards passed as research |
 | 30 | UA Read OperationLimits, native Async failure/quality facts | Original Read5/limit3 fails, O18/O19 live and root backend268+1knownignored pass; native54/source pass, both656COM accepted; full head deadline repair pending |
+| 31 | UA data Read excess response, native Async admission | Source before/fail after/pass, normal live O18/O19 2/2; native54/source pass, admission both COM pending |
 
 Пара 01 исправила начальное состояние fixture после честного отрицательного
 NOCONFIG verdict на `a004b226`. Проверка на `36fa668` подтвердила

@@ -119,3 +119,15 @@ now rejects results first observed at/after budget, without repolling completed
 futures and retaining bounded drain/quarantine. Root backend268/0/1knownignored
 passed again. This does not determine a remote completion instant or remove
 frozen-source research limitations; repaired Windows CI is pending.
+
+## Pair31 — malformed data Read cardinality
+
+[Actual-source proof](ua-read-limits-proof.md) rejects excess results with an
+explicit Read error; short prefix/missing-key policy is retained. Helper1/1 and
+ordinary O18/O19 live2/2 passed. No malformed wire, cap-query cardinality or new
+recovery acceptance claimed; frozen SDK research receipts remain9ba.
+
+Receipt 2026-11-01 Asia/Yekaterinburg: exact repaired code
+`266c683d303f396b67a9e69e054bb27f62c8248d` passed9/9 jobs
+(SDK41231426756, COM41231426901, App41231426880, package41231426739).
+The new pair31 admission/cardinality packet needs its own exact-head CI.

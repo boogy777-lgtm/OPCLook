@@ -8,7 +8,7 @@
 Это входное задание для нового чата. Маршруты направляют к существующим механизмам; текущий частичный runtime срез
 ExplicitRefresh и CLI opt-in WriteReadback описан в status.md. Полный R2 не завершён.
 
-Последний принятый exact code head — `22a1348`, все9 jobs; generic test-only
+Последний принятый exact code head — `266c683d`, все9 jobs; generic test-only
 Async fixture прошёл обе i686 COM matrix. SDK readiness/racefix/drain — отдельный
 reviewed research packet, без production pin/App change, только одна subscription
 в ReactivatedSession. Актуальные scope/gaps и следующая пара находятся в
@@ -26,7 +26,7 @@ ACK-specific uncertainty не заменяет recovery history flag или App 
 и bounded adapter split; [Async facts](testing/native-sdk/async-facts.md) — новый
 test-only fixture (оба656COM прошли), production Async не включён.
 656 в целом8/1 из-за deadline gap; controlled repair прошёл Linux backend,
-отдельная Windows приёмка исправленного head pending. Historical SDK
+отдельная приёмка266c683d прошла9/9. Historical SDK
 drain Engine stand требует frozen9ba receipts, не текущий изменённый Read-loop.
 
 

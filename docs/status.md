@@ -1,5 +1,45 @@
 # Текущий статус
 
+## 2026-11-01 — пара30 принята; пара31 подготовлена
+
+Exact code266c683d303f396b67a9e69e054bb27f62c8248d прошёл9/9:
+[SDK4](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41231426756),
+[COM2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41231426901),
+[App2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41231426880),
+[package1](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41231426739).
+Windows backend deadline regression и O18/O19 прошли; оба native facts COM
+inputs и strict cleanup приняты. 656 остаётся историческим8/1, исправление
+подтверждено отдельным code head. Дата receipt — Asia/Yekaterinburg.
+
+Пара31 готовит следующий пакет: excess data Read → явный Read service error,
+source before/fail after/pass, live O18/O19 2/2; native Async admission через
+штатный write-only SDK tag, actual Windows ещё pending. Root Linux backend
+269/0/1knownignored и runtime54/54 hooks (48/48 nohooks) прошли. Production
+Async Unsupported, N4/default DA/pins не меняются; frozen SDK research9ba.
+
+
+## 2026-10-31 — пара31: UA malformed Read и Async admission
+
+UA data Read больше не принимает лишние результаты как корректный prefix:
+excess chunk возвращает явный UaServiceError(Read), не добавляя его значения.
+Short response сохраняет прежний prefix/stop и missing-key outcomes. Actual
+source/helper regression падала до исправления, после прошла1/1; обычные live
+O18/O19 прошли2/2 за8.69с. Это не malformed wire/server proof и не проверка
+cardinality cap-query или новых timeout/revision races.
+
+Новый native test-only gate регистрирует штатный write-only SDK tag. Pinned
+SDK source ожидает S_FALSE + OPC_E_BADRIGHTS при приёме без request в transaction;
+это отличается от accepted callback E_ACCESSDENIED пары30. No-sample facts,
+slot retirement и strict cleanup проверяет отдельный i686 live test, включённый
+в оба COM inputs. Local runtime54/54 и pinned source/fixture selector guard
+прошли; root backend269/0/1knownignored за78.38с и runtime54/54 hooks
+(48/48 без hooks) прошли. Actual Windows ещё pending. Production Async Unsupported, pins и N4
+не менялись. См. [native proof](testing/native-sdk/async-admission.md).
+
+266c683d публикует deadline repair пары30; exact-head CI принят9/9.
+656 сохранил честный8/1, два native facts COM accepted. Frozen SDK Engine
+research остаётся на9ba; namespace diagnostic не возобновлён.
+
 ## 2026-10-31 — пара30: Windows deadline repair, native facts accepted locally
 
 Exact6564157 завершился8success/1failure. Оба COM inputs прошли новый Async
