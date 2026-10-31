@@ -3916,3 +3916,26 @@ fn early_push_is_applied_only_after_successful_registration() {
         }
     }
 }
+
+#[test]
+fn p2_oversized_action_is_visible_and_never_dispatched() {
+    use opclook_contract::actions::ACTION_MAX_BYTES;
+    for lang in Lang::ALL {
+        let (_ctx, mut app, _) = profile_fixture();
+        app.settings.set_lang(lang);
+        let before = app.dispatched_for_test().len();
+        assert!(
+            app.send(
+                SessionId::FIRST,
+                Protocol::OpcUa,
+                CommandKind::Browse {
+                    node_id: "x".repeat(ACTION_MAX_BYTES + 1),
+                    view_id: None,
+                },
+            )
+            .is_none()
+        );
+        assert_eq!(app.dispatched_for_test().len(), before);
+        assert_eq!(app.status, tr(lang, Tr::ActionPayloadInvalid));
+    }
+}

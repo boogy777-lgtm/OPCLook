@@ -790,6 +790,11 @@ impl App {
         };
         let (request_id, failure) = match dispatch {
             Ok(id) => (id, None),
+            Err(DispatchError::InvalidActionPayload(_)) => {
+                self.journal.error_l(Tr::ActionPayloadInvalid, &[]);
+                self.status = tr(self.lang(), Tr::ActionPayloadInvalid).to_string();
+                return None;
+            }
             Err(DispatchError::InvalidAcquisition(_)) => {
                 self.journal.error_l(Tr::AcquisitionInvalid, &[]);
                 self.status = tr(self.lang(), Tr::AcquisitionInvalid).to_string();

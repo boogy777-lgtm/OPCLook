@@ -99,6 +99,8 @@ translation_keys! {
     GatewayClosed,
     WorkerClosed,
     RequestIdsExhausted,
+    // P2 bounded action payload integration.
+    ActionPayloadInvalid,
     ReadBusy,
     AcquisitionTitle,
     AcquisitionExplicit,
@@ -911,6 +913,9 @@ fn ru(key: Tr) -> &'static str {
         GatewayClosed => "Шлюз остановлен",
         WorkerClosed => "Канал рабочего потока закрыт",
         RequestIdsExhausted => "Исчерпаны идентификаторы запросов",
+        ActionPayloadInvalid => {
+            "Параметры действия превышают ограничения размера, глубины или числа элементов. Уменьшите объём данных"
+        }
         ReadBusy => "Чтение этой сессии уже выполняется",
         AcquisitionTitle => "Получение данных",
         AcquisitionEdit => "Настроить профиль соединения",
@@ -1644,6 +1649,9 @@ fn en(key: Tr) -> &'static str {
         GatewayClosed => "Gateway is shut down",
         WorkerClosed => "Worker command channel is closed",
         RequestIdsExhausted => "Request identifiers exhausted",
+        ActionPayloadInvalid => {
+            "Action parameters exceed the size, depth or item limits. Reduce the amount of data"
+        }
         ReadBusy => "A read is already in progress for this session",
         AcquisitionTitle => "Data acquisition",
         AcquisitionEdit => "Edit connection profile",
@@ -2363,6 +2371,7 @@ fn zh(key: Tr) -> &'static str {
         GatewayClosed => "网关已关闭",
         WorkerClosed => "工作线程命令通道已关闭",
         RequestIdsExhausted => "请求标识符已耗尽",
+        ActionPayloadInvalid => "操作参数超出大小、深度或元素数量限制。请减少数据量",
         ReadBusy => "此会话已有读取正在进行",
         AcquisitionTitle => "数据采集",
         AcquisitionEdit => "编辑连接配置",
