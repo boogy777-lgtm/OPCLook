@@ -134,6 +134,11 @@ static bool add_array_fixtures(SODaSNode* node) {
     const LONG ints[] = {-2, 0, 42};
     if (!make_array(value, VT_I4, 5, 3) || SafeArrayGetElemsize(value.parray) != sizeof(LONG) ||
         !fill_array(value, ints, sizeof(ints)) || !add_tag(node, _T("Ints"), value)) return false;
+    // Valid SDK array deliberately exceeds the adapter's 256-element bound.
+    // It exercises codec failure after a successful SDK device/cache read.
+    LONG many[257]{};
+    if (!make_array(value, VT_I4, 0, 257) ||
+        !fill_array(value, many, sizeof(many)) || !add_tag(node, _T("LargeInts"), value)) return false;
     if (!make_array(value, VT_BSTR, 0, 2)) return false;
     SOCmnVariant element;
     element.setBSTR(_T("\u0420\u0423\u0413 \u4e2d\u6587"));

@@ -23,8 +23,8 @@ typedef struct OpclDaReadI4 {
 } OpclDaReadI4;
 
 /* Scalar numeric payload uses low/high words to keep its ABI layout stable on
-   Win32. Unsupported values (including arrays and BYREF) fail without
-   manufacturing a value. Float and DATE use IEEE f64 bits. */
+   Win32. Supported arrays use bounded payload buffers; unsupported values fail
+   without manufacturing a value. Float and DATE use IEEE f64 bits. */
 typedef struct OpclDaScalar {
     int32_t service_result, item_result;
     uint32_t filetime_low, filetime_high;
@@ -32,6 +32,16 @@ typedef struct OpclDaScalar {
     uint16_t quality, vartype;
     uint32_t text_len;
 } OpclDaScalar;
+
+/* Availability bits report only outputs guaranteed by the SDK read contract.
+   Codec/adapter failures can coexist with a completed SDK sample. */
+#define OPCL_DA_READ_SERVICE 0x01u
+#define OPCL_DA_READ_ITEM 0x02u
+#define OPCL_DA_READ_SAMPLE 0x04u
+typedef struct OpclDaReadOutcome {
+    OpclDaScalar value;
+    uint32_t available;
+} OpclDaReadOutcome;
 
 #define OPCL_DA_VALUE_BYTES 65536u
 typedef struct OpclDaPush {
@@ -100,6 +110,8 @@ int32_t opcl_da_read_i4(OpclDaSession* session, OpclDaItem* item, uint32_t max_a
                         OpclDaReadI4* out);
 int32_t opcl_da_read_scalar(OpclDaSession* session, OpclDaItem* item, uint32_t max_age,
                             OpclDaScalar* out, char* text, uint32_t text_capacity);
+int32_t opcl_da_read_scalar_facts(OpclDaSession* session, OpclDaItem* item, uint32_t max_age,
+                                  OpclDaReadOutcome* out, char* text, uint32_t text_capacity);
 int32_t opcl_da_write_scalar(OpclDaSession* session, OpclDaItem* item, uint16_t vartype,
                              uint32_t bits_low, uint32_t bits_high, int32_t* item_result);
 int32_t opcl_da_write_array(OpclDaSession* session, OpclDaItem* item, uint16_t vartype,

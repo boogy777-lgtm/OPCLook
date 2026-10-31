@@ -586,12 +586,7 @@ impl DaHost for NativeHost {
                                     s.read_scalar(*reg, max_age)
                                         .map_err(|e| message(format!("DA read: {e:?}")))
                                 })
-                                .and_then(|value| {
-                                    super::softing_scalar::decode_with_origin(
-                                        value,
-                                        super::model::ValueOrigin::Read,
-                                    )
-                                });
+                                .map(super::softing_scalar::decode_read_outcome);
                             (*key, result.unwrap_or_else(DataValue::bad))
                         })
                         .collect();
@@ -956,18 +951,32 @@ mod tests {
         send(CommandKind::ReadFresh {
             keys: vec![ItemKey::FIRST],
         });
-        assert!(
-            matches!(recv(), EventKind::Values { values } if values[0].1.value == Value::I64(43)),
-            "fresh uses maxAge=0"
-        );
+        let fresh = recv();
+        if cfg!(feature = "native-da-preview") {
+            assert!(
+                matches!(fresh, EventKind::Values { values } if values[0].1.value == Value::I64(43)),
+                "fresh uses maxAge=0"
+            );
+        } else {
+            assert!(
+                matches!(fresh, EventKind::Error { operation: Operation::Read, message: BackendMsg::Raw(ref message) } if message == "Explicit cache/device read is not supported by the legacy DA adapter")
+            );
+        }
         send(CommandKind::ReadCached {
             keys: vec![ItemKey::FIRST],
             max_age_ms: 1234,
         });
-        assert!(
-            matches!(recv(), EventKind::Values { values } if values[0].1.value == Value::I64(42)),
-            "DA cache uses maxAge=MAX"
-        );
+        let cached = recv();
+        if cfg!(feature = "native-da-preview") {
+            assert!(
+                matches!(cached, EventKind::Values { values } if values[0].1.value == Value::I64(42)),
+                "DA cache uses maxAge=MAX"
+            );
+        } else {
+            assert!(
+                matches!(cached, EventKind::Error { operation: Operation::Read, message: BackendMsg::Raw(ref message) } if message == "Explicit cache/device read is not supported by the legacy DA adapter")
+            );
+        }
         send(CommandKind::Write {
             request: WriteRequest {
                 key: ItemKey::FIRST,

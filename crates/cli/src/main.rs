@@ -763,9 +763,23 @@ fn data_json(data: &DataValue, endpoint: &EndpointSpec) -> Result<Json, String> 
         QualityKind::Uncertain => "uncertain",
         QualityKind::Bad => "bad",
     };
-    Ok(
-        json!({"value":encode(&data.value,0,&mut MAX_JSON_BUDGET.clone())?,"quality":{"code":data.quality.code,"kind":quality,"text":data.quality.text},"timestamp":data.timestamp.map(|v| v.to_rfc3339()),"times":value_times_json(&data.times),"reason":data.reason.as_ref().map(|reason| message(reason,endpoint))}),
-    )
+    let mut result = json!({"value":encode(&data.value,0,&mut MAX_JSON_BUDGET.clone())?,"quality":{"code":data.quality.code,"kind":quality,"text":data.quality.text},"timestamp":data.timestamp.map(|v| v.to_rfc3339()),"times":value_times_json(&data.times),"reason":data.reason.as_ref().map(|reason| message(reason,endpoint))});
+    if let Some(BackendMsg::DaReadFailure {
+        adapter,
+        service,
+        item,
+        quality,
+        filetime,
+        vartype,
+        cause,
+    }) = &data.reason
+    {
+        // DataValue::bad carries a synthetic zero code; expose only SDK quality
+        // explicitly attested by the native outcome.
+        result["quality"]["code"] = json!(quality);
+        result["da_read_failure"] = json!({"adapter_hresult":adapter,"service_hresult":service,"item_hresult":item,"quality":quality,"filetime_ticks":filetime,"vartype":vartype,"cause":cause.as_ref().map(|reason| message(reason, endpoint))});
+    }
+    Ok(result)
 }
 
 fn read_terminal_json(
@@ -1509,6 +1523,29 @@ mod tests {
         assert_eq!(value["ambiguous"], true);
         assert_eq!(value["history"], "unknown");
         assert_eq!(value["latest_value"], "not_implied");
+    }
+
+    #[test]
+    fn da_read_failure_json_preserves_optional_raw_statuses() {
+        use super::*;
+        let endpoint = EndpointSpec::da("localhost", "test");
+        let data = DataValue::bad(BackendMsg::DaReadFailure {
+            adapter: Some(-1),
+            service: None,
+            item: None,
+            quality: None,
+            filetime: None,
+            vartype: None,
+            cause: None,
+        });
+        let value = data_json(&data, &endpoint).unwrap();
+        assert_eq!(value["quality"]["kind"], "bad");
+        assert!(value["quality"]["code"].is_null());
+        assert_eq!(value["da_read_failure"]["adapter_hresult"], -1);
+        assert!(value["da_read_failure"]["service_hresult"].is_null());
+        assert!(value["da_read_failure"]["item_hresult"].is_null());
+        assert!(value["da_read_failure"]["quality"].is_null());
+        assert!(value["da_read_failure"]["filetime_ticks"].is_null());
     }
 
     #[test]

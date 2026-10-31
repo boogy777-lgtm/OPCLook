@@ -99,6 +99,30 @@ pub struct ReadScalar {
     pub vartype: u16,
     pub text_len: u32,
 }
+pub const READ_SERVICE: u32 = 1;
+pub const READ_ITEM: u32 = 2;
+pub const READ_SAMPLE: u32 = 4;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
+struct NativeReadOutcome {
+    value: ReadScalar,
+    available: u32,
+}
+
+#[derive(Debug)]
+pub enum ReadPayloadError {
+    InvalidLength,
+}
+
+#[derive(Debug)]
+pub struct ReadOutcome {
+    pub adapter_result: i32,
+    pub available: u32,
+    pub value: ReadScalar,
+    pub payload: Result<Option<Vec<u8>>, ReadPayloadError>,
+}
+
 #[repr(C)]
 #[derive(Clone)]
 struct PushRecord {
@@ -183,11 +207,11 @@ unsafe extern "C" {
         overflow: *mut u32,
     ) -> i32;
     fn opcl_da_read_i4(session: *mut c_void, item: *mut c_void, age: u32, out: *mut ReadI4) -> i32;
-    fn opcl_da_read_scalar(
+    fn opcl_da_read_scalar_facts(
         session: *mut c_void,
         item: *mut c_void,
-        age: u32,
-        out: *mut ReadScalar,
+        max_age: u32,
+        out: *mut NativeReadOutcome,
         text: *mut c_char,
         text_capacity: u32,
     ) -> i32;
@@ -586,17 +610,13 @@ impl Session {
         check(unsafe { opcl_da_read_i4(self.ptr.as_ptr(), item.as_ptr(), max_age, &mut out) })?;
         Ok(out)
     }
-    pub fn read_scalar(
-        &mut self,
-        key: u64,
-        max_age: u32,
-    ) -> Result<(ReadScalar, Option<Vec<u8>>), Error> {
+    pub fn read_scalar(&mut self, key: u64, max_age: u32) -> Result<ReadOutcome, Error> {
         let item = self.items.get(&key).ok_or(Error::InvalidHandle)?;
-        let mut out = ReadScalar::default();
+        let mut out = NativeReadOutcome::default();
         let mut text = vec![0u8; 65_536];
-        // SAFETY: the map owns the registration and both buffers remain valid for the call.
-        check(unsafe {
-            opcl_da_read_scalar(
+        // SAFETY: the live item and bounded output buffers outlive the synchronous call.
+        let adapter_result = unsafe {
+            opcl_da_read_scalar_facts(
                 self.ptr.as_ptr(),
                 item.as_ptr(),
                 max_age,
@@ -604,18 +624,27 @@ impl Session {
                 text.as_mut_ptr().cast(),
                 text.len() as u32,
             )
-        })?;
-        let text = if out.vartype == 8 || out.vartype & 0x2000 != 0 {
-            let count = usize::try_from(out.text_len).map_err(|_| Error::InvalidString)?;
-            if count > text.len() {
-                return Err(Error::InvalidString);
-            }
-            text.truncate(count);
-            Some(text)
-        } else {
-            None
         };
-        Ok((out, text))
+        let payload = if adapter_result >= 0
+            && out.available & READ_SAMPLE != 0
+            && (out.value.vartype == 8 || out.value.vartype & 0x2000 != 0)
+        {
+            match usize::try_from(out.value.text_len) {
+                Ok(count) if count <= text.len() => {
+                    text.truncate(count);
+                    Ok(Some(text))
+                }
+                _ => Err(ReadPayloadError::InvalidLength),
+            }
+        } else {
+            Ok(None)
+        };
+        Ok(ReadOutcome {
+            adapter_result,
+            available: out.available,
+            value: out.value,
+            payload,
+        })
     }
     pub fn write_array(&mut self, key: u64, vt: u16, bytes: &[u8]) -> Result<i32, Error> {
         let item = self.items.get(&key).ok_or(Error::InvalidHandle)?;
@@ -957,6 +986,38 @@ mod tests {
         0
     }
     #[unsafe(no_mangle)]
+    unsafe extern "C" fn opcl_da_read_scalar_facts(
+        session: *mut c_void,
+        item: *mut c_void,
+        max_age: u32,
+        out: *mut NativeReadOutcome,
+        text: *mut c_char,
+        capacity: u32,
+    ) -> i32 {
+        if max_age == 0xabc001 {
+            // SAFETY: out is provided by read_scalar and points to a writable result.
+            unsafe {
+                (*out).value.service_result = 0;
+                (*out).value.item_result = 0;
+                (*out).value.quality = 0xc0;
+                (*out).value.vartype = 0x2003;
+                (*out).value.filetime_low = 0xd53e8000;
+                (*out).value.filetime_high = 0x019db1de;
+                (*out).available = READ_SERVICE | READ_ITEM | READ_SAMPLE;
+            }
+            return -2147024774;
+        }
+        // SAFETY: the caller provides both output buffers for the duration of the call.
+        let result = unsafe {
+            opcl_da_read_scalar(session, item, max_age, &mut (*out).value, text, capacity)
+        };
+        // SAFETY: out is a live writable NativeReadOutcome as above.
+        unsafe {
+            (*out).available = READ_SERVICE | READ_ITEM | READ_SAMPLE;
+        }
+        result
+    }
+    #[unsafe(no_mangle)]
     unsafe extern "C" fn opcl_da_write_array(
         _: *mut c_void,
         _: *mut c_void,
@@ -1010,8 +1071,42 @@ mod tests {
         0
     }
     #[test]
+    fn native_failure_output_survives_the_real_rust_bridge() {
+        let guid = Guid {
+            data1: 1,
+            data2: 2,
+            data3: 3,
+            data4: [0; 8],
+        };
+        let host = Host::new().unwrap();
+        let shared = host.shared();
+        let mut session = shared.open("server", "localhost", &guid).unwrap();
+        let key = session.add("item").unwrap().0;
+        let outcome = session.read_scalar(key, 0xabc001).unwrap();
+        assert_eq!(outcome.adapter_result, -2147024774);
+        assert_eq!(outcome.available, READ_SERVICE | READ_ITEM | READ_SAMPLE);
+        assert_eq!(outcome.value.quality, 0xc0);
+        let mapped = super::super::softing_scalar::decode_read_outcome(outcome);
+        assert!(matches!(
+            mapped.reason,
+            Some(super::super::model::BackendMsg::DaReadFailure {
+                adapter: Some(-2147024774),
+                service: Some(0),
+                item: Some(0),
+                quality: Some(0xc0),
+                ..
+            })
+        ));
+        session.close().unwrap();
+        drop(shared);
+        host.close().unwrap();
+    }
+
+    #[test]
     fn stale_and_foreign_registrations_do_not_reach_native_read() {
         assert_eq!(std::mem::size_of::<ReadScalar>(), 32);
+        assert_eq!(std::mem::size_of::<NativeReadOutcome>(), 36);
+        assert_eq!(std::mem::offset_of!(NativeReadOutcome, available), 32);
         assert_eq!(std::mem::size_of::<PushRecord>(), 48);
         assert_eq!(std::mem::offset_of!(PushRecord, value), 16);
         assert_eq!(std::mem::size_of::<BrowseRecord>(), 5132);

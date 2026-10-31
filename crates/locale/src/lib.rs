@@ -3630,6 +3630,51 @@ pub fn backend_text(lang: Lang, msg: &BackendMsg) -> String {
             text
         }
         // ---- DA value conversion ----
+        M::DaReadFailure {
+            adapter,
+            service,
+            item,
+            quality,
+            filetime,
+            vartype,
+            cause,
+        } => {
+            let unknown = l!(lang, "неизвестно", "unknown", "未知");
+            let hr = |v: &Option<i32>| {
+                v.map(|v| format!("0x{:08X}", v as u32))
+                    .unwrap_or_else(|| unknown.clone())
+            };
+            let q = quality
+                .map(|v| format!("0x{v:04X}"))
+                .unwrap_or_else(|| unknown.clone());
+            let time = filetime
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| unknown.clone());
+            let vt = vartype
+                .map(|v| format!("0x{v:04X}"))
+                .unwrap_or_else(|| unknown.clone());
+            let mut detail = format!(
+                "{}: adapter={}, service={}, item={}, quality={}, FILETIME={}, VT={}",
+                l!(lang, "Ошибка чтения DA", "DA read failed", "DA 读取失败"),
+                hr(adapter),
+                hr(service),
+                hr(item),
+                q,
+                time,
+                vt
+            );
+            if let Some(cause) = cause {
+                detail.push_str(": ");
+                detail.push_str(&backend_text(lang, cause));
+            }
+            detail
+        }
+        M::DaReadPayloadInvalid => l!(
+            lang,
+            "Некорректная длина данных чтения DA",
+            "Invalid DA read payload length",
+            "DA 读取数据长度无效"
+        ),
         M::DaDateRequired => l!(
             lang,
             "для типа DATE требуется дата/время",
@@ -4571,6 +4616,19 @@ mod tests {
                 vec!["4242", "4242", "7001", "7002", "7003", "7004", "§vendor§"],
             ),
             (BackendMsg::DaDateRequired, vec![]),
+            (
+                BackendMsg::DaReadFailure {
+                    adapter: Some(-1),
+                    service: None,
+                    item: None,
+                    quality: None,
+                    filetime: None,
+                    vartype: None,
+                    cause: None,
+                },
+                vec!["0xFFFFFFFF"],
+            ),
+            (BackendMsg::DaReadPayloadInvalid, vec![]),
             (BackendMsg::DaBadDate, vec![]),
             (BackendMsg::DaVtUnsupported { vt: 4242 }, vec!["4242"]),
             (BackendMsg::DaArrayCreateFailed { vt: 4242 }, vec!["4242"]),

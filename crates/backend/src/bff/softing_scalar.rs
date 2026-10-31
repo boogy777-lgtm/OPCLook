@@ -4,6 +4,45 @@ use super::da_convert::{convert_float, convert_int, convert_uint, da_range};
 use super::model::{BackendMsg, DataValue, Quality, Value, ValueOrigin, ValueTimes};
 use super::softing_runtime::ReadScalar;
 
+/// Map one synchronous SDK read without promoting missing output to a fact.
+pub fn decode_read_outcome(outcome: super::softing_runtime::ReadOutcome) -> DataValue {
+    use super::softing_runtime::{READ_ITEM, READ_SAMPLE, READ_SERVICE};
+    let raw = outcome.value;
+    let service = (outcome.available & READ_SERVICE != 0).then_some(raw.service_result);
+    let item = (service.is_some_and(|hr| hr >= 0) && outcome.available & READ_ITEM != 0)
+        .then_some(raw.item_result);
+    let sample = item.is_some_and(|hr| hr >= 0) && outcome.available & READ_SAMPLE != 0;
+    let mut cause = None;
+    if outcome.adapter_result >= 0 && sample {
+        match outcome.payload {
+            Ok(payload) => match decode_with_origin((raw, payload), ValueOrigin::Read) {
+                Ok(value) => return value,
+                Err(error) => cause = Some(Box::new(error)),
+            },
+            Err(super::softing_runtime::ReadPayloadError::InvalidLength) => {
+                cause = Some(Box::new(BackendMsg::DaReadPayloadInvalid));
+            }
+        }
+    }
+    let ticks = (u64::from(raw.filetime_high) << 32) | u64::from(raw.filetime_low);
+    // The generic Bad quality code is a synthetic display sentinel. Native
+    // quality, if any, is carried only by the typed reason below.
+    let mut value = DataValue::bad(BackendMsg::DaReadFailure {
+        adapter: Some(outcome.adapter_result),
+        service,
+        item,
+        quality: sample.then_some(raw.quality),
+        filetime: sample.then_some(ticks),
+        vartype: sample.then_some(raw.vartype),
+        cause,
+    });
+    if sample {
+        value.timestamp = super::filetime::ticks_to_utc(ticks);
+    }
+    value.times = ValueTimes::da(value.timestamp, chrono::Utc::now(), ValueOrigin::Read);
+    value
+}
+
 pub fn decode(value: (ReadScalar, Option<Vec<u8>>)) -> Result<DataValue, BackendMsg> {
     decode_with_origin(value, ValueOrigin::Unknown)
 }
@@ -392,6 +431,123 @@ pub fn encode(value: &Value, hint: Option<u16>) -> Result<(u16, u64), BackendMsg
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn read_failure_keeps_only_attested_facts_and_never_reports_good() {
+        use super::super::softing_runtime::{READ_ITEM, READ_SAMPLE, READ_SERVICE, ReadOutcome};
+        let ticks = 116_444_736_010_000_000u64;
+        let raw = ReadScalar {
+            service_result: 0,
+            item_result: 0,
+            filetime_low: ticks as u32,
+            filetime_high: (ticks >> 32) as u32,
+            quality: 0xc0,
+            vartype: 0x2003,
+            ..Default::default()
+        };
+        let failed = decode_read_outcome(ReadOutcome {
+            adapter_result: -2147024774,
+            available: READ_SERVICE | READ_ITEM | READ_SAMPLE,
+            value: raw,
+            payload: Ok(None),
+        });
+        assert_eq!(failed.quality.kind, super::super::model::QualityKind::Bad);
+        assert!(failed.timestamp.is_some());
+        assert_eq!(failed.times.da_timestamp, failed.timestamp);
+        assert!(
+            matches!(failed.reason, Some(BackendMsg::DaReadFailure { adapter: Some(-2147024774), service: Some(0), item: Some(0), quality: Some(0xc0), filetime: Some(t), vartype: Some(0x2003), .. }) if t == ticks)
+        );
+        let service = decode_read_outcome(ReadOutcome {
+            adapter_result: 0,
+            available: READ_SERVICE,
+            value: ReadScalar {
+                service_result: -1,
+                ..raw
+            },
+            payload: Ok(None),
+        });
+        assert_eq!(service.quality.kind, super::super::model::QualityKind::Bad);
+        assert!(service.timestamp.is_none());
+        assert_eq!(service.times.origin, ValueOrigin::Read);
+        assert!(service.times.received_at.is_some());
+        assert!(service.times.da_timestamp.is_none());
+        assert!(matches!(
+            service.reason,
+            Some(BackendMsg::DaReadFailure {
+                service: Some(-1),
+                item: None,
+                quality: None,
+                filetime: None,
+                vartype: None,
+                ..
+            })
+        ));
+        let item = decode_read_outcome(ReadOutcome {
+            adapter_result: 0,
+            available: READ_SERVICE | READ_ITEM,
+            value: ReadScalar {
+                item_result: -1,
+                ..raw
+            },
+            payload: Ok(None),
+        });
+        assert!(matches!(
+            item.reason,
+            Some(BackendMsg::DaReadFailure {
+                service: Some(0),
+                item: Some(-1),
+                quality: None,
+                filetime: None,
+                vartype: None,
+                ..
+            })
+        ));
+        let malformed = decode_read_outcome(ReadOutcome {
+            adapter_result: 0,
+            available: READ_SERVICE | READ_ITEM | READ_SAMPLE,
+            value: raw,
+            payload: Err(super::super::softing_runtime::ReadPayloadError::InvalidLength),
+        });
+        assert!(
+            matches!(malformed.reason, Some(BackendMsg::DaReadFailure { quality: Some(0xc0), cause: Some(cause), .. }) if *cause == BackendMsg::DaReadPayloadInvalid)
+        );
+        let no_sdk = decode_read_outcome(ReadOutcome {
+            adapter_result: -2,
+            available: 0,
+            value: raw,
+            payload: Ok(None),
+        });
+        assert!(matches!(
+            no_sdk.reason,
+            Some(BackendMsg::DaReadFailure {
+                adapter: Some(-2),
+                service: None,
+                item: None,
+                quality: None,
+                filetime: None,
+                vartype: None,
+                ..
+            })
+        ));
+        let decoded = decode_read_outcome(ReadOutcome {
+            adapter_result: 0,
+            available: READ_SERVICE | READ_ITEM | READ_SAMPLE,
+            value: ReadScalar {
+                vartype: 0xffff,
+                ..raw
+            },
+            payload: Ok(None),
+        });
+        assert_eq!(decoded.quality.kind, super::super::model::QualityKind::Bad);
+        assert!(matches!(
+            decoded.reason,
+            Some(BackendMsg::DaReadFailure {
+                quality: Some(0xc0),
+                cause: Some(_),
+                ..
+            })
+        ));
+    }
+
     #[test]
     fn da_timestamp_and_origin_are_separate_from_ua_facts() {
         let ticks = 116_444_736_010_000_000u64;

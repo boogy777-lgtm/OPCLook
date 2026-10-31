@@ -12,6 +12,10 @@
 #include <mutex>
 #include <utility>
 #include <cstring>
+#include <cstddef>
+
+static_assert(sizeof(OpclDaReadOutcome) == 36, "read outcome ABI size");
+static_assert(offsetof(OpclDaReadOutcome, available) == 32, "read outcome ABI offset");
 #ifdef OPCL_DA_TESTING
 #include <cstdio>
 #include <condition_variable>
@@ -902,22 +906,28 @@ extern "C" int32_t opcl_da_test_async_callback_state(void) try {
 
 class ReadScalarTask : public SOCltTask {
 public:
-    ReadScalarTask(SODaCGroup* group, SODaCItem* item, DWORD age, OpclDaScalar* out, char* text, uint32_t capacity)
-        : SOCltTask(group), group_(group), item_(item), age_(age), out_(out), text_(text), capacity_(capacity) {}
+    ReadScalarTask(SODaCGroup* group, SODaCItem* item, DWORD age, OpclDaScalar* out, char* text, uint32_t capacity, uint32_t* available)
+        : SOCltTask(group), group_(group), item_(item), age_(age), out_(out), text_(text), capacity_(capacity), available_(available) {}
     void execute() override try {
         SODaCItem* items[] = {item_}; SOCmnVariant value; SOCmnDateTime time;
         WORD quality = 0; HRESULT item_result = E_FAIL;
         const HRESULT service = group_->syncRead(1, items, age_, &value, &quality, &time, &item_result);
-        FILETIME ft{}; time.get(&ft);
-        out_->service_result = service; out_->item_result = item_result;
-        out_->filetime_low = ft.dwLowDateTime; out_->filetime_high = ft.dwHighDateTime;
-        out_->quality = quality; out_->vartype = value.vt;
+        out_->service_result = service;
+        if (available_) *available_ |= OPCL_DA_READ_SERVICE;
+        if (SUCCEEDED(service)) {
+            out_->item_result = item_result;
+            if (available_) *available_ |= OPCL_DA_READ_ITEM;
+        }
         if (SUCCEEDED(service) && SUCCEEDED(item_result)) {
+            FILETIME ft{}; time.get(&ft);
+            out_->filetime_low = ft.dwLowDateTime; out_->filetime_high = ft.dwHighDateTime;
+            out_->quality = quality; out_->vartype = value.vt;
+            if (available_) *available_ |= OPCL_DA_READ_SAMPLE;
             setResult(copy_sdk_value(value, out_, text_, capacity_));
         } else setResult(S_OK);
     } catch (...) { setResult(E_UNEXPECTED); }
 private:
-    SODaCGroup* group_; SODaCItem* item_; DWORD age_; OpclDaScalar* out_; char* text_; uint32_t capacity_;
+    SODaCGroup* group_; SODaCItem* item_; DWORD age_; OpclDaScalar* out_; char* text_; uint32_t capacity_; uint32_t* available_;
 };
 class WriteScalarTask : public SOCltTask {
 public:
@@ -944,9 +954,17 @@ private:
 extern "C" int32_t opcl_da_read_scalar(OpclDaSession* s, OpclDaItem* item, uint32_t max_age,
                                         OpclDaScalar* out, char* text, uint32_t text_capacity) try {
     if (!out) return E_INVALIDARG;
-    *out = {}; out->service_result = E_FAIL; out->item_result = E_FAIL;
+    OpclDaReadOutcome facts{};
+    const HRESULT hr = opcl_da_read_scalar_facts(s, item, max_age, &facts, text, text_capacity);
+    *out = facts.value;
+    return hr;
+} catch (...) { return E_UNEXPECTED; }
+extern "C" int32_t opcl_da_read_scalar_facts(OpclDaSession* s, OpclDaItem* item, uint32_t max_age,
+                                              OpclDaReadOutcome* out, char* text, uint32_t text_capacity) try {
+    if (!out) return E_INVALIDARG;
+    *out = {}; out->value.service_result = E_FAIL; out->value.item_result = E_FAIL;
     if (!owns(s, item)) return E_INVALIDARG;
-    ReadScalarTask* task = new (std::nothrow) ReadScalarTask(s->group, item->sdk, max_age, out, text, text_capacity);
+    ReadScalarTask* task = new (std::nothrow) ReadScalarTask(s->group, item->sdk, max_age, &out->value, text, text_capacity, &out->available);
     if (!task) return E_OUTOFMEMORY;
     const HRESULT hr = s->group->executeTask(task); task->release(); return hr;
 } catch (...) { return E_UNEXPECTED; }

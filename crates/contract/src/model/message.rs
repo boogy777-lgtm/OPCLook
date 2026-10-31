@@ -276,6 +276,17 @@ pub enum BackendMsg {
         server: Option<DaServerStatus>,
     },
     // ---- DA value conversion ----
+    /// Adapter outcome plus independently available native DA read facts.
+    DaReadFailure {
+        adapter: Option<i32>,
+        service: Option<i32>,
+        item: Option<i32>,
+        quality: Option<u16>,
+        filetime: Option<u64>,
+        vartype: Option<u16>,
+        cause: Option<Box<BackendMsg>>,
+    },
+    DaReadPayloadInvalid,
     DaDateRequired,
     DaBadDate,
     DaVtUnsupported {

@@ -76,3 +76,10 @@ other values fail. After `start()` succeeds, the fixture explicitly sets the SDK
 server state to Running before signaling readiness, matching the control tag.
 The SDK setter marks the state as manually set; this fixture behavior makes no
 claim about the startup state or Failed response of other DA servers.
+
+`Fixture.LargeInts` is a valid SDK I4 array with 257 elements. The native
+adapter intentionally limits array conversion to 256 elements. The strict
+`sdk_read_failure_facts_live` test checks that this codec failure retains only
+the SDK service/item HRESULTs, quality and timestamp actually returned by the
+read; the resulting value remains Bad. This fixture is local and its Windows
+interop result must be measured separately.

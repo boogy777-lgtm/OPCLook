@@ -553,6 +553,7 @@ mod tests {
         release: Mutex<Option<Receiver<()>>>,
         /// Sessions whose teardown ran (RemoveGroup stand-in).
         torn_down: Mutex<Vec<SessionId>>,
+        explicit_reads: std::sync::atomic::AtomicUsize,
         /// Discovery with this host name waits for `release_discovery`.
         release_discovery: Mutex<Option<Receiver<()>>>,
     }
@@ -565,6 +566,7 @@ mod tests {
                 Arc::new(Self {
                     release: Mutex::new(Some(release_rx)),
                     torn_down: Mutex::new(Vec::new()),
+                    explicit_reads: std::sync::atomic::AtomicUsize::new(0),
                     release_discovery: Mutex::new(Some(disc_rx)),
                 }),
                 release_tx,
@@ -593,6 +595,13 @@ mod tests {
             let mut connected = false;
             while let Some(cmd) = commands.blocking_recv() {
                 let (request_id, sid) = (cmd.request_id, cmd.owner);
+                if matches!(
+                    &cmd.kind,
+                    CommandKind::ReadFresh { .. } | CommandKind::ReadCached { .. }
+                ) {
+                    self.explicit_reads
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
                 let reply = |kind| {
                     let _ = events.send(Event {
                         origin: request_id.into(),
@@ -709,6 +718,43 @@ mod tests {
     }
     fn is_kind(event: &Event, request_id: u64) -> bool {
         event_id(event) == request_id
+    }
+
+    #[cfg(not(feature = "native-da-preview"))]
+    #[test]
+    fn legacy_rejects_explicit_reads_before_session_dispatch() {
+        let (host, _r, _d) = MockHost::new();
+        let (mut router, rx) = router_with(host.clone());
+        router.dispatch(connect(1, sid(1), "ok"));
+        assert!(matches!(next(&rx).kind, EventKind::Connected { .. }));
+        for (id, kind) in [
+            (
+                2,
+                CommandKind::ReadFresh {
+                    keys: vec![ItemKey::FIRST],
+                },
+            ),
+            (
+                3,
+                CommandKind::ReadCached {
+                    keys: vec![ItemKey::FIRST],
+                    max_age_ms: 1,
+                },
+            ),
+        ] {
+            router.dispatch(command(id, sid(1).into(), kind));
+            let event = next(&rx);
+            assert!(is_kind(&event, id));
+            assert!(
+                matches!(event.kind, EventKind::Error { operation: Operation::Read, message: BackendMsg::Raw(ref text) } if text == "Explicit cache/device read is not supported by the legacy DA adapter")
+            );
+        }
+        assert_eq!(
+            host.explicit_reads
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        assert!(!router.shutdown(WAIT).panicked);
     }
 
     #[test]
