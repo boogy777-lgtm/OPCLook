@@ -1,5 +1,27 @@
 ## 2026-10-30 — R2.ROUTE/R2.REUSE: источники OPC Foundation и вход LLM
 
+## 2026-10-31 — 08a105d: App2/COM2/source2 success; test-stand repairs
+
+Exact head 08a105da5794b15cd277af84b76d858abbebe6d5 completed all9jobs:6success,
+3failure. App Linux/Windows41162662263 and both COM matrix41162662199 passed.
+Actual SDK async I4 callback fixture PASS in both variants, followed by strict
+cleanup; actual LargeInts SDK success plus bounded codec failure retained typed
+HRESULT/quality/FILETIME/VT in both variants (1/1 each). Production Async stays
+unsupported: submit/lifetime/full shapes are separate gates. Source probes2
+passed. Both core jobs compiled/passed C++ before failing the isolated Rust ABI
+stand: new test referenced backend-only model/scalar modules. Runtime FFI test
+now asserts raw facts independently; mapper regression remains in scalar tests.
+Locally reproduced two E0433 before; rust-stand5/5 and mapper1/1 passed after.
+
+Package stopped before building at a test fixture that created LICENSE/license
+as distinct physical files. Windows overwrites one. The repaired fixture uses
+one real file and controlled duplicate-name enumeration; production collector
+and ambiguity guard unchanged. Windows-like baseline failed; repaired collector
+13/13, Windows-like2/2, packager8/8 passed, disabled guard still fails.
+These are narrow test repairs; new exact-head CI pending. The prior adbd315
+package/read/cleanup result is not a claim that 08 packaged the new notices.
+
+
 ## 2026-10-31 — опубликованный baseline9/9; следующий пакет R2/N2/N1
 
 `adbd315` прошёл все9jobs, включая реальный запуск упакованного x86 CLI и
