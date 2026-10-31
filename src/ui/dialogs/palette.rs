@@ -40,7 +40,7 @@ pub(super) fn palette_dialog(app: &mut App, ui: &mut egui::Ui) {
             super::dialog_spacing(ui);
             let search = ui.add(egui::TextEdit::singleline(&mut app.dialogs.palette.query)
                 .id_salt("palette_search").char_limit(256).desired_width(f32::INFINITY)
-                .hint_text(tr(lang, Tr::PaletteSearch)));
+                .hint_text(tr(lang, Tr::PaletteSearch))).accessible_name(tr(lang, Tr::PaletteSearch));
             if opening { search.request_focus(); app.dialogs.palette.focus_pending = false; }
             let filtered: Vec<&ActionSpec> = CATALOG.iter().filter(|spec| matches_query(spec, tr(lang, label(spec.id)), &app.dialogs.palette.query)).collect();
             if !filtered.iter().any(|spec| Some(spec.id) == app.dialogs.palette.selected) {
@@ -55,7 +55,7 @@ pub(super) fn palette_dialog(app: &mut App, ui: &mut egui::Ui) {
             if app.dialogs.palette.selected == Some(ActionId::Browse) {
                 ui.label(tr(lang, Tr::PaletteBrowseNode));
                 let node = ui.add(egui::TextEdit::singleline(&mut app.dialogs.palette.browse_node)
-                    .id_salt("palette_browse_node").hint_text(tr(lang, Tr::HintItemId)).char_limit(4096).desired_width(f32::INFINITY));
+                    .id_salt("palette_browse_node").hint_text(tr(lang, Tr::HintItemId)).char_limit(4096).desired_width(f32::INFINITY)).accessible_name(tr(lang, Tr::PaletteBrowseNode));
                 browse_focus = node.has_focus() || (node.lost_focus() && ui.memory(|m| m.focused().is_none()));
             }
             if !crate::ui::ime_blocks_keys(&ctx) && !opening {

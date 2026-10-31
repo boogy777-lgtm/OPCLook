@@ -8266,7 +8266,7 @@ fn p4_keyboard_palette_typed_browse_and_unknown_result() {
     h.event(egui::Event::Text("2001".into()));
     h.run_steps(3);
     assert!(h.state().dispatched_for_test().is_empty());
-    h.get_by_label("OPC DA item id или OPC UA NodeId").focus();
+    h.get_by_label("NodeId ветки (пусто — корень)").focus();
     h.run_steps(1);
     h.event(egui::Event::Text("ns=2;s=Unknown".into()));
     h.run_steps(2);
@@ -8305,6 +8305,30 @@ fn p4_keyboard_palette_typed_browse_and_unknown_result() {
 }
 
 #[test]
+fn p4_browse_parameter_has_a_localized_accessible_name() {
+    use opclook::i18n::{Lang, Tr, tr};
+    for lang in [Lang::Ru, Lang::En, Lang::Zh] {
+        let mut app = App::new_test(&egui::Context::default());
+        app.settings.set_lang(lang);
+        app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+        app.open_command_palette();
+        app.dialogs.palette.query = "2001".into();
+        let mut h = Harness::builder()
+            .with_size([1200.0, 900.0])
+            .with_max_steps(60)
+            .with_accessibility_check(false)
+            .allow_missing_glyphs()
+            .build_ui_state(|ui, app| opclook::ui::draw(app, ui), app);
+        h.run_steps(4);
+        let node = h.get_by_label(tr(lang, Tr::PaletteBrowseNode));
+        assert_eq!(
+            node.accesskit_node().role(),
+            egui::accesskit::Role::TextInput
+        );
+    }
+}
+
+#[test]
 fn p4_palette_write_reuses_typed_dialog_and_confirmation() {
     let mut app = App::new_test(&egui::Context::default());
     let key = seed_writable_table(&mut app, &[("a", "SigA", 42)])[0];
@@ -8324,7 +8348,8 @@ fn p4_palette_write_reuses_typed_dialog_and_confirmation() {
     h.event(egui::Event::Text("77".into()));
     h.run_steps(2);
     h.key_press(Key::Enter);
-    h.run_steps(2);
+    // The dialog-region handoff deliberately waits for a clean input frame.
+    h.run_steps(4);
     assert!(h.state().dialogs.confirm.is_some());
     assert!(h.state().dispatched_for_test().is_empty());
     h.get_by_label("Да").click();
@@ -8349,6 +8374,17 @@ fn p4_palette_keyboard_refuses_repeat_ime_and_modal() {
             }));
         }
         if mode == 0 {
+            // egui derives repeat from held-key state, ignoring the incoming
+            // repeat bit. Hold an unmodified P first; then send its repeat.
+            h.event(egui::Event::Key {
+                key: Key::P,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            });
+            h.run_steps(1);
+            assert!(!h.state().dialogs.palette.open, "initial unmodified P");
             h.event(egui::Event::Key {
                 key: Key::P,
                 physical_key: None,
@@ -8360,7 +8396,10 @@ fn p4_palette_keyboard_refuses_repeat_ime_and_modal() {
             h.key_press_modifiers(Modifiers::COMMAND, Key::P);
         }
         h.run_steps(2);
-        assert!(!h.state().dialogs.palette.open);
+        assert!(
+            !h.state().dialogs.palette.open,
+            "unexpected palette open in mode {mode} (0=held repeat, 1=IME, 2=modal)"
+        );
     }
 }
 
