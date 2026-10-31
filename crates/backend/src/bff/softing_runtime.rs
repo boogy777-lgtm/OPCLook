@@ -186,6 +186,16 @@ unsafe extern "C" {
         revised_rate_ms: *mut u32,
         out: *mut *mut c_void,
     ) -> i32;
+    #[cfg(feature = "native-da-test-hooks")]
+    fn opcl_da_test_async_version_open(
+        host: *mut c_void,
+        name: *const c_char,
+        node: *const c_char,
+        clsid: *const Guid,
+        version: u32,
+        revised: *mut u32,
+        out: *mut *mut c_void,
+    ) -> i32;
     fn opcl_da_session_close(session: *mut c_void) -> i32;
     fn opcl_da_server_status(session: *mut c_void, state: *mut i32) -> i32;
     fn opcl_da_item_add(
@@ -479,6 +489,39 @@ impl SharedHost {
     pub fn open(&self, name: &str, node: &str, clsid: &Guid) -> Result<Session, Error> {
         self.open_config(name, node, clsid, false, 1000)
             .map(|(session, _)| session)
+    }
+    #[cfg(feature = "native-da-test-hooks")]
+    pub fn open_async_version(
+        &self,
+        name: &str,
+        node: &str,
+        clsid: &Guid,
+        version: u32,
+    ) -> Result<Session, Error> {
+        let name = string(name)?;
+        let node = string(node)?;
+        let mut ptr = std::ptr::null_mut();
+        let mut revised = 0;
+        // SAFETY: host, input strings and output pointers remain live throughout the call.
+        check(unsafe {
+            opcl_da_test_async_version_open(
+                self.core.ptr.as_ptr(),
+                name.as_ptr(),
+                node.as_ptr(),
+                clsid,
+                version,
+                &mut revised,
+                &mut ptr,
+            )
+        })?;
+        Ok(Session {
+            ptr: NonNull::new(ptr).ok_or(Error::NullHandle)?,
+            _host: self.clone(),
+            items: HashMap::new(),
+            push_buffer: vec![0; 65_536],
+            closed: false,
+            _thread: PhantomData,
+        })
     }
     pub fn open_config(
         &self,
@@ -1151,6 +1194,20 @@ mod tests {
                 .insert(session as usize, test_state);
         };
         0
+    }
+    #[cfg(feature = "native-da-test-hooks")]
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn opcl_da_test_async_version_open(
+        host: *mut c_void,
+        name: *const c_char,
+        node: *const c_char,
+        guid: *const Guid,
+        _: u32,
+        revised: *mut u32,
+        out: *mut *mut c_void,
+    ) -> i32 {
+        // SAFETY: the caller supplies the same valid pointers as the ordinary open mock.
+        unsafe { opcl_da_session_open(host, name, node, guid, 1, 1000, 100000, revised, out) }
     }
     #[unsafe(no_mangle)]
     unsafe extern "C" fn opcl_da_session_close(session: *mut c_void) -> i32 {

@@ -228,6 +228,56 @@ impl TestManagerAsyncLease {
             .map_err(|e| format!("item add: {e:?}"))?;
         Ok(Self { lease, key })
     }
+    pub fn open_fixture_version(version: u32) -> Result<Self, String> {
+        use super::softing_runtime::TestAsyncSessionLease;
+        let host = acquire_host()?;
+        let guid = Guid {
+            data1: 0x7d4bd1b1,
+            data2: 0x7422,
+            data3: 0x48c0,
+            data4: [0xad, 0x58, 0x60, 0x1b, 0x70, 0x14, 0x49, 0xc6],
+        };
+        let session = host
+            .open_async_version("OPCLook.NativeDaFixture.1", "localhost", &guid, version)
+            .map_err(|e| format!("version open: {e:?}"))?;
+        drop(host);
+        let mut lease = TestAsyncSessionLease::new(session);
+        lease
+            .prepare()
+            .map_err(|e| format!("async prepare: {e:?}"))?;
+        let (key, _, _) = lease
+            .session_mut()
+            .ok_or("missing session")?
+            .add("Fixture.AsyncRoute")
+            .map_err(|e| format!("item add: {e:?}"))?;
+        Ok(Self { lease, key })
+    }
+    pub fn route_counts(&mut self) -> Result<(i32, i32), String> {
+        let session = self.lease.session_mut().ok_or("missing session")?;
+        let mut counts = [0; 2];
+        for (slot, id) in counts.iter_mut().zip([
+            "Fixture.AsyncDeviceKindCount",
+            "Fixture.AsyncMaxAgeKindCount",
+        ]) {
+            let (key, _, _) = session.add(id).map_err(|e| format!("counter add: {e:?}"))?;
+            let raw = session
+                .read_i4(key, u32::MAX)
+                .map_err(|e| format!("counter read: {e:?}"))?;
+            if raw.service_result < 0
+                || raw.item_result < 0
+                || raw.vartype != 3
+                || raw.quality & 0xc0 != 0xc0
+            {
+                return Err(format!("counter result: {raw:?}"));
+            }
+            *slot = raw.value;
+            session
+                .remove(key)
+                .map_err(|e| format!("counter remove: {e:?}"))?;
+        }
+        let [device, max_age] = counts;
+        Ok((device, max_age))
+    }
     pub fn read(&mut self, timeout_ms: u32) -> Result<i32, String> {
         self.lease
             .read(self.key, 0, timeout_ms)
