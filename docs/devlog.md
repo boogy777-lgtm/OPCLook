@@ -1,3 +1,29 @@
+## 2026-10-31 — пара30: UA Read limits и native Async failure facts
+
+Последний опубликованный9ba4db1 прошёл все workflow. Новый production UA Read
+loop использует SDK MaxNodesPerRead и существующее bounded chunking; только
+whole-service BadTooManyOperations делит запрос пополам, singleton завершает
+ошибкой. Порядок, per-item status, max_age/timestamps и scoped revision checks
+сохранены; timeout помечает сессию непригодной для дальнейшего I/O.
+Original Gateway Read5 при server limit3 дал пять ошибок; исправленные O18/O19
+live tests прошли, включая seeded stale chunk5→2 и BadNodeIdUnknown в позиции.
+Root full backend:268passed/0failed/1knownignored за394.32с; native/mock54/54 и
+source guards прошли. [Scope и пределы](testing/ua-read-limits-proof.md).
+Это не полная проверка namespace/timeout/cardinality/reconnect или SDK type-loader.
+
+[Test-only native Async facts](testing/native-sdk/async-facts.md) измеряет Good,
+Uncertain, Bad samples и ReadDenied через существующий SDK slot/decoder.
+Read-only snapshot отличает attempted/returned/item-known/matching callback,
+не создавая нового owner. Synthetic display quality на failure не server fact.
+Local54/54 и source checks прошли; новый i686 live gate включён в оба COM inputs,
+actual execution/cleanup pending нового head. Production Async Unsupported.
+
+SDK readiness/drain Engine research остаётся pinned к историческим source
+receipts:9ba4db1 действительно matches WORK_BLOBS, текущие UA files уже другие.
+Новые hashes не подставлялись; перенос требует отдельной приёмки. SDK ACK unit
+candidate и остальные исторические измерения не становятся production adoption.
+N4, namespace, remote/physical Windows/legal и иные открытые гейты сохранены.
+
 ## 2026-10-31 — пара29: DA2/DA3 routes и SDK Publish ACK results
 
 Exact code `22a134866bdad3dfdc487156cb9613ba74c2238f` прошёл9/9:

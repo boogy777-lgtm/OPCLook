@@ -8,6 +8,13 @@ sample-server patch fixes the previously documented closed-Publish fixture bug.
 The runner verifies source receipts and copies both SDKs. It applies the Engine
 and adapter changes only to a clean disposable linked worktree.
 
+**Application source baseline:** use a clean linked worktree from
+`9ba4db1cfab32b1c6648c9392ef9b4e07af63997`; parent verified that all WORK_BLOBS
+match it. The later O18/O19 production Read-loop change modifies four of these
+receipts. This historical Engine proof has not been ported to that change.
+Keep the guarded hashes; do not replace them without applying/reviewing the
+adapter overlay on the new source and rerunning its acceptance.
+
 The SDK prototype pauses its existing subscription stream while it runs bounded
 replay followed by at most 64 sequential SDK Publish calls with a five-second
 deadline. It accepts this drain only with exactly one SDK subscription. The

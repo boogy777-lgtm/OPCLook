@@ -215,3 +215,16 @@ Forced/selected versions512/768 and inactive group were observed; for ages
 MAX/0/1234 the total/cache/device deltas were DA2:1/1/0,1/0/1,1/0/1 and
 DA3:1/0/0 each. All9 jobs for22a passed.
 This is Sync route evidence, not Async version/cancellation admission or N4.
+
+
+### Prepared Async error/quality facts (pair30)
+
+[Async facts probe](async-facts.md) reuses the SDK task/slot/lease and decoder.
+Ordinary fixture Good/Uncertain/Bad samples preserve value, raw quality and time;
+ReadDenied must retain available service/item failure without inventing sample
+quality/FILETIME/VT. A read-only same-mutex snapshot separates call attempt,
+SDK return, known submit-item status and matched callback. It is test-only and
+not a production outcome contract. Root runtime/mock54/54 and source guards,
+including the task/destructor guard, passed. Actual i686 execution, ABI and
+strict cleanup of the new fixture are pending both COM inputs. No Async method,
+cancellation, network failure, DA1 or remote acceptance follows from it.

@@ -91,3 +91,23 @@ change, extras, symlinks, path overlap and log preservation guards passed. These
 are in-process SDK response tests with synthetic opaque callback data, not wire
 decoder/live server/Windows/GUI or production adoption. Namespace, multiple
 subscriptions, transfer/secure interleavings and final candidate adoption remain open.
+
+
+## Production adapter Read operation limits (pair30)
+
+[O18/O19 proof](ua-read-limits-proof.md) records the original failing normal
+Gateway Read and the bounded fix using stock SDK Read calls. Positive advertised
+limit is capped locally; absent/zero metadata has a nonzero fallback, and only
+whole-service size rejection halves the actual failed slice. The ordinary live
+server tests cover max3/five keys and deliberately stale cached5→2 with a
+per-item error in position. Parent Linux backend268/0/1knownignored passed.
+This is not a dedicated cap-timeout/cardinality/reconnect or SDK type-loader
+proof. Scoped fences are retained; existing unscoped metadata fallback is not
+promoted to an identity guarantee. Windows new-head acceptance is pending.
+
+The earlier readiness/drain Engine overlays still require historical source
+receipts. Parent static verification found all final drain WORK_BLOBS match
+9ba4db1, while the new Read implementation changes core, connection, session
+state and live-test blobs. Keep those historical proofs reproducible on frozen
+9ba. Combining this production adapter change with that experimental handoff
+requires an actual port and fresh SDK/Engine acceptance; no hash-only update.

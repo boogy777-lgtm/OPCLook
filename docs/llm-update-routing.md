@@ -22,6 +22,11 @@ namespace fix или production Async. Не восстанавливать эт�
 оба COM inputs на22a; [ACK results](testing/ua-sdk-ack-results-audit.md)
 — SDK-owned bounded observations с unit/source proof, не production pin change.
 ACK-specific uncertainty не заменяет recovery history flag или App events.
+Пара30: [O18/O19 Read limits](testing/ua-read-limits-proof.md) использует SDK Read
+и bounded adapter split; [Async facts](testing/native-sdk/async-facts.md) — новый
+test-only fixture (Win pending), production Async не включён. Historical SDK
+drain Engine stand требует frozen9ba receipts, не текущий изменённый Read-loop.
+
 
 
 Полностью принятый runtime: `690a830` (8/8 jobs). На `cb3da7d` SDK4/COM2
