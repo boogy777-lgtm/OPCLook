@@ -31,9 +31,9 @@ static const CLSID fixture_clsid = {0x7d4bd1b1, 0x7422, 0x48c0, {0xad, 0x58, 0x6
 // SDK complete() performs cache updates and OPC request completion.
 class FixtureTag : public SODaSTagDefault {
 public:
-    FixtureTag(LPCTSTR name, VARTYPE type, bool delayed = false, bool state = false, bool counted = false, bool count_reads = false, bool read_only = false, HRESULT read_result = S_OK) : SODaSTagDefault(name), delayed_(delayed), state_(state), counted_(counted), count_reads_(count_reads), read_result_(read_result) {
+    FixtureTag(LPCTSTR name, VARTYPE type, bool delayed = false, bool state = false, bool counted = false, bool count_reads = false, bool read_only = false, HRESULT read_result = S_OK, bool write_only = false) : SODaSTagDefault(name), delayed_(delayed), state_(state), counted_(counted), count_reads_(count_reads), read_result_(read_result) {
         setNativeDatatype(type);
-        setAccessRights(read_only ? OPC_READABLE : OPC_READABLE | OPC_WRITEABLE);
+        setAccessRights(write_only ? OPC_WRITEABLE : (read_only ? OPC_READABLE : OPC_READABLE | OPC_WRITEABLE));
         setDeviceIOMode(SODaSItemTag::direct);
     }
     void handleRequest(SODaSRequest* request) override {
@@ -159,8 +159,8 @@ public:
 
 static bool add_tag(SODaSNode* node, LPCTSTR name, SOCmnVariant& value, bool delayed = false, bool state = false, bool counted = false,
                     SOCmnPointer<SODaSCache>* saved_cache = nullptr, bool count_reads = false, bool read_only = false,
-                    WORD quality = OPC_QUALITY_GOOD, HRESULT read_result = S_OK) {
-    SOCmnPointer<SODaSTag> tag = new FixtureTag(name, value.vt, delayed, state, counted, count_reads, read_only, read_result);
+                    WORD quality = OPC_QUALITY_GOOD, HRESULT read_result = S_OK, bool write_only = false) {
+    SOCmnPointer<SODaSTag> tag = new FixtureTag(name, value.vt, delayed, state, counted, count_reads, read_only, read_result, write_only);
     if (!node->addLeaf(tag)) return false;
     SOCmnPointer<SODaSCache> cache = tag->getCache();
     if (saved_cache) *saved_cache = cache;
@@ -281,6 +281,8 @@ static int run(int argc, char** argv) {
             value.setI4(42);
             tags = add_tag(node, _T("DeviceValue"), value, false, false, false, nullptr, true) && tags;
             tags = add_tag(node, _T("ReadDenied"), value, false, false, false, nullptr, false, false, OPC_QUALITY_GOOD, E_ACCESSDENIED) && tags;
+            // Ordinary server access rights cause SDK transaction admission to reject the read.
+            tags = add_tag(node, _T("WriteOnly"), value, false, false, false, nullptr, false, false, OPC_QUALITY_GOOD, S_OK, true) && tags;
             value.setI4(51);
             tags = add_tag(node, _T("ReadUncertain"), value, false, false, false, nullptr, false, false, OPC_QUALITY_UNCERTAIN) && tags;
             value.setI4(52);
