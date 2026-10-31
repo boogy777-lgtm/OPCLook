@@ -350,6 +350,9 @@ fn send(
 }
 fn dispatch_error(error: DispatchError) -> String {
     match error {
+        DispatchError::InvalidActionPayload(reason) => {
+            format!("action payload exceeds limits: {reason:?}")
+        }
         DispatchError::InvalidAcquisition(error) => format!("invalid acquisition: {error:?}"),
         DispatchError::Exhausted => "request identifiers exhausted".into(),
         DispatchError::ReadBusy => {
@@ -955,7 +958,11 @@ fn parse_write(kind: &str, value: &str) -> Result<Value, String> {
             .parse()
             .map(Value::F64)
             .map_err(|_| "invalid f64".into()),
-        "string" => Ok(Value::Str(value.to_owned())),
+        "string" => {
+            opclook_contract::actions::validate_action_text(value)
+                .map_err(|reason| format!("action payload exceeds limits: {reason:?}"))?;
+            Ok(Value::Str(value.to_owned()))
+        }
         _ => Err("unsupported write type".into()),
     }
 }
@@ -1384,6 +1391,24 @@ fn main() {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn write_text_budget_is_checked_before_copy_and_keeps_type_errors() {
+        use super::*;
+        let too_large = "x".repeat(opclook_contract::actions::ACTION_MAX_BYTES + 1);
+        assert_eq!(
+            parse_write("unknown", &too_large).unwrap_err(),
+            "unsupported write type"
+        );
+        assert!(
+            parse_write("string", &too_large)
+                .unwrap_err()
+                .contains("Bytes")
+        );
+        let boundary = "я".repeat(opclook_contract::actions::ACTION_MAX_BYTES / 2);
+        assert!(
+            matches!(parse_write("string", &boundary), Ok(Value::Str(value)) if value == boundary)
+        );
+    }
     #[test]
     fn json_preserves_separate_time_facts_and_origin() {
         use super::*;

@@ -317,6 +317,7 @@ pub enum Due {
 }
 #[derive(Debug)]
 pub enum DispatchError {
+    InvalidActionPayload(opclook_contract::actions::ActionPayloadError),
     InvalidAcquisition(AcquisitionError),
     Exhausted,
     ReadBusy,
@@ -1208,6 +1209,17 @@ impl<C> Engine<C> {
             }
             return Err(DispatchError::Exhausted);
         };
+        match &kind {
+            CommandKind::Browse {
+                node_id, view_id, ..
+            } => opclook_contract::actions::validate_browse_payload(node_id, view_id.as_deref())
+                .map_err(DispatchError::InvalidActionPayload)?,
+            CommandKind::Write { request } => {
+                opclook_contract::actions::validate_write_payload(&request.value)
+                    .map_err(DispatchError::InvalidActionPayload)?
+            }
+            _ => {}
+        }
         if let CommandKind::Read { keys } = &kind {
             if keys.is_empty() {
                 return Err(DispatchError::ReadEmpty);
@@ -3861,6 +3873,102 @@ mod tests {
         );
         let batch = buffer.lock().unwrap().drain();
         assert!(batch.latest.iter().any(|entry| matches!(&entry.terminal.status, ReadTerminalStatus::ReceivedMetadata { times, .. } if times.origin == ValueOrigin::Read && times.source_clock == Some(SourceClockId(42)))));
+    }
+
+    #[test]
+    fn action_payload_limits_follow_availability_and_never_dispatch() {
+        use opclook_contract::actions::{ACTION_MAX_BYTES, ActionPayloadError, DomainAction};
+        use opclook_contract::model::{NodeClassFilter, Value, WriteRequest};
+        let mut engine = Engine::<()>::default();
+        engine.test_skip_dispatch = true;
+        let make_write = || WriteRequest {
+            key: key(1),
+            value: Value::Str("x".repeat(ACTION_MAX_BYTES + 1)),
+            type_hint: None,
+        };
+        let action = || DomainAction::Write {
+            session: sid(1),
+            protocol: Protocol::OpcUa,
+            request: make_write(),
+        };
+        let oversized_browse = || DomainAction::Browse {
+            session: sid(1),
+            protocol: Protocol::OpcUa,
+            node_id: "x".repeat(ACTION_MAX_BYTES),
+            filter: NodeClassFilter::All,
+            view_id: Some("y".into()),
+        };
+        assert!(matches!(
+            engine.execute_action(action(), ()),
+            Err(DispatchError::ActionUnavailable(
+                ActionUnavailable::SessionMissing
+            ))
+        ));
+        assert!(matches!(
+            engine.execute_action(oversized_browse(), ()),
+            Err(DispatchError::ActionUnavailable(
+                ActionUnavailable::SessionMissing
+            ))
+        ));
+        let mut view =
+            SessionRuntime::new(EndpointSpec::ua("opc.tcp://localhost:4840"), Instant::now());
+        engine.sessions.insert(sid(1), view.clone());
+        assert!(matches!(
+            engine.execute_action(action(), ()),
+            Err(DispatchError::ActionUnavailable(
+                ActionUnavailable::SessionNotConnected
+            ))
+        ));
+        view.state = SessionState::Connected;
+        view.connection_id = Some(rid(77));
+        engine.sessions.insert(sid(1), view);
+        assert!(matches!(
+            engine.send_write_with_readback(sid(1), Protocol::OpcUa, make_write(), ()),
+            Err(DemandWriteError::Demand(DemandError::ItemNotRegistered))
+        ));
+        engine
+            .sessions
+            .get_mut(&sid(1))
+            .unwrap()
+            .items
+            .insert(key(1), false);
+        assert!(matches!(
+            engine.send_write_with_readback(sid(1), Protocol::OpcUa, make_write(), ()),
+            Err(DemandWriteError::Dispatch(
+                DispatchError::InvalidActionPayload(ActionPayloadError::Bytes)
+            ))
+        ));
+        assert!(matches!(
+            engine.execute_action(action(), ()),
+            Err(DispatchError::InvalidActionPayload(
+                ActionPayloadError::Bytes
+            ))
+        ));
+        assert!(matches!(
+            engine.execute_action(oversized_browse(), ()),
+            Err(DispatchError::InvalidActionPayload(
+                ActionPayloadError::Bytes
+            ))
+        ));
+        assert_eq!(engine.next, Some(RequestId::FIRST));
+        assert!(engine.requests.is_empty());
+        assert!(engine.test_commands.borrow().is_empty());
+        let valid = DomainAction::Write {
+            session: sid(1),
+            protocol: Protocol::OpcUa,
+            request: WriteRequest {
+                key: key(1),
+                value: Value::Array(vec![Value::I64(42)]),
+                type_hint: None,
+            },
+        };
+        assert_eq!(engine.execute_action(valid, ()).unwrap(), RequestId::FIRST);
+        assert_eq!(engine.test_commands.borrow().len(), 1);
+        engine.next = None;
+        assert!(matches!(
+            engine.execute_action(action(), ()),
+            Err(DispatchError::Exhausted)
+        ));
     }
 
     #[test]
