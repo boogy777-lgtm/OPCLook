@@ -1,0 +1,23 @@
+--- a/src/session/event_loop.rs
++++ b/src/session/event_loop.rs
+@@ -306,0 +307,17 @@
++                        // Test-only barrier: make DrainAnnounce and Closed ready together.
++                        let mut test_closed = None;
++                        if announcing {
++                            if let Some(dir)=std::env::var_os("OPCLOOK_TEST_DRAIN_BARRIER") {
++                                let dir=std::path::PathBuf::from(dir);
++                                if !dir.join("done").exists() {
++                                    let _=std::fs::write(dir.join("entered"),b"entered");
++                                    let until=Instant::now()+Duration::from_secs(8);
++                                    while !dir.join("release").exists() && Instant::now()<until { std::thread::yield_now(); }
++                                    test_closed = tokio::time::timeout(Duration::from_secs(5), async {
++                                        loop { let result=state.channel.poll().await; if matches!(result, TransportPollResult::Closed(_)) { break result; } }
++                                    }).await.ok();
++                                    assert!(test_closed.is_some(), "SDK did not observe Closed");
++                                    let _=std::fs::write(dir.join("done"),b"done");
++                                }
++                            }
++                        }
+@@ -309 +326 @@
+-                            r = state.channel.poll() => {
++                            r = async { if let Some(closed)=test_closed.take() { closed } else { state.channel.poll().await } } => {

@@ -1,0 +1,250 @@
+--- a/src/session/mod.rs
++++ b/src/session/mod.rs
+@@ -199 +199,3 @@
+-fn confirm_recovery_ready(tx: &tokio::sync::watch::Sender<RecoveryReadiness>, generation: u64, now: std::time::Instant) -> bool {
++fn confirm_recovery_ready<C, H>(tx: &tokio::sync::watch::Sender<RecoveryReadiness>, generation: u64, clock: C, before_lock: H) -> bool
++where C: FnOnce() -> std::time::Instant, H: FnOnce() {
++    before_lock();
+@@ -202 +204 @@
+-        if state.generation == generation && state.phase == RecoveryReadyPhase::Waiting && now < state.deadline {
++        if state.generation == generation && state.phase == RecoveryReadyPhase::Waiting && clock() < state.deadline {
+@@ -250 +252 @@
+-        confirm_recovery_ready(&self.recovery_ready_tx, generation, std::time::Instant::now())
++        confirm_recovery_ready(&self.recovery_ready_tx, generation, std::time::Instant::now, || {})
+@@ -579,0 +582,15 @@
++    fn deadline_is_checked_after_acquiring_ready_lock() {
++        use std::sync::{Arc, atomic::{AtomicBool, Ordering}, mpsc::channel};
++        let early=std::time::Instant::now();
++        let deadline=early+std::time::Duration::from_secs(1);
++        let (tx,rx)=tokio::sync::watch::channel(RecoveryReadiness {generation:7,phase:RecoveryReadyPhase::Waiting,deadline});
++        let lock=rx.borrow();
++        let late=Arc::new(AtomicBool::new(false));let thread_late=late.clone();
++        let (entered_tx,entered_rx)=channel();
++        let thread=std::thread::spawn(move || confirm_recovery_ready(&tx,7,|| if thread_late.load(Ordering::SeqCst) {deadline} else {early},|| {entered_tx.send(()).unwrap();}));
++        entered_rx.recv().unwrap();
++        late.store(true,Ordering::SeqCst);
++        drop(lock);
++        assert!(!thread.join().unwrap(), "expired readiness must not be confirmed");
++    }
++    #[test]
+@@ -583,5 +600,5 @@
+-        assert!(!confirm_recovery_ready(&tx,6,now));
+-        assert!(!confirm_recovery_ready(&tx,8,now));
+-        assert!(!confirm_recovery_ready(&tx,7,now+std::time::Duration::from_secs(1)));
+-        assert!(confirm_recovery_ready(&tx,7,now));
+-        assert!(!confirm_recovery_ready(&tx,7,now));
++        assert!(!confirm_recovery_ready(&tx,6,|| now,|| {}));
++        assert!(!confirm_recovery_ready(&tx,8,|| now,|| {}));
++        assert!(!confirm_recovery_ready(&tx,7,|| now+std::time::Duration::from_secs(1),|| {}));
++        assert!(confirm_recovery_ready(&tx,7,|| now,|| {}));
++        assert!(!confirm_recovery_ready(&tx,7,|| now,|| {}));
+@@ -589,4 +606,4 @@
+-        assert!(!confirm_recovery_ready(&tx,7,now));
+-        assert!(confirm_recovery_ready(&tx,8,now));
+-    }
+-}
++        assert!(!confirm_recovery_ready(&tx,7,|| now,|| {}));
++        assert!(confirm_recovery_ready(&tx,8,|| now,|| {}));
++    }
++}
+--- a/src/session/event_loop.rs
++++ b/src/session/event_loop.rs
+@@ -61,0 +62,10 @@
++fn guarded_replay<F>(future: F, outcome: tokio::sync::watch::Sender<Option<RepublishRecoveryOutcome>>) -> BoxFuture<'static, RepublishRecoveryOutcome>
++where F: std::future::Future<Output=RepublishRecoveryOutcome> + Send + 'static {
++    let guard = ReplayCancellationGuard { outcome, armed: true };
++    async move {
++        let mut guard = guard;
++        let result = future.await;
++        guard.armed = false;
++        result
++    }.boxed()
++}
+@@ -68,0 +79,47 @@
++}
++
++fn recovery_wait_expired(phase: &RecoveryPhase, now: Instant) -> bool {
++    matches!(phase, RecoveryPhase::Waiting(_, _, deadline) if now >= *deadline)
++}
++fn is_confirmed(phase: &RecoveryPhase, ready: RecoveryReadiness) -> bool {
++    matches!(phase, RecoveryPhase::Waiting(generation, _, _) if *generation == ready.generation && ready.phase == RecoveryReadyPhase::Confirmed)
++}
++// Decide expiry while holding the same lock used by confirmation. A confirmed
++// generation cannot be overwritten by a timeout based on a stale snapshot.
++fn expire_waiting<C: FnOnce() -> Instant>(tx: &tokio::sync::watch::Sender<RecoveryReadiness>, generation: u64, clock: C) -> bool {
++    let mut expired = false;
++    let mut clock = Some(clock);
++    tx.send_if_modified(|ready| {
++        if ready.generation == generation && ready.phase == RecoveryReadyPhase::Waiting && clock.take().unwrap()() >= ready.deadline {
++            ready.phase = RecoveryReadyPhase::Inactive;
++            expired = true;
++            true
++        } else { false }
++    });
++    expired
++}
++fn cancel_recovery_phase(phase: &RecoveryPhase, outcome: &tokio::sync::watch::Sender<Option<RepublishRecoveryOutcome>>) {
++    if matches!(phase, RecoveryPhase::Announce(..) | RecoveryPhase::Waiting(..)) {
++        outcome.send_replace(Some(RepublishRecoveryOutcome::Cancelled));
++    }
++    // Replaying owns a drop guard and publishes cancellation once on drop.
++}
++fn advance_confirmed(phase: &mut RecoveryPhase, ready: RecoveryReadiness, session: Arc<Session>) -> bool {
++    let (generation, same_session, deadline) = match phase {
++        RecoveryPhase::Waiting(generation, same_session, deadline) if *generation == ready.generation && ready.phase == RecoveryReadyPhase::Confirmed => (*generation,*same_session,*deadline),
++        _ => return false,
++    };
++    session.recovery_ready_tx.send_replace(RecoveryReadiness { generation, phase: RecoveryReadyPhase::Inactive, deadline });
++    if same_session {
++        let outcome_tx=session.republish_outcome_tx.clone();
++        *phase=RecoveryPhase::Replaying(guarded_replay(async move {
++            match tokio::time::timeout(Duration::from_secs(5),session.recovery_republish_prototype()).await {
++                Ok(result)=>result,
++                Err(_)=>RepublishRecoveryOutcome::Deadline,
++            }
++        },outcome_tx));
++    } else {
++        *phase=RecoveryPhase::Normal;
++        session.republish_outcome_tx.send_replace(Some(RepublishRecoveryOutcome::NewSessionUnreplayed));
++    }
++    true
+@@ -213,0 +271,8 @@
++                        // Check and transition under the confirmation lock.
++                        if let RecoveryPhase::Waiting(generation, _, _) = state.recovery {
++                            if expire_waiting(&slf.inner.recovery_ready_tx, generation, Instant::now) {
++                                state.recovery = RecoveryPhase::Failed;
++                                slf.inner.republish_outcome_tx.send_replace(Some(RepublishRecoveryOutcome::ReadinessDeadline));
++                                return Ok(Some((SessionPollResult::RecoveryProgress,(slf,SessionEventLoopState::Connected(state)))));
++                            }
++                        }
+@@ -216,40 +280,0 @@
+-                            changed = slf.ready_rx.changed(), if waiting => {
+-                                if changed.is_ok() {
+-                                    let ready = *slf.ready_rx.borrow_and_update();
+-                                    if let RecoveryPhase::Waiting(generation, same_session, _) = state.recovery {
+-                                        if ready.generation == generation && ready.phase == RecoveryReadyPhase::Confirmed {
+-                                            slf.inner.recovery_ready_tx.send_replace(RecoveryReadiness { generation, phase: RecoveryReadyPhase::Inactive, deadline });
+-                                            if same_session {
+-                                                let session = slf.inner.clone();
+-                                                let outcome_tx = session.republish_outcome_tx.clone();
+-                                                state.recovery = RecoveryPhase::Replaying(async move {
+-                                                    let mut guard = ReplayCancellationGuard { outcome: outcome_tx, armed: true };
+-                                                    let result = match tokio::time::timeout(Duration::from_secs(5), session.recovery_republish_prototype()).await {
+-                                                        Ok(result) => result,
+-                                                        Err(_) => RepublishRecoveryOutcome::Deadline,
+-                                                    };
+-                                                    guard.armed = false;
+-                                                    result
+-                                                }.boxed());
+-                                            } else {
+-                                                state.recovery = RecoveryPhase::Normal;
+-                                                slf.inner.republish_outcome_tx.send_replace(Some(RepublishRecoveryOutcome::NewSessionUnreplayed));
+-                                            }
+-                                        }
+-                                    }
+-                                }
+-                                Ok((SessionPollResult::RecoveryProgress, SessionEventLoopState::Connected(state)))
+-                            }
+-                            _ = tokio::time::sleep_until(deadline.into()), if waiting => {
+-                                if let RecoveryPhase::Waiting(generation, _, _) = state.recovery {
+-                                    slf.inner.recovery_ready_tx.send_replace(RecoveryReadiness { generation, phase: RecoveryReadyPhase::Inactive, deadline });
+-                                }
+-                                state.recovery = RecoveryPhase::Failed;
+-                                slf.inner.republish_outcome_tx.send_replace(Some(RepublishRecoveryOutcome::ReadinessDeadline));
+-                                Ok((SessionPollResult::RecoveryProgress, SessionEventLoopState::Connected(state)))
+-                            }
+-                            outcome = async { match &mut state.recovery { RecoveryPhase::Replaying(future) => future.await, _ => futures::future::pending().await } }, if replaying => {
+-                                state.recovery = RecoveryPhase::Normal;
+-                                slf.inner.republish_outcome_tx.send_replace(Some(outcome));
+-                                Ok((SessionPollResult::RecoveryProgress, SessionEventLoopState::Connected(state)))
+-                            }
+@@ -261 +286 @@
+-                                        slf.inner.republish_outcome_tx.send_replace(Some(RepublishRecoveryOutcome::Cancelled));
++                                        cancel_recovery_phase(&state.recovery, &slf.inner.republish_outcome_tx);
+@@ -276,0 +302,15 @@
++                                    // A constantly-ready transport must not starve an accepted
++                                    // readiness signal or the SDK's bounded replay future.
++                                    let ready = *slf.inner.recovery_ready_tx.borrow();
++                                    advance_confirmed(&mut state.recovery, ready, slf.inner.clone());
++                                    let replay_outcome = match &mut state.recovery {
++                                        RecoveryPhase::Replaying(future) => match futures::poll!(future.as_mut()) {
++                                            std::task::Poll::Ready(result) => Some(result),
++                                            std::task::Poll::Pending => None,
++                                        },
++                                        _ => None,
++                                    };
++                                    if let Some(outcome) = replay_outcome {
++                                        state.recovery = RecoveryPhase::Normal;
++                                        slf.inner.republish_outcome_tx.send_replace(Some(outcome));
++                                    }
+@@ -281,0 +322,24 @@
++                            }
++                            changed = slf.ready_rx.changed(), if waiting => {
++                                if changed.is_ok() {
++                                    let ready = *slf.ready_rx.borrow_and_update();
++                                    advance_confirmed(&mut state.recovery, ready, slf.inner.clone());
++                                }
++                                Ok((SessionPollResult::RecoveryProgress, SessionEventLoopState::Connected(state)))
++                            }
++                            _ = tokio::time::sleep_until(deadline.into()), if waiting => {
++                                if let RecoveryPhase::Waiting(generation, _, _) = state.recovery {
++                                    if expire_waiting(&slf.inner.recovery_ready_tx, generation, Instant::now) {
++                                        state.recovery = RecoveryPhase::Failed;
++                                        slf.inner.republish_outcome_tx.send_replace(Some(RepublishRecoveryOutcome::ReadinessDeadline));
++                                    } else {
++                                        let ready = *slf.inner.recovery_ready_tx.borrow();
++                                        advance_confirmed(&mut state.recovery, ready, slf.inner.clone());
++                                    }
++                                }
++                                Ok((SessionPollResult::RecoveryProgress, SessionEventLoopState::Connected(state)))
++                            }
++                            outcome = async { match &mut state.recovery { RecoveryPhase::Replaying(future) => future.await, _ => futures::future::pending().await } }, if replaying => {
++                                state.recovery = RecoveryPhase::Normal;
++                                slf.inner.republish_outcome_tx.send_replace(Some(outcome));
++                                Ok((SessionPollResult::RecoveryProgress, SessionEventLoopState::Connected(state)))
+@@ -543,0 +608,45 @@
++    fn drop_unpolled_replay_reports_cancelled() {
++        let (tx, rx) = tokio::sync::watch::channel(None);
++        let future=guarded_replay(futures::future::pending(),tx);
++        drop(future);
++        assert_eq!(*rx.borrow(),Some(RepublishRecoveryOutcome::Cancelled));
++    }
++    #[test]
++    fn ready_transport_cannot_hide_expired_deadline() {
++        let now=Instant::now();
++        let waiting=RecoveryPhase::Waiting(1,true,now);
++        assert!(recovery_wait_expired(&waiting,now));
++        assert!(!recovery_wait_expired(&waiting,now-std::time::Duration::from_millis(1)));
++        assert!(!recovery_wait_expired(&RecoveryPhase::Failed,now));
++    }
++    #[test]
++    fn confirmed_ack_is_not_overwritten_by_stale_timeout() {
++        let deadline=Instant::now();
++        let (tx,rx)=tokio::sync::watch::channel(RecoveryReadiness {generation:7,phase:RecoveryReadyPhase::Waiting,deadline});
++        let stale=*rx.borrow();
++        assert_eq!(stale.phase,RecoveryReadyPhase::Waiting);
++        tx.send_modify(|r| r.phase=RecoveryReadyPhase::Confirmed);
++        assert!(!expire_waiting(&tx,7,|| deadline));
++        assert_eq!(rx.borrow().phase,RecoveryReadyPhase::Confirmed);
++    }
++    #[test]
++    fn replay_cancellation_publishes_once() {
++        let (tx,mut rx)=tokio::sync::watch::channel(None);
++        let phase=RecoveryPhase::Replaying(guarded_replay(futures::future::pending(),tx.clone()));
++        cancel_recovery_phase(&phase,&tx);
++        assert!(!rx.has_changed().unwrap(), "replay guard owns cancellation");
++        drop(phase);
++        assert!(rx.has_changed().unwrap());
++        assert_eq!(*rx.borrow_and_update(),Some(RepublishRecoveryOutcome::Cancelled));
++        assert!(!rx.has_changed().unwrap(), "one cancellation transition");
++    }
++    #[test]
++    fn confirmed_generation_remains_actionable_at_deadline() {
++        let deadline=Instant::now();
++        let phase=RecoveryPhase::Waiting(7,true,deadline);
++        let ready=RecoveryReadiness {generation:7,phase:RecoveryReadyPhase::Confirmed,deadline};
++        assert!(recovery_wait_expired(&phase,deadline));
++        assert!(is_confirmed(&phase,ready));
++        assert!(!is_confirmed(&phase,RecoveryReadiness {generation:8,..ready}));
++    }
++    #[test]
