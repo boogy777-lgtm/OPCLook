@@ -3,7 +3,7 @@ import importlib.util
 import hashlib
 import json
 import tarfile
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -175,17 +175,48 @@ checksum = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         self.assertEqual(valid["missing"], [])
         self.assertEqual(valid["packages"][1]["files"][0]["path"], "LICENSE")
         real_iterdir = Path.iterdir
+        # collect() resolves the manifest before scanning, so compare against
+        # the same canonical directory even if the temporary root has an alias.
+        canonical_package = (self.pkg / "Cargo.toml").resolve(strict=True).parent
+        injected = []
+
+        class CaseFoldEntry:
+            def __init__(self, name):
+                self.name = name
+
+            def __eq__(self, other):
+                return isinstance(other, CaseFoldEntry) and PureWindowsPath(self.name) == PureWindowsPath(other.name)
+
+            def __hash__(self):
+                return hash(PureWindowsPath(self.name))
+
+            def resolve(self, strict=False):
+                return (canonical_package / "LICENSE").resolve(strict=strict)
+
+        upper, lower = CaseFoldEntry("LICENSE"), CaseFoldEntry("license")
+        self.assertEqual(upper, lower)
+        self.assertEqual(hash(upper), hash(lower))
 
         def ambiguous_iterdir(path):
             entries = list(real_iterdir(path))
-            if path == self.pkg:
-                entries.append(path / "license")
+            if path == canonical_package:
+                injected.append(path)
+                entries = [entry for entry in entries if entry.name.casefold() != "license"]
+                entries.extend([upper, lower])
             return iter(entries)
 
         with patch.object(Path, "iterdir", ambiguous_iterdir):
             with self.assertRaisesRegex(ValueError, "ambiguous case-insensitive notice name"):
                 collector.collect(self.metadata, self.rows, self.workspace, self.home,
                                   self.root / "ambiguous-output")
+        self.assertEqual(injected, [canonical_package])
+
+    def test_case_collision_injection_uses_resolved_package_root(self):
+        # Exercise the spelling difference that occurs when a temporary path
+        # resolves through an alias, without requiring symlink privileges.
+        (self.pkg.parent / "alias").mkdir()
+        self.pkg = self.pkg.parent / "alias" / ".." / self.pkg.name
+        self.test_rejects_ambiguous_case_independent_of_filesystem()
 
     def test_rejects_untrusted_manifest(self):
         self.rows[1]["manifest_path"] = str(self.workspace / "cli/Cargo.toml")
