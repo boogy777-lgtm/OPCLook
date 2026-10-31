@@ -129,6 +129,8 @@ pub enum UaService {
     TranslatePath,
     Read,
     Write,
+    CreateSubscription,
+    CreateMonitoredItems,
 }
 
 /// A message of the backend (DA/UA workers, discovery, mDNS) for the user.
@@ -149,6 +151,11 @@ pub enum BackendMsg {
     UaServiceError {
         service: UaService,
         detail: String,
+    },
+    /// Client-side rejection of an operation whose SDK session scope changed.
+    /// This does not manufacture a server StatusCode.
+    UaIdentityChanged {
+        service: UaService,
     },
     DaRoute(crate::da_route::DaRouteError),
     RequestTimeout {
@@ -269,6 +276,17 @@ pub enum BackendMsg {
         server: Option<DaServerStatus>,
     },
     // ---- DA value conversion ----
+    /// Adapter outcome plus independently available native DA read facts.
+    DaReadFailure {
+        adapter: Option<i32>,
+        service: Option<i32>,
+        item: Option<i32>,
+        quality: Option<u16>,
+        filetime: Option<u64>,
+        vartype: Option<u16>,
+        cause: Option<Box<BackendMsg>>,
+    },
+    DaReadPayloadInvalid,
     DaDateRequired,
     DaBadDate,
     DaVtUnsupported {
@@ -406,6 +424,10 @@ pub enum BackendMsg {
     /// P1: count of items read by polling because the server's subscription
     /// limits are reached.
     PollOnlyItems {
+        count: usize,
+    },
+    /// Explicit subscription cannot monitor these items; no polling fallback.
+    SubscriptionItemsUnavailable {
         count: usize,
     },
     StructTypesUnavailable {

@@ -86,7 +86,11 @@ pub(super) fn ua_type_name(t: VariantScalarTypeId) -> &'static str {
 
 /// A server value as the application sees it; structures are decoded with
 /// the server's data type descriptions (V3) when they were loaded.
-pub(super) fn ua_data_value_typed(dv: &UaDataValue, types: Option<&DataTypeTree>) -> DataValue {
+pub(super) fn ua_data_value_typed(
+    dv: &UaDataValue,
+    types: Option<&DataTypeTree>,
+    origin: crate::bff::model::ValueOrigin,
+) -> DataValue {
     let status = dv.status.unwrap_or(StatusCode::Good);
     let quality = Quality::from_ua(
         status.bits(),
@@ -97,16 +101,17 @@ pub(super) fn ua_data_value_typed(dv: &UaDataValue, types: Option<&DataTypeTree>
         .as_ref()
         .map(|v| convert(v, types, 0))
         .unwrap_or(Value::Empty);
+    let times = crate::bff::model::ValueTimes::ua(
+        dv.source_timestamp.map(|dt| dt.as_chrono()),
+        dv.server_timestamp.map(|dt| dt.as_chrono()),
+        chrono::Utc::now(),
+        origin,
+    );
     DataValue {
         value,
         quality,
-        // The source timestamp is the change time. Some servers leave it
-        // null and only set the server timestamp; showing that is better than
-        // an empty «change time» column.
-        timestamp: dv
-            .source_timestamp
-            .or(dv.server_timestamp)
-            .map(|dt| dt.as_chrono()),
+        timestamp: times.primary(),
+        times,
         reason: None,
     }
 }
@@ -641,7 +646,7 @@ mod tests {
             server_timestamp: server,
             server_picoseconds: None,
         };
-        ua_data_value_typed(&dv, None)
+        ua_data_value_typed(&dv, None, crate::bff::model::ValueOrigin::Read)
     }
 
     /// A server may leave the source timestamp null and set only the server
@@ -651,6 +656,32 @@ mod tests {
         let now = opcua::types::DateTime::from(chrono::Utc::now());
         let mapped = map(None, Some(now));
         assert!(mapped.timestamp.is_some());
+    }
+
+    #[test]
+    fn ua_times_keep_source_server_received_and_do_not_invent_absent_values() {
+        use crate::bff::model::ValueOrigin;
+        let source = opcua::types::DateTime::from(chrono::Utc::now());
+        let server =
+            opcua::types::DateTime::from(chrono::Utc::now() + chrono::TimeDelta::seconds(5));
+        for (s, v) in [
+            (Some(source), Some(server)),
+            (None, Some(server)),
+            (Some(source), None),
+            (None, None),
+        ] {
+            let result = map(s, v);
+            assert_eq!(result.times.ua_source, s.map(|value| value.as_chrono()));
+            assert_eq!(result.times.ua_server, v.map(|value| value.as_chrono()));
+            assert_eq!(
+                result.timestamp,
+                result.times.ua_source.or(result.times.ua_server)
+            );
+            assert!(result.times.da_timestamp.is_none());
+            assert!(result.times.received_at.is_some());
+            assert_eq!(result.times.origin, ValueOrigin::Read);
+            assert!(result.times.source_clock.is_none());
+        }
     }
 
     #[test]

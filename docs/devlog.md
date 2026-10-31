@@ -1,4 +1,211 @@
+## 2026-10-31 — пара30: Windows deadline repair, native facts accepted locally
+
+Exact6564157 завершился8success/1failure. Оба COM inputs прошли новый Async
+facts test1/1 со strict cleanup (SDK0.07с,official-MIT0.08с): все четыре cases
+дали flags0xf, submitS_OK и admission itemS_OK; ReadDenied получил E_ACCESSDENIED
+в callback без sample quality/time/VT. Это callback failure, не измеренный
+immediate-admission rejection. В Windows backend O18/O19 тоже прошли, но один
+старый deadline test вернулOk42 вместоRequestTimeout (314passed/1failed/1ignored).
+Полный656 не считается принятым.
+
+[Deadline proof](testing/ua-deadline-proof.md): Tokio value-first polling может
+вернуть result, впервые замеченный после budget. Controlled before/fail и
+проверка elapsed послеReady исправляют контракт; завершённый future повторно
+не poll-ится, pending future по-прежнему drain-ится в bounded grace. Физическое
+время remote completion неизвестно; Windows scheduling cause не установлена.
+Root repaired backend268/0/1knownignored прошёл за77.54с; точечный regression
+прошёл, включая ZERO/MAX budgets и no-repoll guards. Новый Windows head pending.
+
+## 2026-10-31 — пара30: UA Read limits и native Async failure facts
+
+Последний опубликованный9ba4db1 прошёл все workflow. Новый production UA Read
+loop использует SDK MaxNodesPerRead и существующее bounded chunking; только
+whole-service BadTooManyOperations делит запрос пополам, singleton завершает
+ошибкой. Порядок, per-item status, max_age/timestamps и scoped revision checks
+сохранены; timeout помечает сессию непригодной для дальнейшего I/O.
+Original Gateway Read5 при server limit3 дал пять ошибок; исправленные O18/O19
+live tests прошли, включая seeded stale chunk5→2 и BadNodeIdUnknown в позиции.
+Root full backend:268passed/0failed/1knownignored за394.32с; native/mock54/54 и
+source guards прошли. [Scope и пределы](testing/ua-read-limits-proof.md).
+Это не полная проверка namespace/timeout/cardinality/reconnect или SDK type-loader.
+
+[Test-only native Async facts](testing/native-sdk/async-facts.md) измеряет Good,
+Uncertain, Bad samples и ReadDenied через существующий SDK slot/decoder.
+Read-only snapshot отличает attempted/returned/item-known/matching callback,
+не создавая нового owner. Synthetic display quality на failure не server fact.
+Local54/54 и source checks прошли; новый i686 live gate включён в оба COM inputs,
+actual execution/cleanup pending нового head. Production Async Unsupported.
+
+SDK readiness/drain Engine research остаётся pinned к историческим source
+receipts:9ba4db1 действительно matches WORK_BLOBS, текущие UA files уже другие.
+Новые hashes не подставлялись; перенос требует отдельной приёмки. SDK ACK unit
+candidate и остальные исторические измерения не становятся production adoption.
+N4, namespace, remote/physical Windows/legal и иные открытые гейты сохранены.
+
+## 2026-10-31 — пара29: DA2/DA3 routes и SDK Publish ACK results
+
+Exact code `22a134866bdad3dfdc487156cb9613ba74c2238f` прошёл9/9:
+[SDK4](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41204614557),
+[COM2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41204614566),
+[App2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41204614561),
+[package1](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41204614562).
+Оба COM inputs выполнили DA2 и DA3 probes со strict cleanup PASS: forced=selected
+512/768, group connected1/started0, sample42 и nonzero timestamp. DA2 deltas
+дляMAX/0/1234:1/1/0,1/0/1,1/0/1; DA3 —1/0/0 для каждого age.
+Это local forced SDK route proof, не числовой age на сервере или physical DA2/3.
+SDK ACK overlay отдельно принят как unit/source research, без production pin change.
+
+Последний accepted exact `06dfc796e08cd9c533458306002f78d36de3b179`
+прошёл9/9: [SDK4](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41179520507),
+[COM2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41179520461),
+[App2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41179520429),
+[package1](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41179520430).
+
+Новые test-only DA2/DA3 probes используют тот же early-force SDK open и inactive
+group, сохраняя production zero/default и DA1 ABI. DA2 проверяет Cache для
+UINT32_MAX, Device для0 и1234; DA3 — syncMaxAge request kind для всех трёх ages.
+Fixture counters измеряют вид запроса; числовой age на сервере не измерен.
+Pinned SDK fragments со stubs проверяют forwarding; root runtime/mock54/54,
+actual-source/stub route guards и before/after wrong-kind check прошли.
+Два отдельных live gate выполнились в обоих COM inputs на22a; actual Win32
+результат принят выше. [Scope](testing/native-sdk/version-routes.md); production Async Unsupported.
+
+[SDK ACK result candidate](testing/ua-sdk-ack-results-audit.md) хранит bounded
+latest summary и отдельный ACK-specific sticky flag; notifications/callback и
+more_notifications сохраняются, status retry не добавлен. Guard commit означает
+местное завершение владения, не server acceptance. Root fresh exact-source
+counterfactual упал на ожидаемой проверке; fixed3/3, existing ACK guards2/2 и
+recovery16/16 прошли. Runner аутентифицирует архив по Cargo.lock, сверяет все40
+файлов, отклоняет symlinks/лишние файлы/пересечения путей и сохраняет старый log;
+quick guards прошли. Это in-process SDK research, не wire/Windows/App acceptance.
+SDK production pin/App не меняются; getter нельзя вызывать из SDK callback
+или под backend identity lock. Namespace gate и остальные N4/external gates открыты.
+
+## 2026-10-31 — пара28: Async Gateway fixture и namespace source audit
+
+Точный code head `f787f43842756c58ab57beeb689e09ede9e7c920` прошёл9/9:
+[SDK4](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41178553269),
+[COM2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41178553338),
+[App2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41178553274),
+[package1](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41178553268).
+Новый Gateway Async fixture реально выполнен: SDK inputs1/1 за0.32с,
+official-MIT1/1 за0.33с; обе strict fixture cleanup PASS. Это принятие
+ограниченного test-only сценария, без production Async/N4 или namespace fix.
+
+Предыдущий опубликованный exact `5eb9912bdafedf81deb034e9aa49219a73224b1f`
+прошёл все9 jobs: [SDK4](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41177513731),
+[COM2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41177513818),
+[App2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41177513808),
+[package1](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41177513730).
+Это CI совместимости опубликованных research artifacts с неизменённым
+production SDK/App, не повторный запуск SDK overlay стендов. Новый Gateway
+fixture ниже требует своего следующего exact-head CI.
+
+В test-only native режиме один arm связывает owner, Connect epoch, RequestId
+и ItemKey с существующим SDK Async slot. Timeout даёт один Error/TimeoutRead;
+последующий retire — cleanup, не повторный результат. Pending Disconnect и
+закрытие канала завершают worker, сохраняя живой SDK lease в явном quarantine.
+Другой Gateway в подготовленном live fixture читает, пока первая задача held;
+следующая эпоха проверяется только после полного retirement прежней.
+Allocated token не доказывает SDK/server admission; отдельный barrier подтверждает
+вход SDK worker. Production Async остаётся Unsupported, нового owner нет.
+
+Root actual-source/mock54/54, source/stub getter и Linux Rust typecheck нового
+теста прошли. Agent no-default-features49/49 и три C++ source/stub guards прошли;
+это не Win32 ABI/link/COM. Новый `sdk_async_gateway_live` precompile+nonzero-test
+gate выполнился в обоих COM inputs на exact f787; actual результат принят выше;
+[scope](testing/native-sdk/async-gateway-correlation.md).
+
+[Namespace cache audit](testing/ua-sdk-namespace-cache-audit.md) принят только
+по закреплённым SDK исходникам: SDK cache write предшествует adapter post-check.
+Потенциальный NewSession interleaving не воспроизведён, candidate не проверен и
+не включён в PR. Никакого namespace fix/runtime acceptance не заявлено.
+N4/remote/physical Windows/legal и остальные UA/DA capability gates открыты.
+
+## 2026-10-31 — 6c5349c: 9/9; SDK readiness/drain reviewed research
+
+Точный `6c5349c87334860c52a8317f8fdc5e34a9568dd1` прошёл все 9 jobs:
+[SDK4](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41176472728),
+[COM2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41176472844),
+[App2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41176472851),
+[package1](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41176472772).
+Оба actual i686 COM inputs выполнили `sdk_async_values_live` (по 1/1): I4,
+BOOL, Unicode BSTR, R8/BOOL/I8 и BSTR arrays, bounded oversize failure с raw
+facts; strict fixture cleanup прошла. Остальные native gates также прошли.
+Это test-only single-slot probe, не production Async, не все типы/версии/remote.
+Unknown-admission exception проверен actual-source моделью, не SDK crash.
+
+Принят отдельный исследовательский SDK readiness/racefix/drain packet:
+[proof](testing/ua-sdk-readiness-drain-proof.md). Измерены SDK recovery16/16,
+ACK Drop/incarnation2/2, scope predicate1/1, fresh Engine/Gateway15.45с и
+instrumented SDK-observed Closed/Complete30.93с. Один SDK guard сохраняется
+между фазами; metadata-ready ACK → bounded SDK replay/drain → Reconciled →
+один snapshot53.5 → push54.5; старое52.5 встречает закрытый gate, history unknown
+сохраняется. Это ReactivatedSession с одной subscription, disposable patches,
+без production SDK pin/App change. Отдельный watch может увидеть failure, затем
+Cancelled до terminal stream delivery; глобальная exactly-once гарантия не дана.
+
+Открыты NewSession namespace-cache race, stale Connect/late ACK/loss-during-drain
+wire cases, multi-subscription, mapped Transfer, secure interleavings, общий
+порядок будущего Push/Read и per-ACK statuses. Production Async/default DA/N4,
+remote/physical Windows/legal gates не закрыты. Следующая независимая пара:
+SDK-owned namespace-cache scope и test-only Async Gateway correlation.
+
 ## 2026-10-30 — R2.ROUTE/R2.REUSE: источники OPC Foundation и вход LLM
+
+## 2026-10-31 — 77d8a42: 7/9 jobs; portable fixture and prepared recovery repairs
+
+SDK4 (41163828310), COM2 (41163828217) and Windows App (41163828213) passed.
+Package stopped at the notice-test root alias comparison; collector source and
+its profile hashes remain unchanged. The fixture now resolves the Cargo.toml
+parent before controlled case-entry enumeration and asserts injection happened.
+An alias/.. baseline reproduced the exact missing-ValueError failure; repaired
+notice14/14, package8/8, inventory4/4 and profile19/19 passed locally.
+
+Linux backend passed264 with one failure and one known ignored probe: metadata
+restart did not see Reconnected. A controlled witness kept the replacement
+offline until real SDK Stopped, proving that delayed startup can exhaust the
+three-attempt retry budget; this does not prove the particular CI failure cause.
+The test now builds the replacement server/RSA before the outage and binds the
+original port only after observed Lost. Current-nonce/reconnect-revision and
+Double/RW metadata assertions remain strict; bounded transition diagnostics are
+retained. New full real-source backend265/265 passed, plus the one explicitly
+ignored timing-sensitive notification probe (79.98s). Windows exact repair head
+still pending. No production behavior or SDK pin changed by these test repairs.
+
+
+## 2026-10-31 — 08a105d: App2/COM2/source2 success; test-stand repairs
+
+Exact head 08a105da5794b15cd277af84b76d858abbebe6d5 completed all9jobs:6success,
+3failure. App Linux/Windows41162662263 and both COM matrix41162662199 passed.
+Actual SDK async I4 callback fixture PASS in both variants, followed by strict
+cleanup; actual LargeInts SDK success plus bounded codec failure retained typed
+HRESULT/quality/FILETIME/VT in both variants (1/1 each). Production Async stays
+unsupported: submit/lifetime/full shapes are separate gates. Source probes2
+passed. Both core jobs compiled/passed C++ before failing the isolated Rust ABI
+stand: new test referenced backend-only model/scalar modules. Runtime FFI test
+now asserts raw facts independently; mapper regression remains in scalar tests.
+Locally reproduced two E0433 before; rust-stand5/5 and mapper1/1 passed after.
+
+Package stopped before building at a test fixture that created LICENSE/license
+as distinct physical files. Windows overwrites one. The repaired fixture uses
+one real file and controlled duplicate-name enumeration; production collector
+and ambiguity guard unchanged. Windows-like baseline failed; repaired collector
+13/13, Windows-like2/2, packager8/8 passed, disabled guard still fails.
+These are narrow test repairs; new exact-head CI pending. The prior adbd315
+package/read/cleanup result is not a claim that 08 packaged the new notices.
+
+
+## 2026-10-31 — опубликованный baseline9/9; следующий пакет R2/N2/N1
+
+`adbd315` прошёл все9jobs, включая реальный запуск упакованного x86 CLI и
+строгую COM cleanup. Следующий private packet добавляет scoped SDK recovery,
+per-key UserAccessLevel/type metadata, sequence/Overflow facts, GUI/CLI requested
+vs revised, DA failure facts и проверенные Cargo notice texts. Измерения и
+ограничения: [packet evidence](testing/packet-2026-10-31.md). Native Async
+production по-прежнему Unsupported; library patches остаются research.
+N4/remote/physical Windows/legal gates не закрыты. Новый CI exact packet pending.
+
 
 По запросу владельца исследованы публичные OPC UA Part 4/5 и официальный
 информационный обзор Classic DA. Подготовлен [routing table](llm-update-routing.md):
@@ -788,3 +995,675 @@ Header управляет настоящими меню и их пунктами
 [PR #10](https://github.com/boogy777-lgtm/OPCLook/pull/10) слит в `main` коммитом `0e4d4c310cbc20cba24345657b7e3d340c7861dc`. Измерено: Linux и native Windows x86 задания CI прошли для точного HEAD PR `9d05dd2965b6c2081ef33a11cc73aa2edc9188b7`. Локальная ветка была опубликована через GitHub connector с пересозданием коммитов; дерево каждого опубликованного коммита сверено с локальным. Эти результаты не относятся к последующим изменениям документации. Физический DA/UAC/маршруты, реальные Windows IME и средства доступности остаются внешними проверками.
 
 Обновлён README: описаны четыре области клавиатуры, различие курсора и выделения, подтверждение записи и явная пакетная операция; ограничения частичной палитры и GUI payload вынесены к пользовательским сведениям. Исторический пункт плана о незакоммиченном P3 заменён текущим состоянием; оставшаяся работа P2–P5 сохранена открытой.
+## 2026-10-30 — R2.1: раннее освобождение Read и аудит SDK
+
+Class: корреляция конкурирующих Read; invariant: завершение одного запроса не
+освобождает периодический опрос, пока другой Read ещё ожидает ответа. N+1:
+использована существующая таблица Engine requests и вычисление read_pending;
+новый scheduler не создан. Defect: accept безусловно сбрасывал флаг после
+коррелированного Values/Error. Регрессия через send/accept/due до исправления
+падала на ошибочном запуске третьего Read. Исправление не вводит один Read-slot
+и не реализует pending demand, read-back, конфиг или полную R2 приёмку.
+Измерено: Linux Engine 28 unit и 2 doctest, внешний стенд с реальным файлом
+28 unit и 2 doctest, fmt check — прошли. Windows x86 и live DA не выполнялись.
+
+Аудит: исходники locked async-opcua-client 0.19.0 и
+[тег 0.19.0](https://github.com/FreeOpcUa/async-opcua/tree/9ad28fc011002398f2e8a95696a50408a14531d9):
+SDK event loop ведёт Publish и выполняет Transfer/recreate. При recreate
+результат create_monitored_items игнорируется; ручной Republish API не доказывает
+автоматическое восстановление пропущенных sequence. Существующий quarantine
+таймаута не удалён; проверка gap и live recovery остаётся открытой.
+
+В скачанном `opc_da` 0.3.1 callback входные указатели оборачиваются в
+владеющий RemoteArray, а shallow Clone и Drop с CoTaskMemFree делают этот путь
+опасным; Windows воспроизведение не проводилось. В
+[rust_opc safe facade](https://github.com/Ronbb/rust_opc/tree/da44a99265f9706618bbe506c98f714f2aa46f0b)
+0.4.0 есть группы и Sync Read/Write, но публичный client facade не покрывает
+Browse, remote activation, subscription/async и сводит успешные HRESULT к ().
+[bytehound 0.3.1](https://github.com/bytehound-labs/opc-cli/tree/3ef66a85a3c24592669ff0fc199ea85cd058c4a9)
+даёт browse и sync I/O, но TagValue возвращает строковые значение/quality/локальное
+время, WriteResult — bool/error, а типы записи ограничены. Эти API не сохраняют
+обязательный контракт; кандидаты не добавлены и старый DA путь не удалён.
+x86 совместимость и физический DA не подтверждены. Не все кандидаты исчерпаны;
+библиотечное исправление или подходящий SDK остаются необходимы.
+
+## 2026-10-30 — R2.1 продолжение: scope до реализации
+
+Class: продуктовые цели чтения и корреляция. Invariant: старый Read не
+удаляет потребность после нового Write, не больше одного Read в работе;
+снимок Add и read-back проходят существующий Engine scheduler. N+1: расширяется
+существующая таблица запросов/диспетчер и `due`, второй scheduler и протокольный
+цикл не вводятся. Defect: App отправляет snapshot напрямую, а Engine не хранит
+цели и допускает конкурирующие Read. Проверка — реальные send/accept/due,
+детерминированное время, GUI/CLI и настоящий Engine Linux-стенд.
+
+Реализован только initial-срез: Engine создаёт pending по успешным AddItems,
+объединяет готовые снимки с периодическими Read, а GUI использует Engine tick.
+Ранний terminal push закрывает pending, WaitingForInitialData продолжает ждать;
+запрет reuse ItemKey внутри epoch и ограниченный ledger защищают регистрацию.
+Одноразовый permit отличает reservation после reconnect даже при тех же ключах;
+неверный protocol/permit не потребляет текущий. Повторный due не отправляет
+второй Read. Начальное ожидание по ключу использует переданный frontend interval,
+не revised: backend пока его не предоставляет. Это изменяет время начального
+снимка, но прежний periodic fallback при Inactive/Failed/poll_only сохраняется.
+Продолжающиеся Add пачки не продлевают grace для старых ключей. CLI обрабатывает
+не более 64 накопленных событий между проверками due.
+
+Измерено на Linux: Engine 36 unit + 2 doctest, contract 31 unit + 3 doctest,
+GUI library 230, CLI 9 unit + 2 live UA, отдельный Engine стенд 36 unit + 2
+doctest — прошли. В одном промежуточном параллельном запуске CLI browse истёк
+timeout; изолированный повтор после сборки прошёл. Live тест допускает оба
+наблюдения snapshot и позднего push, но требует последующее изменённое значение.
+Физический DA и Windows текущего HEAD не выполнялись.
+
+Полный Linux gate сначала остановился на E0463 для opclook_backend; после
+очистки собственных backend/engine артефактов повтор обнаружил два падающих
+reconnect UI теста, воспроизведённых и CI 74fa313. Test fixture при Connecting
+ошибочно возвращал старые GUI rows в runtime.items. Fixture теперь сохраняет
+пустую регистрацию при Connecting, не сбрасывая ledger или permit; тесты
+по-прежнему проходят реальные reconnect request/reply и проверяют AddItems.
+После исправления полный `scripts/check-linux.sh` прошёл; UI interactions
+235 passed, 1 Windows-only ignored. Точную причину E0463 не определяли.
+
+WriteReadback не подключён: UA write сводит Uncertain и Good к Ok(()), а DA
+теряет положительные HRESULT, поэтому текущий результат не позволяет надёжно
+распознать принятый Good. Общий конфиг, Refresh и корректное завершение каждого
+ключа partial reply остаются открытыми, как и Browse fairness, полные таблицы,
+native DA, timestamps/gap. Статусы не объявляются сохранёнными этим срезом.
+
+## 2026-10-30 — R2.5/R2.1: Write outcome и наблюдение — до кода
+
+Class: статус операции записи и последующее наблюдение. Invariant: сохранять
+raw per-item статус, различать Good, Good_CompletesAsynchronously, Uncertain,
+Rejected и неизвестный исход; read-back не доказывает физического действия.
+N+1: использовать существующие SDK Write и Engine request/due/permit, без нового
+протокольного scheduler или COM слоя. Defect: UA not-Bad преобразован в Ok(()),
+DA HRESULT и отсутствие массива результата теряются; App и CLI интерпретируют
+Ok как подтверждённое выполнение. Места: contract/event, UA io/worker, DA write,
+Engine, App events и CLI. Проверки: O14–O16 и S01–S07, correlation/epoch,
+конкретные native статусы и timeout через реальные entry points.
+
+
+2026-10-30, результат: typed WriteOutcome передаёт raw UA/DA item или service статус и сохраняет Unknown на таймауте после отправки; preflight Err означает неотправленную запись. GUI и CLI используют общую нормализацию. Read-back не включён. Headless egui/wgpu отрисовал три синтетических сценария Rejected, NotSubmitted, Unknown; PNG визуально просмотрены. Первая попытка упала из-за отсутствующего CJK fallback; английские сцены проверены с установленным DejaVu Sans через штатный OPCLOOK_CJK_FONT.
+
+Полный Linux gate завершился exit 0 после `cargo clean --target x86_64-unknown-linux-gnu` и прогона без debug symbols/incremental. Ранее E0463 для opclook_locale при последовательной сборке, причина не установлена; отдельный запуск без явного Linux target не нашёл неустановленный i686 core. Один повтор gate остановлен при заполнении диска. CLI checked deadline защищает от переполнения, post-dispatch ошибка ожидания даёт Unknown.
+
+2026-10-30 R2 demand turn, до кода. Class: R02/R03/R08 product demand lifecycle; Inv: отдельные pending и покрытые Read цели, один permit на эпоху, push не покрывает post-write/explicit, ошибки терминальны, сохранение статусов, без изменения legacy policy. N+1: тот же scheduler/корреляция Engine; UA SDK 0.19 владеет протоколом, существующий DA worker остаётся открытым migration gap. Defect: `pending_initial` и `reserved_read` не представляют очереди WriteReadback/ExplicitRefresh; старый Read и поздняя потребность не связаны покрытием; CLI закрывается после Wrote. Места: crates/engine/src/lib.rs, src/app/runtime.rs/events.rs, crates/cli/src/main.rs, contract; проверка реальными send/accept/due и fake monotonic временем на E04–E16/S01–S07, включая старый ответ/ошибку/timeout и новый Write, push и reconnect. Запрещено включать read-after-write без явно выбранной политики; DA cache не объявлять FreshSource.
+
+
+Реализован частичный R02/R03/R08: Engine ставит read-back только по matching принятому Wrote с opt-in на исходном Write; новый demand не покрывается старым Read или push. CLI boolean --read-after-write ожидает UA Read и сохраняет отдельно Write outcome и observation, включая ошибку сериализации; DA Cache-only отклонён до Write. Проверки/открытые строки перечислены в acquisition-truth-tables. Целевой запуск дал E0463 opclook_engine при последовательном cargo (причина не установлена); после ограниченного cargo clean и jobs=1 Engine 42+2 doctest и CLI 12+2 live прошли. Дополнительный тест усиленного reservation/Remove прошёл отдельно. Синтетический timeout не является проверкой UA quarantine.
+
+CLI дополнительно проверяет ключ Wrote и покрытие конкретного permit: чужой ключ даёт Unknown, initial snapshot не может считаться read-back. Реальный CLI event-path regression прошёл; его первый compile потребовал исправления тестового импорта SubscriptionState.
+
+Финальный полный Linux gate после wrong-key fix: exit 0; backend 223, contract 33+3 doctest, Engine 42+2, CLI 13+2 sample-server live, GUI library 233, UI interactions 235 и 1 Windows-only ignored; внешний stand 42+2. Профиль debug=0, incremental=0, jobs=1. Предыдущий gate остановлен для исправления correlation и не считается зелёным. Никакой Windows/физический DA live не заявлен.
+
+2026-10-30, до R2.3 кода. Class R01-CONFIG/R02/R08; Inv: validated per-connection acquisition snapshot не меняется глобальными настройками, capability проверяется до Connect и никакая явная Subscription не заменяется Poll, Poll UA не создаёт monitored values, новый Write intent только по opted-in профилю; отсутствие профиля сохраняет legacy поведение. N+1: существующий Engine/UA SDK и backend capability, без новых протокольных циклов; DA Cache worker остаётся временным и не заявляет stream/device. Defect: режим и интервал сейчас глобальные/CLI force_poll фильтрует push после запуска stream, настройки не принадлежат соединению. Затронуты contract EndpointSpec, engine/adapter, CLI и при готовности GUI; тесты реальные entry points, C/U/M, fake time, живой UA и headless UI при изменении. Отдельный Class CI: bounded live fixture/диагностика, первый Browse timeout 15s в Linux run 41014492173, стадия неизвестна; Inv: сохранять проверку реального успешного Browse, deadline и error context, не retry и не считать предположение причиной.
+
+Целевые результаты: contract 34+3 doctest, Engine 45+2, CLI 13, UA sample Poll live с отсутствием stream и реальным Read, App snapshot/dedup, Settings backup, три headless UI и DA double-click — зелёные. PNG UI 900px UA/DA и 720px UA просмотрены; на 720 действия достигаются прокруткой. Первый вариант 900px обрезал кнопки, исправлен адаптивной областью прокрутки; тест короткого окна также подтвердил Cancel. Linux CI 41014492173 на прежнем head: backend 223, CLI unit 13, ошибка Browse timeout 15s; локальный повтор того live случая прошёл. Test budget увеличен до 60s/120s без повторов и изменений assert; добавлен stage context connect/browse, первопричина не установлена.
+
+Финальный Linux gate после viewport/null/IME изменений: backend 225, contract 34+3 doctest, Engine 45+2, CLI 13+2 sample live, GUI library 236, UI interactions 238 и 1 Windows-only ignored; внешний Engine stand 45+2, внешний backend stand UA Poll live — passed. Отдельные PNG 900 UA/DA и 720 UA после прокрутки просмотрены; проверено что Cancel достижим. Runtime frozen до gate; CI нового head ожидается.
+
+## R2.3 — редактор профиля активного соединения: анализ до кода
+
+- Class: изменение конфигурации действующей сессии и корреляция её эпохи (R01/R03).
+- Inv: активный EndpointSpec/Engine snapshot неизменяем до принятия нового Connect существующим lifecycle (в DA — подготовкой маршрута); авто-reconnect использует активный snapshot; проверка, сохранение и проверка коллизии предшествуют остановке здоровой сессии; незавершённая Write становится Unknown и не повторяется.
+- N+1: соседние пути ручного/автоматического reconnect, отсутствие session, смена эпохи в открытом диалоге, занятые RequestId, коллизия после сохранения, Cancel и ошибка сохранения; проверить через настоящие App/Engine события и GUI взаимодействия.
+- Defect: профиль нового соединения уже существует, но редактор активного профиля отсутствует; глобальная перенастройка не должна обходить snapshot. Владелец протокола остаётся SDK; DA migration не входит в этот срез.
+
+R2.3 восстановление: исходный локальный checkout был удалён средой; дерево
+восстановлено из GitHub и проверено по tree SHA `763b4615ec2a0b1060489ae885c647d8c56edeb4`.
+Измерено: App 5/5, GUI interaction 2/2, RU PNG 900/720 просмотрены; внешний
+стенд настоящего Engine 45+2 doctest. Первый полный Linux gate остановился на
+`fonts_cjk` из-за ошибочно заданного DejaVuSans как CJK override: он не содержит
+китайских глифов. Это ошибка настройки среды, тест не изменён; последующий
+gate запускается с реальным CJK шрифтом без override.
+
+Повторный полный Linux gate с системным WQY CJK: exit 0, backend 225, CLI
+13+2 sample live, contract 34+3 doctest, Engine 45+2 doctest, GUI lib 241,
+UI interactions 240 и один Windows-only ignored. Font tests 2/2, PNG 900/720
+перерендерены и просмотрены. Физический DA и Windows локально не проверялись;
+Windows x86 остаётся за CI нового commit.
+
+## N1 — проверка публичного API Softing до кода
+
+Class: готовый native DA SDK и граница адаптера (R00/N0/N1).
+Inv: SDK владеет COM/data-plane и callback lifecycle; значения, quality,
+timestamps и raw per-item статусы не теряются, x86 и закрытие проверяются.
+N+1: Browse, Sync/Async, Cache/Device, subscription, session isolation и
+соседние callback/cleanup пути рассматриваются вместе; declarations и demo
+не являются доказательством рабочего runtime.
+Defect: текущий production DA остаётся собственным Sync/Cache worker; готовая
+замена пока не доказана. Проверка обращается к публичным исходникам и сборке
+SDK без изменения частных механизмов активации.
+
+N1 Softing: публичные headers v4.47.1 проверены Linux g++ syntax-only.
+Source-method harness: 14 случаев двух read режимов / семи шаблонов,
+исходный SDK 6 read и 6 write-cache mismatches; подготовленный patch 0/0.
+Исходный SDK body/fragment компилировались с fake dependencies, а не полным SDK.
+Физические Windows/DA, транзитивные лицензии и lifecycle не проверены.
+Финальный Win32 core probe подготовлен; его результат необходимо получить в CI.
+
+## N1 CI setup: анализ до исправления
+
+Class: перенос test harness между Windows и Linux, не OPC protocol.
+Inv: оба SDK probe применяют один и тот же patch к точному blob; CMake
+использует нормализованный путь и не ослабляет сборку или assertions.
+N+1: CRLF/LF patch, спецсимволы и пробелы пути, source-method и core job.
+Defect: CI run 41061743112 остановился до core-компиляции: Windows patch
+не применился; CMake VerifyGlobs получил путь с обратными слешами.
+
+Воспроизведено локально: CRLF patch к точному LF blob даёт git apply exit 1
+на строке 982, как в Windows CI. Общий helper нормализует CRLF в LF, сверяет
+blob SHA и выполняет `git apply --check` до применения. Тесты проверяют
+идентичность результата LF/CRLF и отсутствие изменения при ошибках. CMake
+нормализует SDK path до configure/glob; x86 SDK compilation по-прежнему
+не выполнена локально.
+
+## N1 Win32 core build: анализ до исправления
+
+Class: изолированная конфигурация сборочного probe и использование API SDK.
+Inv: тот же upstream DA/DCOM core и callback test компилируются без изменений
+протокольных исходников или обхода SDK; отключение непроверенной capability
+не выдаётся за её поддержку в production.
+N+1: pointer API, зависимости Watch/XML/Expat и оба варианта SDK patch.
+Defect: CI 41062539737 дошёл до компиляции и получил `isNull` C2039 и конфликт
+Expat `ELEMENT_TYPE` с WinSDK; вторичные ошибки ещё не классифицированы.
+
+Публичный SDK `SOCmnPointer` предоставляет `isNotNull`; probe переключён на
+него. В рассмотренных core исходниках XML-DA ограждён `SOFEATURE_SOAP`,
+Expat — `SOFEATURE_CMN_XML`. Изолированный native DA/DCOM probe отключает
+только Watch/XML в test stdafx после SDK config. Pinned config preprocessor
+check подтверждает DCOM/DA1 и отсутствие SOAP/Watch/XML; полноценная Win32
+сборка и классификация остальных ошибок ещё ожидаются в CI.
+
+## N1: SDK common XML и Expat — анализ до исправления
+
+Class: test-only native build closure и совместимость старого Expat с WinSDK.
+Inv: DA Browse сохраняет настоящий SDK `getVARTYPE`; Expat компилируется из
+точного upstream source с согласованным SDK ABI, без подмены protocol кода.
+N+1: символы и calling convention, char width, DTD/namespace, source patch и
+оба read/write callback теста; никакое отключение функциональности не считать
+доказательством работающего SDK.
+Defect: 41063686408 показал зависимость DA Browse от common XML, поэтому
+предыдущий DCOM-only config без CMN_XML неверен; Expat/WinSDK конфликт ещё
+нужно проверить на реальной Windows сборке.
+
+CI 41063686408 подтвердил зависимость DA Browse от CMN_XML (`getVARTYPE`):
+предыдущее отключение common XML было слишком широким и отменено.
+Точный SDK Expat собран на Linux тремя C translation units; narrow XML_Char,
+namespace, DTD и C-to-C++ linkage прошли. SDK исходники не менялись. Первый
+локальный запуск использовал усечённый header, после восстановления blob SHA
+повтор прошёл. WinSDK compatibility и оставшиеся ошибки проверит новый CI.
+
+## N1 Win32 host hook — анализ до исправления
+
+Class: SDK sample host integration для форматирования сообщений ресурсов.
+Inv: probe использует настоящий Win32 module handle, не подменяет SDK error,
+DA protocol или COM; результат linked/runtime всё ещё проверяет CI.
+N+1: resource lookup и отсутствие host message table не считаются доказанной
+поддержкой локализованных ошибок; SDK source/patch остаются без изменений.
+Defect: run 41065211900 скомпилировал native core и Expat, но link завершился
+LNK2019: host не предоставил SDK `getInstanceHandle()`.
+
+## N1: SDK lifecycle и диагностика Win32 probe
+
+Class: host SDK lifecycle и диагностика исполняемого test probe.
+Inv: `initSOCmn` предшествует созданию entry, SDK владеет COM, entry
+освобождается до `exitSOCmn`; исходный код процесса и timeout видимы в CI.
+N+1: ошибка initialize, callback fixture или terminate проходит освобождение;
+ненулевой код и timeout не превращаются в успех. До нового CI причина падения
+не доказана; synthetic callback не проверяет COM advise и физический сервер.
+Defect: run 41066061516 скомпилировал и слинковал core, Win32 Expat smoke
+прошёл, но core probe завершился до итогов callback; фактический код был
+скрыт оболочкой CI. Пример SDK требует initSOCmn/exitSOCmn при SOFLAG_NO_DLLS,
+а probe их не вызывал. Добавлены SDK lifecycle и flush фаз; без изменения SDK.
+
+## N1: Win32 direct core — измеренный offline callback
+
+[Run 41067236324](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41067236324),
+head `d375f15f4b57837baeec75d1cf3a7c9b843cb96e`: все три native jobs
+успешны. Реальный direct SDK core собран и слинкован на Win32; Expat narrow
+namespace/DTD smoke прошёл. Исходный SDK offline callback: read setup=1,
+correct=0; write setup=1, correct=0; input unchanged=1. С предлагаемым SDK
+patch все пять признаков равны 1. Каждый процесс exit 0 и выполнил common/entry
+init и cleanup. Это не физический DA или доказательство COM advise/late teardown.
+
+N2: разрабатывать тонкий адаптер на direct SODaC/SOClt/SOCmn; DaSession/TBC
+имел только header probe, OTB не подключён. Открыты live/remote I/O, типы,
+изоляция сессий, late callback/teardown и лицензия полного closure. Patch
+остаётся предложением библиотеки, старый production DA не заменён. Результат
+этого исторического head не переносится автоматически на новый docs-only head.
+
+
+### 2026-10-30 — N2.1 callback facts
+
+Решение: offline ABI возвращает не более 64 фактов последнего callback и
+отдельный envelope (в том числе для нулевых элементов); доступ сериализует
+хост. Это не доставка истории. Только VT_I4 становится DataValue, HRESULT
+остаётся отдельным фактом, failed/unknown не выдаются за успешное значение.
+Измерено локально: 3 теста настоящих Rust файлов на Linux. Win32 SDK/ABI
+fixture и сквозная передача в Rust требуют проверки CI точного HEAD; живой
+сервер, подключение к Engine и полная миграция остаются открыты.
+
+### N2 SDK COM balance — source defect and regression (2026-10-30)
+
+Class R00/R03/R09/R13, O30–O35: SDK владеет COM lifecycle, сессии изолированы,
+старые регистрации не меняют новую эпоху. N+1: один зависший сервер не должен
+задерживать другой; неподдерживаемое не превращается в успех. Defect: pinned
+`SOCltEntry::initialize` сохраняет режим `COINIT_MULTITHREADED` (0), тогда как
+`terminate` использует `m_coInit != 0` для решения о `CoUninitialize`, и один
+успешный MTA init не балансируется. `softing-com-balance.patch` считает успешные
+инициализации отдельно от режима; source blobs проверяются перед применением.
+Windows probe ожидает обнаружить baseline leak и после patch отсутствие COM
+context на той же thread; baseline leak он балансирует при выходе. Это не live
+interop и не доказательство lifecycle произвольного host: Windows CI pending.
+Локально измерено: 3 Python patch tests прошли на точных SDK blobs.
+`SOCltServer::getWorkerThread` возвращает собственный `m_workThread` каждого
+server, а не общий entry worker; live isolation и shutdown остаются открыты.
+
+### N2 direct SDK runtime prototype (2026-10-30)
+
+`native/softing-da/runtime` создаёт SDK host, server, group и item и вызывает
+SODaC sync read/write, сохраняя service/item HRESULT, VARTYPE, quality и
+FILETIME. `core-probe --live` требует fixture `OPCLook.NativeDaFixture.1`,
+`Fixture.Value` начальное I4 42; проверяет device read, write 77, повторную
+регистрацию и read. Это пока только I4 prototype, не Rust runtime и не
+доказательство interop: Win32 compile и исполнение ожидаются. Для active group
+выбран SDK drPolledRefresh: исходный `SODaCComGroup` не создаёт при этом
+cyclic sync read (source inspection), Engine остаётся owner Poll. Production
+остается legacy до полноценного adapter и live gate.
+
+SDK syncRead/syncWrite непосредственно вызывают COM на вызывающей thread;
+вызов с session thread без COM init был бы неверен. Prototype теперь запускает
+I/O через SDK `SOCltTask` и `executeTask` на per-server SDK worker, который
+сам инициализирует и балансирует MTA. Строгий fixture вызывает I/O на отдельной thread и проверяет, что её COM
+context до и после не меняется; Windows может назначить implicit MTA. Win32 compile
+и live выполнение этого изменения ещё не измерены.
+
+CMake создаёт статическую SDK bridge library; `softing_runtime.rs` оборачивает
+I4 ABI с thread-affine Host, явным close и уникальными регистрациями.
+`rust-stand` компилирует настоящий файл и проверяет с mock ABI отклонение
+удалённой и чужой регистрации; 4 stand tests прошли локально. Отдельный
+`sdk-live` executable предназначен для cross-process fixture и проверяет две
+сессии, повторную регистрацию, read/write и cleanup. Win32 link/run pending;
+обёртка не подключена к Gateway. До N4 нужны реальные типы, Browse/Discover, Subscription и live proof.
+
+Rust host владеется потоком инициализации, `SharedHost` удерживает entry в
+независимых session threads. Entry branch list синхронизирован в SDK; каждая
+Session имеет одного caller. При ещё живых ссылках `close` возвращает Busy и
+не освобождает SDK под зависшей операцией: это намеренная утечка до выхода
+процесса при timeout, а не подтверждённое ограниченное завершение SDK. Локальный
+stand проверяет поток с удерживаемым host после Busy через mock ABI; Windows
+live isolation/teardown остаются открыты.
+
+SDK `executeTask` может вернуть S_FALSE, если task не поставлена; read output
+до dispatch заполняется failed service/item sentinel, поэтому неисполненная
+операция не превращается в успешный ноль. I4 write создаётся через SDK
+SOCmnVariant::setI4. Проверка Windows compile/live ожидается.
+
+### N2 Gateway SDK preview и process host (2026-10-30)
+
+Feature `native-da-preview` выбирает один DA adapter за Gateway/router; direct
+SDK C ABI используется для I4 и CLSID endpoint. Доступные HRESULT записи
+сохраняются как per-item или service status, после dispatch отказ даёт Unknown,
+повтора Write нет. Другие типы и пока не подключённые SDK browse/discovery
+явно отклоняются. Default production не переключён.
+
+Process-level owner thread только управляет SDK entry: новый Gateway повторно
+получает тот же host, пока существует session reference; после исчезновения
+ссылок owner выполняет terminate на thread и может создать host снова. SDK
+per-server worker владеет OPC I/O. Возможное зависание terminate может задержать
+новый Gateway, recovery после исключений в C ABI ещё не доказан. Восемь ABI
+входов и две SDK task ловят C++ исключения; task устанавливает E_UNEXPECTED,
+чтобы SDK отправил completion. Неисполненная Write не превращается в per-item
+Rejected: при неизвестном dispatch остаётся Unknown с service HRESULT.
+
+Linux runtime-stand компилирует реальные файлы router, Gateway adapter,
+contract и Rust SDK owner с mock channel/ABI; 1 command/event test прошёл.
+`sdk_gateway_live` запускается только с явно выбранным feature, без ignore или
+условного успеха при отсутствии fixture. Win32 compile/link/live pending, типы,
+Unicode, Browse/Discover и Subscription остаются открыты.
+
+Process owner не выполняет idle termination: он переиспользует host между
+Gateway до явного финального `finish_native_sdk` и никогда не блокирует новый
+Gateway фоновым terminate. Финальный вызов возвращает Busy при живых сессиях,
+ожидает terminate ограниченное caller время и завершает owner после успеха
+или ошибки. `sdk_gateway_live` вызывает его после shutdown. Production app ещё
+не подключает этот финальный API; strict Windows proof pending.
+
+Live server run 41089436547: SDK direct client baseline прошёл cross-process
+Read 42/Write 73/Read 73 и shutdown. Следующий `core-probe --live` завершился
+exit 32 до Write; финальная печать затирала исходный HRESULT. Добавлены phase
+logging connect, caller COM context, Add и Read с raw facts. Причина до
+следующего Win32 прогона не установлена; не считать C ABI live зелёным.
+
+`CoGetContextToken == CO_E_NOTINITIALIZED` на новой thread нельзя требовать
+безусловно: в процессе может существовать implicit MTA. Строгий live fixture
+сравнивает caller context до/после SDK операции, принимая implicit MTA; при
+этом Read/Write выполняются на SDK worker. Причина run 41089436547 пока не
+доказана; следующий run должен показать phase diagnostics.
+
+N2 SDK scalar ABI переносит signed/unsigned 64-bit без f64 преобразования,
+BOOL, I1/I2/I4/I8/INT, UI1/UI2/UI4/UI8/UINT, R4/R8, CY и DATE; запись создаёт
+SOCmnVariant только SDK setters, диапазоны проверяются до dispatch. Raw type,
+service/item HRESULT, quality/time сохраняются; ARRAY/BSTR и прочие типы дают
+явный Unsupported. Linux stand: scalar boundary test и Gateway mock command
+test по 1/1. Strict Gateway fixture расширен bool/i64/u64/f64 read/write,
+SDK C++ Win32 compile и реальные значения ещё не измерены.
+
+# 2026-10-31 — N2/N3 восстановление сборочных гейтов
+
+Class: совместимость собственных мостов с платформенными заголовками и
+сохранение существующего API при выносе общей конверсии. Inv: Win32 SDK
+fixture компилируется с исходными заголовками, а legacy DA по-прежнему может
+очистить каждый инициализированный VARIANT. N+1: любые WinSDK macro имена в
+тестовых локальных переменных и все существующие вызовы общего cleanup.
+Defect измерен в CI head `41a5f007`: C++ `small` раскрывается в `char`;
+Rust потерял `clear_variant`; rustfmt также отклонил этот head. Изменено имя
+тестовой переменной и восстановлена прежняя функция очистки. Существующий
+Win32 core build/queue boundary fixture и DA Rust build/variant tests —
+регрессионные проверки, которые на дефектном head не компилировались.
+
+Локально: 37/37 Linux stand тестов с mock ABI и реальными адаптерными Rust
+файлами; fmt и diff-check прошли. Это не компиляция Win32, не live COM и не
+доказательство нового subscription/array/Unicode кода. Подробности и ссылки
+на failed runs — в status; N2/N3/N4 остаются открыты.
+Полный Linux gate после fmt остановлен отсутствующим в offline cache
+`serde_json`; приложение этим прогоном не проверено.
+
+2026-10-31 N2 DATE: Class = представление времени в floating-point DATE;
+Inv = timestamp остаётся в пределах разрешения формата и тип не меняется;
+N+1 = целые секунды и дробные секунды; Defect = прежний тест требует точного
+nanosecond equality, Windows CI `9553bce` измерил +42 нс при roundtrip.
+Два конкретных тестовых момента проверяются с допуском 1 мкс, отдельный тест
+общего конвертера проверяет воспроизведённый момент. Это изменение теста,
+не округление данных и не доказательство Windows до нового запуска.
+
+2026-10-31 N3 crash: Class = наблюдаемость live native fixture; Inv = сбой
+остаётся ошибкой и последняя отправленная фаза видна в CI; N+1 = любое место
+dispatch/reply и ранний init/discovery; Defect = `9553bce` завершился с access
+violation, а стандартный test capture скрыл пройденные этапы. Markers и
+`--nocapture` не исправляют runtime; строгие assertions и cleanup сохранены.
+Windows повторное воспроизведение требуется для определения причины.
+
+2026-10-31 N3 fixture arrays: Class = семантика устройства для записи массива;
+Inv = строгий тест получает объявленную замену или ошибку; N+1 = изменение
+длины и nonzero lower bound; Defect = pinned SDK server default updateValue
+делает индексный merge и возвращает FALSE для disjoint bounds, тогда как
+complete игнорирует этот результат. На `bd6b9f74` измерено S_OK и прежнее
+значение Ints. Fixture явно использует SDK setValue, проверяет BOOL и не
+позволяет default merge повторно изменить результат; это не правка backend и
+не утверждение о других серверах. Windows live regression ожидается.
+
+2026-10-31 N3 reconnect: Class = диагностика intermittently crashing native
+reconnect; Inv = каждый исходный assert и измерение отдельного процесса остаются
+обязательными; N+1 = resolve ProgID и каждая стадия SDK open; Defect = 1-й
+strict Gateway процесс на `4d22079` прошёл, 2-й завершился AV после Connect101,
+3-й не запущен. Добавлены test-only фазовые markers и AV observer, который
+возвращает EXCEPTION_CONTINUE_SEARCH; runtime поведение не менялось, дальнейшая
+локализация требует Windows CI.
+
+2026-10-31 N3 ephemeral worker: Class = SDK task/context lifetime; Inv = SDK
+worker завершён до уничтожения context на caller; N+1 = resolve и discover,
+успех и исключение/ошибка; Defect подтверждён pinned source: completion signal
+предшествует последнему worker task release, а direct COM-server context не
+инициализировал shutdown sink. Использован общий scoped SOCltServer без COM
+server impl; SDK управляет своим потоком. Barrier fixture использует настоящий
+SDK task, unguarded baseline в subprocess с watchdog и guarded destructor/thread
+проверку. Пока это проект проверок, не измеренный Win32 результат и не доказанная
+причина AV; полная subscription/teardown/remote проверка остаётся открытой.
+
+2026-10-31 N3 measured acceptance: code `46339cc` прошёл все 6 CI jobs:
+SDK run 41124600706 (3), COM 41124600770 (1), app 41124600679 (2).
+Win32 baseline watchdog воспроизвёл self-wait; guarded SDK worker joined,
+destructor on caller PASS; callback ABI mapping PASS, stand 4/4.
+Gateway 3/3 независимых процесса: 0.89/0.89/0.85 с, strict assertions и
+cleanup пройдены. Windows все шаги success, включая диагностический UA probe;
+отдельные внешние live tests ignored. Production DA остаётся legacy.
+Routing/status/audit обновлены по измерению точного code head; последующий
+documentation-only commit не меняет код и не объявляется новым runtime proof.
+Следующий gap: remote/другой сервер, late/failure/timeout teardown,
+session isolation и license closure. Выборочная серия не доказывает отсутствие
+всех races и единственную причинность прежнего AV.
+
+2026-10-31 N2.TEST/N3.ISOLATION integration: Class = native status verdict и
+независимость сессий при device I/O; Inv = один SDK owner и коррелированный
+Test, B завершает read/write/read-back пока A подтверждённо ожидает release.
+N+1 = общий D6 mapper и существующий fixture mode; Defect = native Test был
+заглушкой, реальный isolation proof отсутствовал. Два агента подготовили
+раздельные commits. Родитель добавил da_status в stand, полный stand и launcher
+регрессии в Linux SDK CI, strict isolation gate после Gateway 3-run gate.
+Event action assert-unset только проверяет отсутствие release, не сбрасывает его.
+Measured локально агентами: 41 mock stand test, launcher success/failure,
+fmt/diff; Windows/live пока pending. HRESULT failure mock, Running/Failed
+должен проверить реальный SDK fixture; production DA остаётся legacy.
+
+2026-10-31 N2.TEST fixture precondition: реальный a004b226 status вернул
+NOCONFIG=3; API/mapping не объявили его успехом. Fixture получил явный SDK
+Running после start до ready; новый CI pending. Владелец поручил далее
+выполнять весь оставшийся план парами Terra High. Очередь remaining-work.md
+объединяет прежние R2/N/P планы, различает выполненное, pending и внешние гейты.
+
+2026-10-31 пары 01/02: `36fa668` прошёл все 6 jobs (SDK41137831955,
+COM41137831873, app41137831806). Test RUNNING/FAILED/RUNNING в Gateway3/3;
+isolation1/1 за0.31с, B42→77→77 до release A, cleanupPASS. Пара02: Class =
+bounded shutdown при pending SDK I/O и provenance build inputs; Inv = SDK
+не освобождается пока session running, reply не повторяется, drift не
+проходит guard; N+1 = существующий barrier и pinned inventory checker;
+Defect = missing live timeout acceptance и неполная source/license closure.
+Добавлен strict test и CI prepatch guard. Локально measured41mock stand,
+launcher, compile-only stubGateway,4checker tests; Win32/live нового test
+pending. Legal clearance и release inventory не установлены. Следующая
+пара03: UA cache/maxAge и MIT OPC inputs, изолированное владение.
+
+2026-10-31 пары02/03: `70357117` SDK3/3 и COMPASS; pending-write shutdown
+измерен5.003833с, Busy до release, одинAcceptedWrite и финальныйcleanup;
+app41139818993 ещё выполняется. N1 guard проверил271 cleanSDKentry.
+R2.3 Class=UA cache allowance, Inv=FreshSource доминирует в общей reservation,
+N+1=mixed/readback/stale/direct/subscription, Defect=SDKmaxAge был0 и
+CacheAllowed rejected. Engine-generated ReadCached ограничен permit, Poll
+используетrequestedinterval; Subscription initial stronger0 доnegotiated.
+4realEngine pathstand tests PASS; UA wiretest добавлен, compile/livepending.
+N1 Class=officialMIT inputprovenance, Inv=no oldSDK OPC includes/IID opt-in,
+N+1=pin/tamper/fallback/trace guards, Defect=oldgrantclosure unresolved.
+Opt-in immutable8 inputs +MIDL CMake route,12Python tests PASS; rootдобавил
+sdk/official-mit Win32matrix, retainedlogs/traceguard/COMsuite. Это кандидат,
+не провереннаяABI/лицензионнаязакрытость. Root native stand41/41PASS.
+Пара04 приступила к SDK negotiatedfacts и hostreuse во времяpendingwrite.
+
+2026-10-31 пара04: Class=SDK negotiatedfacts и processhostreuse приpendingIO;
+Inv=requested не revised, epochorigin и perkeygrace, fresh0доминирует;
+SDKhostживдоreleaseA; N+1=mixedsub/partialmodify/stale/invalidratio/hugeinterval
+и timedoutA→newB; Defect=applied=requested и отсутствующийN2L09liveproof.
+SDKfacts берутсяиз publicstate0.19, servernormalizedrawсохранены; scheduling
+acceptance1..3600000ms явнаяapppolicy,invalid→log/fallbackgrace/cache0.
+Measured4negotiatedstand+2cacheповтора,41native/mockstandwithhooks иtestshim;
+actualSDKsample1000→2000 и Win32hostreuse pending. Rootreviewдобавилstrict
+rejectвсехunexpectedReply и nativeDa0. UIprojection/recoveryfacts/itemvalidity
+ещёopen. CIпроверит03/04общимhead, old02testsнеотменялись.
+
+2026-10-31 exact-head checkpoint: `70357117` завершил app41139818993
+Linux/Windows2/2SUCCESS. Вместе сSDK41139819035(3) иCOM41139819114(1)
+все6jobsSUCCESS. Только послеэтогопубликуютсяcodecommitsпар03/04 иих
+новаяmatrix. Это не доказательство новыхнеисполненныхtestcases.
+
+2026-10-31 measured690a830: SDK41141220207(4), COM41141220142(2),
+app41141220265(2) всеSUCCESS. OfficialMIT8inputs staged/MIDL, traces14/11
+requiredpaths nooldOPC; обаnativeварианта Gateway3/3+isolation+pending
+shutdown+hostreuse. SampleUAwire1234/0 иrequested/revised1000/2000PASS.
+Пара05review: Class=persisted legacyprofile и ambiguousWriteexception,
+Inv=checkedatomicmigration/visiblewarning, oneUnknown/noRetry/cleanup;
+N+1=mixedexplicit/invalid/savefailure/idempotence иone-shotSDKthrowaftercall;
+Defect=missingmigration инеизмеренныйN2L10 (необъявленruntimebug).
+Local3puremigration+localecompile,42mockABIstand+typedtestshim PASS;
+Settings/App иновыеC++/livependingCI. ParentSDKsourcecheckpoint pinned0.19
+иguardinstalledVCS, localtemporaryregressionPASS, actualidentitypending.
+Пара06terminalAPI/P4вработе; realUI/SDKgatesнеподмененыstand.
+
+2026-10-31 df2bf1d checkpoint: SDK41143031194(4), COM41143031277(2),
+appLinuxPASS; Windows124361565035FAILEDтолькоintegration/test_isolation
+privatePKIownнепоявилсяза30сautosearch. Productrootcauseнеустановлен;
+Class=testprecondition, Inv=тотжеApp/SDKprivatePKIpath иsentinelassertions,
+N+1=loopback query безmDNS/adapter, Defect=assertзависелотобщегоautosearch.
+Тестdriverявныйloopback,30снеувеличено, новыйWinCIpending. Nativeexception
+реальноUnknownDaService0x8000ffff/count1/readback77/noRetry,0.11сofficial;
+installedUAcrateVCS9adpass. Пара06Class=readneedterminals/contextualpalette,
+Inv=coverage+epoch/oneoutcome иstaleform/Yesnotdispatch; N+1=14Engineedges
+иtypedUnknownBrowse/3locale/IME/repeat; Defect=missingperkeyAPI/P4context
+иstaleWriteguard. Local14Engine/mock+3actions/mock+locale+2runnerchecksPASS;
+fullGUI/counterfactual/PNGpendingCI. СредаудалилаoldsessionGitdb/cache;
+recoveredexactpublishedtree89b4/362blobsвcurrentdirectory,06sources/07WIP
+сохранены, remotehistoryнепереписана. FuturelocalSHAsновые,remoteheaddf2
+осталсяparentдлянефорсирующейпубликации. Пара07frontendE02/packageвработе.
+
+## 2026-10-31 — continuation парами07/08/09
+
+- Class: read result consumers/time facts/native source intent/build closure.
+  Inv: нет раннего Good до AddOK; ровно один terminal projection; unknown clocks
+  не сравниваются; SDK владеет Device и COM; production legacy до N4.
+  N+1: early push+AddErr, late older after idle/equal conflict, cached poll+refresh,
+  inactive --check-cfg features, packaged executable vs test-hook library.
+- Reviewed07/08 code: E02/bounded GUI+CLI consumers, ValueTimes/TimeSelection,
+  SDK Device route и preferred MIT/nohook packager. Измеренные локальные результаты
+  и непроверенный Windows/full-Cargo/GPU scope указаны в status; cache утрачен,
+  direct real-source stands с mock boundary не объявлены actual SDK.
+- cb3da7d: SDK4/COM2 success; App build/shared/library и252 GUI tests/platform
+  success, два menu exact-label assertions fail. Upstream egui0.37 Button объединяет
+  shortcut atoms с accessible label. Исправлен test query с сохранением action
+  assertions и видимого Ctrl+P (47e6558); новый CI ещё ожидается.
+- Пара09 выполняет native Fresh/readback capability/permit integration и отдельный
+  actual nohook packaged CLI build/fixture read. External/legal/N4 gates открыты.
+
+## 2026-10-31 — реальные gates после восстановления Cargo cache
+
+Class G-R2/S11/E11/P2/P3/P4/P5: epoch admission, очередь и UI input.
+Inv: pending Disconnect не даёт Read; due strong demand получает safe boundary
+перед Browse2; Deferred не теряет initial tree item; Drop завершает needs один раз.
+N+1: continuous Browse+sessionB, grace100s, Poll не блокирует Browse, held repeat,
+early push требует AddOK, hover Time должен быть физически видимым.
+
+Измеренные результаты и exact scope перечислены в начале status.md: Engine88,
+App264, CLI18; full Linux GUI integration257/table21/theme19; P4 target19,
+real guard-disabled/restored P4(2) иP3(1) прошли нужную последовательность.
+Native44 — mock ABI, не Win32; Windows PKI47e1/1 за6.41с подтверждён actual log.
+До этого новые тестовые drivers ошибочно ждали Read при pending root Browse,
+считали synthetic repeat без held-key настоящим repeat и hover невидимой Time
+ячейки. Исправлены реальные последовательности без ослабления guards; Source/
+Server/Received вTime fixture различаются, pending first push применяется послеAddOK.
+
+Подготовленный Windows batch включает Device+Engine readback и nohook packaged
+CLI read. Отдельные UA recovery/namespace/metadata branches ещё review/private;
+strict first notification реально failed, поздний sample и NewSession проходят.
+Никаких production Async/native DA или release/legal clearance этим не включено.
+
+Большие debug artifacts заполнили временный диск; root удалил только свой
+воспроизводимый Cargo target, исходники и logs сохранены. Последующие локальные
+сборки debug-info=0/incremental=0, без изменения debug assertions/opt policy.
+
+## 2026-10-31 — Win32 gate be960ff и ремонт private preview
+
+Class: SDK cache lifetime и reviewed patch newline. Inv: fixture-owned SDK refs
+освобождаются до SDK common teardown; reverse verification проверяет исходные
+blob bytes независимо от checkout CRLF. N+1: обе matrix и release nohook path,
+точно те же reviewed hashes, extra tracked/untracked inputs запрещены.
+Измерено: App2+SDK4 success;8PNG лично просмотрены root+UI owner. COM I/O PASS,
+но cleanup AV; добавлен release device cache как у прежнего exception cache,
+без подавления exit check. Packager reverse на CRLF падал на новом реальном
+Git regression, после stdin normalization7/7; actual Windows повтор pending.
+Root не смешивает этот repair с UA private recovery scopes; N4/remote/license
+и полный Async/первая post-recovery notification остаются отдельными gates.
+
+
+## 2026-10-31 — N1 inventory после CRLF repair
+
+На c7ff4dc native jobs остановились до компиляции: verifier честно обнаружил
+изменённый package-preview.py, чей profile hash не был обновлён вместе с
+исправлением LF/CRLF. Повторно просмотрен точный diff: только нормализация
+patch bytes и передача через stdin для reverse verification, без изменения
+SDK inputs, dependencies или notices. Обновлён только этот SHA-256.
+Все profile hashes локально совпадают; 4 inventory и 7 package tests проходят.
+COM cache-release fix и полная упаковка пока не проверены новым Win32 runtime.
+
+
+## 2026-10-31 — N1 absolute build-trace roots; 96fd624: 8/9 jobs
+
+Exact head 96fd6249eeac06bd0e3bd039cd15e189f460f328 passed App Linux/Windows
+(41158256649), SDK4 (41158256627) and COM2 (41158256863). Both native matrix
+variants now pass strict fixture cleanup, Device/Fresh, Engine readback,
+blocked-write isolation/shutdown/host-reuse and write-exception gates. These are
+local fixture results, not remote/other-server or production-switch acceptance.
+
+The remaining preview-package job 41158256861 compiled the no-hook bridge and
+x86 release CLI and passed reverse SDK patch verification. It then rejected
+required include paths: CLI arguments were relative while MSVC /showIncludes
+reported absolute paths. The packager now resolves both verified roots before
+the existing strict trace check; missing generated inputs and old SDK headers
+still fail. Real temporary-path regression fails before and passes after this
+change; package tests8/8 and inventory tests4/4 pass, with the reviewed profile
+hash updated. The packaged executable has not yet passed its real CLI read.
+
+
+## 2026-10-31 — SDK lifetime, arrays и replay boundary
+
+Class: N2/N3 ownership/shape acceptance и R07 SDK replay evidence.
+Inv: SDK владеет task/COM/recovery; timeout не освобождает accepted task;
+retire не выдаёт второй outcome; unknown history не исчезает от свежего snapshot.
+N+1: mutable Session escape, zero-item failed-master callback, >2^53/extrema,
+readonly/invalid writes, поздний RepublishResponse и watch overwrite.
+Defect: pending mutable accessor позволял заменить Session; empty failed-master
+callback игнорировался; raw BOOL array принимал неканонические bytes. Для каждого
+есть actual-source before-fail/after-pass regression. Общие primitive array codecs
+уже существовали, повторная реализация не добавлена.
+
+Native Linux runtime stand50/50 и две C++ source/stub regressions прошли;
+оба live Rust gates подключены к обоим COM inputs, Windows результат pending.
+Research Engine/Gateway replay:1/1 targeted12.06s и fresh runner1/1 18.24s;
+SDK delayed response1/1 17.02s, cut1/1 9.08s, watch overwrite unit1/1.
+Исторический exactb94303f прошёл все9 jobs; проверенный package manifest183/94/
+295875bytes/missing0 и executable42+strictcleanup. Все ограничения в status.
+
+## 2026-10-31 — SDK destruction order и pair22
+
+Class N3/R07. Inv: retirement только после всех SDK task item/group refs;
+независимая sessionB прогрессирует при blockedA; secure mode и certificate
+verification устанавливаются на actual SDK, unknown остаётся после fresh read.
+N+1: queued task removal, SDK base destructor release barrier; rejected-cert
+negative case с последующим явно доверенным cert, NewSession вместо Reactivated.
+Defect: ранний derived destructor notification; actual-source beforeFAIL/afterPASS
+для двух branches. Root runtime stand51/51, secure live1/1 + fresh runner1/1.
+Windows isolation/destruction-fix acceptance pending. SDK947 source/core4/4success;
+остальные jobs ещё идут. Production Async/pins/default не переключены.
+
+## 2026-10-31 — пары23/24 и точный94773fa green
+
+Class A08/O23 и R07 secure Transfer/token. Inv: old callback не меняет новый
+registration; активная subscription не создаёт hidden SyncPoll; SDK owns lifecycle.
+N+1: callback88 held→remove/readd→99, distinct server cyclic vs client Sync read,
+SDK public Transfer Good without destination item map, same-channel token renewal.
+Новые native gates только подготовлены: actual-source C++ guards5/5, runtime51/51;
+Win execution pending. UA Transfer real1/1+fresh1/1, stock secure token1/1+fresh1/1.
+94773fa завершил все9 jobs, в обоих COM inputs actual array/manager lease1/1 иcleanup;
+новый retirement fix/late callback/O23 не приписываются историческому run.
+Пара25 A09 отрицательные facts и SDK readiness candidate в работе.
+
+## 2026-10-31 — cec DA1 setup repair
+
+Class N3/O24 test setup. Inv: принудительная версия выбирается до SDK connect,
+а доказательство маршрута строится на real fixture request types, не getter.
+N+1: production open(false) unchanged, explicit inactive open(true), bounded
+phase diagnostics; independent live gates не скрываются за чужим failure.
+SDK source force setter online allowed; server negotiation happens at connect.
+CEC оба COM stop exit62/zeros, точная failing stage пока неизвестна; cleanuppass.
+Shared-impl/source regression + runtime52/52 passed; новый Win результат pending.
+
+## 2026-10-31 — 81f accepted; generic async N+1
+
+81f exact all9 success; новые5 native gates passed в обоих inputs, cleanupstrict.
+Class N2 single-slot SDK async conversion/admission. Inv: existing SDK owner,
+I4/generic shared submit, only attested flags, no lease retirement on unknown
+SDK acceptance. N+1: same bounded Sync codec, no new COM/transaction engine.
+Defect: local throw after entering SDK call is not proof of rejection; attempted
+flag keeps pending, caller error once/late cleanupACK. Modeled actual-source
+before/after passes; runtime53/53, new Win generic execution pending. Source
+SDK Sync normal return assigns item outputs; no unnecessary sentinel patch there.
+Production Async stays Unsupported and callback-never-arrives quarantine remains.

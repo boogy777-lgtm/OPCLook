@@ -170,11 +170,27 @@ target\i686-pc-windows-msvc\release\opclook.exe
 
 ## Headless CLI
 
+CLI принимает `--update-mode subscription|poll`, `--interval-ms`,
+`--poll-freshness cache|source` и `--read-after-write true|false` (для
+совместимости допускается флаг без значения). `--poll` равнозначен
+`--update-mode poll`. Для CLI read-back по умолчанию выключен; явное `true`
+ожидает UA Read и возвращает отдельно исход Write и `readback` с данными и
+quality. Ошибка или Bad/Uncertain результата наблюдения дают ненулевой exit,
+не повторяя Write. DA пока поддерживает Poll/Cache и отклоняет read-back до
+записи. UA CacheAllowed пока не подключён в OPCLook. Read-back не доказывает
+физическое действие. Старые соединения без профиля сохраняют legacy fallback.
+
+В окне состояния подключённого сервера можно изменить профиль: сохранение
+откладывает его до следующего ручного подключения, а сохранение с
+переподключением применяет его через новую сессию. Автоматическое
+переподключение сохраняет текущий профиль.
+
 ```sh
 cargo run -p opclook-cli --target x86_64-unknown-linux-gnu -- --help
 cargo run -p opclook-cli --target x86_64-unknown-linux-gnu -- --ua opc.tcp://127.0.0.1:4840 --policy None --mode None browse i=85
 cargo run -p opclook-cli --target x86_64-unknown-linux-gnu -- --ua opc.tcp://127.0.0.1:4840 read 'ns=2;s=Level'
 cargo run -p opclook-cli --target x86_64-unknown-linux-gnu -- --ua opc.tcp://127.0.0.1:4840 write 'ns=2;s=Level' f64 42.5
+cargo run -p opclook-cli --target x86_64-unknown-linux-gnu -- --ua opc.tcp://127.0.0.1:4840 --read-after-write write 'ns=2;s=Level' f64 42.5
 cargo run -p opclook-cli --target x86_64-unknown-linux-gnu -- --ua opc.tcp://127.0.0.1:4840 --poll --count 3 watch 'ns=2;s=Level'
 ```
 
@@ -182,6 +198,12 @@ cargo run -p opclook-cli --target x86_64-unknown-linux-gnu -- --ua opc.tcp://127
 через переменные окружения и тайм-аут. Результаты — JSON/JSONL; 64-битные
 целые и нечисловые float кодируются строками, качество и время передаются
 отдельно. CLI DA использует системную маршрутизацию. `watch` по умолчанию использует подписку UA, `--poll` включает периодические чтения; работа заканчивается по `--count` или Ctrl+C. Секреты берутся из переменных окружения и редактируются в диагностике. Закрытый stdout завершает вывод без ошибки BrokenPipe. Live subprocess тесты на Linux проверяют CLI против sample UA; физический DA остаётся внешней проверкой.
+
+`write` возвращает `accepted`, `outcome` и `raw_status` с указанием протокола и
+уровня (`item` или `service`); прежнее поле `written` сохранено как синоним
+`accepted`. Принятие сервером, включая асинхронное, не подтверждает физическое
+действие. Неопределённый, отклонённый или неизвестный исход не считается
+успешным; timeout может означать, что запись всё же была выполнена.
 
 ## Документация
 

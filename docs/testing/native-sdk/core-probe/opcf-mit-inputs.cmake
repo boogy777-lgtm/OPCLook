@@ -1,0 +1,21 @@
+# Official OPCF input selection; historical SDK OPC input requires explicit control.
+# Call after find_package(Python3); guard runs both at configure and before build.
+function(opcf_mit_inputs out_sources out_include)
+  if(NOT IS_ABSOLUTE "${OPCF_MIT_STAGED}" OR NOT IS_ABSOLUTE "${OPCF_MIT_GENERATED}")
+    message(FATAL_ERROR "OPCF_MIT_STAGED and OPCF_MIT_GENERATED must be absolute paths")
+  endif()
+  set(script "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../generate-opcf-midl.py")
+  set(args --source "${OPCF_MIT_STAGED}" --output "${OPCF_MIT_GENERATED}" --verify)
+  execute_process(COMMAND "${Python3_EXECUTABLE}" "${script}" ${args} RESULT_VARIABLE result)
+  if(NOT result EQUAL 0)
+    message(FATAL_ERROR "OPCF staged/generated input guard failed")
+  endif()
+  add_custom_target(opcf_mit_guard ALL
+    COMMAND "${Python3_EXECUTABLE}" "${script}" ${args} VERBATIM)
+  set(inputs)
+  foreach(idl opccomn opcda opc_ae opcSec OpcEnum)
+    list(APPEND inputs "${OPCF_MIT_GENERATED}/${idl}_i.c")
+  endforeach()
+  set(${out_sources} "${inputs}" PARENT_SCOPE)
+  set(${out_include} "${OPCF_MIT_GENERATED}" PARENT_SCOPE)
+endfunction()

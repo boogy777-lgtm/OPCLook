@@ -103,6 +103,8 @@ pub struct DaHit {
 }
 
 pub struct ConnectDialog {
+    pub ua_acquisition: Option<crate::bff::model::AcquisitionConfig>,
+    pub da_acquisition: Option<crate::bff::model::AcquisitionConfig>,
     pub open: bool,
     pub pane: ConnectPane,
     pub da_host: String,
@@ -178,6 +180,8 @@ impl Default for ConnectDialog {
     fn default() -> Self {
         Self {
             open: false,
+            ua_acquisition: Some(crate::bff::model::AcquisitionConfig::ua_default()),
+            da_acquisition: Some(crate::bff::model::AcquisitionConfig::da_available()),
             pane: ConnectPane::Da,
             da_host: String::new(),
             da_servers: Vec::new(),
@@ -234,6 +238,8 @@ pub struct AddSignalDialog {
 #[derive(Default)]
 pub struct WriteDialog {
     pub open: bool,
+    pub context_generation: Option<u64>,
+    pub epoch: Option<RequestId>,
     pub keys: Vec<ItemKey>,
     pub text: String,
     pub type_index: usize,
@@ -272,6 +278,8 @@ pub struct MessageDialog {
 #[derive(Clone, Debug)]
 pub struct PendingWrites {
     pub session: SessionId,
+    pub context_generation: Option<u64>,
+    pub epoch: Option<RequestId>,
     pub protocol: Protocol,
     pub requests: Vec<WriteRequest>,
     pub type_label: String,
@@ -297,9 +305,24 @@ pub struct PaletteDialog {
     pub query: String,
     pub selected: Option<opclook_contract::actions::ActionId>,
     pub focus_pending: bool,
+    pub browse_node: String,
+    pub context_session: Option<SessionId>,
+    pub context_epoch: Option<RequestId>,
+    pub context_generation: Option<u64>,
+    pub context_initialized: bool,
+}
+
+#[derive(Default)]
+pub struct AcquisitionDialog {
+    pub open: bool,
+    pub session: Option<SessionId>,
+    pub epoch: Option<RequestId>,
+    pub draft: Option<crate::bff::model::AcquisitionConfig>,
+    pub error: Option<String>,
 }
 
 pub struct Dialogs {
+    pub acquisition: AcquisitionDialog,
     pub palette: PaletteDialog,
     pub connect: ConnectDialog,
     pub add_signal: AddSignalDialog,
@@ -314,6 +337,7 @@ pub struct Dialogs {
 impl Default for Dialogs {
     fn default() -> Self {
         Self {
+            acquisition: AcquisitionDialog::default(),
             palette: PaletteDialog::default(),
             connect: ConnectDialog::default(),
             add_signal: AddSignalDialog::default(),
@@ -346,7 +370,8 @@ impl Dialogs {
     }
 
     pub fn any_open_except_palette(&self) -> bool {
-        self.connect.open
+        self.acquisition.open
+            || self.connect.open
             || self.add_signal.open
             || self.write.open
             || self.columns.open

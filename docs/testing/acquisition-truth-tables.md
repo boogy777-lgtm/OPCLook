@@ -32,6 +32,43 @@ ItemKey). Read хранит набор покрытых demand identities; HashS
 ожидать отсутствие dispatch и сохранение ещё действительной потребности.
 Локальные операции не являются обещанием физической свежести сервера.
 
+## Измеренный частичный срез 2026-10-30
+
+Текущий PR добавляет настоящие Engine тесты `old_read_reply_error_or_synthetic_timeout_does_not_cover_new_write` (покрытие старого Read, coalescing и push), `new_write_after_reservation_and_remove_are_distinct` (повторный demand после reservation и Remove), `e06_active_subscription_cannot_release_reservation`, `old_write_and_read_replies_do_not_cross_reconnect`, `write_opt_in_only_accepts_matching_good_replies` и `unsupported_da_readback_fails_before_write_and_uncertain_never_queues`. CLI `readback_failure_and_quality_preserve_accepted_write_record` проверяет сериализацию/quality; `wrong_key_write_reply_is_unknown_and_initial_read_is_not_readback` проверяет CLI event path и покрытие permit; `browse_read_write_push_forced_poll_and_idle_interrupt` также выполняет UA sample-server opt-in read-back. Они покрывают отдельные переходы E06/E08–E10/E13/E15–E16 и S01/S02/S04/S07/S17/S18, а не целиком соответствующие строки. Timeout тест — синтетический Engine timeout с работающим транспортом, не native UA IO quarantine S03. Общее per-key terminal API для многоключевого E11, fairness, полные G/D таблицы, физический DA/live и остальные случаи остаются открытыми.
+
+### Частичный R2.3 профиль
+
+`legacy_none_roundtrip_and_unknown_or_partial_profiles_fail`, `invalid_acquisition_interval_is_reported_with_backup`, `validates_known_adapter_capabilities_and_interval_boundaries`, `c14_c22_connection_profiles_are_snapshotted_and_poll_independently`, `c23_c24_profile_write_and_invalid_connect_guard` и `explicit_failed_subscription_has_no_hidden_periodic_poll` проверяют части M/C/U через реальные contract/backend/Engine entry points. `explicit_cli_poll_alias_uses_same_profile_and_rejects_invalid_options`, `explicit_poll_reads_without_monitored_value_stream`, GUI `acquisition_*`, `explicit_profiles_do_not_reconfigure_when_global_options_change` и `same_endpoint_with_different_profiles_creates_distinct_sessions` проверяют части C/U/GUI; это не полное покрытие таблиц. Полноценная миграция M03/M04, reported revised interval, UA CacheAllowed, DA Subscription/Device/native SDK и G/D/fairness остаются открыты; редактор активного профиля покрыт частично ниже.
+
+### Редактор активного профиля — границы покрытия
+
+`profile_save_auto_and_manual_reconnect_keep_distinct_snapshots` проверяет C16
+через реальные App/Engine Connect и команды; `profile_rejects_invalid_save_collision_and_stale_epoch`,
+`profile_late_collision_and_capacity_preserve_staged_choice` и
+`profile_connect_dispatch_failure_keeps_saved_candidate` проверяют части C18,
+включая отказ до остановки и сохранение отложенного выбора. Тест
+`profile_reconnect_rejects_old_read_write_and_push_and_reregisters_rows`
+покрывает часть C17 и корреляцию S13/S14 в обе стороны с реальными App/Engine событиями,
+но не доказывает поведение физического сервера. GUI тесты
+`active_profile_cancel_keeps_active_saved_and_staged_profile` и
+`active_profile_enter_message_and_missing_target_are_safe` проверяют C15,
+клавиатуру, приоритет сообщения и видимое отсутствие цели. Остальные требования
+таблиц, включая native UA timeout quarantine S03, DA live и fairness, не закрыты.
+
+### N1: проверка кандидата SDK
+
+`reproduce-softing-status.py` использует точный исходник SDK и fake зависимости:
+14 read-прогонов (два режима × семь наборов handle), те же семь write наборов
+повторяются в двух режимах. Он обнаруживает несоответствие HRESULT до patch,
+после patch проверяет identity/value/quality/time/status и неизменность входа.
+[Run 41067236324](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41067236324)
+на head `d375f15f4b57837baeec75d1cf3a7c9b843cb96e` дополнительно вызывает
+реальный слинкованный Win32 SDK callback offline до/после patch, проверяя
+identity, raw status и неизменность input, а также common/entry lifecycle.
+Это не закрывает O23–O26/A04–A10: COM advise, late teardown и физический DA
+сервер отдельно обязательны. Подробности —
+[Softing N1](native-sdk/softing-4.47.1.md).
+
 ## 2. G — полная таблица допуска Read
 
 Файл: [acquisition-read-gate.csv](acquisition-read-gate.csv).
@@ -139,7 +176,7 @@ UA Bad_WaitingForInitialData не является конечным снимко
 | C13 | DA percent deadband = 0 / 100 | Валидный конфиг; только Subscription применяет фильтр |
 | C14 | Глобальный interval изменён при активных A/B | Активные snapshots A/B неизменны |
 | C15 | Черновик A изменён, затем Cancel | Сохранённый и активный конфиги неизменны |
-| C16 | Apply без reconnect | Сохранён профиль следующего соединения; текущий snapshot неизменен |
+| C16 | Apply без reconnect | Сохранён профиль следующего ручного соединения; текущий snapshot и авто-reconnect неизменны |
 | C17 | ApplyAndReconnect с валидным профилем | Старый канал закрыт, новая эпоха, новый snapshot |
 | C18 | ApplyAndReconnect с невалидным профилем | Ошибка до остановки исправного старого соединения |
 | C19 | Async DA completion пришёл | Reply только соответствующему Read; не Subscription event |
@@ -252,7 +289,7 @@ T08/T09 применяются к выбору отображаемого экз
 | M07 | requested interval=1000, revised=2000 | Оба видны; сохраняется requested=1000 |
 | M08 | Профиль A сохранён, профиль B активен | B snapshot не меняется |
 | M09 | Legacy UA с неподдержанными monitored items | Видимое предупреждение; не скрытый переход Poll |
-| M10 | read_after_write отсутствует в новом совместимом config | true |
+| M10 | read_after_write отсутствует во впервые введённом явном config | Ошибка неполного профиля с backup/notice; legacy отсутствие всего acquisition отдельно |
 | M11 | Новый DA профиль без Device capability | FreshSource disabled; CacheAllowed виден, read_after_write=false либо конфиг отклонён |
 | M12 | Unknown enum/null/неверный тип | Для явно присутствующего невалидного acquisition ошибка; совместимость отсутствующего поля обрабатывается отдельно |
 
@@ -340,5 +377,85 @@ transaction не превращать в unsolicited value ради прохож
 результат после, ограничения среды. Не менять ожидаемые результаты под старый код.
 Если противоречие требует изменения контракта, править R2 и эти таблицы вместе.
 
-Проверка текущего коммита ограничена данными CSV и документацией.
+Проверка исходного документационного коммита была ограничена данными CSV и документацией.
 128+128 — число строк данных, не число пройденных тестов продукта.
+
+### N2.1 offline Softing fact boundary (partial; measured Win32)
+
+Measurement baseline: `36fa668a4b5777cbf751ee4eee866e9c1151518a`,
+[SDK run 41137831955](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41137831955)
+and [COM run 41137831873](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41137831873)
+passed. SDK fact cases below use offline callback injection into the actual
+SDK/C ABI/Rust adapter; they are not independent live device cases. N2L rows
+name the precise live scope. New code after this baseline requires its own CI.
+
+| ID | Case | Adapter expectation | Evidence / limit |
+| --- | --- | --- | --- |
+| N2F01 | Callback containing invalid SDK handle before valid item | Patched SDK supplies aligned per-item HRESULT; C ABI copies valid client handle, mode, transaction, master statuses, quality and FILETIME | Win32 fixture calls real SDK callback, C ABI, then Rust `adapt` via serialized test output; measured in SDK Win32 baseline above |
+| N2F02 | Failed item HRESULT with Good quality | `Failed`, raw HRESULT/quality retained separately; never a usable value | Rust actual adapter test; not yet an Engine terminal event |
+| N2F03 | Unknown VT including ARRAY/BYREF | `UnsupportedType`, raw VT retained; no Empty/Good value | Rust actual adapter test |
+| N2F04 | Zero FILETIME, one tick, max | Raw ticks retained; zero maps to no timestamp, one tick converts with 100 ns precision, max is representable by chrono | Rust actual adapter and existing time tests |
+| N2F05 | Empty callback with failed master status | Empty batch and envelope retained; previous facts are inaccessible | Win32 fixture calls group adapter directly for this edge; measured in SDK Win32 baseline above |
+| N2F06 | 64 accepted; too many entries, null required arrays or invalid identity | 64 facts accepted; explicit overflow/invalid, no partial batch or stale facts; Rust handle/mode errors are typed | Win32 fixture / Rust actual adapter test; SDK callback inputs beyond SDK validation remain untrusted |
+| N2F07 | Failed master error with positive item HRESULT and Good quality | `BatchFailed`, both raw statuses and quality retained; no usable value | Rust actual adapter test |
+
+The 64-item limit applies after the SDK has received and prepared the callback; it does not bound SDK-side allocations. Buffer holds only the latest callback and requires external serialization; it is
+not a queue or history, is not wired to the production backend, and cannot prove
+live delivery, transaction correlation, teardown or two-session isolation.
+
+### N2 SDK initialization owner (partial; scope by row)
+
+| ID | Условие | Ожидаемый результат | Проверка |
+| --- | --- | --- | --- |
+| N2L01 | Успешный MTA initialize и terminate на одной thread | COM initialization balanced; исходный SDK не балансирует | direct core probe проверил CoGetContextToken для baseline и исправленного SDK; SDK run выше прошёл |
+| N2L02 | Несовпадение любого из двух SDK source blobs | Patch не изменяет ни один исходный файл | Python test, локально прошёл |
+| N2L03 | Две независимые сессии, одна зависла | Вторая продолжает обслуживаться, teardown ограничен | sdk_session_isolation_live: A device Write blocked, B cache Read/Write/Read-back до release; COM run выше прошёл; indefinite/network failure отдельно |
+
+| N2L04 | Fixture connect, add I4, device read, write, remove/re-add, read | SDK ABI returns raw service/item result and original value/quality/time | `core-probe --live` прошёл в COM run выше |
+
+| N2L05 | Read/write с отдельной вызывающей thread | SDK выполняет I/O на своём per-server COM worker, caller context не изменяется (implicit MTA допустим) | `core-probe --live` прошёл в COM run выше |
+
+| N2L06 | Remove/re-add и чужая session registration в Rust ABI wrapper | Старый/чужой ключ отклоняется до native call | Реальный wrapper + mock ABI и `sdk-live` Win32 прошли; проверены stale/foreign registrations |
+
+| N2L07 | Owner закрывает host при живой session thread | Busy; native host остаётся живым для завершения зависшей операции | Реальный Rust wrapper + mock ABI прошёл; sdk_pending_shutdown_live прошёл на70357117: Busy до release и финальный cleanup после |
+
+| N2L08 | Gateway Connect/Add/Read/Write/Remove через SDK preview | Обычные correlated Command/Event, raw write status, unsupported явно | Real router/adapter + mock ABI прошёл; strict Win32 sdk_gateway_live прошёл 3/3, включая Test RUNNING/FAILED/RUNNING |
+| N2L09 | Новый Gateway пока старый worker удерживает SDK host | Общий process owner повторно выдаёт существующий host; не освобождает его под вызовом | sdk_host_reuse_live добавлен: bounded A, same live SharedCore, B I/O до release; 41 mock stand/hook PASS, оба Win32 native matrix live PASS на690a830 |
+| N2L10 | SDK task выбрасывает исключение при Write | Task завершается ошибкой, Write outcome Unknown с available service HRESULT, повтора нет | sdk_write_exception_live PASS обоих variants наdf2bf1d: Unknown/DaService E_UNEXPECTED, server count1, no retry, cleanup; full app head7/8 |
+
+| N2L11 | Новый Gateway после idle и финальное завершение процесса | Один SDK host переиспользуется; terminate только final и ожидание ограничено | Linux mock Gateway test и strict Win32 Gateway final shutdown прошли; это idle/normal scope |
+
+| N2L12 | SDK scalar value I8/UI8 выше точности f64, bool, R8 | Exact integer bits, raw status/quality/time, checked write, unsupported explicit | Linux mapper tests и strict Windows Gateway fixture прошли; проверенные scalar cases см. sdk_gateway_live |
+
+### N3 дополнительные строгие live gates
+
+| ID | Сценарий и доказательство | Граница |
+| --- | --- | --- |
+| N3.TEST | sdk_gateway_live, Test RUNNING → FAILED → RUNNING, 3/3 процессов на `36fa668` | Не все vendor states; negative HRESULT отдельно mock |
+| N3.ISOLATION | sdk_session_isolation_live, B42→77→77 пока A ждёт device-write release; PASS1/1 на `36fa668` | Локальный SDK fixture, не remote server/transport failure |
+| N3.PENDING-IO-SHUTDOWN | sdk_pending_shutdown_live: bounded shutdown, Busy до release, один Write reply, final SDK cleanup | Win32 live PASS на70357117, COM41139819114; shutdown5.003833с, app2/2 success, все6 jobs зелёные |
+
+N2L09 получил отдельный strict test пары04 и ожидает нового Win32 CI;
+N2L10 (реальное исключение SDK Write task) выполняется парой05. N3
+pending shutdown не считается доказательством этих условий. Remote/другой
+сервер и полный late-callback/epoch matrix не закрыты локальным fixture.
+
+### Пары03/04 — ожидающие SDK runtime gates
+
+UA Engine stand проверил cache permit/fresh dominance, per-key revised grace,
+mixed minimum age, stale epoch и invalid/overflow ratio. Реальные backend
+sample tests `ua_live_read_sends_requested_max_age_and_direct_read_sends_zero`
+и `ua_live_reports_requested_and_server_revised_subscription_parameters`
+прошли в обычном suite на690a830 (все8jobs). O01/O02/O08 не объявляются
+полностью закрытыми до оставшихся UI projection/recovery cases; item sentinel -1
+сохраняется как SDK факт, не как положительный sampling interval.
+
+### Пара06 terminal API — bounded coverage, runtime CI pending
+
+14 новых реальных Engine tests через path/mock stand проверили partial/missing,
+Bad/Uncertain/reason, service/timeout/late, remove/pending-new, epoch/untracked,
+dispatch closed, ID/permit exhaustion и explicit shutdown. PendingRequest и
+sink — две проекции одного terminal, не две операции. Это не complete G/D/E/S.
+Initial push/E02, frontend consumers и Drop без explicit shutdown ещё не
+закрыты API этого среза; E02/front projection выполняет пара07. P4 actual UI,
+2 counterfactual guard regressions и4PNG ожидают новогоCI.

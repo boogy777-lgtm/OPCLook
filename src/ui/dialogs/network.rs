@@ -71,10 +71,16 @@ pub(super) fn network_settings_view(
             })
             .width(max_width)
             .show_ui(ui, |ui| {
-                ui.selectable_value(&mut chosen, None, tr(lang, Tr::NetworkNotSelected));
+                super::super::components::selectable_value(
+                    ui,
+                    &mut chosen,
+                    None,
+                    tr(lang, Tr::NetworkNotSelected),
+                );
                 for adapter in &rows {
                     let is_selected = preferred_id.is_some() && preferred_id == Some(adapter.id);
-                    ui.selectable_value(
+                    super::super::components::selectable_value(
+                        ui,
                         &mut chosen,
                         Some(adapter.id),
                         adapter_choice_label(lang, adapter, is_selected),
@@ -99,7 +105,7 @@ pub(super) fn network_settings_view(
     if let Some(adapter) = selected {
         let current = adapter.select_address(preferred_ip);
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(tr(lang, Tr::NetworkAddressChoice)).weak());
+            super::super::components::hint(ui, tr(lang, Tr::NetworkAddressChoice));
             match current {
                 None => {
                     ui.colored_label(red(), tr(lang, Tr::NetworkNoIp));
@@ -114,7 +120,8 @@ pub(super) fn network_settings_view(
                         .width(max_width)
                         .show_ui(ui, |ui| {
                             for candidate in &adapter.addresses {
-                                ui.selectable_value(
+                                super::super::components::selectable_value(
+                                    ui,
                                     &mut chosen,
                                     Some(candidate.ip),
                                     candidate.display_with_prefix(),
@@ -127,18 +134,18 @@ pub(super) fn network_settings_view(
                 }
             }
         });
-        ui.label(egui::RichText::new(tr(lang, Tr::NetworkApplyHint)).weak());
+        super::super::components::hint(ui, tr(lang, Tr::NetworkApplyHint));
     } else if preferred_id.is_some() {
-        ui.label(egui::RichText::new(tr(lang, Tr::NetworkStaleAdapter)).weak());
+        super::super::components::hint(ui, tr(lang, Tr::NetworkStaleAdapter));
         if ui.button(tr(lang, Tr::NetworkForget)).ime_safe_clicked() {
             *action = Some((AdapterSelection::None, None));
         }
-        ui.label(egui::RichText::new(tr(lang, Tr::NetworkApplyHint)).weak());
+        super::super::components::hint(ui, tr(lang, Tr::NetworkApplyHint));
     } else if rows.is_empty() {
-        ui.label(egui::RichText::new(tr(lang, Tr::NetworkEmptyList)).weak());
-        ui.label(egui::RichText::new(tr(lang, Tr::NetworkApplyHint)).weak());
+        super::super::components::hint(ui, tr(lang, Tr::NetworkEmptyList));
+        super::super::components::hint(ui, tr(lang, Tr::NetworkApplyHint));
     } else {
-        ui.label(egui::RichText::new(tr(lang, Tr::NetworkSelectAdapterHint)).weak());
-        ui.label(egui::RichText::new(tr(lang, Tr::NetworkApplyHint)).weak());
+        super::super::components::hint(ui, tr(lang, Tr::NetworkSelectAdapterHint));
+        super::super::components::hint(ui, tr(lang, Tr::NetworkApplyHint));
     }
 }

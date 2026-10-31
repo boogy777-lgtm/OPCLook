@@ -1,0 +1,44 @@
+--- a/development/core/src/SODaC/SODaCCallback.cpp
++++ b/development/core/src/SODaC/SODaCCallback.cpp
+@@ -982,7 +982,7 @@
+ 				item.addRef();
+ 				pItems[rellevantItemCount] = (ptrdiff_t)(void*)(SODaCItem*)item;
+ 				_TRACE(SOCMNTRACE_L_DEB, SOCMNTRACE_G_OPC_ADVISE_C, (_T("      [%lu] %s ; 0x%8.8X"), i, (LPCTSTR)item->getItemID(), pErrors[i]));
+-				item->setWrite(pErrors[rellevantItemCount], dwTransid);
++				item->setWrite(pErrors[i], dwTransid);
+ 				pRellevantErrors[rellevantItemCount] = pErrors[i];
+ 				++rellevantItemCount;
+ 			}
+@@ -1085,6 +1085,7 @@
+ 	pItems = new ptrdiff_t[dwCount];
+ 	pValues = new SOCmnVariant[dwCount];
+ 	WORD *pQualities = new WORD[dwCount];
++	HRESULT *pRelevantErrors = new HRESULT[dwCount];
+ 	pTimestamps = new SOCmnDateTime[dwCount];
+ 	m_pComGroupImpl->onDataChangeBegin();
+ 	_TRACE(SOCMNTRACE_L_DEB, SOCMNTRACE_G_OPC_ADVISE_C, (_T(" IN : TransID=0x%X; count: 0x%X ; hrMastererror: 0x%X ; hrMasterquality: 0x%X ; hGroup: 0x%8.8X"), dwTransid, dwCount, hrMastererror, hrMasterquality, hGroup));
+@@ -1112,6 +1113,7 @@
+ 			pValues[rellevantItemCount] = &pvValues[i];
+ 			pTimestamps[rellevantItemCount] = &pftTimeStamps[i];
+ 			pQualities[rellevantItemCount] = pwQualities[i];
++			pRelevantErrors[rellevantItemCount] = pErrors[i];
+ 			item->setRead(pErrors[i], &pValues[rellevantItemCount], pQualities[rellevantItemCount], &pTimestamps[rellevantItemCount], dwTransid);
+ 			++rellevantItemCount;
+ 		}
+@@ -1124,7 +1126,7 @@
+ 	}
+ 
+ 	m_group->onReadAdvise(dataChangeOrRead, dwTransid, hrMasterquality, hrMastererror, rellevantItemCount,
+-						  (SODaCItem**)pItems, pValues, pQualities, pTimestamps, pErrors);
++						  (SODaCItem**)pItems, pValues, pQualities, pTimestamps, pRelevantErrors);
+ 
+ 	for (i = 0; i < rellevantItemCount; i++)
+ 	{
+@@ -1136,6 +1138,7 @@
+ 	delete[] pValues;
+ 	delete[] pTimestamps;
+ 	delete[] pQualities;
++	delete[] pRelevantErrors;
+ 	return S_OK;
+ } // handleReadAdvise
+ 

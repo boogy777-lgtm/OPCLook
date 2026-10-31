@@ -62,6 +62,16 @@ pub fn route_of(kind: &CommandKind) -> Route {
             Route::Unsupported(kind.operation(), BackendMsg::DaNoUaNetworkSearch)
         }
         CommandKind::BrowseViews => Route::Unsupported(kind.operation(), BackendMsg::DaNoViews),
+        CommandKind::ReadFresh { .. } | CommandKind::ReadCached { .. }
+            if !cfg!(feature = "native-da-preview") =>
+        {
+            Route::Unsupported(
+                kind.operation(),
+                BackendMsg::raw(
+                    "Explicit cache/device read is not supported by the legacy DA adapter",
+                ),
+            )
+        }
         CommandKind::ResolveBrowsePath { .. } => {
             Route::Unsupported(kind.operation(), BackendMsg::DaNoBrowsePath)
         }
@@ -75,6 +85,8 @@ pub fn route_of(kind: &CommandKind) -> Route {
         | CommandKind::AddItems { .. }
         | CommandKind::RemoveItems { .. }
         | CommandKind::Read { .. }
+        | CommandKind::ReadFresh { .. }
+        | CommandKind::ReadCached { .. }
         | CommandKind::Write { .. }
         | CommandKind::Test => Route::Session,
     }
@@ -101,7 +113,9 @@ pub fn no_connection_reply(command: &Command) -> Option<Event> {
                 .map(|item| (item.key, Err(BackendMsg::NoConnection)))
                 .collect(),
         },
-        CommandKind::Read { keys } => EventKind::Values {
+        CommandKind::Read { keys }
+        | CommandKind::ReadFresh { keys }
+        | CommandKind::ReadCached { keys, .. } => EventKind::Values {
             values: keys
                 .iter()
                 .map(|key| (*key, DataValue::bad(BackendMsg::NoConnection)))
@@ -245,6 +259,19 @@ impl<H: DaHost> Router<H> {
                 &command,
                 command.kind.operation(),
                 BackendMsg::NoConnection,
+            ));
+            return;
+        }
+        if let CommandKind::Connect { endpoint } = &command.kind
+            && endpoint
+                .acquisition
+                .as_ref()
+                .is_some_and(|config| config.da_read_method == super::model::DaReadMethod::Async)
+        {
+            self.send(error_event(
+                &command,
+                Operation::Connect,
+                BackendMsg::raw("DA asynchronous read is not yet available"),
             ));
             return;
         }
@@ -470,6 +497,31 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::mpsc::{Receiver, channel};
 
+    #[test]
+    fn explicit_reads_only_route_to_native_preview() {
+        let fresh = CommandKind::ReadFresh {
+            keys: vec![ItemKey::FIRST],
+        };
+        let cached = CommandKind::ReadCached {
+            keys: vec![ItemKey::FIRST],
+            max_age_ms: 1,
+        };
+        for kind in [fresh, cached] {
+            if cfg!(feature = "native-da-preview") {
+                assert_eq!(route_of(&kind), Route::Session);
+            } else {
+                assert!(matches!(
+                    route_of(&kind),
+                    Route::Unsupported(Operation::Read, _)
+                ));
+            }
+        }
+        assert_eq!(
+            route_of(&CommandKind::Read { keys: vec![] }),
+            Route::Session
+        );
+    }
+
     const WAIT: Duration = Duration::from_secs(5);
 
     fn sid(n: u64) -> SessionId {
@@ -501,6 +553,7 @@ mod tests {
         release: Mutex<Option<Receiver<()>>>,
         /// Sessions whose teardown ran (RemoveGroup stand-in).
         torn_down: Mutex<Vec<SessionId>>,
+        explicit_reads: std::sync::atomic::AtomicUsize,
         /// Discovery with this host name waits for `release_discovery`.
         release_discovery: Mutex<Option<Receiver<()>>>,
     }
@@ -513,6 +566,7 @@ mod tests {
                 Arc::new(Self {
                     release: Mutex::new(Some(release_rx)),
                     torn_down: Mutex::new(Vec::new()),
+                    explicit_reads: std::sync::atomic::AtomicUsize::new(0),
                     release_discovery: Mutex::new(Some(disc_rx)),
                 }),
                 release_tx,
@@ -541,6 +595,13 @@ mod tests {
             let mut connected = false;
             while let Some(cmd) = commands.blocking_recv() {
                 let (request_id, sid) = (cmd.request_id, cmd.owner);
+                if matches!(
+                    &cmd.kind,
+                    CommandKind::ReadFresh { .. } | CommandKind::ReadCached { .. }
+                ) {
+                    self.explicit_reads
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
                 let reply = |kind| {
                     let _ = events.send(Event {
                         origin: request_id.into(),
@@ -650,11 +711,76 @@ mod tests {
     fn event_id(event: &Event) -> u64 {
         match event.origin {
             crate::bff::model::Origin::Reply(id) => id.get(),
-            crate::bff::model::Origin::Unsolicited | crate::bff::model::Origin::Session(_) => 0,
+            crate::bff::model::Origin::Unsolicited
+            | crate::bff::model::Origin::Session(_)
+            | crate::bff::model::Origin::UaSession { .. } => 0,
         }
     }
     fn is_kind(event: &Event, request_id: u64) -> bool {
         event_id(event) == request_id
+    }
+
+    #[cfg(not(feature = "native-da-preview"))]
+    #[test]
+    fn legacy_rejects_explicit_reads_before_session_dispatch() {
+        let (host, _r, _d) = MockHost::new();
+        let (mut router, rx) = router_with(host.clone());
+        router.dispatch(connect(1, sid(1), "ok"));
+        assert!(matches!(next(&rx).kind, EventKind::Connected { .. }));
+        for (id, kind) in [
+            (
+                2,
+                CommandKind::ReadFresh {
+                    keys: vec![ItemKey::FIRST],
+                },
+            ),
+            (
+                3,
+                CommandKind::ReadCached {
+                    keys: vec![ItemKey::FIRST],
+                    max_age_ms: 1,
+                },
+            ),
+        ] {
+            router.dispatch(command(id, sid(1).into(), kind));
+            let event = next(&rx);
+            assert!(is_kind(&event, id));
+            assert!(
+                matches!(event.kind, EventKind::Error { operation: Operation::Read, message: BackendMsg::Raw(ref text) } if text == "Explicit cache/device read is not supported by the legacy DA adapter")
+            );
+        }
+        assert_eq!(
+            host.explicit_reads
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        assert!(!router.shutdown(WAIT).panicked);
+    }
+
+    #[test]
+    fn direct_async_connect_is_rejected_before_session_start() {
+        let (host, _r, _d) = MockHost::new();
+        let (mut router, rx) = router_with(host);
+        let mut endpoint = EndpointSpec::da("", "test");
+        let mut config = super::super::model::AcquisitionConfig::da_available();
+        config.da_read_method = super::super::model::DaReadMethod::Async;
+        endpoint.acquisition = Some(config);
+        router.dispatch(command(
+            44,
+            sid(1).into(),
+            CommandKind::Connect { endpoint },
+        ));
+        let event = next(&rx);
+        assert!(is_kind(&event, 44));
+        assert!(matches!(
+            event.kind,
+            EventKind::Error {
+                operation: Operation::Connect,
+                ..
+            }
+        ));
+        assert_eq!(router.session_count(), 0);
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

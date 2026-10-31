@@ -1,0 +1,199 @@
+diff --git a/crates/backend/src/bff/ua/live_tests.rs b/crates/backend/src/bff/ua/live_tests.rs
+index ca034b4..fa94366 100644
+--- a/crates/backend/src/bff/ua/live_tests.rs
++++ b/crates/backend/src/bff/ua/live_tests.rs
+@@ -3584,0 +3585,194 @@ fn sdk_callback_reports_synthetic_publish_sequence_gap_and_still_delivers_value(
++
++/// SDK-only wire probe: drop exactly one complete PublishResponse and cut the
++/// connection; server has already retained its notification for Republish.
++struct DropPublishProxy {
++    url: String,
++    armed: Arc<std::sync::atomic::AtomicBool>,
++    lost: Receiver<(u32, u32)>,
++    publish_after_cut: Receiver<()>,
++    republish_count: Arc<std::sync::atomic::AtomicUsize>,
++    cut_seen: Arc<std::sync::atomic::AtomicBool>,
++    pause_reconnect: Arc<std::sync::atomic::AtomicBool>,
++    resume_reconnect: Arc<tokio::sync::Notify>,
++    fault_mode: Arc<std::sync::atomic::AtomicU8>,
++    fault_seen: Receiver<()>,
++    release: Arc<tokio::sync::Notify>,
++    stop: Option<tokio::sync::oneshot::Sender<()>>,
++    thread: Option<std::thread::JoinHandle<()>>,
++}
++impl DropPublishProxy {
++    fn start(server: &TestServer) -> Self {
++        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
++        listener.set_nonblocking(true).unwrap();
++        let port = listener.local_addr().unwrap().port();
++        let server_port = server.port;
++        let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
++        let proxy_armed = armed.clone();
++        let cut_seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
++        let proxy_cut = cut_seen.clone();
++        let republish_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
++        let proxy_rep = republish_count.clone();
++        let pause_reconnect = Arc::new(std::sync::atomic::AtomicBool::new(false));
++        let pause_ref = pause_reconnect.clone();
++        let resume_reconnect = Arc::new(tokio::sync::Notify::new());
++        let resume_ref = resume_reconnect.clone();
++        let fault_mode = Arc::new(std::sync::atomic::AtomicU8::new(0));
++        let fault_ref = fault_mode.clone();
++        let release = Arc::new(tokio::sync::Notify::new());
++        let release_ref = release.clone();
++        let (fault_tx, fault_seen) = channel();
++        let (lost_tx, lost) = channel();
++        let (publish_tx, publish_after_cut) = channel();
++        let (stop, stopped) = tokio::sync::oneshot::channel();
++        let thread = std::thread::spawn(move || {
++            use tokio::io::{AsyncReadExt, AsyncWriteExt};
++            let rt = tokio::runtime::Builder::new_multi_thread()
++                .worker_threads(2)
++                .enable_all()
++                .build()
++                .unwrap();
++            rt.block_on(async move {
++                let listener=tokio::net::TcpListener::from_std(listener).unwrap(); let mut tasks=tokio::task::JoinSet::new(); tokio::pin!(stopped);
++                loop { tokio::select! {
++                    _=&mut stopped=>break,
++                    accepted=listener.accept()=>{
++                        let Ok((client,_))=accepted else {break}; let armed=proxy_armed.clone(); let cut=proxy_cut.clone(); let rep=proxy_rep.clone(); let lost_tx=lost_tx.clone(); let publish_tx=publish_tx.clone(); let fault=fault_ref.clone(); let fault_down=fault_ref.clone(); let signal=fault_tx.clone(); let signal_down=fault_tx.clone(); let release=release_ref.clone(); let pause=pause_ref.clone(); let resume=resume_ref.clone();
++                        tasks.spawn(async move {
++                            if cut.load(std::sync::atomic::Ordering::SeqCst) && pause.load(std::sync::atomic::Ordering::SeqCst) { resume.notified().await; }
++                            let Ok(server)=tokio::net::TcpStream::connect(("127.0.0.1",server_port)).await else {return};
++                            let (mut cr,mut cw)=client.into_split();let (mut sr,mut sw)=server.into_split(); let cut_up=cut.clone();
++                            let upstream=async move { loop {
++                                let mut h=[0u8;8]; if cr.read_exact(&mut h).await.is_err(){break} let n=u32::from_le_bytes([h[4],h[5],h[6],h[7]]) as usize;
++                                if !(8..=1_048_576).contains(&n){break} let mut f=vec![0;n];f[..8].copy_from_slice(&h);if cr.read_exact(&mut f[8..]).await.is_err(){break}
++                                if &h[..4]==b"MSGF" && n>24 { use opcua::types::{BinaryDecodable,ContextOwned}; let ctx=ContextOwned::default();let mut c=std::io::Cursor::new(&f[24..]);
++                                    if let Ok(id)=NodeId::decode(&mut c,&ctx.context()) {
++                                        if id==NodeId::from(ObjectId::RepublishRequest_Encoding_DefaultBinary){rep.fetch_add(1,std::sync::atomic::Ordering::SeqCst); if fault.compare_exchange(2,0,std::sync::atomic::Ordering::SeqCst,std::sync::atomic::Ordering::SeqCst).is_ok(){let _=signal.send(());break;}}
++                                        if id==NodeId::from(ObjectId::PublishRequest_Encoding_DefaultBinary)&&cut_up.load(std::sync::atomic::Ordering::SeqCst){let _=publish_tx.send(());}
++                                    }
++                                } if sw.write_all(&f).await.is_err(){break}
++                            }};
++                            let downstream=async move {loop {
++                                let mut held_reply = false;
++                                let mut h=[0u8;8];if sr.read_exact(&mut h).await.is_err(){break}let n=u32::from_le_bytes([h[4],h[5],h[6],h[7]]) as usize;
++                                if !(8..=1_048_576).contains(&n){break}let mut f=vec![0;n];f[..8].copy_from_slice(&h);if sr.read_exact(&mut f[8..]).await.is_err(){break}
++                                if &h[..4]==b"MSGF" && n>24 && fault_down.load(std::sync::atomic::Ordering::SeqCst)==1 { use opcua::types::{BinaryDecodable,ContextOwned};let ctx=ContextOwned::default();let mut c=std::io::Cursor::new(&f[24..]); if NodeId::decode(&mut c,&ctx.context()).is_ok_and(|id| id==NodeId::from(ObjectId::RepublishResponse_Encoding_DefaultBinary)) && fault_down.compare_exchange(1,0,std::sync::atomic::Ordering::SeqCst,std::sync::atomic::Ordering::SeqCst).is_ok(){let _=signal_down.send(());release.notified().await;held_reply=true;} }
++                                if &h[..4]==b"MSGF"&&n>24&&armed.load(std::sync::atomic::Ordering::SeqCst){use opcua::types::{BinaryDecodable,ContextOwned,PublishResponse};let ctx=ContextOwned::default();let mut c=std::io::Cursor::new(&f[24..]);
++                                    if NodeId::decode(&mut c,&ctx.context()).is_ok_and(|id|id==NodeId::from(ObjectId::PublishResponse_Encoding_DefaultBinary)){
++                                        if let Ok(r)=PublishResponse::decode(&mut c,&ctx.context()) {if r.notification_message.notification_data.as_ref().is_some_and(|v|!v.is_empty())&&armed.swap(false,std::sync::atomic::Ordering::SeqCst){
++                                            cut.store(true,std::sync::atomic::Ordering::SeqCst);let _=lost_tx.send((r.subscription_id,r.notification_message.sequence_number));break;
++                                        }}
++                                    }
++                                }if cw.write_all(&f).await.is_err(){break} if held_reply { let _=signal_down.send(()); }
++                            }};
++                            tokio::select!{_ = upstream=>{},_ = downstream=>{}}
++                        });
++                    }
++                }}tasks.abort_all();while tasks.join_next().await.is_some(){}
++            });
++        });
++        Self {
++            url: format!("opc.tcp://127.0.0.1:{port}/"),
++            armed,
++            lost,
++            publish_after_cut,
++            republish_count,
++            cut_seen,
++            pause_reconnect,
++            resume_reconnect,
++            fault_mode,
++            fault_seen,
++            release,
++            stop: Some(stop),
++            thread: Some(thread),
++        }
++    }
++}
++impl Drop for DropPublishProxy {
++    fn drop(&mut self) {
++        if let Some(stop) = self.stop.take() {
++            let _ = stop.send(());
++        }
++        if let Some(thread) = self.thread.take() {
++            let _ = thread.join();
++        }
++    }
++}
++
++
++
++#[test]
++fn sdk_ready_handoff_holds_replay_without_blocking_read() {
++    use opcua::client::{DataChangeCallback, RepublishRecoveryOutcome};
++    use opcua::types::{AttributeId, MonitoredItemCreateRequest, MonitoringMode, MonitoringParameters, ReadValueId, TimestampsToReturn};
++    use crate::bff::model::{Origin, RequestId, UaRecoveryMode, UaRecoveryState};
++    use std::sync::atomic::Ordering;
++    let server=TestServer::start(free_port());let proxy=DropPublishProxy::start(&server);
++    let rt=tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
++    rt.block_on(async {
++        let (events,event_rx)=channel();let cancel=tokio_util::sync::CancellationToken::new();
++        let epoch=RequestId::FIRST;let mut adapter=super::session::connect(SessionId::FIRST,Some(epoch),Harness::endpoint(&proxy.url),&cancel,&events).await.unwrap();
++        let mut ready=adapter.session.subscribe_recovery_readiness();let mut outcome=adapter.session.subscribe_republish_recovery();
++        let (tx,rx)=channel();let callback=DataChangeCallback::new(move |v:DataValue,_|{let _=tx.send(v);});
++        let sub=adapter.session.create_subscription(Duration::from_millis(100),100,20,1000,0,true,callback).await.unwrap();
++        let node=ReadValueId {node_id:NodeId::new(server.ns,"Level"),attribute_id:AttributeId::Value as u32,..Default::default()};
++        let items=adapter.session.create_monitored_items(sub,TimestampsToReturn::Both,vec![MonitoredItemCreateRequest {item_to_monitor:node.clone(),monitoring_mode:MonitoringMode::Reporting,requested_parameters:MonitoringParameters {client_handle:1,sampling_interval:0.0,queue_size:10,discard_oldest:true,..Default::default()}}]).await.unwrap();assert!(items[0].result.status_code.is_good());
++        rx.recv_timeout(Duration::from_secs(15)).expect("initial callback");
++        proxy.pause_reconnect.store(true,Ordering::SeqCst);proxy.armed.store(true,Ordering::SeqCst);server.set("Level",Variant::Double(52.5));proxy.lost.recv_timeout(Duration::from_secs(15)).expect("lost Publish 52.5");
++        let until=Instant::now()+Duration::from_secs(20);let mut lost=false;
++        while Instant::now()<until {let Ok(e)=event_rx.recv_timeout(until.saturating_duration_since(Instant::now())) else {break};if matches!((e.origin,e.kind),(Origin::UaSession {connection,..},EventKind::UaRecovery {state:UaRecoveryState::ConnectionLost {..}}) if connection==epoch){lost=true;break}}assert!(lost);
++        server.set("Level",Variant::Double(53.5));proxy.pause_reconnect.store(false,Ordering::SeqCst);proxy.resume_reconnect.notify_one();
++        let until=Instant::now()+Duration::from_secs(25);let mut reconnected=false;
++        while Instant::now()<until {let Ok(e)=event_rx.recv_timeout(until.saturating_duration_since(Instant::now())) else {break};if matches!((e.origin,e.kind),(Origin::UaSession {connection,..},EventKind::UaRecovery {state:UaRecoveryState::Reconnected {mode:UaRecoveryMode::ReactivatedSession}}) if connection==epoch){reconnected=true;break}}assert!(reconnected,"same session reactivation");
++        tokio::time::timeout(Duration::from_secs(5),ready.changed()).await.unwrap().unwrap();let state=*ready.borrow_and_update();let generation=state.generation;assert_eq!(state.phase,opcua::client::RecoveryReadyPhase::Waiting);
++        assert!(!adapter.session.confirm_recovery_readiness(generation+1));
++        let read=adapter.session.read(&[node],TimestampsToReturn::Both,0.0).await.expect("SDK network driver must progress while not ready");assert_eq!(read[0].value,Some(Variant::Double(53.5)));
++        assert!(rx.recv_timeout(Duration::from_millis(350)).is_err(),"callback before identity ready");
++        assert!(adapter.session.confirm_recovery_readiness(generation));assert!(!adapter.session.confirm_recovery_readiness(generation));
++        let first=rx.recv_timeout(Duration::from_secs(15)).expect("SDK replay after ready");assert_eq!(first.value,Some(Variant::Double(52.5)));
++        let second=rx.recv_timeout(Duration::from_secs(15)).expect("later SDK Publish");assert_eq!(second.value,Some(Variant::Double(53.5)));
++        tokio::time::timeout(Duration::from_secs(10),outcome.changed()).await.unwrap().unwrap();assert_eq!(*outcome.borrow_and_update(),Some(RepublishRecoveryOutcome::MessageNotAvailable));
++        assert!(adapter.session.republish_history_uncertain());
++        eprintln!("OBSERVED sdk_ready={generation} unready_read=53.5 pre_ready_callback=none replay=52.5 then_publish=53.5 unknown=true");
++        adapter.close().await;
++    });
++}
++
++#[test]
++fn sdk_ready_deadline_and_transport_loss_reject_late_ack() {
++    use opcua::client::{DataChangeCallback, RecoveryReadyPhase, RepublishRecoveryOutcome};
++    use opcua::types::{AttributeId, MonitoredItemCreateRequest, MonitoringMode, MonitoringParameters, ReadValueId, TimestampsToReturn};
++    let server=TestServer::start(free_port());let proxy=RecoveryProxy::start(&server);
++    let rt=tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
++    rt.block_on(async {
++        let (events,_event_rx)=channel();let cancel=tokio_util::sync::CancellationToken::new();
++        let mut adapter=super::session::connect(SessionId::FIRST,Some(crate::bff::model::RequestId::FIRST),Harness::endpoint(&proxy.url),&cancel,&events).await.unwrap();
++        let mut ready=adapter.session.subscribe_recovery_readiness();let mut outcome=adapter.session.subscribe_republish_recovery();
++        let node=ReadValueId {node_id:NodeId::new(server.ns,"Level"),attribute_id:AttributeId::Value as u32,..Default::default()};
++        let (tx,rx)=channel();let callback=DataChangeCallback::new(move |v:DataValue,_|{let _=tx.send(v);});
++        let sub=adapter.session.create_subscription(Duration::from_millis(100),100,20,1000,0,true,callback).await.unwrap();
++        let items=adapter.session.create_monitored_items(sub,TimestampsToReturn::Both,vec![MonitoredItemCreateRequest {item_to_monitor:node.clone(),monitoring_mode:MonitoringMode::Reporting,requested_parameters:MonitoringParameters {client_handle:1,sampling_interval:0.0,queue_size:10,discard_oldest:true,..Default::default()}}]).await.unwrap();assert!(items[0].result.status_code.is_good());
++        rx.recv_timeout(Duration::from_secs(15)).expect("initial callback");
++        proxy.cut.send_modify(|n|*n+=1);
++        tokio::time::timeout(Duration::from_secs(30),ready.changed()).await.expect("first readiness").unwrap();
++        let first=*ready.borrow_and_update();assert_eq!(first.phase,RecoveryReadyPhase::Waiting);
++        assert!(!adapter.session.confirm_recovery_readiness(first.generation+1));
++        tokio::time::timeout(Duration::from_secs(10),outcome.changed()).await.expect("deadline outcome").unwrap();
++        assert_eq!(*outcome.borrow_and_update(),Some(RepublishRecoveryOutcome::ReadinessDeadline));
++        assert!(!adapter.session.confirm_recovery_readiness(first.generation));
++        server.set("Level",Variant::Double(65.5));
++        let read=adapter.session.read(&[node],TimestampsToReturn::Both,0.0).await.expect("network after deadline");assert_eq!(read[0].value,Some(Variant::Double(65.5)));
++        assert!(rx.recv_timeout(Duration::from_secs(1)).is_err(), "timeout must not deliver callback to unready consumer");
++        let _=*ready.borrow_and_update();
++        proxy.cut.send_modify(|n|*n+=1);
++        tokio::time::timeout(Duration::from_secs(30),ready.changed()).await.expect("second readiness").unwrap();
++        let second=*ready.borrow_and_update();assert_eq!(second.phase,RecoveryReadyPhase::Waiting);assert!(second.generation>first.generation);
++        assert!(!adapter.session.confirm_recovery_readiness(first.generation));
++        proxy.cut.send_modify(|n|*n+=1);
++        tokio::time::timeout(Duration::from_secs(10),outcome.changed()).await.expect("cancel outcome").unwrap();
++        assert_eq!(*outcome.borrow_and_update(),Some(RepublishRecoveryOutcome::Cancelled));
++        assert!(!adapter.session.confirm_recovery_readiness(second.generation));
++        assert!(adapter.session.republish_history_uncertain());
++        eprintln!("OBSERVED ready_timeout=typed late_ack=rejected loss_cancel=typed stale_ack=rejected network_after_deadline=ok unready_callback=none");
++        adapter.close().await;
++    });
++}

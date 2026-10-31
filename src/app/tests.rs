@@ -3,7 +3,8 @@ use super::sessions::reconnect_delay;
 use super::table::infer_kind;
 use super::*;
 use crate::bff::model::{
-    BackendMsg, BrowseNode, EndpointSpec, EventKind, NodeKind, Operation, WriteRequest,
+    BackendMsg, BrowseNode, EndpointSpec, Event, EventKind, NodeKind, Operation, Origin,
+    WriteRequest,
 };
 use crate::constants::{RECONNECT_MAX_ATTEMPTS, RECONNECT_MAX_DELAY};
 use crate::i18n::Lang;
@@ -497,8 +498,7 @@ fn add_children_disconnect_cancels_job() {
 /// OPC UA Part 4 requires the initial value notification for a new monitored
 /// item, but some stacks report only on change and a slow first publish can
 /// delay the snapshot. With an active push subscription the periodic Read is
-/// suppressed, so the app must read the confirmed keys once after AddItems or
-/// the row stays empty until the value changes.
+/// suppressed, so Engine schedules a one-shot read for confirmed keys.
 #[test]
 fn add_items_reply_reads_confirmed_keys_once() {
     let ctx = egui::Context::default();
@@ -515,9 +515,19 @@ fn add_items_reply_reads_confirmed_keys_once() {
     ));
     let keys: Vec<ItemKey> = app.rows.iter().map(|row| row.key).collect();
     assert_eq!(keys.len(), 2);
-    app.on_event_for_test_at(
-        session,
-        EventKind::AddItems {
+    let add_request = app
+        .dispatched_for_test()
+        .into_iter()
+        .find_map(|command| {
+            matches!(command.kind, CommandKind::AddItems { .. })
+                .then_some(command.request_id)
+                .flatten()
+        })
+        .unwrap();
+    app.on_event(Event {
+        owner: session.into(),
+        origin: Origin::Reply(add_request),
+        kind: EventKind::AddItems {
             results: vec![
                 (
                     keys[0],
@@ -530,7 +540,8 @@ fn add_items_reply_reads_confirmed_keys_once() {
                 (keys[1], Err(BackendMsg::NoConnection)),
             ],
         },
-    );
+    });
+    app.tick_at(Instant::now() + Duration::from_secs(2));
     let reads: Vec<Vec<ItemKey>> = app
         .dispatched_for_test()
         .into_iter()
@@ -1125,11 +1136,11 @@ fn pend_discover(app: &mut App, request_id: RequestId, host: &str) {
     app.engine.insert_pending_for_test(
         crate::bff::model::Owner::Discovery,
         request_id,
-        PendingRequest {
-            operation: Operation::Discover,
-            sent: Instant::now(),
-            ctx: PendingCtx::Host(host.to_string()),
-        },
+        PendingRequest::new(
+            Operation::Discover,
+            Instant::now(),
+            PendingCtx::Host(host.to_string()),
+        ),
     );
 }
 
@@ -1446,11 +1457,7 @@ fn k1_fresh_requests_do_not_expire() {
     app.engine.insert_pending_for_test(
         crate::bff::model::SessionId::new(1).unwrap(),
         RequestId::new(501).unwrap(),
-        PendingRequest {
-            operation: Operation::Browse,
-            sent: Instant::now(),
-            ctx: PendingCtx::None,
-        },
+        PendingRequest::new(Operation::Browse, Instant::now(), PendingCtx::None),
     );
     app.age_pending_requests_for_test(crate::bff::model::SessionId::new(1).unwrap(), 20);
     app.tick_for_test();
@@ -1773,10 +1780,104 @@ fn write_request(key: ItemKey) -> WriteRequest {
 fn start_batch(app: &mut App, keys: &[ItemKey]) {
     app.perform_write(PendingWrites {
         session: crate::bff::model::SessionId::new(1).unwrap(),
+        context_generation: app
+            .session(SessionId::FIRST)
+            .and_then(|v| v.context_generation),
+        epoch: app.engine.connection_id(SessionId::FIRST),
         protocol: Protocol::OpcUa,
         requests: keys.iter().copied().map(write_request).collect(),
         type_label: "Int".to_string(),
     });
+}
+
+#[test]
+fn write_outcomes_keep_status_and_never_replace_observed_value() {
+    use crate::bff::model::WriteOutcome;
+    for (code, accepted) in [
+        (0x002e_0000, true),
+        (0x4000_1234, false),
+        (0x8000_0042, false),
+    ] {
+        let (_ctx, mut app) = tree_app();
+        let session = SessionId::FIRST;
+        let key = app.seed_row(session, "A", "A", Value::I64(9));
+        start_batch(&mut app, &[key]);
+        let id = app.pending_request_ids_for_test(session)[0];
+        app.on_event_for_test_with_request(
+            session,
+            id,
+            EventKind::Wrote {
+                key,
+                result: Ok(WriteOutcome::from_ua(code, "status")),
+            },
+        );
+        assert_eq!(app.rows[0].value, Value::I64(9));
+        assert_eq!(app.write_batch.ok, usize::from(accepted));
+        assert_eq!(app.dialogs.message.is_some(), code == 0x8000_0042);
+        assert!(
+            app.journal
+                .entries()
+                .iter()
+                .any(|entry| entry.render(app.lang()).contains(&format!("0x{code:08X}")))
+        );
+    }
+}
+
+#[test]
+fn write_timeout_is_reported_as_unknown_and_not_retried() {
+    let (_ctx, mut app) = tree_app();
+    let session = SessionId::FIRST;
+    let key = app.seed_row(session, "A", "A", Value::I64(9));
+    app.record_dispatches_for_test();
+    start_batch(&mut app, &[key]);
+    let id = app.pending_request_ids_for_test(session)[0];
+    app.on_event_for_test_with_request(
+        session,
+        id,
+        EventKind::Error {
+            operation: Operation::Write,
+            message: BackendMsg::RequestTimeout { seconds: 5 },
+        },
+    );
+    assert_eq!(app.rows[0].value, Value::I64(9));
+    assert_eq!(app.write_batch.ok, 0);
+    assert_eq!(
+        app.dispatched_for_test()
+            .into_iter()
+            .filter(|cmd| matches!(cmd.kind, CommandKind::Write { .. }))
+            .count(),
+        1
+    );
+    assert!(app.journal.entries().iter().any(|entry| {
+        entry
+            .render(app.lang())
+            .contains(tr(app.lang(), Tr::WriteUnknownStatus))
+    }));
+    assert!(app.dialogs.message.is_none());
+}
+
+#[test]
+fn preflight_write_error_is_not_submitted() {
+    let (_ctx, mut app) = tree_app();
+    let session = SessionId::FIRST;
+    let key = app.seed_row(session, "A", "A", Value::I64(9));
+    start_batch(&mut app, &[key]);
+    let id = app.pending_request_ids_for_test(session)[0];
+    app.on_event_for_test_with_request(
+        session,
+        id,
+        EventKind::Wrote {
+            key,
+            result: Err(BackendMsg::NodeNotSubscribed),
+        },
+    );
+    let dialog = app.dialogs.message.as_ref().unwrap();
+    assert!(
+        dialog
+            .details
+            .contains(tr(app.lang(), Tr::WriteNotSubmitted))
+    );
+    assert_eq!(app.rows[0].value, Value::I64(9));
 }
 
 #[test]
@@ -1813,7 +1914,7 @@ fn a11_overlapping_write_batches_add_up() {
             *id,
             EventKind::Wrote {
                 key,
-                result: Ok(()),
+                result: Ok(crate::bff::model::WriteOutcome::from_ua(0, "Good")),
             },
         );
     }
@@ -1850,7 +1951,7 @@ fn a11_counters_restart_after_a_finished_batch() {
         id,
         EventKind::Wrote {
             key: a,
-            result: Ok(()),
+            result: Ok(crate::bff::model::WriteOutcome::from_ua(0, "Good")),
         },
     );
     start_batch(&mut app, &[a]);
@@ -2299,6 +2400,10 @@ fn partial_write_then_closed_worker_finishes_batch() {
     app.engine.limit_dispatch_for_test(1);
     app.perform_write(PendingWrites {
         session: crate::bff::model::SessionId::new(1).unwrap(),
+        context_generation: app
+            .session(SessionId::FIRST)
+            .and_then(|v| v.context_generation),
+        epoch: app.engine.connection_id(SessionId::FIRST),
         protocol: Protocol::OpcUa,
         requests: vec![
             WriteRequest {
@@ -2422,6 +2527,8 @@ fn old_disconnect_preserves_new_connection_write_confirmation() {
         focus_pending: true,
         action: ConfirmAction::Write(PendingWrites {
             session,
+            context_generation: app.session(session).and_then(|v| v.context_generation),
+            epoch: Some(b),
             protocol: Protocol::OpcUa,
             requests: vec![],
             type_label: String::new(),
@@ -2464,6 +2571,7 @@ fn stale_connection_push_does_not_change_current_row() {
                     quality: crate::bff::model::Quality::from_da(0xc0),
                     timestamp: None,
                     reason: None,
+                    times: Default::default(),
                 },
             )],
         },
@@ -2498,6 +2606,7 @@ fn late_unsolicited_data_cannot_revive_a_lost_or_connecting_link() {
                         quality: crate::bff::model::Quality::from_da(0xc0),
                         timestamp: None,
                         reason: None,
+                        times: Default::default(),
                     },
                 )],
             },
@@ -2547,7 +2656,9 @@ fn exhausted_reconnect_preserves_pending_and_existing_state() {
         .send(
             crate::bff::model::SessionId::new(1).unwrap(),
             Protocol::OpcUa,
-            CommandKind::Read { keys: vec![] },
+            CommandKind::Read {
+                keys: vec![ItemKey::FIRST],
+            },
         )
         .unwrap();
     app.engine.exhaust_requests_for_test();
@@ -2567,7 +2678,13 @@ fn unsolicited_values_and_read_error_do_not_clear_pending_read_in_ui() {
     app.sync_fixture_sessions();
     app.engine.limit_dispatch_for_test(1);
     let request = app
-        .send(session, Protocol::OpcUa, CommandKind::Read { keys: vec![] })
+        .send(
+            session,
+            Protocol::OpcUa,
+            CommandKind::Read {
+                keys: vec![ItemKey::FIRST],
+            },
+        )
         .unwrap();
     app.project_session(session);
     app.on_event_for_test_at(session, EventKind::Values { values: vec![] });
@@ -2972,4 +3089,1193 @@ fn visible_tree_cache_updates_on_toggle() {
     assert_eq!(view.visible_tree_indices().as_slice(), &[0, 1]);
     view.toggle_tree(root);
     assert_eq!(view.visible_tree_indices().as_slice(), &[0]);
+}
+
+#[test]
+fn explicit_profiles_do_not_reconfigure_when_global_options_change() {
+    use crate::bff::model::AcquisitionConfig;
+    let mut app = App::new_test(&egui::Context::default());
+    let mut endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+    endpoint.acquisition = Some(AcquisitionConfig::ua_default());
+    app.seed_session(SessionId::FIRST, endpoint.clone());
+    app.record_dispatches_for_test();
+    app.dialogs.options.draft.update_interval_secs = 9;
+    app.apply_options();
+    assert_eq!(app.sessions[0].endpoint().acquisition, endpoint.acquisition);
+    assert!(
+        app.dispatched_for_test()
+            .iter()
+            .all(|cmd| !matches!(cmd.kind, CommandKind::ConfigureUaSubscription { .. }))
+    );
+}
+
+#[test]
+fn same_endpoint_with_different_profiles_creates_distinct_sessions() {
+    use crate::bff::model::{AcquisitionConfig, UpdateMode};
+    let mut app = App::new_test(&egui::Context::default());
+    app.record_dispatches_for_test();
+    let mut subscription = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+    subscription.acquisition = Some(AcquisitionConfig::ua_default());
+    let mut poll = subscription.clone();
+    poll.acquisition.as_mut().unwrap().update_mode = UpdateMode::Poll;
+    assert!(app.open_tab_for_endpoint(subscription.clone()));
+    assert!(app.open_tab_for_endpoint(poll.clone()));
+    assert_eq!(app.sessions.len(), 2);
+    assert_eq!(
+        app.sessions[0].endpoint().acquisition,
+        subscription.acquisition
+    );
+    assert_eq!(app.sessions[1].endpoint().acquisition, poll.acquisition);
+}
+
+fn profile_fixture() -> (egui::Context, App, EndpointSpec) {
+    let ctx = egui::Context::default();
+    let mut app = App::new_test(&ctx);
+    let mut endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+    endpoint.acquisition = Some(crate::bff::model::AcquisitionConfig::ua_default());
+    app.seed_session(SessionId::FIRST, endpoint.clone());
+    app.record_dispatches_for_test();
+    let connect = app
+        .send(
+            SessionId::FIRST,
+            Protocol::OpcUa,
+            CommandKind::Connect {
+                endpoint: endpoint.clone(),
+            },
+        )
+        .unwrap();
+    app.on_event(Event {
+        owner: SessionId::FIRST.into(),
+        origin: Origin::Reply(connect),
+        kind: EventKind::Connected {
+            endpoint: endpoint.clone(),
+            info: BackendMsg::raw("connected"),
+        },
+    });
+    (ctx, app, endpoint)
+}
+
+#[test]
+fn profile_save_auto_and_manual_reconnect_keep_distinct_snapshots() {
+    use crate::bff::model::UpdateMode;
+    let dir = std::env::temp_dir().join(format!("opclook-profile-{}-auto", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _redirect = crate::settings::thread_dir::redirect(&dir);
+    let (_ctx, mut app, active) = profile_fixture();
+    let session = SessionId::FIRST;
+    app.open_acquisition_editor(session);
+    app.dialogs.acquisition.draft.as_mut().unwrap().update_mode = UpdateMode::Poll;
+    assert!(app.apply_acquisition_editor(false));
+    assert_eq!(
+        app.session(session).unwrap().endpoint().acquisition,
+        active.acquisition
+    );
+    assert_eq!(
+        app.session(session)
+            .unwrap()
+            .pending_acquisition
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .update_mode,
+        UpdateMode::Poll
+    );
+    app.session_mut(session).unwrap().reconnect = ReconnectState::Waiting {
+        at: Instant::now(),
+        attempt: 1,
+    };
+    app.attempt_auto_reconnect(session);
+    let auto = app
+        .dispatched_for_test()
+        .into_iter()
+        .rev()
+        .find_map(|cmd| match cmd.kind {
+            CommandKind::Connect { endpoint } => Some((cmd.request_id.unwrap(), endpoint)),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(auto.1.acquisition, active.acquisition);
+    assert!(app.session(session).unwrap().pending_acquisition.is_some());
+    app.on_event(Event {
+        owner: session.into(),
+        origin: Origin::Reply(auto.0),
+        kind: EventKind::Connected {
+            endpoint: auto.1,
+            info: BackendMsg::raw("auto"),
+        },
+    });
+    app.reconnect_session(session);
+    let manual = app
+        .dispatched_for_test()
+        .into_iter()
+        .rev()
+        .find_map(|cmd| match cmd.kind {
+            CommandKind::Connect { endpoint } => Some(endpoint),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(manual.acquisition.unwrap().update_mode, UpdateMode::Poll);
+    assert!(app.session(session).unwrap().pending_acquisition.is_none());
+    drop(_redirect);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn profile_rejects_invalid_save_collision_and_stale_epoch() {
+    let (_ctx, mut app, active) = profile_fixture();
+    let session = SessionId::FIRST;
+    let epoch = app.engine.connection_id(session);
+    let dispatch_count = app.dispatched_for_test().len();
+    app.open_acquisition_editor(session);
+    app.dialogs.acquisition.draft.as_mut().unwrap().interval_ms = 0;
+    assert!(!app.apply_acquisition_editor(true));
+    assert_eq!(app.engine.connection_id(session), epoch);
+    assert_eq!(app.dispatched_for_test().len(), dispatch_count);
+    assert_eq!(
+        app.session(session).unwrap().endpoint().acquisition,
+        active.acquisition
+    );
+    app.dialogs.acquisition.draft = active.acquisition.clone();
+    app.settings.save_blocked = true;
+    assert!(!app.apply_acquisition_editor(true));
+    assert_eq!(app.engine.connection_id(session), epoch);
+    assert_eq!(app.dispatched_for_test().len(), dispatch_count);
+    app.settings.save_blocked = false;
+    app.seed_session(SessionId::new(2).unwrap(), active.clone());
+    assert!(!app.apply_acquisition_editor(true));
+    assert_eq!(app.engine.connection_id(session), epoch);
+    assert_eq!(app.dispatched_for_test().len(), dispatch_count);
+    app.sessions.retain(|v| v.id == session);
+    app.reconnect_session(session);
+    let new_connect = app
+        .dispatched_for_test()
+        .into_iter()
+        .rev()
+        .find_map(|cmd| match cmd.kind {
+            CommandKind::Connect { endpoint } => Some((cmd.request_id.unwrap(), endpoint)),
+            _ => None,
+        })
+        .unwrap();
+    app.on_event(Event {
+        owner: session.into(),
+        origin: Origin::Reply(new_connect.0),
+        kind: EventKind::Connected {
+            endpoint: new_connect.1,
+            info: BackendMsg::raw("new"),
+        },
+    });
+    assert!(!app.apply_acquisition_editor(true));
+    assert_eq!(
+        app.dialogs.acquisition.error.as_deref(),
+        Some(tr(app.lang(), Tr::AcquisitionEpochChanged))
+    );
+    assert_eq!(app.engine.connection_id(session), Some(new_connect.0));
+}
+
+#[test]
+fn profile_reconnect_rejects_old_read_write_and_push_and_reregisters_rows() {
+    use crate::bff::model::{DataValue, ItemInfo, Quality, UpdateMode, WriteOutcome};
+    for initial_mode in [UpdateMode::Subscription, UpdateMode::Poll] {
+        let dir = std::env::temp_dir().join(format!(
+            "opclook-profile-{}-{initial_mode:?}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let redirect = crate::settings::thread_dir::redirect(&dir);
+        let (_ctx, mut app, mut endpoint) = profile_fixture();
+        // Establish the initial profile using a real new Connect if Poll was requested.
+        if initial_mode == UpdateMode::Poll {
+            endpoint.acquisition.as_mut().unwrap().update_mode = initial_mode;
+            app.sessions[0].update_endpoint(endpoint.clone());
+            app.reconnect_session(SessionId::FIRST);
+            let connect = app
+                .dispatched_for_test()
+                .into_iter()
+                .rev()
+                .find_map(|cmd| match cmd.kind {
+                    CommandKind::Connect { endpoint } => Some((cmd.request_id.unwrap(), endpoint)),
+                    _ => None,
+                })
+                .unwrap();
+            app.on_event(Event {
+                owner: SessionId::FIRST.into(),
+                origin: Origin::Reply(connect.0),
+                kind: EventKind::Connected {
+                    endpoint: connect.1,
+                    info: BackendMsg::raw("poll"),
+                },
+            });
+        }
+        let session = SessionId::FIRST;
+        let old_epoch = app.engine.connection_id(session).unwrap();
+        assert!(app.add_items(session, vec![("ns=2;s=A".into(), "A".into())]));
+        let key = app.rows[0].key;
+        let add = app
+            .dispatched_for_test()
+            .into_iter()
+            .rev()
+            .find(|cmd| matches!(cmd.kind, CommandKind::AddItems { .. }))
+            .unwrap()
+            .request_id
+            .unwrap();
+        app.on_event(Event {
+            owner: session.into(),
+            origin: Origin::Reply(add),
+            kind: EventKind::AddItems {
+                results: vec![(
+                    key,
+                    Ok(ItemInfo {
+                        data_type: None,
+                        type_id: None,
+                        writable: true,
+                    }),
+                )],
+            },
+        });
+        let read = app
+            .send(
+                session,
+                Protocol::OpcUa,
+                CommandKind::Read { keys: vec![key] },
+            )
+            .unwrap();
+        let write = app
+            .send_with(
+                session,
+                Protocol::OpcUa,
+                CommandKind::Write {
+                    request: WriteRequest {
+                        key,
+                        value: Value::I64(9),
+                        type_hint: None,
+                    },
+                },
+                PendingCtx::WriteKey(key),
+            )
+            .unwrap();
+        app.open_acquisition_editor(session);
+        app.dialogs.acquisition.draft.as_mut().unwrap().update_mode =
+            if initial_mode == UpdateMode::Poll {
+                UpdateMode::Subscription
+            } else {
+                UpdateMode::Poll
+            };
+        assert!(app.apply_acquisition_editor(true));
+        let new_connect = app
+            .dispatched_for_test()
+            .into_iter()
+            .rev()
+            .find_map(|cmd| match cmd.kind {
+                CommandKind::Connect { endpoint } => Some((cmd.request_id.unwrap(), endpoint)),
+                _ => None,
+            })
+            .unwrap();
+        assert_ne!(app.engine.connection_id(session), Some(old_epoch));
+        assert_eq!(
+            new_connect.1.acquisition.as_ref().unwrap().update_mode,
+            if initial_mode == UpdateMode::Poll {
+                UpdateMode::Subscription
+            } else {
+                UpdateMode::Poll
+            }
+        );
+        let value_before = app.rows[0].value.clone();
+        let values = || EventKind::Values {
+            values: vec![(
+                key,
+                DataValue {
+                    value: Value::I64(99),
+                    quality: Quality::from_da(0xc0),
+                    timestamp: None,
+                    reason: None,
+                    times: Default::default(),
+                },
+            )],
+        };
+        app.on_event(Event {
+            owner: session.into(),
+            origin: Origin::Reply(read),
+            kind: values(),
+        });
+        app.on_event(Event {
+            owner: session.into(),
+            origin: Origin::Reply(write),
+            kind: EventKind::Wrote {
+                key,
+                result: Ok(WriteOutcome::from_ua(0, "Good")),
+            },
+        });
+        app.on_event(Event {
+            owner: session.into(),
+            origin: Origin::Session(old_epoch),
+            kind: values(),
+        });
+        assert_eq!(app.rows[0].value, value_before);
+        let before_connected = app.dispatched_for_test().len();
+        app.on_event(Event {
+            owner: session.into(),
+            origin: Origin::Reply(new_connect.0),
+            kind: EventKind::Connected {
+                endpoint: new_connect.1,
+                info: BackendMsg::raw("new"),
+            },
+        });
+        let after_connected = app.dispatched_for_test().len();
+        app.on_event(Event {
+            owner: session.into(),
+            origin: Origin::Reply(read),
+            kind: values(),
+        });
+        app.on_event(Event {
+            owner: session.into(),
+            origin: Origin::Reply(write),
+            kind: EventKind::Wrote {
+                key,
+                result: Ok(WriteOutcome::from_ua(0, "Good")),
+            },
+        });
+        app.on_event(Event {
+            owner: session.into(),
+            origin: Origin::Session(old_epoch),
+            kind: values(),
+        });
+        assert_eq!(app.rows[0].value, value_before);
+        assert_eq!(app.dispatched_for_test().len(), after_connected);
+        assert!(
+            app.dispatched_for_test()[before_connected..]
+                .iter()
+                .any(|cmd| match &cmd.kind {
+                    CommandKind::AddItems { items } => items.iter().any(|item| item.key == key),
+                    _ => false,
+                })
+        );
+        assert_eq!(
+            app.dispatched_for_test()
+                .iter()
+                .filter(|cmd| matches!(cmd.kind, CommandKind::Write { .. }))
+                .count(),
+            1
+        );
+        assert!(app.journal.entries().iter().any(|entry| {
+            entry
+                .render(app.lang())
+                .contains(tr(app.lang(), Tr::WriteUnknownStatus))
+        }));
+        drop(redirect);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[test]
+fn profile_late_collision_and_capacity_preserve_staged_choice() {
+    use crate::bff::model::UpdateMode;
+    let dir =
+        std::env::temp_dir().join(format!("opclook-profile-{}-collision", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let redirect = crate::settings::thread_dir::redirect(&dir);
+    let (_ctx, mut app, mut candidate) = profile_fixture();
+    app.open_acquisition_editor(SessionId::FIRST);
+    app.dialogs.acquisition.draft.as_mut().unwrap().update_mode = UpdateMode::Poll;
+    assert!(app.apply_acquisition_editor(false));
+    candidate.acquisition.as_mut().unwrap().update_mode = UpdateMode::Poll;
+    app.seed_session(SessionId::new(2).unwrap(), candidate);
+    let before = app.dispatched_for_test().len();
+    let epoch = app.engine.connection_id(SessionId::FIRST);
+    app.reconnect_session(SessionId::FIRST);
+    assert_eq!(app.dispatched_for_test().len(), before);
+    assert_eq!(app.engine.connection_id(SessionId::FIRST), epoch);
+    assert!(
+        app.session(SessionId::FIRST)
+            .unwrap()
+            .pending_acquisition
+            .is_some()
+    );
+    assert_eq!(app.status, tr(app.lang(), Tr::AcquisitionCollision));
+    app.sessions.retain(|view| view.id == SessionId::FIRST);
+    app.open_acquisition_editor(SessionId::FIRST);
+    app.dialogs.acquisition.draft = None;
+    app.engine.exhaust_requests_for_test();
+    assert!(!app.apply_acquisition_editor(true));
+    assert_eq!(app.dispatched_for_test().len(), before);
+    assert!(app.apply_acquisition_editor(false));
+    assert_eq!(
+        app.session(SessionId::FIRST).unwrap().pending_acquisition,
+        Some(None)
+    );
+    app.reconnect_session(SessionId::FIRST);
+    assert_eq!(app.dispatched_for_test().len(), before);
+    assert_eq!(app.engine.connection_id(SessionId::FIRST), epoch);
+    assert_eq!(
+        app.session(SessionId::FIRST).unwrap().pending_acquisition,
+        Some(None)
+    );
+    drop(redirect);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn profile_connect_dispatch_failure_keeps_saved_candidate() {
+    use crate::bff::model::UpdateMode;
+    let dir = std::env::temp_dir().join(format!("opclook-profile-{}-dispatch", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let redirect = crate::settings::thread_dir::redirect(&dir);
+    let (_ctx, mut app, active) = profile_fixture();
+    app.open_acquisition_editor(SessionId::FIRST);
+    app.dialogs.acquisition.draft.as_mut().unwrap().update_mode = UpdateMode::Poll;
+    app.engine.limit_dispatch_for_test(1); // Disconnect succeeds; Connect fails.
+    assert!(app.apply_acquisition_editor(true));
+    let view = app.session(SessionId::FIRST).unwrap();
+    assert_eq!(view.endpoint().acquisition, active.acquisition);
+    assert_eq!(
+        view.pending_acquisition
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .update_mode,
+        UpdateMode::Poll
+    );
+    assert_eq!(view.state, SessionState::Disconnected);
+    assert!(!app.status.is_empty());
+    drop(redirect);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn migrated_profiles_are_reported_as_localized_warning_and_status() {
+    use crate::journal::{JournalMessage, Level};
+    use crate::settings::SettingsNotice;
+    let mut app = App::new_inner(Settings::default());
+    let message = app.report_settings_notice(SettingsNotice::AcquisitionMigrated {
+        ua: 1,
+        da: 1,
+        interval_ms: 5000,
+    });
+    assert_eq!(app.status, message);
+    assert!(
+        app.journal
+            .entries()
+            .iter()
+            .any(|entry| matches!(entry, crate::journal::Entry {
+        level: Level::Warning,
+        message: JournalMessage::Localized { key: Tr::SettingsAcquisitionMigrated, args }, ..
+    } if args == &vec!["1", "1", "5000"]))
+    );
+    for lang in Lang::ALL {
+        let text = crate::i18n::fmt(lang, Tr::SettingsAcquisitionMigrated, &[&1, &1, &5000]);
+        assert!(text.contains("5000"));
+        assert!(text.contains("poll_only"));
+    }
+}
+
+#[test]
+fn failed_migration_cannot_open_legacy_profile() {
+    let settings = Settings {
+        save_blocked: true,
+        legacy_migration_failed: true,
+        ..Settings::default()
+    };
+    let mut app = App::new_inner(settings);
+    assert!(!app.open_tab_for_endpoint(EndpointSpec::ua("opc.tcp://127.0.0.1:4840")));
+    assert!(app.sessions.is_empty());
+    assert_eq!(
+        app.status,
+        tr(app.lang(), Tr::SettingsAcquisitionMigrationBlocked)
+    );
+}
+
+#[test]
+fn p4_stale_write_form_cannot_cross_connection_epoch() {
+    let (_ctx, mut app) = tree_app();
+    let session = SessionId::FIRST;
+    app.record_dispatches_for_test();
+    let endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+    let a = app
+        .send(
+            session,
+            Protocol::OpcUa,
+            CommandKind::Connect {
+                endpoint: endpoint.clone(),
+            },
+        )
+        .unwrap();
+    app.on_event_for_test_with_request(
+        session,
+        a,
+        EventKind::Connected {
+            endpoint: endpoint.clone(),
+            info: BackendMsg::raw("A"),
+        },
+    );
+    let key = app.seed_writable_row(session, "a", "A", Value::I64(1));
+    app.settings.view.options.confirm_write = false;
+    app.open_write_dialog(vec![key]);
+    app.dialogs.write.text = "7".into();
+    let b = app
+        .send(
+            session,
+            Protocol::OpcUa,
+            CommandKind::Connect {
+                endpoint: endpoint.clone(),
+            },
+        )
+        .unwrap();
+    app.on_event_for_test_with_request(
+        session,
+        b,
+        EventKind::Connected {
+            endpoint,
+            info: BackendMsg::raw("B"),
+        },
+    );
+    assert_ne!(a, b);
+    app.record_dispatches_for_test();
+    app.apply_write();
+    assert!(
+        app.dispatched_for_test()
+            .iter()
+            .all(|command| !matches!(command.kind, CommandKind::Write { .. }))
+    );
+    assert_eq!(
+        app.dialogs.write.error.as_deref(),
+        Some(tr(app.lang(), Tr::PaletteWriteStale))
+    );
+}
+
+#[test]
+fn p4_stale_write_confirmation_cannot_cross_connection_epoch() {
+    let (_ctx, mut app) = tree_app();
+    app.record_dispatches_for_test();
+    let session = SessionId::FIRST;
+    let endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+    let a = app
+        .send(
+            session,
+            Protocol::OpcUa,
+            CommandKind::Connect {
+                endpoint: endpoint.clone(),
+            },
+        )
+        .unwrap();
+    app.on_event_for_test_with_request(
+        session,
+        a,
+        EventKind::Connected {
+            endpoint: endpoint.clone(),
+            info: BackendMsg::raw("A"),
+        },
+    );
+    let key = app.seed_writable_row(session, "a", "A", Value::I64(1));
+    app.settings.view.options.confirm_write = true;
+    app.open_write_dialog(vec![key]);
+    app.dialogs.write.text = "7".into();
+    app.apply_write();
+    // Simulate a previously queued confirmation being delivered after reconnect.
+    let old_confirmation = app.dialogs.confirm.take().expect("write confirmation");
+    let b = app
+        .send(
+            session,
+            Protocol::OpcUa,
+            CommandKind::Connect {
+                endpoint: endpoint.clone(),
+            },
+        )
+        .unwrap();
+    app.on_event_for_test_with_request(
+        session,
+        b,
+        EventKind::Connected {
+            endpoint,
+            info: BackendMsg::raw("B"),
+        },
+    );
+    assert_ne!(a, b);
+    app.dialogs.confirm = Some(old_confirmation);
+    app.confirm_yes();
+    assert!(
+        app.dispatched_for_test()
+            .iter()
+            .all(|command| !matches!(command.kind, CommandKind::Write { .. }))
+    );
+    assert_eq!(app.status, tr(app.lang(), Tr::PaletteWriteStale));
+}
+
+#[test]
+fn p4_palette_captures_connection_when_opened() {
+    use opclook_contract::actions::ActionId;
+    let (_ctx, mut app) = tree_app();
+    app.record_dispatches_for_test();
+    app.open_command_palette();
+    let old = app.dialogs.palette.context_epoch;
+    let endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+    app.send(SessionId::FIRST, Protocol::OpcUa, CommandKind::Test)
+        .unwrap();
+    let id = app
+        .send(
+            SessionId::FIRST,
+            Protocol::OpcUa,
+            CommandKind::Connect {
+                endpoint: endpoint.clone(),
+            },
+        )
+        .unwrap();
+    app.on_event_for_test_with_request(
+        SessionId::FIRST,
+        id,
+        EventKind::Connected {
+            endpoint,
+            info: BackendMsg::raw("new"),
+        },
+    );
+    assert_ne!(old, app.engine.connection_id(SessionId::FIRST));
+    app.prepare_palette_context();
+    assert_eq!(app.dialogs.palette.context_epoch, old);
+    assert_eq!(
+        app.execute_palette_action(ActionId::Browse),
+        Err(Tr::PaletteConnectionChanged)
+    );
+}
+
+// Connected App fixtures start a real root Browse. Complete its correlated
+// reply before expecting a Read; Browse and Read intentionally share the gate.
+fn complete_profile_fixture_browse(app: &mut App) {
+    let browses: Vec<_> = app
+        .dispatched_for_test()
+        .into_iter()
+        .filter_map(|command| match (command.request_id, command.kind) {
+            (Some(request), CommandKind::Browse { node_id, .. }) => {
+                Some((command.owner, request, node_id))
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(!browses.is_empty(), "initial App root Browse");
+    for (owner, request, node_id) in browses {
+        app.on_event(Event {
+            owner,
+            origin: Origin::Reply(request),
+            kind: EventKind::Browse {
+                node_id,
+                children: vec![],
+            },
+        });
+    }
+}
+
+#[test]
+fn read_terminal_missing_is_visible_on_correct_row_once() {
+    use crate::journal::JournalMessage;
+    let (_ctx, mut app, _) = profile_fixture();
+    let session = SessionId::FIRST;
+    let key = app.seed_row(session, "tag", "Tag", Value::I64(10));
+    app.sync_fixture_sessions();
+    app.engine.request_refresh(session, key).unwrap();
+    assert!(
+        app.engine
+            .due(Instant::now(), Duration::from_secs(60), None)
+            .is_empty(),
+        "root Browse retains read demand"
+    );
+    complete_profile_fixture_browse(&mut app);
+    let due = app
+        .engine
+        .due(Instant::now(), Duration::from_secs(60), None);
+    let [opclook_engine::Due::Read { keys, permit, .. }] = due.as_slice() else {
+        panic!("read due")
+    };
+    let request = app
+        .engine
+        .send_due_read(
+            session,
+            Protocol::OpcUa,
+            keys.clone(),
+            *permit,
+            PendingCtx::None,
+        )
+        .unwrap();
+    app.on_event(Event {
+        owner: session.into(),
+        origin: Origin::Reply(request),
+        kind: EventKind::Values { values: vec![] },
+    });
+    app.drain_read_observations();
+    assert!(matches!(
+        &app.rows.iter().find(|row| row.key == key).unwrap().quality,
+        RowQuality::Error(_)
+    ));
+    assert!(matches!(
+        &app.rows
+            .iter()
+            .find(|row| row.key == key)
+            .unwrap()
+            .last_read
+            .as_ref()
+            .unwrap()
+            .terminal
+            .status,
+        crate::bff::model::ReadTerminalStatus::MissingResult
+    ));
+    assert_eq!(
+        app.journal
+            .entries()
+            .iter()
+            .filter(|entry| matches!(
+                &entry.message,
+                JournalMessage::Localized {
+                    key: Tr::ReadTerminalLine,
+                    ..
+                }
+            ))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn removed_row_is_not_restored_by_late_terminal_projection() {
+    let (_ctx, mut app, _) = profile_fixture();
+    let session = SessionId::FIRST;
+    let key = app.seed_row(session, "tag", "Tag", Value::I64(10));
+    app.sync_fixture_sessions();
+    app.engine.request_refresh(session, key).unwrap();
+    assert!(
+        app.engine
+            .due(Instant::now(), Duration::from_secs(60), None)
+            .is_empty(),
+        "root Browse retains read demand"
+    );
+    complete_profile_fixture_browse(&mut app);
+    let due = app
+        .engine
+        .due(Instant::now(), Duration::from_secs(60), None);
+    let [opclook_engine::Due::Read { keys, permit, .. }] = due.as_slice() else {
+        panic!("read due")
+    };
+    let request = app
+        .engine
+        .send_due_read(
+            session,
+            Protocol::OpcUa,
+            keys.clone(),
+            *permit,
+            PendingCtx::None,
+        )
+        .unwrap();
+    app.engine
+        .send(
+            session,
+            Protocol::OpcUa,
+            CommandKind::RemoveItems { keys: vec![key] },
+            PendingCtx::None,
+        )
+        .unwrap();
+    app.remove_rows(&[key].into_iter().collect());
+    app.drain_read_observations();
+    assert!(app.rows.iter().all(|row| row.key != key));
+    app.on_event(Event {
+        owner: session.into(),
+        origin: Origin::Reply(request),
+        kind: EventKind::Values { values: vec![] },
+    });
+    app.drain_read_observations();
+    assert!(app.rows.iter().all(|row| row.key != key));
+}
+
+#[test]
+fn early_push_is_applied_only_after_successful_registration() {
+    use crate::bff::model::{DataValue, ItemInfo};
+    for accepted in [false, true] {
+        let (_ctx, mut app, _) = profile_fixture();
+        let session = SessionId::FIRST;
+        assert!(app.add_items(session, vec![("tag".into(), "Tag".into())]));
+        let key = app.rows.last().unwrap().key;
+        let add = app
+            .dispatched_for_test()
+            .into_iter()
+            .rev()
+            .find_map(|command| match command.kind {
+                CommandKind::AddItems { .. } => command.request_id,
+                _ => None,
+            })
+            .unwrap();
+        let epoch = app.engine.connection_id(session).unwrap();
+        let received = chrono::Utc::now();
+        let times = crate::bff::model::ValueTimes::ua(
+            Some(received),
+            Some(received),
+            received,
+            crate::bff::model::ValueOrigin::Subscription,
+        );
+        let value = DataValue {
+            value: Value::I64(42),
+            quality: Quality::from_ua(0, "Good"),
+            timestamp: times.primary(),
+            reason: None,
+            times: times.clone(),
+        };
+        let push = |epoch| Event {
+            owner: session.into(),
+            origin: Origin::Session(epoch),
+            kind: EventKind::Values {
+                values: vec![(key, value.clone())],
+            },
+        };
+        app.on_event(push(RequestId::new(u64::MAX).unwrap()));
+        assert!(app.rows.last().unwrap().pending_push.is_none());
+        app.on_event(push(epoch));
+        let row = app.rows.last().unwrap();
+        assert!(row.pending);
+        assert!(matches!(row.value, Value::Empty));
+        assert!(row.pending_push.is_some());
+        let result = if accepted {
+            Ok(ItemInfo {
+                data_type: None,
+                type_id: None,
+                writable: false,
+            })
+        } else {
+            Err(BackendMsg::NoConnection)
+        };
+        app.on_event(Event {
+            owner: session.into(),
+            origin: Origin::Reply(add),
+            kind: EventKind::AddItems {
+                results: vec![(key, result)],
+            },
+        });
+        app.drain_read_observations();
+        let row = app.rows.last().unwrap();
+        assert!(!row.pending);
+        assert!(row.pending_push.is_none());
+        if accepted {
+            assert!(matches!(row.value, Value::I64(42)));
+            assert_eq!(row.times, times);
+            assert_eq!(row.timestamp, Some(received));
+            assert!(matches!(
+                row.last_read.as_ref().map(|o| &o.terminal.status),
+                Some(crate::bff::model::ReadTerminalStatus::InitialPush { .. })
+            ));
+        } else {
+            assert!(matches!(row.value, Value::Empty));
+            assert!(matches!(row.quality, RowQuality::Error(_)));
+            assert!(row.last_read.is_none());
+        }
+    }
+}
+
+#[test]
+fn p2_oversized_action_is_visible_and_never_dispatched() {
+    use opclook_contract::actions::ACTION_MAX_BYTES;
+    for lang in Lang::ALL {
+        let (_ctx, mut app, _) = profile_fixture();
+        app.settings.set_lang(lang);
+        let before = app.dispatched_for_test().len();
+        assert!(
+            app.send(
+                SessionId::FIRST,
+                Protocol::OpcUa,
+                CommandKind::Browse {
+                    node_id: "x".repeat(ACTION_MAX_BYTES + 1),
+                    filter: crate::bff::model::NodeClassFilter::All,
+                    view_id: None,
+                },
+            )
+            .is_none()
+        );
+        assert_eq!(app.dispatched_for_test().len(), before);
+        assert_eq!(app.status, tr(lang, Tr::ActionPayloadInvalid));
+    }
+}
+
+#[test]
+fn deferred_add_children_keeps_exact_item_until_read_reply() {
+    let (_ctx, mut app, _) = profile_fixture();
+    let session = SessionId::FIRST;
+    complete_profile_fixture_browse(&mut app);
+    let key = app.seed_row(session, "tag", "Tag", Value::I64(10));
+    app.sync_fixture_sessions();
+    app.seed_tree_item(session, None, 0, branch_node("duplicate", "first", true));
+    let selected = app.seed_tree_item(session, None, 0, branch_node("duplicate", "second", true));
+    app.engine.request_refresh(session, key).unwrap();
+    let due = app
+        .engine
+        .due(Instant::now(), Duration::from_secs(60), None);
+    let [opclook_engine::Due::Read { keys, permit, .. }] = due.as_slice() else {
+        panic!("read due")
+    };
+    let read = app
+        .engine
+        .send_due_read(
+            session,
+            Protocol::OpcUa,
+            keys.clone(),
+            *permit,
+            PendingCtx::None,
+        )
+        .unwrap();
+    let before = app.dispatched_for_test().len();
+    app.set_tree_focus(session, selected);
+    app.add_selected_children();
+    let job = app.add_children.as_ref().expect("deferred job retained");
+    assert_eq!(job.queue.front().map(String::as_str), Some("duplicate"));
+    assert_eq!(job.initial_item_id, Some(selected));
+    assert!(job.in_flight.is_empty());
+    assert_eq!(app.dispatched_for_test().len(), before);
+    app.on_event(Event {
+        owner: session.into(),
+        origin: Origin::Reply(read),
+        kind: EventKind::Values { values: vec![] },
+    });
+    let job = app.add_children.as_ref().expect("job resumed");
+    let browse = *job.in_flight.keys().next().expect("one browse issued");
+    assert!(job.queue.is_empty());
+    app.on_event(Event {
+        owner: session.into(),
+        origin: Origin::Reply(browse),
+        kind: EventKind::Browse {
+            node_id: "duplicate".into(),
+            children: vec![item_node("child", "child")],
+        },
+    });
+    let view = app.session(session).unwrap();
+    assert!(
+        view.tree
+            .iter()
+            .any(|item| item.parent == Some(selected) && item.node.node_id == "child")
+    );
+}
+
+#[test]
+fn ua_recovery_reports_missing_and_metadata_without_claiming_history() {
+    use crate::bff::model::{UaRecoveryMode, UaRecoveryState};
+    let (_ctx, mut app) = tree_app();
+    let session = SessionId::FIRST;
+    app.add_items(session, vec![("ns=2;s=missing".into(), "missing".into())]);
+    let key = app.rows[0].key;
+    app.sync_fixture_sessions();
+    let send = |app: &mut App, state| {
+        app.on_synced_event_for_test_at(session, EventKind::UaRecovery { state })
+    };
+    send(
+        &mut app,
+        UaRecoveryState::ConnectionLost { status: 0x80000000 },
+    );
+    assert!(app.status.contains("80000000"));
+    send(
+        &mut app,
+        UaRecoveryState::Reconnected {
+            mode: UaRecoveryMode::NewSession,
+        },
+    );
+    send(
+        &mut app,
+        UaRecoveryState::Reconciled {
+            missing: vec![key],
+            ambiguous: true,
+        },
+    );
+    assert!(matches!(app.rows[0].quality, RowQuality::Error(_)));
+    assert!(app.status.contains('1'));
+    send(
+        &mut app,
+        UaRecoveryState::TypeMetadata { known: 1, total: 3 },
+    );
+    assert!(app.status.contains('1') && app.status.contains('3'));
+    send(&mut app, UaRecoveryState::Stopped { status: 0x80010000 });
+    assert!(app.status.contains("80010000"));
+    let stopped = app.status.clone();
+    send(
+        &mut app,
+        UaRecoveryState::Reconciled {
+            missing: vec![],
+            ambiguous: false,
+        },
+    );
+    assert_eq!(app.status, stopped);
+}
+
+#[test]
+fn ua_new_session_rejects_queued_confirmation_and_discards_old_tree_metadata() {
+    use crate::bff::model::{UaRecoveryMode, UaRecoveryState};
+    let (_ctx, mut app) = tree_app();
+    let session = SessionId::FIRST;
+    app.record_dispatches_for_test();
+    let key = app.seed_writable_row(session, "ns=2;s=old", "old", Value::I64(1));
+    app.rows[0].data_type = Some("Int32".into());
+    let old_tree = app.seed_tree_item(session, None, 0, branch_node("ns=2;s=old", "old", false));
+    app.set_tree_focus(session, old_tree);
+    app.settings.view.options.confirm_write = true;
+    app.open_write_dialog(vec![key]);
+    app.dialogs.write.text = "7".into();
+    app.apply_write();
+    let queued = app.dialogs.confirm.take().expect("confirmation");
+    let epoch = app.engine.connection_id(session);
+    app.on_synced_event_for_test_at(
+        session,
+        EventKind::UaRecovery {
+            state: UaRecoveryState::ConnectionLost { status: 1 },
+        },
+    );
+    app.on_synced_event_for_test_at(
+        session,
+        EventKind::UaRecovery {
+            state: UaRecoveryState::Reconnected {
+                mode: UaRecoveryMode::NewSession,
+            },
+        },
+    );
+    assert_eq!(app.engine.connection_id(session), epoch);
+    assert!(app.session(session).unwrap().tree().is_empty());
+    assert!(app.tree_focus.is_none());
+    assert!(app.rows[0].data_type.is_none());
+    assert!(!app.rows[0].writable);
+    app.on_synced_event_for_test_at(
+        session,
+        EventKind::UaRecovery {
+            state: UaRecoveryState::Reconciled {
+                missing: vec![],
+                ambiguous: false,
+            },
+        },
+    );
+    app.dialogs.confirm = Some(queued);
+    app.confirm_yes();
+    assert!(
+        app.dispatched_for_test()
+            .iter()
+            .all(|c| !matches!(c.kind, CommandKind::Write { .. }))
+    );
+    assert_eq!(app.status, tr(app.lang(), Tr::PaletteWriteStale));
+    let new_id = app.seed_tree_item(session, None, 0, branch_node("ns=2;s=new", "new", false));
+    assert_ne!(old_tree, new_id);
+}
+
+#[test]
+fn ua_recovery_invalidates_palette_and_cancels_recursive_browse_without_clearing_text() {
+    use crate::bff::model::{UaRecoveryMode, UaRecoveryState};
+    use opclook_contract::actions::ActionId;
+    let (_ctx, mut app) = tree_app();
+    let session = SessionId::FIRST;
+    app.record_dispatches_for_test();
+    app.start_add_children(session, "ns=2;s=old");
+    assert!(app.add_children.is_some());
+    app.open_command_palette();
+    app.dialogs.palette.browse_node = "ns=2;s=old".into();
+    let epoch = app.engine.connection_id(session);
+    app.on_synced_event_for_test_at(
+        session,
+        EventKind::UaRecovery {
+            state: UaRecoveryState::ConnectionLost { status: 1 },
+        },
+    );
+    assert!(app.add_children.is_none());
+    app.on_synced_event_for_test_at(
+        session,
+        EventKind::UaRecovery {
+            state: UaRecoveryState::Reconnected {
+                mode: UaRecoveryMode::ReactivatedSession,
+            },
+        },
+    );
+    assert_eq!(app.engine.connection_id(session), epoch);
+    assert_eq!(app.dialogs.palette.browse_node, "ns=2;s=old");
+    assert_eq!(
+        app.execute_palette_action(ActionId::Browse),
+        Err(Tr::PaletteConnectionChanged)
+    );
+}
+
+#[test]
+fn ua_recovery_metadata_is_scoped_and_unknown_is_not_read_only() {
+    use crate::bff::model::{UaItemMetadata, UaRecoveryMode, UaRecoveryState};
+    let (_ctx, mut app) = tree_app();
+    let session = SessionId::FIRST;
+    let key = app.seed_writable_row(session, "ns=2;s=tag", "tag", Value::I64(1));
+    app.sync_fixture_sessions();
+    let connection = app.engine.connection_id(session).unwrap();
+    let send = |app: &mut App, revision, kind| {
+        app.on_event(Event {
+            owner: session.into(),
+            origin: Origin::UaSession {
+                connection,
+                revision,
+            },
+            kind,
+        })
+    };
+    send(
+        &mut app,
+        1,
+        EventKind::UaRecovery {
+            state: UaRecoveryState::ConnectionLost { status: 1 },
+        },
+    );
+    send(
+        &mut app,
+        2,
+        EventKind::UaRecovery {
+            state: UaRecoveryState::Reconnected {
+                mode: UaRecoveryMode::NewSession,
+            },
+        },
+    );
+    send(
+        &mut app,
+        2,
+        EventKind::UaRecovery {
+            state: UaRecoveryState::Reconciled {
+                missing: vec![],
+                ambiguous: false,
+            },
+        },
+    );
+    let fact = |access| UaItemMetadata {
+        key,
+        data_type: Some("Int32".into()),
+        type_id: Some(6),
+        user_access_level: access,
+        diagnostic: None,
+    };
+    send(
+        &mut app,
+        1,
+        EventKind::UaItemMetadata {
+            facts: vec![fact(Some(3))],
+        },
+    );
+    assert!(!app.rows[0].writable && !app.rows[0].ua_access_known);
+    send(
+        &mut app,
+        2,
+        EventKind::UaItemMetadata {
+            facts: vec![fact(Some(1))],
+        },
+    );
+    assert!(!app.rows[0].writable && app.rows[0].ua_access_known);
+    assert_eq!(app.rows[0].ua_type_id, Some(6));
+    send(
+        &mut app,
+        2,
+        EventKind::UaItemMetadata {
+            facts: vec![fact(None)],
+        },
+    );
+    assert!(!app.rows[0].writable && !app.rows[0].ua_access_known);
+    send(
+        &mut app,
+        2,
+        EventKind::UaItemMetadata {
+            facts: vec![fact(Some(3))],
+        },
+    );
+    assert!(app.rows[0].writable && app.rows[0].ua_access_known);
+    app.settings.view.options.confirm_write = false;
+    app.record_dispatches_for_test();
+    app.open_write_dialog(vec![key]);
+    app.dialogs.write.text = "7".into();
+    app.apply_write();
+    assert!(app.dispatched_for_test().iter().any(
+        |command| matches!(&command.kind, CommandKind::Write { request } if request.key == key)
+    ));
 }

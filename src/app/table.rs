@@ -59,11 +59,17 @@ impl App {
                 canonical_vt: None,
                 write_type: None,
                 writable: false,
+                ua_access_known: true,
+                ua_type_id: None,
                 value: Value::Empty,
                 quality: RowQuality::NoData(tr(self.lang(), Tr::NoData).to_string()),
                 timestamp: None,
+                times: Default::default(),
+                time_selection: Default::default(),
+                last_read: None,
                 description: String::new(),
                 pending: true,
+                pending_push: None,
                 poll_only: false,
                 changed_at: None,
                 value_text_cache: Default::default(),
@@ -104,6 +110,10 @@ impl App {
         let mut specs = Vec::new();
         for row in self.rows.iter_mut().filter(|r| r.session == session) {
             row.pending = true;
+            row.pending_push = None;
+            row.last_read = None;
+            row.times = Default::default();
+            row.time_selection = Default::default();
             // The new session decides again which items it can push (P1).
             row.poll_only = false;
             specs.push(ItemSpec {
@@ -124,6 +134,7 @@ impl App {
             {
                 for row in self.rows.iter_mut().filter(|row| keys.contains(&row.key)) {
                     row.pending = false;
+                    row.pending_push = None;
                 }
             }
         }
@@ -206,6 +217,10 @@ impl App {
             });
             return;
         }
+        self.dialogs.write.epoch = self.engine.connection_id(first_session);
+        self.dialogs.write.context_generation = self
+            .session(first_session)
+            .and_then(|v| v.context_generation);
         self.dialogs.write.keys = keys;
         self.dialogs.write.text = first_text;
         self.dialogs.write.type_index = 0;
@@ -223,6 +238,28 @@ impl App {
             self.dialogs.write.focus_pending = true;
             return;
         }
+        let Some(first_row) = self
+            .dialogs
+            .write
+            .keys
+            .first()
+            .and_then(|key| self.rows.iter().find(|row| row.key == *key))
+        else {
+            return;
+        };
+        // BEGIN P4 form epoch guard
+        if self.dialogs.write.context_generation.is_none()
+            || self.dialogs.write.context_generation
+                != self
+                    .session(first_row.session)
+                    .and_then(|v| v.context_generation)
+            || self.dialogs.write.epoch.is_none()
+            || self.dialogs.write.epoch != self.engine.connection_id(first_row.session)
+        {
+            self.dialogs.write.error = Some(tr(self.lang(), Tr::PaletteWriteStale).to_string());
+            return;
+        }
+        // END P4 form epoch guard
         let keys = self.dialogs.write.keys.clone();
         if keys.is_empty() {
             return;
@@ -288,6 +325,8 @@ impl App {
         let Some(view) = self.session(session) else {
             return Ok(PendingWrites {
                 session,
+                context_generation: self.dialogs.write.context_generation,
+                epoch: self.dialogs.write.epoch,
                 protocol: Protocol::OpcDa,
                 requests: Vec::new(),
                 type_label: String::new(),
@@ -329,6 +368,8 @@ impl App {
         }
         Ok(PendingWrites {
             session,
+            context_generation: self.dialogs.write.context_generation,
+            epoch: self.dialogs.write.epoch,
             protocol,
             requests,
             type_label: choice.label.to_string(),
@@ -336,6 +377,21 @@ impl App {
     }
 
     pub(super) fn perform_write(&mut self, pending: PendingWrites) {
+        // BEGIN P4 confirmation epoch guard
+        if pending.context_generation.is_none()
+            || pending.context_generation
+                != self
+                    .session(pending.session)
+                    .and_then(|v| v.context_generation)
+            || pending.epoch.is_none()
+            || pending.epoch != self.engine.connection_id(pending.session)
+        {
+            self.dialogs.write.error = Some(tr(self.lang(), Tr::PaletteWriteStale).to_string());
+            self.journal.error_l(Tr::PaletteWriteStale, &[]);
+            self.status = tr(self.lang(), Tr::PaletteWriteStale).to_string();
+            return;
+        }
+        // END P4 confirmation epoch guard
         let starting_new_batch = self.write_batch.pending == 0;
         let mut count = 0;
         for request in pending.requests {

@@ -1,0 +1,1730 @@
+//! Experimental Gateway integration for the direct SDK ABI. This feature is
+//! intentionally opt-in until the live gate and missing capabilities are done.
+use super::da_clsid::{ClsidLookup, DiscoveredClsids, resolve_clsid};
+use super::da_router::{DaHost, SESSION_JOIN_BUDGET, no_connection_reply, run_router};
+use super::model::{
+    BackendMsg, Command, CommandKind, DataValue, Event, EventKind, ItemInfo, ItemKey, Operation,
+    Owner, SessionId, WriteOutcome,
+};
+use super::softing_runtime::{Error as SdkError, Guid, Host, Session, SharedHost};
+use std::collections::HashMap;
+use std::sync::{
+    Arc, Mutex, OnceLock, PoisonError,
+    mpsc::{self, Sender},
+};
+use std::time::Duration;
+use tokio::sync::mpsc::{UnboundedReceiver, error::TryRecvError};
+
+// The SDK entry is process-global and its init/termination are thread-affine.
+// This owner does not execute OPC operations: SDK server workers do that. It
+// retains/reuses the same entry while any detached session still references it.
+type AcquireReply = Sender<Result<SharedHost, String>>;
+enum HostRequest {
+    Acquire(AcquireReply),
+    Finish(Sender<Result<(), String>>),
+}
+// Feature-gated observations only; this does not retain a host or create sessions.
+#[cfg(feature = "native-da-test-hooks")]
+static HOST_ACQUISITIONS: Mutex<(Option<usize>, usize, bool)> = Mutex::new((None, 0, true));
+
+// Test-only, bounded to one armed request in this process. Never selected by
+// acquisition configuration and never carries an SDK pointer.
+#[cfg(feature = "native-da-test-hooks")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GatewayAsyncProbe {
+    pub owner: SessionId,
+    pub epoch: super::model::RequestId,
+    pub request: super::model::RequestId,
+    pub key: ItemKey,
+    pub timeout_ms: u32,
+    pub registration: u64,
+    pub token: u32,
+    pub dispatched: bool,
+}
+#[cfg(feature = "native-da-test-hooks")]
+static GATEWAY_ASYNC_PROBE: Mutex<Option<GatewayAsyncProbe>> = Mutex::new(None);
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_gateway_async_arm(
+    owner: SessionId,
+    epoch: super::model::RequestId,
+    request: super::model::RequestId,
+    key: ItemKey,
+    timeout_ms: u32,
+) -> Result<(), &'static str> {
+    if timeout_ms == 0 || timeout_ms > 30_000 {
+        return Err("invalid timeout");
+    }
+    let mut slot = GATEWAY_ASYNC_PROBE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if slot.is_some() {
+        return Err("probe already armed");
+    }
+    *slot = Some(GatewayAsyncProbe {
+        owner,
+        epoch,
+        request,
+        key,
+        timeout_ms,
+        registration: 0,
+        token: 0,
+        dispatched: false,
+    });
+    Ok(())
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_gateway_async_observation() -> Option<GatewayAsyncProbe> {
+    *GATEWAY_ASYNC_PROBE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_gateway_async_clear() {
+    *GATEWAY_ASYNC_PROBE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = None;
+}
+/// Snapshot actual manager acquisitions in this test process, in manager order.
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_host_acquisitions() -> (usize, bool) {
+    let state = HOST_ACQUISITIONS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    (state.1, state.2)
+}
+
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_arm_write_exception() -> Result<(), String> {
+    super::softing_runtime::test_arm_write_exception().map_err(|e| format!("{e:?}"))
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_write_exception_state() -> i32 {
+    super::softing_runtime::test_write_exception_state()
+}
+
+static HOST_MANAGER: OnceLock<Result<Sender<HostRequest>, String>> = OnceLock::new();
+fn manager() -> Result<Sender<HostRequest>, String> {
+    HOST_MANAGER
+        .get_or_init(|| {
+            let (tx, rx) = mpsc::channel::<HostRequest>();
+            std::thread::Builder::new()
+                .name("opc-da-sdk-owner".to_string())
+                .spawn(move || {
+                    let mut host: Option<Host> = None;
+                    while let Ok(request) = rx.recv() {
+                        match request {
+                            HostRequest::Acquire(reply) => {
+                                if host.is_none() {
+                                    match Host::new() {
+                                        Ok(created) => host = Some(created),
+                                        Err(e) => {
+                                            let _ = reply.send(Err(format!("{e:?}")));
+                                            continue;
+                                        }
+                                    }
+                                }
+                                let result = host
+                                    .as_ref()
+                                    .map(Host::shared)
+                                    .ok_or_else(|| "SDK owner unavailable".to_string());
+                                #[cfg(feature = "native-da-test-hooks")]
+                                if let Ok(ref shared) = result {
+                                    let mut state = HOST_ACQUISITIONS
+                                        .lock()
+                                        .unwrap_or_else(PoisonError::into_inner);
+                                    let identity = shared.test_identity();
+                                    if let Some(first) = state.0 {
+                                        state.2 &= first == identity;
+                                    } else {
+                                        state.0 = Some(identity);
+                                    }
+                                    state.1 = state.1.saturating_add(1);
+                                }
+                                let _ = reply.send(result);
+                            }
+                            HostRequest::Finish(reply) => {
+                                if host.as_ref().is_some_and(|h| !h.is_idle()) {
+                                    let _ =
+                                        reply.send(Err("SDK sessions still running".to_string()));
+                                    continue;
+                                }
+                                let result = host
+                                    .take()
+                                    .map(|h| h.close().map_err(|e| format!("SDK cleanup: {e:?}")))
+                                    .unwrap_or(Ok(()));
+                                let _ = reply.send(result);
+                                break;
+                            }
+                        }
+                    }
+                })
+                .map(|_| tx)
+                .map_err(|e| e.to_string())
+        })
+        .clone()
+}
+fn acquire_host() -> Result<SharedHost, String> {
+    let (reply, result) = mpsc::channel();
+    manager()?
+        .send(HostRequest::Acquire(reply))
+        .map_err(|e| e.to_string())?;
+    result.recv().map_err(|e| e.to_string())?
+}
+/// Final process shutdown only: the caller must have closed every Gateway.
+/// A timeout bounds the caller even if SDK termination is stuck. A successful
+/// finish is final: the process must not start another SDK Gateway afterward.
+pub fn finish_native_sdk(timeout: Duration) -> Result<(), String> {
+    let Some(manager) = HOST_MANAGER.get() else {
+        return Ok(());
+    };
+    let manager = manager.as_ref().map_err(Clone::clone)?;
+    let (reply, result) = mpsc::channel();
+    manager
+        .send(HostRequest::Finish(reply))
+        .map_err(|e| e.to_string())?;
+    result.recv_timeout(timeout).map_err(|e| e.to_string())?
+}
+
+// Test-only facade over the real process manager and its SharedHost. This is
+// not a Gateway acquisition mode and does not create an additional owner.
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub struct TestManagerAsyncLease {
+    lease: super::softing_runtime::TestAsyncSessionLease,
+    key: u64,
+}
+#[cfg(feature = "native-da-test-hooks")]
+impl TestManagerAsyncLease {
+    pub fn open_fixture() -> Result<Self, String> {
+        Self::open_fixture_item("Fixture.DeviceValue")
+    }
+    pub fn open_fixture_item(item_id: &str) -> Result<Self, String> {
+        use super::softing_runtime::TestAsyncSessionLease;
+        let host = acquire_host()?;
+        let guid = Guid {
+            data1: 0x7d4bd1b1,
+            data2: 0x7422,
+            data3: 0x48c0,
+            data4: [0xad, 0x58, 0x60, 0x1b, 0x70, 0x14, 0x49, 0xc6],
+        };
+        let (session, _) = host
+            .open_config("OPCLook.NativeDaFixture.1", "localhost", &guid, true, 1000)
+            .map_err(|e| format!("session open: {e:?}"))?;
+        drop(host);
+        let mut lease = TestAsyncSessionLease::new(session);
+        lease
+            .prepare()
+            .map_err(|e| format!("async prepare: {e:?}"))?;
+        let (key, _, _) = lease
+            .session_mut()
+            .ok_or("missing session")?
+            .add(item_id)
+            .map_err(|e| format!("item add: {e:?}"))?;
+        Ok(Self { lease, key })
+    }
+    pub fn read(&mut self, timeout_ms: u32) -> Result<i32, String> {
+        self.lease
+            .read(self.key, 0, timeout_ms)
+            .map(|(hr, _)| hr)
+            .map_err(|e| format!("async read: {e:?}"))
+    }
+    pub fn read_value(&mut self, timeout_ms: u32) -> Result<DataValue, String> {
+        self.lease
+            .read_value(self.key, 0, timeout_ms)
+            .map(super::softing_scalar::decode_read_outcome)
+            .map_err(|e| format!("async read: {e:?}"))
+    }
+    /// Flags: call attempted, SDK returned, submit item known, matching callback observed.
+    pub fn facts(&self) -> Result<(u32, i32, i32), String> {
+        self.lease
+            .facts()
+            .map_err(|e| format!("async facts: {e:?}"))
+    }
+    pub fn retire(&mut self, timeout_ms: u32) -> Result<(i32, i32), String> {
+        self.lease
+            .wait_retire(timeout_ms)
+            .map(|(hr, value)| (hr, value.value))
+            .map_err(|e| format!("async retire: {e:?}"))
+    }
+    pub fn close(self) -> Result<(), String> {
+        let session = self
+            .lease
+            .into_session()
+            .map_err(|_| "async lease still pending".to_string())?;
+        session.close().map_err(|e| format!("session close: {e:?}"))
+    }
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_late_arm(value: i32) -> Result<(), String> {
+    super::softing_runtime::test_late_arm(value).map_err(|e| format!("{e:?}"))
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_late_entered(timeout: u32) -> Result<(), String> {
+    super::softing_runtime::test_late_entered(timeout).map_err(|e| format!("{e:?}"))
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_late_held() -> Result<(), String> {
+    super::softing_runtime::test_late_held().map_err(|e| format!("{e:?}"))
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_late_release() -> Result<(), String> {
+    super::softing_runtime::test_late_release().map_err(|e| format!("{e:?}"))
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_late_processed(timeout: u32) -> Result<(), String> {
+    super::softing_runtime::test_late_processed(timeout).map_err(|e| format!("{e:?}"))
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_late_close() -> Result<(), String> {
+    super::softing_runtime::test_late_close().map_err(|e| format!("{e:?}"))
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_async_gate_arm() -> Result<(), String> {
+    super::softing_runtime::test_async_gate_arm().map_err(|e| format!("{e:?}"))
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_async_gate_entered(timeout: u32) -> Result<(), String> {
+    super::softing_runtime::test_async_gate_entered(timeout).map_err(|e| format!("{e:?}"))
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_async_gate_held() -> Result<(), String> {
+    super::softing_runtime::test_async_gate_held().map_err(|e| format!("{e:?}"))
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_async_gate_release() -> Result<(), String> {
+    super::softing_runtime::test_async_gate_release().map_err(|e| format!("{e:?}"))
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_async_gate_close() -> Result<(), String> {
+    super::softing_runtime::test_async_gate_close().map_err(|e| format!("{e:?}"))
+}
+
+/// Raw attested facts from the test-only two-item SDK group read.
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct TestMixedReadFact {
+    pub service: i32,
+    pub item: i32,
+    pub available: u32,
+    pub quality: u16,
+    pub vartype: u16,
+    pub bits_low: u32,
+    pub filetime: u64,
+}
+#[cfg(feature = "native-da-test-hooks")]
+#[doc(hidden)]
+pub fn test_sdk_mixed_read_fixture() -> Result<[TestMixedReadFact; 2], String> {
+    let host = acquire_host()?;
+    let guid = Guid {
+        data1: 0x7d4bd1b1,
+        data2: 0x7422,
+        data3: 0x48c0,
+        data4: [0xad, 0x58, 0x60, 0x1b, 0x70, 0x14, 0x49, 0xc6],
+    };
+    let mut session = host
+        .open("OPCLook.NativeDaFixture.1", "localhost", &guid)
+        .map_err(|e| format!("session open: {e:?}"))?;
+    let good = session
+        .add("Fixture.Value")
+        .map_err(|e| format!("good item: {e:?}"))?
+        .0;
+    let denied = session
+        .add("Fixture.ReadDenied")
+        .map_err(|e| format!("denied item: {e:?}"))?
+        .0;
+    let values = session
+        .test_mixed_read(good, denied)
+        .map_err(|e| format!("group read: {e:?}"))?;
+    let facts = values.map(|out| TestMixedReadFact {
+        service: out.value.service_result,
+        item: out.value.item_result,
+        available: out.available,
+        quality: out.value.quality,
+        vartype: out.value.vartype,
+        bits_low: out.value.bits_low,
+        filetime: (u64::from(out.value.filetime_high) << 32) | u64::from(out.value.filetime_low),
+    });
+    session
+        .close()
+        .map_err(|e| format!("session close: {e:?}"))?;
+    Ok(facts)
+}
+
+struct NativeHost {
+    sdk: SharedHost,
+    discovered: Mutex<DiscoveredClsids>,
+}
+fn guid_to_u128(g: Guid) -> u128 {
+    (u128::from(g.data1) << 96)
+        | (u128::from(g.data2) << 80)
+        | (u128::from(g.data3) << 64)
+        | u128::from(u64::from_be_bytes(g.data4))
+}
+fn guid_from_u128(v: u128) -> Guid {
+    Guid {
+        data1: (v >> 96) as u32,
+        data2: (v >> 80) as u16,
+        data3: (v >> 64) as u16,
+        data4: (v as u64).to_be_bytes(),
+    }
+}
+struct NativeClsidLookup<'a> {
+    host: &'a NativeHost,
+}
+impl ClsidLookup for NativeClsidLookup<'_> {
+    fn remote_enum(&mut self, node: &str, progid: &str) -> Result<u128, BackendMsg> {
+        self.host
+            .sdk
+            .resolve(node, progid, true)
+            .map(guid_to_u128)
+            .map_err(|e| BackendMsg::DaOpcEnumUnavailable {
+                host: node.to_string(),
+                cause: Box::new(message(format!("{e:?}"))),
+            })
+    }
+    fn discovered(&self, node: &str, progid: &str) -> Option<u128> {
+        self.host
+            .discovered
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(node, progid)
+    }
+    fn local_registry(&mut self, progid: &str) -> Result<u128, BackendMsg> {
+        self.host
+            .sdk
+            .resolve("", progid, false)
+            .map(guid_to_u128)
+            .map_err(|e| BackendMsg::DaProgIdLookupFailed {
+                prog_id: progid.to_string(),
+                detail: format!("{e:?}"),
+            })
+    }
+}
+fn message(s: impl std::fmt::Display) -> BackendMsg {
+    BackendMsg::raw(s.to_string())
+}
+fn write_outcome(result: Result<i32, SdkError>) -> WriteOutcome {
+    match result {
+        Ok(hr) => WriteOutcome::from_da(hr, format!("HRESULT {hr:#x}")),
+        Err(SdkError::Native(hr)) => WriteOutcome::unknown_with_status(
+            super::model::NativeWriteStatus::DaService(hr),
+            format!("DA write HRESULT {hr:#x}"),
+        ),
+        Err(e) => WriteOutcome::unknown(format!("DA write: {e:?}")),
+    }
+}
+fn send(tx: &Sender<Event>, owner: Owner, id: Option<super::model::RequestId>, kind: EventKind) {
+    let _ = tx.send(Event {
+        origin: id.into(),
+        owner,
+        kind,
+    });
+}
+fn failure(tx: &Sender<Event>, command: &Command, operation: Operation, detail: BackendMsg) {
+    send(
+        tx,
+        command.owner,
+        command.request_id,
+        EventKind::Error {
+            operation,
+            message: detail,
+        },
+    );
+}
+// A GUID endpoint is supported in this prototype; ProgID lookup and discovery
+// will use the SDK browser and are explicitly unavailable until wired.
+fn guid(input: &str) -> Option<Guid> {
+    let s = input.trim().trim_start_matches('{').trim_end_matches('}');
+    let p: Vec<&str> = s.split('-').collect();
+    if p.len() != 5
+        || p[0].len() != 8
+        || p[1].len() != 4
+        || p[2].len() != 4
+        || p[3].len() != 4
+        || p[4].len() != 12
+    {
+        return None;
+    }
+    let mut data4 = [0; 8];
+    let tail = format!("{}{}", p[3], p[4]);
+    for (i, byte) in data4.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(tail.get(i * 2..i * 2 + 2)?, 16).ok()?;
+    }
+    Some(Guid {
+        data1: u32::from_str_radix(p[0], 16).ok()?,
+        data2: u16::from_str_radix(p[1], 16).ok()?,
+        data3: u16::from_str_radix(p[2], 16).ok()?,
+        data4,
+    })
+}
+fn drain_push(
+    session: &mut Session,
+    registrations: &HashMap<u64, ItemKey>,
+    owner: Owner,
+    epoch: super::model::RequestId,
+    events: &Sender<Event>,
+) -> Result<(), SdkError> {
+    let (facts, overflow) = session.take_push()?;
+    if overflow {
+        send(
+            events,
+            owner,
+            None,
+            EventKind::Log {
+                message: message(
+                    "DA subscription queue overflow or invalid callback; updates were lost",
+                ),
+            },
+        );
+    }
+    let mut values = Vec::new();
+    for fact in facts {
+        if fact.registration == 0 || fact.master_quality != 0 {
+            send(
+                events,
+                owner,
+                None,
+                EventKind::Log {
+                    message: message(format!(
+                        "DA callback master quality HRESULT {:#x}, master error HRESULT {:#x}",
+                        fact.master_quality, fact.value.service_result
+                    )),
+                },
+            );
+        }
+        let Some(key) = registrations.get(&fact.registration) else {
+            continue;
+        };
+        let value = if fact.adapter_result < 0 {
+            DataValue::bad(message(format!(
+                "DA callback adapter HRESULT {:#x}, service {:#x}, item {:#x}, quality {:#x}, FILETIME {:08x}:{:08x}, VT {:#x}",
+                fact.adapter_result,
+                fact.value.service_result,
+                fact.value.item_result,
+                fact.value.quality,
+                fact.value.filetime_high,
+                fact.value.filetime_low,
+                fact.value.vartype
+            )))
+        } else {
+            super::softing_scalar::decode_with_origin(
+                (fact.value, fact.text),
+                super::model::ValueOrigin::Subscription,
+            )
+            .unwrap_or_else(DataValue::bad)
+        };
+        values.push((*key, value));
+    }
+    if !values.is_empty() {
+        let _ = events.send(Event {
+            origin: super::model::Origin::Session(epoch),
+            owner,
+            kind: EventKind::Values { values },
+        });
+    }
+    Ok(())
+}
+impl DaHost for NativeHost {
+    fn run_discovery(&self, command: Command, events: &Sender<Event>) {
+        let CommandKind::Discover { host } = &command.kind else {
+            failure(
+                events,
+                &command,
+                command.kind.operation(),
+                BackendMsg::NoConnection,
+            );
+            return;
+        };
+        match self.sdk.discover(host) {
+            Ok((records, fallback)) => {
+                let mut servers = Vec::with_capacity(records.len());
+                let mut missing_description = false;
+                {
+                    let mut cache = self
+                        .discovered
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
+                    for record in records {
+                        cache.remember(host, &record.progid, guid_to_u128(record.clsid));
+                        missing_description |= record.description_missing;
+                        servers.push(super::model::ServerEntry {
+                            id: record.progid,
+                            description: record.description,
+                        });
+                    }
+                }
+                send(
+                    events,
+                    command.owner,
+                    command.request_id,
+                    EventKind::Servers {
+                        host: host.clone(),
+                        servers,
+                    },
+                );
+                if fallback {
+                    send(
+                        events,
+                        command.owner,
+                        None,
+                        EventKind::Log {
+                            message: message(
+                                "DA discovery used the SDK's local DA 1 registry fallback; newer-only servers may be absent",
+                            ),
+                        },
+                    );
+                }
+                if missing_description {
+                    send(
+                        events,
+                        command.owner,
+                        None,
+                        EventKind::Log {
+                            message: message(
+                                "DA discovery returned one or more servers without a description",
+                            ),
+                        },
+                    );
+                }
+            }
+            Err(error) => failure(
+                events,
+                &command,
+                Operation::Discover,
+                BackendMsg::DaServerListHostUnavailable {
+                    host: host.clone(),
+                    detail: format!("{error:?}"),
+                },
+            ),
+        }
+    }
+    fn run_session(
+        &self,
+        id: SessionId,
+        commands: &mut UnboundedReceiver<Command>,
+        events: &Sender<Event>,
+    ) {
+        let mut session: Option<Session> = None;
+        let mut items: HashMap<ItemKey, u64> = HashMap::new();
+        let mut registrations: HashMap<u64, ItemKey> = HashMap::new();
+        let mut subscription_epoch = None;
+        #[cfg(feature = "native-da-test-hooks")]
+        let mut probe_lease: Option<super::softing_runtime::TestAsyncSessionLease> = None;
+        loop {
+            if let (Some(epoch), Some(s)) = (subscription_epoch, session.as_mut()) {
+                if let Err(error) = drain_push(s, &registrations, id.into(), epoch, events) {
+                    send(
+                        events,
+                        id.into(),
+                        None,
+                        EventKind::Log {
+                            message: message(format!("DA callback queue: {error:?}")),
+                        },
+                    );
+                    let _ = events.send(Event {
+                        origin: super::model::Origin::Session(epoch),
+                        owner: id.into(),
+                        kind: EventKind::SubscriptionState {
+                            state: super::model::SubscriptionState::Failed,
+                        },
+                    });
+                    subscription_epoch = None;
+                }
+            }
+            let command = if subscription_epoch.is_some() {
+                match commands.try_recv() {
+                    Ok(command) => command,
+                    Err(TryRecvError::Empty) => {
+                        std::thread::sleep(Duration::from_millis(20));
+                        continue;
+                    }
+                    Err(TryRecvError::Disconnected) => break,
+                }
+            } else {
+                let Some(command) = commands.blocking_recv() else {
+                    break;
+                };
+                command
+            };
+            if command.owner != id.into() {
+                if let Some(reply) = no_connection_reply(&command) {
+                    let _ = events.send(reply);
+                }
+                continue;
+            }
+            let owner = command.owner;
+            let request_id = command.request_id;
+            let mut done = false;
+            // An explicit Test command after releasing the fixture barrier joins
+            // the existing SDK operation; it emits only this Test's reply.
+            #[cfg(feature = "native-da-test-hooks")]
+            if matches!(command.kind, CommandKind::Test) && probe_lease.is_some() {
+                let mut lease = match probe_lease.take() {
+                    Some(lease) => lease,
+                    None => continue,
+                };
+                match lease.wait_retire(1_000) {
+                    Ok((hr, _)) if hr == 0 => match lease.into_session() {
+                        Ok(restored) => session = Some(restored),
+                        Err(lease) => {
+                            probe_lease = Some(lease);
+                            failure(events, &command, Operation::Test, BackendMsg::TimeoutRead);
+                            continue;
+                        }
+                    },
+                    _ => {
+                        probe_lease = Some(lease);
+                        failure(events, &command, Operation::Test, BackendMsg::TimeoutRead);
+                        continue;
+                    }
+                }
+            }
+            #[cfg(feature = "native-da-test-hooks")]
+            if probe_lease.is_some() && matches!(command.kind, CommandKind::Disconnect) {
+                // Logical Gateway session ends; Drop quarantines the still-live SDK owner.
+                send(
+                    events,
+                    owner,
+                    request_id,
+                    EventKind::Disconnected {
+                        reason: BackendMsg::TimeoutRead,
+                    },
+                );
+                break;
+            }
+            #[cfg(feature = "native-da-test-hooks")]
+            if probe_lease.is_some() {
+                failure(
+                    events,
+                    &command,
+                    command.kind.operation(),
+                    BackendMsg::NoConnection,
+                );
+                continue;
+            }
+            match &command.kind {
+                CommandKind::Connect { endpoint } => {
+                    let profile = endpoint.acquisition.as_ref();
+                    let subscription = profile
+                        .is_some_and(|p| p.update_mode == super::model::UpdateMode::Subscription);
+                    let interval = profile.map(|p| p.interval_ms).unwrap_or(1000);
+                    let epoch = if subscription { request_id } else { None };
+                    let result = if subscription && epoch.is_none() {
+                        Err(message(
+                            "DA subscription requires a Connect request identity",
+                        ))
+                    } else {
+                        u32::try_from(interval)
+                            .map_err(|_| message("DA update interval out of range"))
+                            .and_then(|interval_ms| {
+                                guid(&endpoint.address)
+                                    .map(Ok)
+                                    .unwrap_or_else(|| {
+                                        resolve_clsid(
+                                            &endpoint.host,
+                                            &endpoint.address,
+                                            &mut NativeClsidLookup { host: self },
+                                        )
+                                        .map(guid_from_u128)
+                                    })
+                                    .and_then(|clsid| {
+                                        self.sdk
+                                            .open_config(
+                                                "",
+                                                &endpoint.host,
+                                                &clsid,
+                                                subscription,
+                                                interval_ms,
+                                            )
+                                            .map_err(|e| message(format!("DA connect: {e:?}")))
+                                    })
+                            })
+                    };
+                    match result {
+                        Ok((open, revised)) => {
+                            #[cfg(feature = "native-da-test-hooks")]
+                            let open = {
+                                let selected = GATEWAY_ASYNC_PROBE
+                                    .lock()
+                                    .unwrap_or_else(PoisonError::into_inner)
+                                    .is_some_and(|probe| {
+                                        probe.owner == id
+                                            && Some(probe.epoch) == request_id
+                                            && subscription
+                                    });
+                                if selected {
+                                    let mut lease =
+                                        super::softing_runtime::TestAsyncSessionLease::new(open);
+                                    if let Err(error) = lease.prepare() {
+                                        failure(
+                                            events,
+                                            &command,
+                                            Operation::Connect,
+                                            message(format!("DA test async prepare: {error:?}")),
+                                        );
+                                        break;
+                                    }
+                                    match lease.into_session() {
+                                        Ok(open) => open,
+                                        Err(_) => {
+                                            failure(
+                                                events,
+                                                &command,
+                                                Operation::Connect,
+                                                BackendMsg::NoConnection,
+                                            );
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    open
+                                }
+                            };
+                            session = Some(open);
+                            send(
+                                events,
+                                owner,
+                                request_id,
+                                EventKind::Connected {
+                                    endpoint: endpoint.clone(),
+                                    info: message(format!(
+                                        "DA connected; revised update rate {revised} ms"
+                                    )),
+                                },
+                            );
+                            if let Some(epoch) = epoch {
+                                subscription_epoch = Some(epoch);
+                                let _ = events.send(Event {
+                                    origin: super::model::Origin::Session(epoch),
+                                    owner,
+                                    kind: EventKind::SubscriptionState {
+                                        state: super::model::SubscriptionState::Active,
+                                    },
+                                });
+                            }
+                        }
+                        Err(error) => {
+                            failure(events, &command, Operation::Connect, error);
+                            done = true;
+                        }
+                    }
+                }
+                CommandKind::Disconnect => {
+                    let reason = match session.take() {
+                        Some(s) => match s.close() {
+                            Ok(()) => message("DA disconnected"),
+                            Err(e) => message(format!("DA close: {e:?}")),
+                        },
+                        None => BackendMsg::NoConnection,
+                    };
+                    send(
+                        events,
+                        owner,
+                        request_id,
+                        EventKind::Disconnected { reason },
+                    );
+                    done = true;
+                }
+                CommandKind::AddItems { items: requested } => {
+                    let mut results = Vec::with_capacity(requested.len());
+                    for item in requested {
+                        let result = if items.contains_key(&item.key) {
+                            Err(message("DA item already registered"))
+                        } else if let Some(s) = session.as_mut() {
+                            s.add(&item.item_id)
+                                .map(|(reg, vt, rights)| {
+                                    items.insert(item.key, reg);
+                                    registrations.insert(reg, item.key);
+                                    ItemInfo {
+                                        data_type: Some(
+                                            super::vt::vt_name(super::model::VarType(vt))
+                                                .to_string(),
+                                        ),
+                                        type_id: Some(vt),
+                                        writable: rights & 2 != 0,
+                                    }
+                                })
+                                .map_err(|e| message(format!("DA add item: {e:?}")))
+                        } else {
+                            Err(BackendMsg::NoConnection)
+                        };
+                        results.push((item.key, result));
+                    }
+                    send(events, owner, request_id, EventKind::AddItems { results });
+                }
+                CommandKind::RemoveItems { keys } => {
+                    let mut err = None;
+                    for key in keys {
+                        if let (Some(s), Some(reg)) = (session.as_mut(), items.remove(key)) {
+                            registrations.remove(&reg);
+                            if let Err(e) = s.remove(reg) {
+                                err = Some(message(format!("DA remove: {e:?}")));
+                            }
+                        }
+                    }
+                    if let Some(detail) = err {
+                        failure(events, &command, Operation::Remove, detail);
+                    } else {
+                        send(
+                            events,
+                            owner,
+                            request_id,
+                            EventKind::Removed { keys: keys.clone() },
+                        );
+                    }
+                }
+                CommandKind::Read { keys }
+                | CommandKind::ReadFresh { keys }
+                | CommandKind::ReadCached { keys, .. } => {
+                    let max_age = if matches!(&command.kind, CommandKind::ReadFresh { .. }) {
+                        0
+                    } else {
+                        u32::MAX
+                    };
+                    #[cfg(feature = "native-da-test-hooks")]
+                    {
+                        let selected = *GATEWAY_ASYNC_PROBE
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner);
+                        if let Some(probe) = selected.filter(|probe| {
+                            !probe.dispatched
+                                && probe.owner == id
+                                && Some(probe.epoch) == subscription_epoch
+                                && Some(probe.request) == request_id
+                                && keys.as_slice() == [probe.key]
+                                && matches!(&command.kind, CommandKind::ReadFresh { .. })
+                        }) {
+                            if let Some((registration, open)) =
+                                items.get(&probe.key).copied().and_then(|registration| {
+                                    session.take().map(|open| (registration, open))
+                                })
+                            {
+                                let mut lease =
+                                    super::softing_runtime::TestAsyncSessionLease::new(open);
+                                let previous = lease.last_token().unwrap_or(0);
+                                let outcome =
+                                    lease.read_value(registration, max_age, probe.timeout_ms);
+                                let token = lease.last_token().unwrap_or(0);
+                                if token > previous {
+                                    let mut slot = GATEWAY_ASYNC_PROBE
+                                        .lock()
+                                        .unwrap_or_else(PoisonError::into_inner);
+                                    if let Some(current) =
+                                        slot.as_mut().filter(|current| **current == probe)
+                                    {
+                                        current.dispatched = true;
+                                        current.registration = registration;
+                                        current.token = token;
+                                    }
+                                }
+                                match outcome {
+                                    Ok(raw) if raw.adapter_result >= 0 => {
+                                        send(
+                                            events,
+                                            owner,
+                                            request_id,
+                                            EventKind::Values {
+                                                values: vec![(
+                                                    probe.key,
+                                                    super::softing_scalar::decode_read_outcome(raw),
+                                                )],
+                                            },
+                                        );
+                                    }
+                                    Ok(raw) if raw.adapter_result == 0x80070102_u32 as i32 => {
+                                        failure(
+                                            events,
+                                            &command,
+                                            Operation::Read,
+                                            BackendMsg::TimeoutRead,
+                                        )
+                                    }
+                                    Ok(raw) => {
+                                        let value = super::softing_scalar::decode_read_outcome(raw);
+                                        failure(
+                                            events,
+                                            &command,
+                                            Operation::Read,
+                                            value.reason.unwrap_or(BackendMsg::NoConnection),
+                                        );
+                                    }
+                                    Err(error) => failure(
+                                        events,
+                                        &command,
+                                        Operation::Read,
+                                        message(format!("DA test async: {error:?}")),
+                                    ),
+                                }
+                                match lease.into_session() {
+                                    Ok(open) => session = Some(open),
+                                    Err(lease) => probe_lease = Some(lease),
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                    let values = keys
+                        .iter()
+                        .map(|key| {
+                            let result = session
+                                .as_mut()
+                                .zip(items.get(key))
+                                .ok_or(BackendMsg::SignalNotSubscribed)
+                                .and_then(|(s, reg)| {
+                                    s.read_scalar(*reg, max_age)
+                                        .map_err(|e| message(format!("DA read: {e:?}")))
+                                })
+                                .map(super::softing_scalar::decode_read_outcome);
+                            (*key, result.unwrap_or_else(DataValue::bad))
+                        })
+                        .collect();
+                    send(events, owner, request_id, EventKind::Values { values });
+                }
+                CommandKind::Write { request } => {
+                    let key = request.key;
+                    let result = match (session.as_mut(), items.get(&key)) {
+                        (None, _) => Err(BackendMsg::NoConnection),
+                        (_, None) => Err(BackendMsg::SignalNotSubscribed),
+                        (Some(s), Some(reg)) => match (&request.value, request.type_hint) {
+                            (
+                                super::model::Value::Bytes(_) | super::model::Value::Array(_),
+                                hint,
+                            ) => super::softing_scalar::encode_array(
+                                &request.value,
+                                hint.map(|v| v.0),
+                            )
+                            .map(|(vt, bytes)| write_outcome(s.write_array(*reg, vt, &bytes))),
+                            (value, Some(hint)) if hint.0 & 0x2000 != 0 => {
+                                super::softing_scalar::encode_array(value, Some(hint.0)).map(
+                                    |(vt, bytes)| write_outcome(s.write_array(*reg, vt, &bytes)),
+                                )
+                            }
+                            (value, hint)
+                                if hint.is_some_and(|v| v.0 == 8)
+                                    || (hint.is_none()
+                                        && matches!(
+                                            value,
+                                            super::model::Value::Str(_)
+                                                | super::model::Value::NodeId(_)
+                                                | super::model::Value::QualifiedName { .. }
+                                                | super::model::Value::LocalizedText { .. }
+                                        )) =>
+                            {
+                                let text = match value {
+                                    super::model::Value::Str(text) => text.clone(),
+                                    other => other.to_string(),
+                                };
+                                if text.contains('\0') || text.len() > 65_536 {
+                                    Err(message("DA string contains NUL or exceeds the SDK limit"))
+                                } else {
+                                    Ok(write_outcome(s.write_text(*reg, &text)))
+                                }
+                            }
+                            _ => super::softing_scalar::encode(
+                                &request.value,
+                                request.type_hint.map(|v| v.0),
+                            )
+                            .map(|(vt, bits)| write_outcome(s.write_scalar(*reg, vt, bits))),
+                        },
+                    };
+                    send(events, owner, request_id, EventKind::Wrote { key, result });
+                }
+                CommandKind::Browse { node_id, .. } => {
+                    let result = session
+                        .as_mut()
+                        .ok_or(BackendMsg::NoConnection)
+                        .and_then(|s| {
+                            s.browse(node_id)
+                                .map_err(|e| message(format!("DA browse: {e:?}")))
+                        });
+                    match result {
+                        Ok(entries) => {
+                            let children = entries
+                                .into_iter()
+                                .map(|entry| super::model::BrowseNode {
+                                    node_id: entry.node_id,
+                                    name: entry.name,
+                                    kind: if entry.is_branch {
+                                        super::model::NodeKind::Branch
+                                    } else {
+                                        super::model::NodeKind::Item
+                                    },
+                                    has_children: entry.is_branch,
+                                })
+                                .collect();
+                            send(
+                                events,
+                                owner,
+                                request_id,
+                                EventKind::Browse {
+                                    node_id: node_id.clone(),
+                                    children,
+                                },
+                            );
+                        }
+                        Err(error) => failure(events, &command, Operation::Browse, error),
+                    }
+                }
+                CommandKind::Test => {
+                    let result = session
+                        .as_mut()
+                        .ok_or(BackendMsg::NoConnection)
+                        .and_then(|s| {
+                            s.test_status()
+                                .map_err(|error| match error {
+                                    SdkError::Native(hr) => BackendMsg::DaLinkLost {
+                                        detail: format!("HRESULT 0x{:08X}", hr as u32),
+                                    },
+                                    other => BackendMsg::DaLinkLost {
+                                        detail: format!("SDK status: {other:?}"),
+                                    },
+                                })
+                                .and_then(super::da_status::check_server_state)
+                        });
+                    match result {
+                        Ok(message) => send(events, owner, request_id, EventKind::Log { message }),
+                        Err(error) => failure(events, &command, Operation::Test, error),
+                    }
+                }
+                _ => {
+                    if let Some(reply) = no_connection_reply(&command) {
+                        let _ = events.send(reply);
+                    }
+                }
+            }
+            if done {
+                break;
+            }
+        }
+        if let Some(s) = session {
+            if let Err(e) = s.close() {
+                send(
+                    events,
+                    id.into(),
+                    None,
+                    EventKind::Log {
+                        message: message(format!("DA close: {e:?}")),
+                    },
+                );
+            }
+        }
+    }
+}
+
+pub(crate) fn spawn(events: Sender<Event>) -> super::WorkerHandle {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Command>();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let join = std::thread::Builder::new()
+        .name("opc-da-sdk".to_string())
+        .spawn(move || {
+            let outcome = match acquire_host() {
+                Ok(sdk) => run_router(
+                    Arc::new(NativeHost {
+                        sdk,
+                        discovered: Mutex::new(DiscoveredClsids::default()),
+                    }),
+                    rx,
+                    events.clone(),
+                    SESSION_JOIN_BUDGET,
+                ),
+                Err(e) => {
+                    let mut rx = rx;
+                    send(
+                        &events,
+                        Owner::Discovery,
+                        None,
+                        EventKind::Log {
+                            message: message(format!("DA SDK initialization: {e}")),
+                        },
+                    );
+                    while let Some(command) = rx.blocking_recv() {
+                        if let Some(reply) = no_connection_reply(&command) {
+                            let _ = events.send(reply);
+                        }
+                    }
+                    super::ShutdownOutcome::Joined
+                }
+            };
+            let _ = done_tx.send(());
+            outcome
+        });
+    match join {
+        Ok(join) => super::WorkerHandle::new(tx, join, done_rx),
+        Err(_) => super::WorkerHandle::closed(done_rx),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::model::{EndpointSpec, ItemSpec, Protocol, RequestId, Value, WriteRequest};
+    use super::*;
+    use std::time::Duration;
+    #[cfg(feature = "native-da-test-hooks")]
+    #[test]
+    fn test_manager_async_lease_busy_and_finish_with_mock_ffi() {
+        const CHILD: &str = "OPCLOOK_MANAGER_LEASE_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "bff::da::tests::test_manager_async_lease_busy_and_finish_with_mock_ffi",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "child failed: {stdout} {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        assert_eq!(test_host_acquisitions(), (0, true));
+        let mut lease = TestManagerAsyncLease::open_fixture().unwrap();
+        assert_eq!(test_host_acquisitions(), (1, true));
+        assert_eq!(lease.read(100).unwrap(), 0x80070102_u32 as i32);
+        assert_eq!(
+            finish_native_sdk(Duration::from_secs(3)).unwrap_err(),
+            "SDK sessions still running"
+        );
+        assert_eq!(lease.retire(10).unwrap(), (0, 0));
+        lease.close().unwrap();
+        finish_native_sdk(Duration::from_secs(3)).unwrap();
+    }
+    #[cfg(feature = "native-da-test-hooks")]
+    #[test]
+    fn manager_async_lease_allows_another_worker_with_mock_ffi() {
+        const CHILD: &str = "OPCLOOK_ASYNC_ISOLATION_MOCK_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "bff::da::tests::manager_async_lease_allows_another_worker_with_mock_ffi",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "child failed: {stdout} {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let mut blocked = TestManagerAsyncLease::open_fixture().unwrap();
+        assert_eq!(blocked.read(100).unwrap(), 0x80070102_u32 as i32);
+        let (events, rx) = std::sync::mpsc::channel();
+        let mut worker = spawn(events);
+        let sender = worker.tx.take().unwrap();
+        let owner = Owner::Session(SessionId::FIRST);
+        let request = |id, kind| {
+            sender
+                .send(Command {
+                    protocol: Protocol::OpcDa,
+                    owner,
+                    request_id: Some(RequestId::new(id).unwrap()),
+                    kind,
+                })
+                .unwrap();
+            loop {
+                let event = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                if event.origin == super::super::model::Origin::Reply(RequestId::new(id).unwrap()) {
+                    return event.kind;
+                }
+                assert!(!matches!(
+                    event.origin,
+                    super::super::model::Origin::Reply(_)
+                ));
+            }
+        };
+        let address = "7D4BD1B1-7422-48C0-AD58-601B701449C6";
+        assert!(matches!(
+            request(
+                1,
+                CommandKind::Connect {
+                    endpoint: EndpointSpec::da("localhost", address)
+                }
+            ),
+            EventKind::Connected { .. }
+        ));
+        assert_eq!(test_host_acquisitions(), (2, true));
+        let key = ItemKey::FIRST;
+        assert!(
+            matches!(request(2, CommandKind::AddItems { items: vec![ItemSpec { key, item_id: "Fixture.DeviceValue".into() }] }), EventKind::AddItems { results } if results.len()==1 && results[0].1.is_ok())
+        );
+        assert!(
+            matches!(request(3, CommandKind::ReadFresh { keys: vec![key] }), EventKind::Values { values } if values.len()==1 && values[0].1.value==Value::I64(43))
+        );
+        assert!(matches!(
+            request(4, CommandKind::Disconnect),
+            EventKind::Disconnected { .. }
+        ));
+        drop(sender);
+        worker.join.take().unwrap().join().unwrap();
+        assert_eq!(
+            finish_native_sdk(Duration::from_secs(3)).unwrap_err(),
+            "SDK sessions still running"
+        );
+        assert_eq!(blocked.retire(10).unwrap(), (0, 0));
+        blocked.close().unwrap();
+        finish_native_sdk(Duration::from_secs(3)).unwrap();
+    }
+    #[cfg(feature = "native-da-test-hooks")]
+    #[test]
+    fn gateway_async_probe_scope_and_timeout_with_mock_ffi() {
+        const CHILD: &str = "OPCLOOK_GATEWAY_ASYNC_MOCK_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            for mode in ["retire", "disconnect", "shutdown", "wrong_epoch"] {
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "bff::da::tests::gateway_async_probe_scope_and_timeout_with_mock_ffi",
+                        "--nocapture",
+                    ])
+                    .env(CHILD, mode)
+                    .output()
+                    .unwrap();
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                assert!(
+                    output.status.success() && stdout.contains("1 passed"),
+                    "{mode} child failed: {stdout} {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            return;
+        }
+        use super::super::model::{
+            AcquisitionConfig, DaReadMethod, Origin, PollFreshness, UpdateMode,
+        };
+        let mode = std::env::var(CHILD).unwrap();
+        let id = SessionId::FIRST;
+        let epoch = RequestId::new(10).unwrap();
+        let request_id = RequestId::new(12).unwrap();
+        let key = ItemKey::FIRST;
+        test_gateway_async_arm(id, epoch, request_id, key, 100).unwrap();
+        assert!(test_gateway_async_arm(id, epoch, request_id, key, 100).is_err());
+        let (events, rx) = std::sync::mpsc::channel();
+        let mut worker = spawn(events);
+        let sender = worker.tx.take().unwrap();
+        let request = |request: u64, kind| {
+            sender
+                .send(Command {
+                    protocol: Protocol::OpcDa,
+                    owner: id.into(),
+                    request_id: RequestId::new(request),
+                    kind,
+                })
+                .unwrap();
+            loop {
+                let event = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                if let Origin::Reply(actual) = event.origin {
+                    assert_eq!(actual, RequestId::new(request).unwrap());
+                    assert_eq!(event.owner, Owner::Session(id));
+                    return event.kind;
+                }
+            }
+        };
+        let mut endpoint = EndpointSpec::da("localhost", "7D4BD1B1-7422-48C0-AD58-601B701449C6");
+        endpoint.acquisition = Some(AcquisitionConfig {
+            update_mode: UpdateMode::Subscription,
+            interval_ms: 100,
+            read_after_write: false,
+            poll_freshness: PollFreshness::CacheAllowed,
+            da_read_method: DaReadMethod::Sync,
+        });
+        assert!(matches!(
+            request(
+                if mode == "wrong_epoch" { 9 } else { 10 },
+                CommandKind::Connect { endpoint }
+            ),
+            EventKind::Connected { .. }
+        ));
+        assert!(
+            matches!(request(11,CommandKind::AddItems{items:vec![ItemSpec{key,item_id:"Fixture.Value".into()}]}),EventKind::AddItems{results} if results[0].1.is_ok())
+        );
+        if mode == "wrong_epoch" {
+            assert!(
+                matches!(request(12,CommandKind::ReadFresh{keys:vec![key]}),EventKind::Values{values} if values[0].1.value==Value::I64(43))
+            );
+            assert!(!test_gateway_async_observation().unwrap().dispatched);
+            assert!(matches!(
+                request(14, CommandKind::Disconnect),
+                EventKind::Disconnected { .. }
+            ));
+            drop(sender);
+            worker.join.take().unwrap().join().unwrap();
+            test_gateway_async_clear();
+            finish_native_sdk(Duration::from_secs(3)).unwrap();
+            return;
+        }
+        assert!(
+            matches!(request(13,CommandKind::ReadFresh{keys:vec![key]}),EventKind::Values{values} if values[0].1.value==Value::I64(43))
+        );
+        assert!(!test_gateway_async_observation().unwrap().dispatched);
+        assert!(matches!(
+            request(12, CommandKind::ReadFresh { keys: vec![key] }),
+            EventKind::Error {
+                operation: Operation::Read,
+                message: BackendMsg::TimeoutRead
+            }
+        ));
+        let observation = test_gateway_async_observation().unwrap();
+        assert!(observation.dispatched && observation.registration > 0 && observation.token > 0);
+        assert_eq!(
+            (
+                observation.owner,
+                observation.epoch,
+                observation.request,
+                observation.key
+            ),
+            (id, epoch, request_id, key)
+        );
+        if mode != "retire" {
+            if mode == "disconnect" {
+                assert!(matches!(
+                    request(14, CommandKind::Disconnect),
+                    EventKind::Disconnected {
+                        reason: BackendMsg::TimeoutRead
+                    }
+                ));
+            }
+            drop(sender);
+            assert_eq!(
+                worker.join.take().unwrap().join().unwrap(),
+                super::super::ShutdownOutcome::Joined
+            );
+            assert_eq!(
+                finish_native_sdk(Duration::from_secs(3)).unwrap_err(),
+                "SDK sessions still running"
+            );
+            return; // quarantined session intentionally retained until this child process exits
+        }
+        let refused = request(14, CommandKind::RemoveItems { keys: vec![key] });
+        assert!(
+            matches!(
+                refused,
+                EventKind::Error {
+                    operation: Operation::RemoveItems,
+                    ..
+                }
+            ),
+            "{refused:?}"
+        );
+        assert!(matches!(
+            request(15, CommandKind::Test),
+            EventKind::Log {
+                message: BackendMsg::DaStateOk
+            }
+        ));
+        assert!(
+            matches!(request(16,CommandKind::ReadFresh{keys:vec![key]}),EventKind::Values{values} if values[0].1.value==Value::I64(43))
+        );
+        assert!(matches!(
+            request(17, CommandKind::Disconnect),
+            EventKind::Disconnected { .. }
+        ));
+        drop(sender);
+        worker.join.take().unwrap().join().unwrap();
+        while let Ok(event) = rx.try_recv() {
+            assert!(
+                !matches!(event.origin, Origin::Reply(_)),
+                "unexpected duplicate reply: {event:?}"
+            );
+        }
+        test_gateway_async_clear();
+        finish_native_sdk(Duration::from_secs(5)).unwrap();
+    }
+    #[test]
+    fn test_command_reports_sdk_state_and_native_error_through_router() {
+        use super::super::model::Origin;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut worker = spawn(tx);
+        let cmd = worker.tx.take().unwrap();
+        let owner = Owner::Session(SessionId::new(301).unwrap());
+        let request = |id, kind| {
+            cmd.send(Command {
+                protocol: Protocol::OpcDa,
+                owner,
+                request_id: Some(RequestId::new(id).unwrap()),
+                kind,
+            })
+            .unwrap();
+            let event = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert_eq!(event.origin, Origin::Reply(RequestId::new(id).unwrap()));
+            assert_eq!(event.owner, owner);
+            event.kind
+        };
+        assert!(matches!(
+            request(1, CommandKind::Test),
+            EventKind::Error {
+                operation: Operation::Test,
+                message: BackendMsg::NoConnection,
+            }
+        ));
+        for (index, (clsid, expected)) in [
+            ("FEDC0001", 1),
+            ("FEDC0002", 2),
+            ("FEDC0003", 3),
+            ("FEDC0004", 4),
+            ("FEDC0005", 5),
+            ("FEDC0006", 6),
+            ("FEDC002A", 42),
+            ("FEDC0000", 0),
+            ("FEDCDEAD", i32::MIN + 5),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let base = 10 + index as u64 * 3;
+            let endpoint =
+                EndpointSpec::da("localhost", &format!("{clsid}-0000-0000-0000-000000000000"));
+            assert!(matches!(
+                request(base, CommandKind::Connect { endpoint }),
+                EventKind::Connected { .. }
+            ));
+            let verdict = request(base + 1, CommandKind::Test);
+            match expected {
+                1 => assert!(matches!(
+                    verdict,
+                    EventKind::Log {
+                        message: BackendMsg::DaStateOk
+                    }
+                )),
+                2 => assert!(
+                    matches!(verdict, EventKind::Error { operation: Operation::Test,
+                    message: BackendMsg::DaNotReady { state: 2, ref name } } if name == "FAILED")
+                ),
+                3..=6 => assert!(
+                    matches!(verdict, EventKind::Error { operation: Operation::Test,
+                    message: BackendMsg::DaNotReady { state, .. } } if state == expected)
+                ),
+                42 | 0 => assert!(
+                    matches!(verdict, EventKind::Error { operation: Operation::Test,
+                    message: BackendMsg::DaUnknownState { state } } if state == expected)
+                ),
+                _ => assert!(
+                    matches!(verdict, EventKind::Error { operation: Operation::Test,
+                    message: BackendMsg::DaLinkLost { ref detail } } if detail.contains("80000005"))
+                ),
+            }
+            assert!(matches!(
+                request(base + 2, CommandKind::Disconnect),
+                EventKind::Disconnected { .. }
+            ));
+        }
+        drop(cmd);
+        worker.join.take().unwrap().join().unwrap();
+    }
+    #[test]
+    fn write_service_failure_is_unknown_with_raw_hresult() {
+        use super::super::model::{NativeWriteStatus, WriteDisposition};
+        let hr = 0x8000_ffffu32 as i32;
+        let outcome = write_outcome(Err(SdkError::Native(hr)));
+        assert_eq!(outcome.disposition, WriteDisposition::Unknown);
+        assert_eq!(outcome.raw, Some(NativeWriteStatus::DaService(hr)));
+    }
+
+    #[test]
+    fn preview_contract_connect_add_read_write_remove() {
+        #[cfg(feature = "native-da-test-hooks")]
+        let before = test_host_acquisitions().0;
+        let first_host = acquire_host().unwrap();
+        let retained = first_host.clone();
+        drop(first_host);
+        let reused = acquire_host().unwrap();
+        assert!(retained.same_host(&reused));
+        #[cfg(feature = "native-da-test-hooks")]
+        {
+            let (count, all_same) = test_host_acquisitions();
+            assert!(count >= before + 2 && all_same);
+        }
+        drop(retained);
+        drop(reused);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut worker = spawn(tx);
+        let cmd = worker.tx.take().unwrap();
+        let owner = Owner::Session(SessionId::FIRST);
+        let send = |kind| {
+            cmd.send(Command {
+                protocol: Protocol::OpcDa,
+                owner,
+                request_id: Some(RequestId::FIRST),
+                kind,
+            })
+            .unwrap()
+        };
+        let recv = || loop {
+            let event = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            if matches!(event.origin, super::super::model::Origin::Reply(_)) {
+                break event.kind;
+            }
+        };
+        cmd.send(Command {
+            protocol: Protocol::OpcDa,
+            owner: Owner::Discovery,
+            request_id: Some(RequestId::FIRST),
+            kind: CommandKind::Discover {
+                host: "localhost".into(),
+            },
+        })
+        .unwrap();
+        assert!(
+            matches!(recv(), EventKind::Servers { servers, .. } if servers.len() == 1 && servers[0].id == "OPCLook.NativeDaFixture.1")
+        );
+        send(CommandKind::Connect {
+            endpoint: EndpointSpec::da("localhost", "OPCLook.NativeDaFixture.1"),
+        });
+        assert!(matches!(recv(), EventKind::Connected { .. }));
+        send(CommandKind::Browse {
+            node_id: String::new(),
+            filter: super::super::model::NodeClassFilter::All,
+            view_id: None,
+        });
+        let branch = match recv() {
+            EventKind::Browse { children, .. } => {
+                assert_eq!(children.len(), 1);
+                assert_eq!(children[0].name, "Fixture");
+                children[0].node_id.clone()
+            }
+            other => panic!("unexpected browse: {other:?}"),
+        };
+        send(CommandKind::Browse {
+            node_id: branch,
+            filter: super::super::model::NodeClassFilter::All,
+            view_id: None,
+        });
+        assert!(
+            matches!(recv(), EventKind::Browse { children, .. } if children.len() == 1 && children[0].node_id == "Fixture.Value")
+        );
+        send(CommandKind::AddItems {
+            items: vec![ItemSpec {
+                key: ItemKey::FIRST,
+                item_id: "Fixture.Value".into(),
+            }],
+        });
+        assert!(
+            matches!(recv(), EventKind::AddItems { results } if results.len() == 1 && results[0].1.is_ok())
+        );
+        send(CommandKind::Read {
+            keys: vec![ItemKey::FIRST],
+        });
+        assert!(
+            matches!(recv(), EventKind::Values { values } if values[0].1.value == Value::I64(42))
+        );
+        send(CommandKind::ReadFresh {
+            keys: vec![ItemKey::FIRST],
+        });
+        let fresh = recv();
+        if cfg!(feature = "native-da-preview") {
+            assert!(
+                matches!(fresh, EventKind::Values { values } if values[0].1.value == Value::I64(43)),
+                "fresh uses maxAge=0"
+            );
+        } else {
+            assert!(
+                matches!(fresh, EventKind::Error { operation: Operation::Read, message: BackendMsg::Raw(ref message) } if message == "Explicit cache/device read is not supported by the legacy DA adapter")
+            );
+        }
+        send(CommandKind::ReadCached {
+            keys: vec![ItemKey::FIRST],
+            max_age_ms: 1234,
+        });
+        let cached = recv();
+        if cfg!(feature = "native-da-preview") {
+            assert!(
+                matches!(cached, EventKind::Values { values } if values[0].1.value == Value::I64(42)),
+                "DA cache uses maxAge=MAX"
+            );
+        } else {
+            assert!(
+                matches!(cached, EventKind::Error { operation: Operation::Read, message: BackendMsg::Raw(ref message) } if message == "Explicit cache/device read is not supported by the legacy DA adapter")
+            );
+        }
+        send(CommandKind::Write {
+            request: WriteRequest {
+                key: ItemKey::FIRST,
+                value: Value::I64(7),
+                type_hint: None,
+            },
+        });
+        assert!(matches!(recv(), EventKind::Wrote { result: Ok(_), .. }));
+        send(CommandKind::RemoveItems {
+            keys: vec![ItemKey::FIRST],
+        });
+        assert!(matches!(recv(), EventKind::Removed { .. }));
+        send(CommandKind::Read {
+            keys: vec![ItemKey::FIRST],
+        });
+        assert!(
+            matches!(recv(), EventKind::Values { values } if values[0].1.reason == Some(BackendMsg::SignalNotSubscribed))
+        );
+        send(CommandKind::Disconnect);
+        assert!(matches!(recv(), EventKind::Disconnected { .. }));
+        drop(cmd);
+        worker.join.take().unwrap().join().unwrap();
+    }
+    #[test]
+    fn subscription_discards_retired_registration_and_reports_overflow() {
+        let guid = Guid {
+            data1: 1,
+            data2: 2,
+            data3: 3,
+            data4: [0; 8],
+        };
+        let host = Host::new().unwrap();
+        let shared = host.shared();
+        let (mut session, _) = shared
+            .open_config("server", "localhost", &guid, true, 100)
+            .unwrap();
+        let old = session.add("Fixture.Value").unwrap().0;
+        session.inject_mock_push(old, 10, false);
+        session.remove(old).unwrap();
+        let fresh = session.add("Fixture.Value").unwrap().0;
+        session.inject_mock_push(fresh, 20, true);
+        let mut registrations = HashMap::new();
+        registrations.insert(fresh, ItemKey::FIRST);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let epoch = RequestId::new(7).unwrap();
+        drain_push(
+            &mut session,
+            &registrations,
+            Owner::Session(SessionId::FIRST),
+            epoch,
+            &tx,
+        )
+        .unwrap();
+        assert!(matches!(rx.recv().unwrap().kind, EventKind::Log { .. }));
+        let event = rx.recv().unwrap();
+        assert_eq!(event.origin, super::super::model::Origin::Session(epoch));
+        assert!(
+            matches!(event.kind, EventKind::Values { values } if values.len() == 1 &&
+            values[0].0 == ItemKey::FIRST && values[0].1.value == Value::I64(20))
+        );
+        assert!(rx.try_recv().is_err());
+        session.close().unwrap();
+        drop(shared);
+        host.close().unwrap();
+    }
+}

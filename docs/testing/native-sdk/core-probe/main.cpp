@@ -1,0 +1,436 @@
+#include "stdafx.h"
+#include <cstdio>
+#include <cstring>
+#include <type_traits>
+#include <thread>
+#include "adapter.hpp"
+#include "runtime.h"
+#include <cstddef>
+static_assert(sizeof(OpclDaFact) == 24 && offsetof(OpclDaFact, client_handle) == 0 &&
+              offsetof(OpclDaFact, hresult) == 4 && offsetof(OpclDaFact, filetime_low) == 8 &&
+              offsetof(OpclDaFact, filetime_high) == 12 && offsetof(OpclDaFact, i4) == 16 &&
+              offsetof(OpclDaFact, quality) == 20 && offsetof(OpclDaFact, vartype) == 22 &&
+              sizeof(OpclDaEnvelope) == 16 && offsetof(OpclDaEnvelope, master_error) == 12, "ABI layout");
+static_assert(sizeof(OpclDaScalar) == 32 && offsetof(OpclDaScalar, bits_low) == 16 &&
+              offsetof(OpclDaScalar, quality) == 24 && offsetof(OpclDaScalar, vartype) == 26,
+              "scalar ABI layout");
+static_assert(sizeof(OpclDaServerRecord) == 3100 && offsetof(OpclDaServerRecord, progid) == 28 &&
+              offsetof(OpclDaServerRecord, description) == 1052, "discovery ABI layout");
+static_assert(sizeof(OpclDaBrowseRecord) == 5132 && offsetof(OpclDaBrowseRecord, name) == 12 &&
+              offsetof(OpclDaBrowseRecord, node_id) == 1036, "browse ABI layout");
+static_assert(sizeof(OpclDaPush) == 48 && offsetof(OpclDaPush, value) == 16, "subscription ABI layout");
+
+
+static_assert(std::is_same<XML_Char, char>::value, "SDK expects narrow Expat strings");
+using ExpectedExpatStart = void (XMLCALL *)(void*, const char*, const char**);
+static_assert(std::is_same<XML_StartElementHandler, ExpectedExpatStart>::value,
+              "SDK Expat callback ABI changed");
+
+class CaptureGroup : public SODaCComGroupDefault {
+public:
+    DWORD read_count = 0, write_count = 0;
+    SODaCItem* read_item = nullptr;
+    SODaCItem* write_item = nullptr;
+    HRESULT read_result = E_FAIL, write_result = E_FAIL;
+    LONG read_value = 0;
+    WORD read_quality = 0;
+    FILETIME read_time{};
+    void onReadAdvise(BYTE, DWORD, HRESULT, HRESULT, DWORD count, SODaCItem** items,
+                      SOCmnVariant* values, WORD* qualities, SOCmnDateTime* times, HRESULT* errors) override {
+        read_count = count;
+        if (count) { read_item = items[0]; read_result = errors[0]; read_value = values[0].lVal; read_quality = qualities[0]; times[0].get(&read_time); }
+    }
+    void onWriteAdvise(DWORD, HRESULT, DWORD count, SODaCItem** items, HRESULT* errors) override {
+        write_count = count;
+        if (count) { write_item = items[0]; write_result = errors[0]; }
+    }
+};
+class ProbeCallback : public SODaCDataCallback {
+public:
+    explicit ProbeCallback(SODaCComGroupImpl* group) : SODaCDataCallback(group) {
+        // Offline test only: no real COM advise was established. The SDK
+        // OnWriteComplete entry point ignores callbacks unless this is set.
+        m_established = TRUE;
+    }
+    ~ProbeCallback() override { m_established = FALSE; }
+    using SODaCDataCallback::handleReadAdvise;
+};
+static int adapter_test() {
+    OpclDaGroup* group = new OpclDaGroup;
+    SODaCItem* item = group->addItem(_T("N2.offline"));
+    if (!item) { group->release(); return 20; }
+    const OPCHANDLE valid = item->getClientHandle();
+    OPCHANDLE handles[] = {0, valid};
+    VARIANT values[2]; VariantInit(&values[0]); VariantInit(&values[1]);
+    values[1].vt = VT_I4; values[1].lVal = -42;
+    WORD qualities[] = {0, 0xc0};
+    FILETIME times[] = {{0, 0}, {1, 0}};
+    HRESULT errors[] = {E_INVALIDARG, static_cast<HRESULT>(7)};
+    bool ok = valid != 0;
+    {
+        ProbeCallback callback(group);
+        ok = ok && SUCCEEDED(callback.handleReadAdvise(0, 42, group->getOpcHandle(), S_OK, S_OK,
+                                                       2, handles, values, qualities, times, errors));
+        OpclDaFact fact{}; OpclDaEnvelope envelope{}; uint32_t count = 99;
+        ok = ok && opcl_da_copy_facts(group, &envelope, &fact, 1, &count) == OPCL_DA_OK && count == 1 &&
+             envelope.mode == 0 && envelope.transaction == 42 && envelope.master_quality == S_OK && envelope.master_error == S_OK &&
+             fact.client_handle == valid && fact.hresult == 7 && fact.quality == 0xc0 &&
+             fact.filetime_low == 1 && fact.filetime_high == 0 && fact.vartype == VT_I4 && fact.i4 == -42;
+        std::printf("N2_FACT %u %u %d %d %u %d %u %u %d %u %u\n", envelope.mode, envelope.transaction, envelope.master_quality, envelope.master_error, fact.client_handle, fact.hresult, fact.filetime_low, fact.filetime_high, fact.i4, fact.quality, fact.vartype);
+        count = 99;
+        ok = ok && opcl_da_copy_facts(group, &envelope, &fact, 0, &count) == OPCL_DA_OVERFLOW && count == 0;
+        count = 99;
+        ok = ok && opcl_da_copy_facts(group, &envelope, nullptr, 1, &count) == OPCL_DA_INVALID && count == 0;
+        ok = ok && opcl_da_copy_facts(nullptr, &envelope, &fact, 1, &count) == OPCL_DA_INVALID;
+        ok = ok && opcl_da_copy_facts(group, &envelope, &fact, 1, nullptr) == OPCL_DA_INVALID;
+        values[1].vt = VT_EMPTY;
+        errors[1] = E_FAIL;
+        ok = ok && SUCCEEDED(callback.handleReadAdvise(1, 42, group->getOpcHandle(), S_OK, S_OK,
+                                                       2, handles, values, qualities, times, errors));
+        ok = ok && opcl_da_copy_facts(group, &envelope, &fact, 1, &count) == OPCL_DA_OK && count == 1 &&
+             fact.hresult == E_FAIL && fact.vartype == VT_EMPTY && fact.quality == 0xc0;
+        SODaCItem* batch_items[OPCL_DA_MAX_FACTS]{};
+        SOCmnVariant batch_values[OPCL_DA_MAX_FACTS];
+        WORD batch_qualities[OPCL_DA_MAX_FACTS]{};
+        SOCmnDateTime batch_times[OPCL_DA_MAX_FACTS];
+        HRESULT batch_errors[OPCL_DA_MAX_FACTS]{};
+        for (uint32_t i = 0; i < OPCL_DA_MAX_FACTS; ++i) {
+            batch_items[i] = item;
+            batch_values[i].vt = VT_I4;
+            batch_values[i].lVal = static_cast<LONG>(i);
+        }
+        group->onReadAdvise(0, 77, S_OK, S_OK, OPCL_DA_MAX_FACTS, batch_items, batch_values,
+                            batch_qualities, batch_times, batch_errors);
+        OpclDaFact batch[OPCL_DA_MAX_FACTS]{};
+        ok = ok && opcl_da_copy_facts(group, &envelope, batch, OPCL_DA_MAX_FACTS, &count) == OPCL_DA_OK &&
+             count == OPCL_DA_MAX_FACTS && envelope.transaction == 77 && batch[63].i4 == 63;
+        group->onReadAdvise(1, 99, E_FAIL, E_INVALIDARG, 0, nullptr, nullptr, nullptr, nullptr, nullptr);
+        ok = ok && opcl_da_copy_facts(group, &envelope, nullptr, 0, &count) == OPCL_DA_OK && count == 0 &&
+             envelope.mode == 1 && envelope.transaction == 99 && envelope.master_quality == E_FAIL && envelope.master_error == E_INVALIDARG;
+        group->onReadAdvise(0, 0, S_OK, S_OK, OPCL_DA_MAX_FACTS + 1, nullptr, nullptr, nullptr, nullptr, nullptr);
+        ok = ok && opcl_da_copy_facts(group, &envelope, &fact, 1, &count) == OPCL_DA_OVERFLOW && count == 0;
+        group->onReadAdvise(0, 77, S_OK, S_OK, OPCL_DA_MAX_FACTS, batch_items, batch_values,
+                            batch_qualities, batch_times, batch_errors);
+        group->onReadAdvise(0, 0, S_OK, S_OK, 1, nullptr, nullptr, nullptr, nullptr, nullptr);
+        ok = ok && opcl_da_copy_facts(group, &envelope, &fact, 1, &count) == OPCL_DA_INVALID && count == 0;
+    }
+    VariantClear(&values[0]); VariantClear(&values[1]);
+    item->release(); group->release();
+    std::printf("N2 adapter callback/ABI: %s\n", ok ? "PASS" : "FAIL");
+    return ok ? 0 : 21;
+}
+static void phase(const char* name) {
+    std::printf("phase: %s\n", name);
+    std::fflush(stdout);
+}
+static int live_fixture() {
+    const OpclDaGuid clsid = {0x7d4bd1b1, 0x7422, 0x48c0,
+                              {0xad, 0x58, 0x60, 0x1b, 0x70, 0x14, 0x49, 0xc6}};
+    OpclDaHost* host = nullptr;
+    OpclDaSession* session = nullptr;
+    OpclDaItem* item = nullptr;
+    uint16_t type = 0; uint32_t rights = 0; int32_t write_result = E_FAIL;
+    OpclDaReadI4 value{};
+    HRESULT hr = opcl_da_host_create(&host);
+    if (FAILED(hr)) { std::printf("host %08lx\n", hr); return 31; }
+    uint32_t revised_rate = 0;
+    hr = opcl_da_session_open(host, "OPCLook.NativeDaFixture.1", "localhost", &clsid, 0, 1000, 100000, &revised_rate, &session);
+    std::printf("live connect hr=%08lx\n", static_cast<unsigned long>(hr));
+    bool ok = SUCCEEDED(hr);
+    // SDK task dispatch performs synchronous OPC I/O on its per-server
+    // worker. Windows may place this caller in the process's implicit MTA.
+    if (ok) { std::thread caller([&] {
+    ULONG_PTR token = 0;
+    const HRESULT caller_before = CoGetContextToken(&token);
+    std::printf("live caller before=%08lx\n", static_cast<unsigned long>(caller_before));
+    const ULONG_PTR token_before = token;
+    ok = true;
+    if (ok) hr = opcl_da_item_add(session, "Fixture.Value", 1, 0, &item, &type, &rights);
+    std::printf("live add hr=%08lx type=%u rights=%lu item=%p\n",
+                static_cast<unsigned long>(hr), type, static_cast<unsigned long>(rights), static_cast<void*>(item));
+    if (SUCCEEDED(hr)) hr = opcl_da_read_i4(session, item, 0, &value);
+    std::printf("live read hr=%08lx service=%08lx item=%08lx vt=%u value=%ld quality=%04x time=%08lx:%08lx\n",
+                static_cast<unsigned long>(hr), static_cast<unsigned long>(value.service_result),
+                static_cast<unsigned long>(value.item_result), value.vartype, static_cast<long>(value.value), value.quality,
+                static_cast<unsigned long>(value.filetime_high), static_cast<unsigned long>(value.filetime_low));
+    ok = ok && SUCCEEDED(hr) && SUCCEEDED(value.service_result) && SUCCEEDED(value.item_result) &&
+              type == VT_I4 && (rights & OPC_WRITEABLE) && value.value == 42 &&
+              (value.quality & 0xc0) == 0xc0 && (value.filetime_low || value.filetime_high);
+    if (ok) {
+        hr = opcl_da_write_i4(session, item, 77, &write_result);
+        std::printf("live write hr=%08lx item=%08lx\n", static_cast<unsigned long>(hr), static_cast<unsigned long>(write_result));
+        ok = SUCCEEDED(hr) && SUCCEEDED(write_result);
+    }
+    if (ok) {
+        hr = opcl_da_read_i4(session, item, 0, &value);
+        ok = SUCCEEDED(hr) && SUCCEEDED(value.service_result) && SUCCEEDED(value.item_result) && value.value == 77;
+    }
+    const HRESULT caller_after = CoGetContextToken(&token);
+    std::printf("live caller after=%08lx\n", static_cast<unsigned long>(caller_after));
+    ok = ok && caller_after == caller_before && (FAILED(caller_before) || token == token_before);
+    }); caller.join(); }
+    if (ok) {
+        hr = opcl_da_item_remove(session, item); item = nullptr;
+        ok = SUCCEEDED(hr);
+    }
+    if (ok) {
+        hr = opcl_da_item_add(session, "Fixture.Value", 2, 0, &item, &type, &rights);
+        if (SUCCEEDED(hr)) hr = opcl_da_read_i4(session, item, 0, &value);
+        ok = SUCCEEDED(hr) && SUCCEEDED(value.service_result) && SUCCEEDED(value.item_result) && value.value == 77;
+    }
+    if (session) { hr = opcl_da_session_close(session); ok = ok && SUCCEEDED(hr); }
+    hr = opcl_da_host_destroy(host); ok = ok && SUCCEEDED(hr);
+    std::printf("live SDK C ABI fixture %s (hr=%08lx item=%08lx)\n", ok ? "PASS" : "FAIL", hr, write_result);
+    return ok ? 0 : 32;
+}
+// Local SDK server/SDK client proof only; forcing the SDK route does not
+// establish that the server is physically limited to DA 1.0.
+static int live_da1_inactive_fixture() {
+    const OpclDaGuid clsid = {0x7d4bd1b1, 0x7422, 0x48c0,
+                              {0xad, 0x58, 0x60, 0x1b, 0x70, 0x14, 0x49, 0xc6}};
+    OpclDaHost* host = nullptr; OpclDaSession* session = nullptr;
+    OpclDaItem *target = nullptr, *cache_count = nullptr, *device_count = nullptr;
+    uint16_t type = 0; uint32_t rights = 0, revised = 0; HRESULT hr = opcl_da_host_create(&host);
+    if (FAILED(hr)) return 61;
+    hr = opcl_da_test_da1_open(host, "OPCLook.NativeDaFixture.1", "localhost", &clsid, &revised, &session);
+    std::printf("DA1 open inactive hr=%08lx\n", static_cast<unsigned long>(hr));
+    bool ok = SUCCEEDED(hr);
+    auto add = [&](const char* id, uint32_t registration, OpclDaItem** item) {
+        const HRESULT result = opcl_da_item_add(session, id, registration, 0, item, &type, &rights);
+        std::printf("DA1 add %s hr=%08lx type=%u rights=%lu\n", id, static_cast<unsigned long>(result), type, static_cast<unsigned long>(rights));
+        return SUCCEEDED(result);
+    };
+    if (ok) ok = add("Fixture.DeviceValue", 1, &target) && add("Fixture.SyncCacheKindCount", 2, &cache_count) &&
+                 add("Fixture.SyncDeviceKindCount", 3, &device_count);
+    if (ok) { hr = opcl_da_test_da1_is_inactive(session); std::printf("DA1 inactive after add hr=%08lx\n", static_cast<unsigned long>(hr)); ok = SUCCEEDED(hr); }
+    auto read = [&](OpclDaItem* item, uint32_t max_age, OpclDaReadI4& out) {
+        HRESULT result = opcl_da_read_i4(session, item, max_age, &out);
+        std::printf("DA1 read source=%s hr=%08lx service=%08lx item=%08lx vt=%u value=%ld quality=%04x time=%08lx:%08lx\n",
+                    max_age == UINT32_MAX ? "cache" : "device", static_cast<unsigned long>(result),
+                    static_cast<unsigned long>(out.service_result), static_cast<unsigned long>(out.item_result),
+                    out.vartype, static_cast<long>(out.value), out.quality,
+                    static_cast<unsigned long>(out.filetime_high), static_cast<unsigned long>(out.filetime_low));
+        return SUCCEEDED(result) && SUCCEEDED(out.service_result) && SUCCEEDED(out.item_result) &&
+               out.vartype == VT_I4 && (out.filetime_low || out.filetime_high);
+    };
+    OpclDaReadI4 before_cache{}, before_device{}, after_cache{}, after_device{}, sample_cache{}, sample_device{};
+    if (ok) ok = read(cache_count, 0, before_cache) && read(device_count, 0, before_device);
+    if (ok) ok = read(target, UINT32_MAX, sample_cache);
+    if (ok) ok = read(cache_count, 0, after_cache) && read(device_count, 0, after_device) &&
+                 after_cache.value == before_cache.value + 1 && after_device.value == before_device.value &&
+                 sample_cache.value == 42 && sample_cache.quality == OPC_QUALITY_OUT_OF_SERVICE;
+    before_cache = after_cache; before_device = after_device;
+    if (ok) ok = read(target, 0, sample_device);
+    if (ok) ok = read(cache_count, 0, after_cache) && read(device_count, 0, after_device) &&
+                 after_cache.value == before_cache.value && after_device.value == before_device.value + 1 &&
+                 sample_device.value == 42 && sample_device.quality == OPC_QUALITY_GOOD &&
+                 SUCCEEDED(opcl_da_test_da1_is_inactive(session));
+    std::printf("forced SDK DA1 inactive cache/device %s cache=%04x device=%04x paths=%ld/%ld\n",
+                ok ? "PASS" : "FAIL", sample_cache.quality, sample_device.quality,
+                static_cast<long>(after_cache.value), static_cast<long>(after_device.value));
+    if (session) { hr = opcl_da_session_close(session); ok = SUCCEEDED(hr) && ok; }
+    hr = opcl_da_host_destroy(host); ok = SUCCEEDED(hr) && ok;
+    return ok ? 0 : 62;
+}
+// Test-only forced versions against the newer local SDK fixture.
+static int live_version_routes_fixture(uint32_t version) {
+    const OpclDaGuid clsid = {0x7d4bd1b1, 0x7422, 0x48c0,
+                              {0xad, 0x58, 0x60, 0x1b, 0x70, 0x14, 0x49, 0xc6}};
+    OpclDaHost* host = nullptr; OpclDaSession* session = nullptr;
+    OpclDaItem *target = nullptr, *cache = nullptr, *device = nullptr, *total = nullptr;
+    uint16_t type = 0; uint32_t rights = 0, revised = 0;
+    HRESULT hr = opcl_da_host_create(&host);
+    if (FAILED(hr)) return 71;
+    hr = opcl_da_test_version_open(host, "OPCLook.NativeDaFixture.1", "localhost", &clsid, version, &revised, &session);
+    bool ok = SUCCEEDED(hr);
+    auto add = [&](const char* id, uint32_t registration, OpclDaItem** item) {
+        return SUCCEEDED(opcl_da_item_add(session, id, registration, 0, item, &type, &rights));
+    };
+    if (ok) ok = add("Fixture.DeviceValue", 1, &target) && add("Fixture.SyncCacheKindCount", 2, &cache) &&
+                 add("Fixture.SyncDeviceKindCount", 3, &device) && add("Fixture.SyncReadRequestCount", 4, &total);
+    auto read = [&](OpclDaItem* item, uint32_t age, OpclDaReadI4& value) {
+        HRESULT result = opcl_da_read_i4(session, item, age, &value);
+        return SUCCEEDED(result) && SUCCEEDED(value.service_result) && SUCCEEDED(value.item_result) &&
+               value.vartype == VT_I4 && (value.filetime_low || value.filetime_high);
+    };
+    auto check = [&](uint32_t age, int cache_delta, int device_delta) {
+        OpclDaReadI4 c0{}, d0{}, t0{}, sample{}, c1{}, d1{}, t1{};
+        if (!read(cache, 0, c0) || !read(device, 0, d0) || !read(total, 0, t0) ||
+            !read(target, age, sample) || !read(cache, 0, c1) || !read(device, 0, d1) || !read(total, 0, t1)) return false;
+        std::printf("version=%u age=%lu sample=%ld quality=%04x deltas total/cache/device=%ld/%ld/%ld\n",
+                    version, static_cast<unsigned long>(age), static_cast<long>(sample.value), sample.quality,
+                    static_cast<long>(t1.value-t0.value), static_cast<long>(c1.value-c0.value), static_cast<long>(d1.value-d0.value));
+        return sample.value == 42 && t1.value == t0.value + 1 && c1.value == c0.value + cache_delta && d1.value == d0.value + device_delta;
+    };
+    if (ok && version == SODAC_VERSION_OPC_DAV20) ok = check(UINT32_MAX, 1, 0) && check(0, 0, 1) && check(1234, 0, 1);
+    if (ok && version == SODAC_VERSION_OPC_DAV30) ok = check(UINT32_MAX, 0, 0) && check(0, 0, 0) && check(1234, 0, 0);
+    if (session) { hr = opcl_da_session_close(session); ok = SUCCEEDED(hr) && ok; }
+    hr = opcl_da_host_destroy(host); ok = SUCCEEDED(hr) && ok;
+    std::printf("forced SDK version %u routes %s\n", version, ok ? "PASS" : "FAIL");
+    return ok ? 0 : 72;
+}
+static int live_async_fixture() {
+    const OpclDaGuid clsid = {0x7d4bd1b1, 0x7422, 0x48c0,
+                              {0xad, 0x58, 0x60, 0x1b, 0x70, 0x14, 0x49, 0xc6}};
+    OpclDaHost* host = nullptr;
+    OpclDaSession* session = nullptr;
+    OpclDaItem* item = nullptr;
+    uint16_t type = 0; uint32_t rights = 0, revised = 0;
+    OpclDaReadI4 value{};
+    HRESULT hr = opcl_da_host_create(&host);
+    if (FAILED(hr)) return 41;
+    hr = opcl_da_session_open(host, "OPCLook.NativeDaFixture.1", "localhost", &clsid,
+                              1, 1000, 100000, &revised, &session);
+    bool ok = SUCCEEDED(hr);
+    if (ok) {
+        hr = opcl_da_test_async_prepare(session);
+        ok = SUCCEEDED(hr);
+    }
+    if (ok) {
+        hr = opcl_da_item_add(session, "Fixture.DeviceValue", 1, 0, &item, &type, &rights);
+        ok = SUCCEEDED(hr);
+    }
+    if (ok) {
+        hr = opcl_da_test_async_read_i4(session, item, 0, 10000, &value);
+        ok = SUCCEEDED(hr) && SUCCEEDED(value.service_result) && SUCCEEDED(value.item_result) &&
+             value.vartype == VT_I4 && value.value == 42 && (value.quality & 0xc0) == 0xc0 &&
+             (value.filetime_low || value.filetime_high);
+    }
+    if (ok) {
+        hr = opcl_da_test_async_read_i4(session, item, 0, 10000, &value);
+        ok = SUCCEEDED(hr) && SUCCEEDED(value.service_result) && SUCCEEDED(value.item_result) && value.value == 42;
+    }
+    // Hold the actual SDK worker before asyncRead: caller times out while
+    // the real session and host remain pinned until release and completion.
+    bool gate = false;
+    if (ok) { hr = opcl_da_test_async_gate_arm(); gate = SUCCEEDED(hr); ok = gate; }
+    if (ok) {
+        hr = opcl_da_test_async_read_i4(session, item, 0, 100, &value);
+        ok = hr == HRESULT_FROM_WIN32(WAIT_TIMEOUT) &&
+             SUCCEEDED(opcl_da_test_async_gate_entered(10000)) &&
+             opcl_da_session_close(session) == E_PENDING &&
+             opcl_da_host_destroy(host) == E_PENDING;
+    }
+    if (gate) {
+        const HRESULT released = opcl_da_test_async_gate_release();
+        uint32_t terminal = 0;
+        const HRESULT retired = opcl_da_test_async_wait_retire(session, 30000, &value, &terminal);
+        if (terminal) opcl_da_test_async_gate_close();
+        ok = ok && SUCCEEDED(released) && SUCCEEDED(retired) && terminal == 1 && value.value == 0;
+    }
+    if (session) { hr = opcl_da_session_close(session); ok = ok && SUCCEEDED(hr); }
+    hr = opcl_da_host_destroy(host); ok = ok && SUCCEEDED(hr);
+    std::printf("SDK async read callback fixture %s (hr=%08lx)\n", ok ? "PASS" : "FAIL", static_cast<unsigned long>(hr));
+    return ok ? 0 : 42;
+}
+static int run_callbacks() {
+    phase("create-group");
+    CaptureGroup* group = new CaptureGroup;
+    phase("add-item");
+    SODaCItem* item = group->addItem(_T("N1.probe"));
+    if (!item) { group->release(); return 11; }
+    OPCHANDLE valid = item->getClientHandle();
+    if (valid == 0) { item->release(); group->release(); return 12; }
+    OPCHANDLE handles[] = {0, valid};
+    VARIANT values[2]; VariantInit(&values[0]); VariantInit(&values[1]);
+    values[0].vt = VT_I4; values[0].lVal = 11;
+    values[1].vt = VT_I4; values[1].lVal = 22;
+    WORD qualities[] = {0, 0xc0};
+    FILETIME times[] = {{0, 0}, {1, 0}};
+    // Distinguish ordinary S_OK and a positive non-S_OK HRESULT. The latter
+    // is a test fixture for preserving raw bits, not a claim about a server.
+    const HRESULT valid_statuses[] = {S_OK, static_cast<HRESULT>(7)};
+    bool read_setup = true, read_correct = true, write_setup = true, write_correct = true;
+    bool unchanged = true;
+    {
+        phase("create-offline-callback");
+        ProbeCallback callback(group);
+        for (HRESULT valid_status : valid_statuses) {
+            HRESULT errors[] = {E_INVALIDARG, valid_status};
+            for (BYTE mode = 0; mode < 2; ++mode) {
+                phase(mode == 0 ? "read-complete" : "read-data-change");
+                HRESULT call = callback.handleReadAdvise(mode, 42, group->getOpcHandle(), S_OK, S_OK,
+                                                         2, handles, values, qualities, times, errors);
+                read_setup = read_setup && SUCCEEDED(call) && group->read_count == 1 && group->read_item == item &&
+                             group->read_value == 22 && group->read_quality == 0xc0 &&
+                             group->read_time.dwLowDateTime == 1 && item->getReadResult() == valid_status;
+                read_correct = read_correct && group->read_result == valid_status;
+            }
+            phase("write-complete");
+            HRESULT call = callback.OnWriteComplete(42, group->getOpcHandle(), S_OK, 2, handles, errors);
+            write_setup = write_setup && SUCCEEDED(call) && group->write_count == 1 &&
+                          group->write_item == item && group->write_result == valid_status;
+            write_correct = write_correct && item->getWriteResult() == valid_status;
+            unchanged = unchanged && errors[0] == E_INVALIDARG && errors[1] == valid_status;
+        }
+    }
+    std::printf("read_setup=%d read_correct=%d write_setup=%d write_correct=%d unchanged=%d\n",
+                read_setup, read_correct, write_setup, write_correct, unchanged);
+    std::fflush(stdout);
+    phase("release-fixture");
+    VariantClear(&values[0]); VariantClear(&values[1]);
+    item->release();
+    group->release();
+    if (!read_setup || !write_setup || !unchanged) return 13;
+    // Bit flags let main check baseline and fixed expectations after cleanup.
+    return (read_correct ? 1 : 0) | (write_correct ? 2 : 0);
+}
+int main(int argc, char** argv) {
+    phase("start");
+    if (argc == 2 && (std::strcmp(argv[1], "--lifetime-baseline") == 0 ||
+                      std::strcmp(argv[1], "--lifetime-fixed") == 0)) {
+        const bool guarded = std::strcmp(argv[1], "--lifetime-fixed") == 0;
+        initSOCmn();
+        const HRESULT hr = opcl_da_test_ephemeral_worker(guarded ? 1 : 0);
+        exitSOCmn();
+        return SUCCEEDED(hr) ? 0 : 25;
+    }
+    if (FAILED(opcl_da_test_queue_bounds())) return 23;
+    if (!::GetModuleHandle(nullptr)) return 9;
+    if (argc == 2 && std::strcmp(argv[1], "--live") == 0) return live_fixture();
+    if (argc == 2 && std::strcmp(argv[1], "--live-async") == 0) return live_async_fixture();
+    if (argc == 2 && std::strcmp(argv[1], "--live-da2-routes") == 0) return live_version_routes_fixture(SODAC_VERSION_OPC_DAV20);
+    if (argc == 2 && std::strcmp(argv[1], "--live-da3-routes") == 0) return live_version_routes_fixture(SODAC_VERSION_OPC_DAV30);
+    if (argc == 2 && std::strcmp(argv[1], "--live-da1-inactive") == 0) return live_da1_inactive_fixture();
+    const bool baseline = argc == 2 && std::strcmp(argv[1], "--expect-existing-defect") == 0;
+    phase("common-init");
+    initSOCmn();
+    phase("common-init-complete");
+    if (FAILED(opcl_da_test_codec_bounds())) { exitSOCmn(); return 24; }
+    int result = 10;
+    {
+        phase("get-entry");
+        SOCmnPointer<SODaCEntry> entry = getSODaCEntry();
+        if (entry.isNotNull()) {
+            phase("entry-init");
+            if (entry->initialize(COINIT_MULTITHREADED)) {
+                phase("callbacks");
+                if (FAILED(opcl_da_test_async_callback_state())) {
+                    result = 25;
+                } else {
+                    result = run_callbacks();
+                    if (!baseline && result == 3 && adapter_test() != 0) result = 21;
+                }
+            }
+            phase("disconnect");
+            entry->disconnect();
+            phase("terminate");
+            if (!entry->terminate()) result = 14;
+            // initialize/terminate run on this same thread. With no prior COM
+            // initialization, the baseline leaks the MTA because its mode is 0.
+            ULONG_PTR token = 0;
+            const HRESULT apartment = CoGetContextToken(&token);
+            const bool balanced = apartment == CO_E_NOTINITIALIZED;
+            std::printf("MTA lifecycle balanced=%d\n", balanced);
+            if (baseline ? balanced : !balanced) result = 22;
+            if (!balanced) CoUninitialize(); // only balance the baseline leak
+        }
+        phase("entry-release");
+        entry.release();
+    }
+    phase("common-exit");
+    exitSOCmn();
+    phase("done");
+    if (result > 3) return result;
+    return (baseline ? result == 0 : result == 3) ? 0 : 1;
+}

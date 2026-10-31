@@ -163,14 +163,16 @@ pub(super) fn menu(app: &mut App, ui: &mut egui::Ui) {
                     if ui
                         .add_enabled(
                             !app.dialogs.any_open() && app.csv_import.is_none(),
-                            egui::Button::new(tr(lang, Tr::PaletteTitle)),
+                            egui::Button::new(tr(lang, Tr::PaletteTitle)).shortcut_text(
+                                super::shortcuts::binding_text(
+                                    ui.ctx(),
+                                    super::keymap::KeyAction::OpenPalette,
+                                ),
+                            ),
                         )
                         .clicked()
                     {
-                        app.dialogs.palette.open = true;
-                        app.dialogs.palette.query.clear();
-                        app.dialogs.palette.selected = None;
-                        app.dialogs.palette.focus_pending = true;
+                        app.open_command_palette();
                         ui.close();
                     }
                     if super::actions::action_button(

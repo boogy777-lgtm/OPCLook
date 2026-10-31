@@ -10,13 +10,23 @@ impl App {
     /// on every connect so a recreated session re-creates the subscription with
     /// the current values.
     pub(super) fn configure_ua_subscription(&mut self, session: SessionId) {
-        let interval_ms = self
-            .settings
-            .view
-            .options
-            .update_interval_secs
-            .max(1)
-            .saturating_mul(1000);
+        let profile = self
+            .session(session)
+            .and_then(|view| view.endpoint().acquisition.clone());
+        if profile
+            .as_ref()
+            .is_some_and(|c| c.update_mode == crate::bff::model::UpdateMode::Poll)
+        {
+            return;
+        }
+        let interval_ms = profile.map(|c| c.interval_ms).unwrap_or_else(|| {
+            self.settings
+                .view
+                .options
+                .update_interval_secs
+                .max(1)
+                .saturating_mul(1000)
+        });
         let deadband = self.settings.view.options.ua_deadband;
         self.send(
             session,
@@ -35,7 +45,10 @@ impl App {
     }
 
     pub(super) fn tick(&mut self) {
-        let now = Instant::now();
+        self.tick_at(Instant::now());
+    }
+
+    pub(super) fn tick_at(&mut self, now: Instant) {
         self.expire_pending_requests(now);
         let options = &self.settings.view.options;
         let interval = Duration::from_secs(options.update_interval_secs.max(1));
@@ -50,14 +63,25 @@ impl App {
                     session,
                     protocol,
                     keys,
+                    permit,
                 } => {
                     self.project_session(session);
                     if self
-                        .send(session, protocol, CommandKind::Read { keys })
+                        .send_with_permit(
+                            session,
+                            protocol,
+                            CommandKind::Read { keys },
+                            PendingCtx::None,
+                            Some(permit),
+                        )
                         .is_none()
                     {
                         self.project_session(session);
                     }
+                }
+                opclook_engine::Due::ReadUnavailable { .. } => {
+                    self.journal.error_l(Tr::RequestIdsExhausted, &[]);
+                    self.status = tr(self.lang(), Tr::RequestIdsExhausted).to_string();
                 }
                 opclook_engine::Due::Test { session, protocol } => {
                     self.project_session(session);
@@ -69,6 +93,7 @@ impl App {
                 }
             }
         }
+        self.pump_add_children();
     }
 }
 

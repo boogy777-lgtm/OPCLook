@@ -440,7 +440,11 @@ pub(super) fn table_panel(app: &mut App, ui: &mut egui::Ui) {
                                                 }
                                                 ColumnId::Time => {
                                                     row.col(|ui| {
-                                                        ui.label(signal.timestamp_text());
+                                                        ui.add_sized(
+                                                            [ui.available_width(), ui.spacing().interact_size.y],
+                                                            egui::Label::new(signal.timestamp_text()),
+                                                        )
+                                                            .on_hover_text(signal.time_details(lang));
                                                     });
                                                 }
                                                 ColumnId::Server => {

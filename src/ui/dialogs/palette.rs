@@ -1,5 +1,5 @@
-use crate::app::{App, actions::UiAction};
-use crate::i18n::{Tr, tr};
+use crate::app::App;
+use crate::i18n::{Tr, fmt, tr};
 use crate::ui::ImeSafeClick;
 use opclook_contract::actions::{ActionId, ActionSpec, CATALOG};
 
@@ -12,12 +12,7 @@ fn label(id: ActionId) -> Tr {
 }
 
 fn unavailable(app: &App, id: ActionId) -> Option<Tr> {
-    match id {
-        ActionId::OpenConnectDialog => {
-            app.ui_action_unavailable_in_palette(UiAction::OpenConnectDialog)
-        }
-        ActionId::Browse | ActionId::Write => Some(Tr::PaletteNeedsContext),
-    }
+    app.palette_unavailable(id)
 }
 
 fn matches_query(spec: &ActionSpec, title: &str, query: &str) -> bool {
@@ -32,6 +27,7 @@ pub(super) fn palette_dialog(app: &mut App, ui: &mut egui::Ui) {
     if !app.dialogs.palette.open {
         return;
     }
+    app.prepare_palette_context();
     let ctx = ui.ctx().clone();
     let lang = app.lang();
     let opening = app.dialogs.palette.focus_pending;
@@ -44,15 +40,27 @@ pub(super) fn palette_dialog(app: &mut App, ui: &mut egui::Ui) {
             super::dialog_spacing(ui);
             let search = ui.add(egui::TextEdit::singleline(&mut app.dialogs.palette.query)
                 .id_salt("palette_search").char_limit(256).desired_width(f32::INFINITY)
-                .hint_text(tr(lang, Tr::PaletteSearch)));
+                .hint_text(tr(lang, Tr::PaletteSearch))).accessible_name(tr(lang, Tr::PaletteSearch));
             if opening { search.request_focus(); app.dialogs.palette.focus_pending = false; }
             let filtered: Vec<&ActionSpec> = CATALOG.iter().filter(|spec| matches_query(spec, tr(lang, label(spec.id)), &app.dialogs.palette.query)).collect();
             if !filtered.iter().any(|spec| Some(spec.id) == app.dialogs.palette.selected) {
                 app.dialogs.palette.selected = filtered.first().map(|spec| spec.id);
             }
+            if matches!(app.dialogs.palette.selected, Some(ActionId::Browse | ActionId::Write)) {
+                if let Some(view) = app.dialogs.palette.context_session.and_then(|id| app.sessions.iter().find(|view| view.id == id)) {
+                    ui.label(fmt(lang, Tr::PaletteTarget, &[&view.display_name]));
+                }
+            }
+            let mut browse_focus = false;
+            if app.dialogs.palette.selected == Some(ActionId::Browse) {
+                ui.label(tr(lang, Tr::PaletteBrowseNode));
+                let node = ui.add(egui::TextEdit::singleline(&mut app.dialogs.palette.browse_node)
+                    .id_salt("palette_browse_node").hint_text(tr(lang, Tr::HintItemId)).char_limit(4096).desired_width(f32::INFINITY)).accessible_name(tr(lang, Tr::PaletteBrowseNode));
+                browse_focus = node.has_focus() || (node.lost_focus() && ui.memory(|m| m.focused().is_none()));
+            }
             if !crate::ui::ime_blocks_keys(&ctx) && !opening {
                 for (key, delta) in [(egui::Key::ArrowDown, 1isize), (egui::Key::ArrowUp, -1isize)] {
-                    if crate::ui::key_pressed_once(&ctx, key) && !filtered.is_empty() {
+                    if search.has_focus() && crate::ui::key_pressed_once(&ctx, key) && !filtered.is_empty() {
                         let index = filtered.iter().position(|spec| Some(spec.id) == app.dialogs.palette.selected).unwrap_or(0);
                         let next = index.saturating_add_signed(delta).min(filtered.len() - 1);
                         app.dialogs.palette.selected = filtered.get(next).map(|spec| spec.id);
@@ -61,7 +69,7 @@ pub(super) fn palette_dialog(app: &mut App, ui: &mut egui::Ui) {
                 if crate::ui::key_pressed_once(&ctx, egui::Key::Escape) { close = true; }
                 if crate::ui::key_pressed_once(&ctx, egui::Key::Enter)
                     && ui.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Enter, pressed: true, repeat: false, modifiers, .. } if modifiers.is_none())))
-                    && (search.has_focus() || (search.lost_focus() && ui.memory(|m| m.focused().is_none())))
+                    && (browse_focus || search.has_focus() || (search.lost_focus() && ui.memory(|m| m.focused().is_none())))
                     && !ui.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::PointerButton { pressed: true, .. }))) {
                     execute = app.dialogs.palette.selected;
                 }
@@ -95,13 +103,8 @@ pub(super) fn palette_dialog(app: &mut App, ui: &mut egui::Ui) {
     if close {
         app.dialogs.palette.open = false;
     } else if let Some(id) = execute {
-        if unavailable(app, id).is_none() {
-            app.dialogs.palette.open = false;
-            if let ActionId::OpenConnectDialog = id {
-                if let Err(reason) = app.execute_ui_action(UiAction::OpenConnectDialog) {
-                    app.status = tr(lang, reason).to_string();
-                }
-            }
+        if let Err(reason) = app.execute_palette_action(id) {
+            app.status = tr(lang, reason).to_string();
         }
     }
 }

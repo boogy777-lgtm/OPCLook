@@ -48,7 +48,22 @@ impl App {
         node_id: String,
         item_id: Option<u64>,
     ) -> Option<RequestId> {
-        let view = self.session_mut(session)?;
+        match self.browse_target_queued(session, node_id, item_id, false) {
+            SendOutcome::Sent(id) => Some(id),
+            SendOutcome::Deferred | SendOutcome::Failed => None,
+        }
+    }
+
+    fn browse_target_queued(
+        &mut self,
+        session: SessionId,
+        node_id: String,
+        item_id: Option<u64>,
+        defer: bool,
+    ) -> SendOutcome {
+        let Some(view) = self.session_mut(session) else {
+            return SendOutcome::Failed;
+        };
         if node_id.is_empty() {
             view.root_loading = true;
         } else if let Some(item) = item_id.and_then(|id| view.tree.iter_mut().find(|t| t.id == id))
@@ -66,7 +81,7 @@ impl App {
             _ => PendingCtx::None,
         };
         let is_root = node_id.is_empty();
-        let request_id = self.send_with(
+        let outcome = self.send_with_permit_inner(
             session,
             protocol,
             CommandKind::Browse {
@@ -75,8 +90,10 @@ impl App {
                 view_id,
             },
             ctx,
+            None,
+            defer,
         );
-        if request_id.is_none() {
+        if !matches!(outcome, SendOutcome::Sent(_)) {
             if let Some(view) = self.session_mut(session) {
                 if is_root {
                     view.root_loading = false;
@@ -87,7 +104,7 @@ impl App {
                 }
             }
         }
-        request_id
+        outcome
     }
 
     /// Requests the list of server Views (UA) and, on success, seeds the tree
@@ -247,29 +264,27 @@ impl App {
         }
         let mut visited = HashSet::new();
         visited.insert(branch_node.to_string());
-        // The start branch is not queued: it is already in flight. The queue
-        // only holds descendants discovered while browsing.
-        let queue = std::collections::VecDeque::new();
-        // Issue the first browse and record its request id; the job only
-        // consumes a Browse event whose id is in this map.
-        let started = match item_id {
-            Some(id) => self.browse_item(session, id),
-            None => self.browse(session, branch_node.to_string()),
-        };
-        let Some(request_id) = started else {
+        if branch_node == BrowseNode::VIEWS_ROOT_ID {
+            self.browse_views(session);
             return;
-        };
-        let mut in_flight = std::collections::HashMap::new();
-        in_flight.insert(request_id, branch_node.to_string());
+        }
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(branch_node.to_string());
         self.add_children = Some(AddChildrenJob {
             session,
+            epoch: self.engine.connection_id(session),
+            initial_item_id: item_id,
             queue,
             visited,
-            in_flight,
+            in_flight: std::collections::HashMap::new(),
             added: 0,
             cap: ADD_CHILDREN_CAP,
             capped: false,
         });
+        self.pump_add_children();
+        if self.add_children.is_none() {
+            return;
+        }
         self.journal
             .info_l(Tr::AddChildrenProgress, &[&"1".to_string()]);
     }
@@ -354,22 +369,7 @@ impl App {
             }
         }
         if keep {
-            // Enqueue the next branch if any (drives the next browse), recording
-            // the new request id for the same correlation rule.
-            if let Some(next) = self.add_children.as_mut().and_then(|j| j.queue.pop_front()) {
-                match self.browse(session, next.clone()) {
-                    Some(rid) => {
-                        if let Some(job) = self.add_children.as_mut() {
-                            job.in_flight.insert(rid, next);
-                        }
-                    }
-                    None => {
-                        // Worker is gone: the job can never complete.
-                        self.add_children = None;
-                        return;
-                    }
-                }
-            }
+            self.pump_add_children();
         }
         let done = {
             let job = self.add_children.as_ref();
@@ -388,6 +388,46 @@ impl App {
             let n = self.add_children.as_ref().map(|j| j.added).unwrap_or(0);
             self.journal
                 .info_l(Tr::AddChildrenProgress, &[&n.to_string()]);
+        }
+    }
+
+    /// Resume the existing job only after its pending read has had a turn.
+    pub(super) fn pump_add_children(&mut self) {
+        let Some(job) = self.add_children.as_ref() else {
+            return;
+        };
+        if !job.in_flight.is_empty() {
+            return;
+        }
+        let Some(node) = job.queue.front().cloned() else {
+            return;
+        };
+        let session = job.session;
+        if job.epoch != self.engine.connection_id(session) {
+            self.add_children = None;
+            return;
+        }
+        if self.engine.browse_deferred_at(session, Instant::now()) {
+            return;
+        }
+        let item_id = job.initial_item_id.or_else(|| {
+            self.session(session).and_then(|view| {
+                view.tree
+                    .iter()
+                    .find(|item| !node.is_empty() && item.node.node_id == node)
+                    .map(|item| item.id)
+            })
+        });
+        match self.browse_target_queued(session, node.clone(), item_id, true) {
+            SendOutcome::Sent(id) => {
+                if let Some(job) = self.add_children.as_mut() {
+                    job.queue.pop_front();
+                    job.initial_item_id = None;
+                    job.in_flight.insert(id, node);
+                }
+            }
+            SendOutcome::Deferred => {}
+            SendOutcome::Failed => self.add_children = None,
         }
     }
 

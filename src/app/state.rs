@@ -53,6 +53,8 @@ pub struct CsvImportJob {
 pub struct AddChildrenJob {
     /// Session whose tree is being walked.
     pub session: SessionId,
+    pub epoch: Option<RequestId>,
+    pub initial_item_id: Option<u64>,
     /// Branch `node_id`s still to browse (BFS/DFS queue).
     pub queue: std::collections::VecDeque<String>,
     /// Branch `node_id`s already queued/browsed (guards cycles and duplicates).
@@ -90,6 +92,7 @@ pub struct UaSessionView {
     pub ua_session_timeout_ms: u32,
     /// Projected from Engine; only Active suppresses normal polling.
     pub subscription: SubscriptionState,
+    pub negotiated: std::sync::Arc<Vec<crate::bff::model::UaSubscriptionParameters>>,
 }
 
 impl Default for UaSessionView {
@@ -99,6 +102,7 @@ impl Default for UaSessionView {
             ua_browse_filter: NodeClassFilter::All,
             ua_session_timeout_ms: crate::settings::default_session_timeout(),
             subscription: SubscriptionState::Inactive,
+            negotiated: std::sync::Arc::default(),
         }
     }
 }
@@ -120,6 +124,8 @@ impl SessionKind {
 pub struct SessionView {
     pub id: SessionId,
     endpoint: EndpointSpec,
+    /// None means no staged change; Some(None) stages the legacy profile.
+    pub pending_acquisition: Option<Option<crate::bff::model::AcquisitionConfig>>,
     kind: SessionKind,
     /// Human-readable server name shown in the servers list and tab strip
     /// (OPC UA host:port or the advertised application name when known; for
@@ -135,6 +141,7 @@ pub struct SessionView {
     pub(super) tree: Vec<TreeItem>,
     tree_visible_cache: std::cell::RefCell<Option<std::rc::Rc<Vec<usize>>>>,
     pub next_tree_id: u64,
+    pub context_generation: Option<u64>,
     pub root_loaded: bool,
     pub root_loading: bool,
     pub read_in_flight: bool,
@@ -152,6 +159,7 @@ impl SessionView {
             id,
             kind: SessionKind::for_protocol(endpoint.protocol),
             endpoint,
+            pending_acquisition: None,
             display_name,
             state: SessionState::Connecting,
             visible: true,
@@ -159,6 +167,7 @@ impl SessionView {
             tree: Vec::new(),
             tree_visible_cache: std::cell::RefCell::new(None),
             next_tree_id: 1,
+            context_generation: Some(1),
             root_loaded: false,
             root_loading: false,
             read_in_flight: false,
@@ -293,11 +302,20 @@ pub struct Row {
     pub canonical_vt: Option<VarType>,
     pub write_type: Option<VarType>,
     pub writable: bool,
+    pub ua_access_known: bool,
+    pub ua_type_id: Option<u16>,
     pub value: Value,
     pub quality: RowQuality,
     pub timestamp: Option<DateTime<Utc>>,
+    pub times: crate::bff::model::ValueTimes,
+    pub time_selection: super::value_time::TimeSelection,
+    /// Latest per-item read lifecycle observation for the current connection.
+    pub last_read: Option<opclook_contract::read_observer::ReadObservation>,
     pub description: String,
     pub pending: bool,
+    /// Latest subscription value awaiting successful registration; never shown
+    /// as a registered value until the corresponding AddItems succeeds.
+    pub(super) pending_push: Option<crate::bff::model::DataValue>,
     /// P1 (UA): no subscription takes this item (server limits), so it is
     /// polled even while the session's push subscription is active.
     pub poll_only: bool,
@@ -327,6 +345,38 @@ impl Row {
     pub fn value_text(&self) -> String {
         let mut cached = self.value_text_cache.borrow_mut();
         cached.get_or_insert_with(|| self.value.to_string()).clone()
+    }
+
+    /// Tooltip exposes raw clock facts and avoids implying a global order.
+    pub fn time_details(&self, lang: Lang) -> String {
+        let show = |time: Option<DateTime<Utc>>| time.map(|v| v.to_rfc3339()).unwrap_or_default();
+        let origin = match self.times.origin {
+            crate::bff::model::ValueOrigin::Unknown => Tr::TimeOriginUnknown,
+            crate::bff::model::ValueOrigin::Read => Tr::TimeOriginRead,
+            crate::bff::model::ValueOrigin::Subscription => Tr::TimeOriginSubscription,
+        };
+        let order = match self.time_selection.order {
+            super::value_time::TimeOrder::Unknown => Tr::TimeOrderUnknown,
+            super::value_time::TimeOrder::Comparable => Tr::TimeOrderComparable,
+            super::value_time::TimeOrder::OlderHeld => Tr::TimeOrderOlderHeld,
+            super::value_time::TimeOrder::EqualConflict => Tr::TimeOrderEqualConflict,
+            super::value_time::TimeOrder::Discontinuity => Tr::TimeOrderDiscontinuity,
+            super::value_time::TimeOrder::Diagnostic => Tr::TimeOrderDiagnostic,
+        };
+        format!(
+            "{}: {}\n{}: {}\n{}: {}\n{}: {}\n{}: {}\n{}",
+            tr(lang, Tr::TimeSource),
+            show(self.times.ua_source),
+            tr(lang, Tr::TimeServer),
+            show(self.times.ua_server),
+            tr(lang, Tr::TimeDa),
+            show(self.times.da_timestamp),
+            tr(lang, Tr::TimeReceived),
+            show(self.times.received_at),
+            tr(lang, Tr::TimeOrigin),
+            tr(lang, origin),
+            tr(lang, order)
+        )
     }
 
     pub fn timestamp_text(&self) -> String {

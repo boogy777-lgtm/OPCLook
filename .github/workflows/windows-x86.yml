@@ -20,7 +20,22 @@ jobs:
           targets: i686-pc-windows-msvc
           components: rustfmt
       - name: Format
-        run: cargo fmt --all -- --check
+        shell: pwsh
+        run: |
+          cargo fmt --all -- --check
+          if ($LASTEXITCODE -ne 0) {
+            cargo fmt --all
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            python -c "import base64,json,pathlib,subprocess; names=subprocess.check_output(['git','diff','--name-only','--','*.rs'],text=True).splitlines(); [(lambda data,p: [(print('RUSTFMT_REPLACE '+json.dumps({'path':p,'sha':subprocess.check_output(['git','hash-object','--stdin'],input=data).decode().strip(),'part':i//9000,'total':(len(data)+8999)//9000,'data':base64.b64encode(data[i:i+9000]).decode()}))) for i in range(0,len(data),9000)])(pathlib.Path(p).read_bytes().replace(b'\r\n',b'\n'),p) for p in names]"
+            exit 1
+          }
+      - name: Verify installed locked UA SDK source identity
+        shell: pwsh
+        run: |
+          python docs/testing/test-ua-sdk-source.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python docs/testing/ua-sdk-source.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build both app binaries and check layer boundaries
         shell: bash
         run: |
@@ -54,6 +69,8 @@ jobs:
       # On failure, compiler errors, failing tests and their panic output are
       # emitted as one error annotation (scripts/ci-test.sh), readable from the
       # checks API without downloading the full job log.
+      - name: Isolated headless settings and PKI loopback regression
+        run: cargo test --locked -p opclook --test test_isolation --target i686-pc-windows-msvc -- --nocapture
       - name: Run integration tests
         shell: bash
         run: scripts/ci-test.sh "Integration tests failed" -p opclook --tests --target i686-pc-windows-msvc
@@ -74,7 +91,7 @@ jobs:
         run: >
           sudo apt-get update && sudo apt-get install -y
           libxkbcommon-dev libwayland-dev libxcb1-dev libx11-dev libgl1-mesa-dev
-          libegl1-mesa-dev pkg-config fonts-noto-cjk
+          libegl1-mesa-dev mesa-vulkan-drivers pkg-config fonts-noto-cjk
       - name: scripts/check-linux.sh
         run: |
           set -o pipefail
@@ -82,3 +99,90 @@ jobs:
             scripts/ci-annotate.sh "Linux gate failed" gate-output.txt
             exit 1
           fi
+      - name: Verify P4 epoch regression against disabled and restored guards
+        shell: bash
+        run: |
+          python3 docs/testing/test-p4-epoch-baseline.py
+          python3 docs/testing/p4-epoch-baseline.py
+      - name: Render P4 palette and write confirmation for visual review
+        shell: bash
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          WGPU_BACKEND: vulkan
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/opclook-xdg"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          cargo test --locked --target x86_64-unknown-linux-gnu --features ui-snapshots --test ui_snapshots p4_palette_browse_ru -- --ignored --nocapture
+          python3 scripts/ci-p4-png.py
+      - name: Render time-source tooltip for visual review
+        shell: bash
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          WGPU_BACKEND: vulkan
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/opclook-xdg"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          cargo test --locked --target x86_64-unknown-linux-gnu --features ui-snapshots --test ui_snapshots t08_value_time_tooltip_ru -- --ignored --nocapture
+          python3 scripts/ci-t08-png.py
+      - name: Preserve time tooltip visual evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t08-value-time-tooltip
+          path: docs/screenshots/t08-value-time-tooltip-ru.png
+          if-no-files-found: warn
+      - name: Preserve P4 rendered visual evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p4-palette-visual-qa
+          path: |
+            docs/screenshots/p4-palette-browse-*.png
+            docs/screenshots/p4-palette-write-confirm-ru.png
+          if-no-files-found: warn
+
+      - name: Verify P3 focused-control regression before and after guard
+        run: |
+          python3 docs/testing/test-p3-columns-baseline.py
+          python3 docs/testing/p3-columns-baseline.py
+      - name: Render P2 error and P3 P5 local controls for visual review
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          WGPU_BACKEND: vulkan
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/opclook-xdg"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          for case in p2_action_payload_error_ru p3_columns_focused_control_ru p5_options_hints_ru; do
+            cargo test --locked --target x86_64-unknown-linux-gnu --features ui-snapshots --test ui_snapshots "$case" -- --ignored --nocapture
+          done
+          python3 scripts/ci-p3-p5-png.py
+      - name: Preserve P2 P3 P5 visual evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p2-p3-p5-visual-qa
+          path: |
+            docs/screenshots/p2-action-payload-error-ru.png
+            docs/screenshots/p3-columns-focus-ru.png
+            docs/screenshots/p5-options-hints-ru.png
+          if-no-files-found: warn
+      - name: Render negotiated UA parameters for visual review
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          WGPU_BACKEND: vulkan
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/opclook-xdg"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          cargo test --locked --target x86_64-unknown-linux-gnu --features ui-snapshots --test ua_metadata_panel ua_acquisition_revised_facts_snapshot -- --ignored --nocapture
+          test -s docs/screenshots/ua-acquisition-revised-en.png
+      - name: Preserve negotiated UA parameter visual evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ua-negotiated-parameters
+          path: docs/screenshots/ua-acquisition-revised-en.png
+          if-no-files-found: warn

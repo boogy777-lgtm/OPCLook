@@ -1,6 +1,9 @@
 //! Session policy and settings limits.
 /// Hard cap on concurrently open OPC UA sessions (DA sessions are not counted).
 pub const MAX_UA_SESSIONS: usize = 100;
+/// Bound the registration identity ledger for one connection epoch.
+pub const MAX_ITEM_KEYS_PER_CONNECTION: usize =
+    opclook_contract::model::MAX_ITEM_KEYS_PER_CONNECTION;
 // ---------------------------------------------------------------------------
 // Reconnect / auto-reconnect
 // ---------------------------------------------------------------------------

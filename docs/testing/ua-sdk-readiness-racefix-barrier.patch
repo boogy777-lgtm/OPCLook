@@ -1,0 +1,14 @@
+--- a/src/session/event_loop.rs
++++ b/src/session/event_loop.rs
+@@ -276,0 +277,11 @@
++                            }
++                        }
++                        // Disposable deterministic test barrier only.
++                        static TEST_PAUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
++                        if waiting {
++                            if let Some(dir) = std::env::var_os("OPCLOOK_TEST_SELECT_BARRIER") {
++                                if !TEST_PAUSED.swap(true, Ordering::SeqCst) {
++                                    let dir = std::path::PathBuf::from(dir);
++                                    let _ = std::fs::write(dir.join("entered"), b"waiting");
++                                    while !dir.join("release").exists() { tokio::time::sleep(Duration::from_millis(1)).await; }
++                                }

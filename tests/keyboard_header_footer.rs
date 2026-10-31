@@ -27,7 +27,9 @@ fn header_keyboard_opens_real_menu_and_runs_existing_action() {
         h.run_steps(2);
         h.key_press(Key::ArrowDown);
         h.run_steps(3);
-        assert!(h.query_by_label("Палитра команд").is_some());
+        // egui 0.37 includes shortcut_text in the accessible button label.
+        assert!(h.query_by_label_contains("Палитра команд").is_some());
+        assert!(h.query_by_label_contains("Ctrl+P").is_some());
         h.key_press(Key::Enter);
         h.run_steps(3);
         assert!(h.state().dialogs.palette.open);
@@ -44,10 +46,10 @@ fn tab_leaves_header_and_closes_open_popup_without_action() {
     h.run_steps(2);
     h.key_press(Key::ArrowDown);
     h.run_steps(2);
-    assert!(h.query_by_label("Палитра команд").is_some());
+    assert!(h.query_by_label_contains("Палитра команд").is_some());
     h.key_press(Key::Tab);
     h.run_steps(3);
-    assert!(h.query_by_label("Палитра команд").is_none());
+    assert!(h.query_by_label_contains("Палитра команд").is_none());
     assert!(!h.state().dialogs.palette.open);
 }
 

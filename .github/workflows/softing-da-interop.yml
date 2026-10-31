@@ -1,0 +1,406 @@
+name: Native DA local COM interop
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  local-com:
+    strategy:
+      fail-fast: false
+      matrix:
+        opc_inputs: [sdk, official-mit]
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: opclook
+      - uses: actions/checkout@v4
+        with:
+          repository: SoftingIndustrial/OPC-Classic-SDK
+          ref: 5130e763998189c822882434c43e6be2eb0174cf
+          path: softing-sdk
+      - uses: actions/checkout@v4
+        if: matrix.opc_inputs == 'official-mit'
+        with:
+          repository: OPCF-Members/OPC-Classic-CoreComponents
+          ref: efe0d1d1ea86a8a727bf26a501a261765e836766
+          path: opc-core
+      - name: Stage and generate pinned official MIT OPC inputs
+        if: matrix.opc_inputs == 'official-mit'
+        shell: cmd
+        run: |
+          @echo off
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSROOT=%%i"
+          if not defined VSROOT exit /b 1
+          call "%VSROOT%\VC\Auxiliary\Build\vcvarsall.bat" x86
+          if errorlevel 1 exit /b 1
+          python opclook/docs/testing/native-sdk/stage-opcf-mit-inputs.py --repo opc-core --output opcf-staged
+          if errorlevel 1 exit /b 1
+          python opclook/docs/testing/native-sdk/generate-opcf-midl.py --source opcf-staged --output opcf-generated
+          if errorlevel 1 exit /b 1
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: i686-pc-windows-msvc
+      - name: Verify reviewed SDK source inventory before patches
+        shell: pwsh
+        run: |
+          python opclook/docs/testing/native-sdk/verify-license-closure.py softing-sdk
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build ready SDK server, client and original IDL RPC proxy
+        shell: cmd
+        run: |
+          @echo off
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSROOT=%%i"
+          if not defined VSROOT exit /b 1
+          call "%VSROOT%\VC\Auxiliary\Build\vcvarsall.bat" x86
+          if errorlevel 1 exit /b 1
+          set "OPCF_ARGS=-DOPCL_USE_LEGACY_OPC=ON"
+          if "${{ matrix.opc_inputs }}"=="official-mit" set "OPCF_ARGS=-DOPCF_MIT_STAGED=%CD%/opcf-staged -DOPCF_MIT_GENERATED=%CD%/opcf-generated"
+          cmake -S opclook/docs/testing/native-sdk/server-fixture -B fixture-build -A Win32 "-DSOFTING_SDK_ROOT=%CD%/softing-sdk" %OPCF_ARGS%
+          if errorlevel 1 exit /b 1
+          if "${{ matrix.opc_inputs }}"=="official-mit" (
+            cmake --build fixture-build --config Release --verbose --parallel 1 > fixture-mit-build.log 2>&1
+          ) else (
+            cmake --build fixture-build --config Release --parallel 2
+          )
+          if errorlevel 1 (
+            if exist fixture-mit-build.log type fixture-mit-build.log
+            exit /b 1
+          )
+          if "${{ matrix.opc_inputs }}"=="official-mit" python opclook/docs/testing/native-sdk/check-opcf-include-trace.py --log fixture-mit-build.log --old-opc-dir "%CD%/softing-sdk/development/core/src/opc" --generated-dir "%CD%/opcf-generated" --require opcda.h --require opccomn.h --require OpcEnum.h --require opc_ae.h --require opcSec.h --require opcerror.h --require opcda_i.c --require opccomn_i.c --require OpcEnum_i.c --require opc_ae_i.c --require opcSec_i.c --require opcae_er.h --require opcda_p.c --require opccomn_p.c
+          if errorlevel 1 exit /b 1
+      - name: Build the reviewed SDK bridge for actual client interop
+        id: sdk_bridge
+        shell: pwsh
+        run: |
+          $env:SOFTING_SDK_ROOT = "${{ github.workspace }}/softing-sdk"
+          $opcfArgs = @("-DOPCL_USE_LEGACY_OPC=ON")
+          if ("${{ matrix.opc_inputs }}" -eq "official-mit") { $opcfArgs = @("-DOPCF_MIT_STAGED=${{ github.workspace }}/opcf-staged", "-DOPCF_MIT_GENERATED=${{ github.workspace }}/opcf-generated") }
+          cmake -S opclook/docs/testing/native-sdk/core-probe -B softing-build -A Win32 -DOPCL_BUILD_PROBES=ON "-DSOFTING_SDK_ROOT=${{ github.workspace }}/softing-sdk" @opcfArgs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -c "import pathlib,subprocess; r=pathlib.Path('softing-sdk'); [(r / p).write_bytes(subprocess.check_output(['git','-C',str(r),'cat-file','blob',sha])) for p,sha in [('development/core/src/SODaC/SODaCCallback.cpp','59205bb9b6e32641c966d334589fe355bafe273f'),('development/core/src/SOClt/SOCltEntry.cpp','9e5304ddd9dd7d1131ebdcf5b05c88a0bac6b8ff'),('development/core/src/include/SOCltEntry.h','c2470da726a608e6242285b97d9156bc2885cecc')]]"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python opclook/docs/testing/native-sdk/softing_patch.py softing-sdk
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ("${{ matrix.opc_inputs }}" -eq "official-mit") {
+            cmake --build softing-build --config Release --target softing_da_bridge softing_core_probe --verbose --parallel 1 2>&1 | Tee-Object -FilePath bridge-mit-build.log
+          } else {
+            cmake --build softing-build --config Release --target softing_da_bridge softing_core_probe --parallel 2
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ("${{ matrix.opc_inputs }}" -eq "official-mit") {
+            python opclook/docs/testing/native-sdk/check-opcf-include-trace.py --log bridge-mit-build.log --old-opc-dir "${{ github.workspace }}/softing-sdk/development/core/src/opc" --generated-dir "${{ github.workspace }}/opcf-generated" --require opcda.h --require opccomn.h --require OpcEnum.h --require opc_ae.h --require opcSec.h --require opcerror.h --require opcda_i.c --require opccomn_i.c --require OpcEnum_i.c --require opc_ae_i.c --require opcSec_i.c
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Actual cross-process OPC DA Read and Write
+        if: ${{ !cancelled() && steps.sdk_bridge.conclusion == 'success' }}
+        shell: pwsh
+        run: |
+          python opclook/docs/testing/native-sdk/server-fixture/run-interop.py --server fixture-build/Release/opcl_da_server.exe --proxy fixture-build/Release/opcl_opcproxy.dll -- ./fixture-build/Release/opcl_da_sdk_client.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Actual C ABI client through SDK worker and remove/re-add
+        if: ${{ !cancelled() && steps.sdk_bridge.conclusion == 'success' }}
+        shell: pwsh
+        run: |
+          python opclook/docs/testing/native-sdk/server-fixture/run-interop.py --server fixture-build/Release/opcl_da_server.exe --proxy fixture-build/Release/opcl_opcproxy.dll -- ./softing-build/Release/softing_core_probe.exe --live
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Private SDK async completion through actual local fixture
+        if: ${{ !cancelled() && steps.sdk_bridge.conclusion == 'success' }}
+        shell: pwsh
+        run: |
+          python opclook/docs/testing/native-sdk/server-fixture/run-interop.py --server fixture-build/Release/opcl_da_server.exe --proxy fixture-build/Release/opcl_opcproxy.dll -- ./softing-build/Release/softing_core_probe.exe --live-async
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Actual Rust owner through the linked SDK bridge
+        if: ${{ !cancelled() && steps.sdk_bridge.conclusion == 'success' }}
+        shell: pwsh
+        working-directory: opclook
+        env:
+          SOFTING_RUNTIME_LIB_DIR: ${{ github.workspace }}/softing-build/Release
+          CARGO_BUILD_JOBS: 1
+          CARGO_PROFILE_DEV_DEBUG: 0
+          CARGO_INCREMENTAL: 0
+        run: |
+          python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- cargo run --locked --manifest-path docs/testing/native-sdk/rust-stand/Cargo.toml --target i686-pc-windows-msvc --features native-live --bin sdk-live
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Actual Gateway commands and events through the native SDK
+        if: ${{ !cancelled() && steps.sdk_bridge.conclusion == 'success' }}
+        shell: pwsh
+        working-directory: opclook
+        env:
+          SOFTING_RUNTIME_LIB_DIR: ${{ github.workspace }}/softing-build/Release
+          CARGO_BUILD_JOBS: 1
+          CARGO_PROFILE_DEV_DEBUG: 0
+          CARGO_PROFILE_TEST_DEBUG: 0
+          CARGO_INCREMENTAL: 0
+        run: |
+          cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-preview --test sdk_gateway_live --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-preview --test sdk_gateway_live -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Independent fresh server/client processes: sampled repetition only,
+          # not proof that callback teardown or SDK lifetime races are absent.
+          for ($attempt = 2; $attempt -le 3; $attempt++) {
+            Write-Host "Gateway fixture repetition $attempt of 3"
+            python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-preview --test sdk_gateway_live -- --nocapture
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Native DA primitive array read and write fidelity
+        if: ${{ !cancelled() && steps.sdk_bridge.conclusion == 'success' }}
+        shell: pwsh
+        working-directory: opclook
+        env:
+          SOFTING_RUNTIME_LIB_DIR: ${{ github.workspace }}/softing-build/Release
+          CARGO_BUILD_JOBS: 1
+          CARGO_PROFILE_DEV_DEBUG: 0
+          CARGO_PROFILE_TEST_DEBUG: 0
+          CARGO_INCREMENTAL: 0
+        run: |
+          cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-preview --test sdk_primitive_arrays_live --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- python scripts/ci-cargo-live.py -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-preview --test sdk_primitive_arrays_live -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: SDK mixed S_FALSE and Gateway item quality and error facts
+        if: ${{ !cancelled() && steps.sdk_bridge.conclusion == 'success' }}
+        shell: pwsh
+        working-directory: opclook
+        env:
+          SOFTING_RUNTIME_LIB_DIR: ${{ github.workspace }}/softing-build/Release
+          CARGO_BUILD_JOBS: 1
+          CARGO_PROFILE_DEV_DEBUG: 0
+          CARGO_PROFILE_TEST_DEBUG: 0
+          CARGO_INCREMENTAL: 0
+        run: |
+          cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_partial_read_live --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- python scripts/ci-cargo-live.py -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_partial_read_live -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: SDK manager finish while async session lease is pending
+        if: ${{ !cancelled() && steps.sdk_bridge.conclusion == 'success' }}
+        shell: pwsh
+        working-directory: opclook
+        env:
+          SOFTING_RUNTIME_LIB_DIR: ${{ github.workspace }}/softing-build/Release
+          CARGO_BUILD_JOBS: 1
+          CARGO_PROFILE_DEV_DEBUG: 0
+          CARGO_PROFILE_TEST_DEBUG: 0
+          CARGO_INCREMENTAL: 0
+        run: |
+          cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_async_lease_live --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- python scripts/ci-cargo-live.py -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_async_lease_live -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test-only generic SDK async values through the shared slot
+        if: ${{ !cancelled() && steps.sdk_bridge.conclusion == 'success' }}
+        shell: pwsh
+        working-directory: opclook
+        env:
+          SOFTING_RUNTIME_LIB_DIR: ${{ github.workspace }}/softing-build/Release
+          CARGO_BUILD_JOBS: 1
+          CARGO_PROFILE_DEV_DEBUG: 0
+          CARGO_PROFILE_TEST_DEBUG: 0
+          CARGO_INCREMENTAL: 0
+        run: |
+          cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_async_values_live --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- python scripts/ci-cargo-live.py -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_async_values_live -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test-only SDK Async failure and quality facts
+        if: ${{ !cancelled() && steps.sdk_bridge.conclusion == 'success' }}
+        shell: pwsh
+        working-directory: opclook
+        env:
+          SOFTING_RUNTIME_LIB_DIR: ${{ github.workspace }}/softing-build/Release
+          CARGO_BUILD_JOBS: 1
+          CARGO_PROFILE_DEV_DEBUG: 0
+          CARGO_PROFILE_TEST_DEBUG: 0
+          CARGO_INCREMENTAL: 0
+        run: |
+          cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_async_facts_live --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- python scripts/ci-cargo-live.py -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_async_facts_live -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test-only SDK Async Gateway request and epoch correlation
+        if: ${{ !cancelled() && steps.sdk_bridge.conclusion == 'success' }}
+        shell: pwsh
+        working-directory: opclook
+        env:
+          SOFTING_RUNTIME_LIB_DIR: ${{ github.workspace }}/softing-build/Release
+          CARGO_BUILD_JOBS: 1
+          CARGO_PROFILE_DEV_DEBUG: 0
+          CARGO_PROFILE_TEST_DEBUG: 0
+          CARGO_INCREMENTAL: 0
+        run: |
+          cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_async_gateway_live --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- python scripts/ci-cargo-live.py -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_async_gateway_live -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Independent Gateway progress while SDK async lease is pending
+        if: ${{ !cancelled() && steps.sdk_bridge.conclusion == 'success' }}
+        shell: pwsh
+        working-directory: opclook
+        env:
+          SOFTING_RUNTIME_LIB_DIR: ${{ github.workspace }}/softing-build/Release
+          CARGO_BUILD_JOBS: 1
+          CARGO_PROFILE_DEV_DEBUG: 0
+          CARGO_PROFILE_TEST_DEBUG: 0
+          CARGO_INCREMENTAL: 0
+        run: |
+          cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_async_isolation_live --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- python scripts/ci-cargo-live.py -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_async_isolation_live -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Late SDK callback after item removal and re-registration
+        if: ${{ !cancelled() && steps.sdk_bridge.conclusion == 'success' }}
+        shell: pwsh
+        working-directory: opclook
+        env:
+          SOFTING_RUNTIME_LIB_DIR: ${{ github.workspace }}/softing-build/Release
+          CARGO_BUILD_JOBS: 1
+          CARGO_PROFILE_DEV_DEBUG: 0
+          CARGO_PROFILE_TEST_DEBUG: 0
+          CARGO_INCREMENTAL: 0
+        run: |
+          cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_late_callback_live --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- python scripts/ci-cargo-live.py -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_late_callback_live -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Active SDK subscription with one-shot Engine refresh and no hidden Sync Poll
+        if: ${{ !cancelled() && steps.sdk_bridge.conclusion == 'success' }}
+        shell: pwsh
+        working-directory: opclook
+        env:
+          SOFTING_RUNTIME_LIB_DIR: ${{ github.workspace }}/softing-build/Release
+          CARGO_BUILD_JOBS: 1
+          CARGO_PROFILE_DEV_DEBUG: 0
+          CARGO_PROFILE_TEST_DEBUG: 0
+          CARGO_INCREMENTAL: 0
+        run: |
+          cargo test --locked -p opclook-engine --target i686-pc-windows-msvc --features native-da-preview --test sdk_subscription_one_shot_live --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- python scripts/ci-cargo-live.py -- cargo test --locked -p opclook-engine --target i686-pc-windows-msvc --features native-da-preview --test sdk_subscription_one_shot_live -- --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Native DA codec failure preserves SDK read facts
+        if: ${{ !cancelled() && steps.sdk_bridge.conclusion == 'success' }}
+        shell: pwsh
+        working-directory: opclook
+        env:
+          SOFTING_RUNTIME_LIB_DIR: ${{ github.workspace }}/softing-build/Release
+          CARGO_BUILD_JOBS: 1
+          CARGO_PROFILE_DEV_DEBUG: 0
+          CARGO_PROFILE_TEST_DEBUG: 0
+          CARGO_INCREMENTAL: 0
+        run: |
+          cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-preview --test sdk_read_failure_facts_live --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- python scripts/ci-cargo-live.py -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-preview --test sdk_read_failure_facts_live -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Native DA device and cache read sources
+        if: ${{ !cancelled() && steps.sdk_bridge.conclusion == 'success' }}
+        shell: pwsh
+        working-directory: opclook
+        env:
+          SOFTING_RUNTIME_LIB_DIR: ${{ github.workspace }}/softing-build/Release
+          CARGO_BUILD_JOBS: 1
+          CARGO_PROFILE_DEV_DEBUG: 0
+          CARGO_PROFILE_TEST_DEBUG: 0
+          CARGO_INCREMENTAL: 0
+        run: |
+          cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-preview --test sdk_device_read_live --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- python scripts/ci-cargo-live.py -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-preview --test sdk_device_read_live -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p opclook-engine --target i686-pc-windows-msvc --features native-da-preview --test sdk_device_profile_live --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- python scripts/ci-cargo-live.py -- cargo test --locked -p opclook-engine --target i686-pc-windows-msvc --features native-da-preview --test sdk_device_profile_live -- --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Independent native DA sessions during blocked device write
+        if: ${{ !cancelled() && steps.sdk_bridge.conclusion == 'success' }}
+        shell: pwsh
+        working-directory: opclook
+        env:
+          SOFTING_RUNTIME_LIB_DIR: ${{ github.workspace }}/softing-build/Release
+          CARGO_BUILD_JOBS: 1
+          CARGO_PROFILE_DEV_DEBUG: 0
+          CARGO_PROFILE_TEST_DEBUG: 0
+          CARGO_INCREMENTAL: 0
+        run: |
+          cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-preview --test sdk_session_isolation_live --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll --isolation -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-preview --test sdk_session_isolation_live -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Bounded shutdown with pending native device write
+        if: ${{ !cancelled() && steps.sdk_bridge.conclusion == 'success' }}
+        shell: pwsh
+        working-directory: opclook
+        env:
+          SOFTING_RUNTIME_LIB_DIR: ${{ github.workspace }}/softing-build/Release
+          CARGO_BUILD_JOBS: 1
+          CARGO_PROFILE_DEV_DEBUG: 0
+          CARGO_PROFILE_TEST_DEBUG: 0
+          CARGO_INCREMENTAL: 0
+        run: |
+          cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-preview --test sdk_pending_shutdown_live --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll --isolation -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-preview --test sdk_pending_shutdown_live -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Reuse SDK host while previous Gateway write is blocked
+        if: ${{ !cancelled() && steps.sdk_bridge.conclusion == 'success' }}
+        shell: pwsh
+        working-directory: opclook
+        env:
+          SOFTING_RUNTIME_LIB_DIR: ${{ github.workspace }}/softing-build/Release
+          CARGO_BUILD_JOBS: 1
+          CARGO_PROFILE_DEV_DEBUG: 0
+          CARGO_PROFILE_TEST_DEBUG: 0
+          CARGO_INCREMENTAL: 0
+        run: |
+          cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_host_reuse_live --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll --isolation -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_host_reuse_live -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Unknown write outcome after actual SDK task exception
+        if: ${{ !cancelled() && steps.sdk_bridge.conclusion == 'success' }}
+        shell: pwsh
+        working-directory: opclook
+        env:
+          SOFTING_RUNTIME_LIB_DIR: ${{ github.workspace }}/softing-build/Release
+          CARGO_BUILD_JOBS: 1
+          CARGO_PROFILE_DEV_DEBUG: 0
+          CARGO_PROFILE_TEST_DEBUG: 0
+          CARGO_INCREMENTAL: 0
+        run: |
+          cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_write_exception_live --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_write_exception_live -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Forced SDK DA1 inactive Cache and Device routes
+        if: ${{ !cancelled() && steps.sdk_bridge.conclusion == 'success' }}
+        shell: pwsh
+        run: |
+          python opclook/docs/testing/native-sdk/server-fixture/run-interop.py --server fixture-build/Release/opcl_da_server.exe --proxy fixture-build/Release/opcl_opcproxy.dll -- ./softing-build/Release/softing_core_probe.exe --live-da1-inactive
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Forced SDK DA2 Cache and Device routes
+        if: ${{ !cancelled() && steps.sdk_bridge.conclusion == 'success' }}
+        shell: pwsh
+        run: |
+          python opclook/docs/testing/native-sdk/server-fixture/run-interop.py --server fixture-build/Release/opcl_da_server.exe --proxy fixture-build/Release/opcl_opcproxy.dll -- ./softing-build/Release/softing_core_probe.exe --live-da2-routes
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Forced SDK DA3 max-age request routes
+        if: ${{ !cancelled() && steps.sdk_bridge.conclusion == 'success' }}
+        shell: pwsh
+        run: |
+          python opclook/docs/testing/native-sdk/server-fixture/run-interop.py --server fixture-build/Release/opcl_da_server.exe --proxy fixture-build/Release/opcl_opcproxy.dll -- ./softing-build/Release/softing_core_probe.exe --live-da3-routes
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Preserve official MIT include and link evidence
+        if: always() && matrix.opc_inputs == 'official-mit'
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-com-official-mit-trace
+          path: |
+            *-mit-build.log
+            opcf-staged/**
+            opcf-generated/**
+          if-no-files-found: warn

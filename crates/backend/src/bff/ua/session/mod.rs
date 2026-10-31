@@ -1,3 +1,6 @@
+mod notification;
+mod recovery;
+
 use super::common::{send, timeout_drain};
 use super::discovery::build_discovery_client;
 use super::security::{
@@ -38,8 +41,18 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 pub(super) struct UaSession {
+    pub(super) poll_mode: bool,
+    pub(super) explicit_acquisition: bool,
     pub(super) session: Arc<Session>,
     pub(super) event_loop: JoinHandle<StatusCode>,
+    /// Latest SDK reconnection revision; coalesces wakeups without blocking its event loop.
+    pub(super) recovery: tokio::sync::watch::Receiver<(u64, RecoveryNotice)>,
+    /// Includes pending registrations for early push; removed before delete awaits.
+    pub(super) push_keys: Arc<std::sync::Mutex<HashSet<ItemKey>>>,
+    pub(super) identity_gate: Arc<std::sync::atomic::AtomicBool>,
+    pub(super) namespace_uris: HashMap<ItemKey, Option<Arc<str>>>,
+    namespace_pool: recovery::NamespacePool,
+    pub(super) identity_blocked: HashSet<ItemKey>,
     pub(super) items: HashMap<ItemKey, NodeId>,
     /// UA built-in variant scalar type of each subscribed node, resolved from
     /// the node's DataType attribute when the attribute could be read.
@@ -52,14 +65,17 @@ pub(super) struct UaSession {
     /// first AddItems. A server limits the monitored items of ONE subscription
     /// (`BadTooManyMonitoredItems`), so a large tag list spreads over several.
     pub(super) subscriptions: Vec<u32>,
+    pub(super) notification_generation: u64,
     /// Requested publishing interval (ms) for the push subscription; mirrors the
     /// app's update interval. 0 until ConfigureUaSubscription arrives.
     pub(super) publishing_interval_ms: u64,
     /// Absolute deadband for DataChangeFilter (0 = off). Used for new items and
     /// pushed to the live ones by `apply_subscription_settings`.
     pub(super) deadband: f64,
-    /// Publishing interval (ms) the live subscription actually runs with.
-    pub(super) applied_interval_ms: u64,
+    /// Last interval request accepted by every live subscription, not revised.
+    pub(super) last_requested_interval_ms: u64,
+    /// Last accepted request for each SDK subscription (partial modify is possible).
+    pub(super) requested_intervals_ms: HashMap<u32, u64>,
     /// Deadband the live monitored items actually carry.
     pub(super) applied_deadband: f64,
     /// Server-assigned monitored item id of every item that is really monitored
@@ -73,6 +89,8 @@ pub(super) struct UaSession {
     /// P1: items per `CreateMonitoredItems` call; halved when the server
     /// answers `BadTooManyOperations`.
     pub(super) monitor_chunk: usize,
+    /// Read limit learned for one SDK connection revision, never shared with monitoring.
+    pub(super) read_chunk: Option<(u64, usize)>,
     /// Items monitored WITHOUT the deadband filter because the server refused it
     /// for their attribute/type (for example a Boolean or String node).
     pub(super) unfiltered: HashSet<ItemKey>,
@@ -80,12 +98,22 @@ pub(super) struct UaSession {
     /// a response in flight, so the session is poisoned: the command loop must
     /// close it gracefully instead of issuing another request on it.
     pub(super) timed_out: bool,
+    /// A session-changing Add cannot safely delete old server-assigned IDs.
+    pub(super) identity_quarantined: Option<crate::bff::model::UaService>,
     /// Keeps the server certificate trusted for this session only (the connect
     /// dialog's "trust the certificate"); released when the session closes.
     pub(super) trust: Option<TrustLease>,
     /// V3: the server's structure descriptions, loaded once after connect, so
     /// structured values decode into named fields.
     pub(super) types: Option<Arc<DataTypeTree>>,
+    pub(super) callback_types: Arc<std::sync::RwLock<Option<Arc<DataTypeTree>>>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RecoveryNotice {
+    Connected,
+    Lost,
+    Stopped,
 }
 
 /// Monitoring parameters of one item: single-slot queue that discards the

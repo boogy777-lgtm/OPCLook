@@ -41,7 +41,7 @@ pub(super) fn add_signal_dialog(app: &mut App, ui: &mut egui::Ui) {
                     .selected_text(current)
                     .show_ui(ui, |ui| {
                         for (id, label) in &sessions {
-                            ui.selectable_value(&mut dialog.session, Some(*id), label);
+                            super::super::components::selectable_value(ui, &mut dialog.session, Some(*id), label.clone());
                         }
                     });
             });

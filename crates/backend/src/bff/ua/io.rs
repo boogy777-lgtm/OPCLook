@@ -27,12 +27,20 @@ pub(super) fn browse_node_class_mask(filter: NodeClassFilter) -> u32 {
     }
 }
 
+fn identity_error(service: crate::bff::model::UaService) -> BackendMsg {
+    BackendMsg::UaIdentityChanged { service }
+}
+
 pub(super) async fn browse(
     session: &mut UaSession,
     node_id: &str,
     filter: NodeClassFilter,
     view_id: Option<String>,
 ) -> Result<Vec<BrowseNode>, BackendMsg> {
+    use crate::bff::model::UaService;
+    let revision = session
+        .identity_revision()
+        .ok_or_else(|| identity_error(UaService::Browse))?;
     let node = parse_node(node_id).unwrap_or_else(|| NodeId::from(ObjectId::RootFolder));
     let view = view_id
         .as_deref()
@@ -59,6 +67,12 @@ pub(super) async fn browse(
         IO_TIMEOUT,
     )
     .await;
+    if browse_result.is_err() {
+        session.timed_out = true;
+    }
+    if !session.identity_is_current(revision) {
+        return Err(identity_error(UaService::Browse));
+    }
     let Ok(browse_result) = browse_result else {
         session.timed_out = true;
         return Err(BackendMsg::TimeoutBrowse);
@@ -126,16 +140,31 @@ pub(super) async fn browse(
             .collect();
         if points.is_empty() || nodes.len() >= MAX_BROWSE_NODES {
             if !points.is_empty() {
+                if !session.identity_is_current(revision) {
+                    return Err(identity_error(UaService::BrowseNext));
+                }
                 let release =
                     timeout_drain(session.session.browse_next(true, &points), IO_TIMEOUT).await;
                 if release.is_err() {
                     session.timed_out = true;
                 }
+                if !session.identity_is_current(revision) {
+                    return Err(identity_error(UaService::BrowseNext));
+                }
             }
             break;
         }
+        if !session.identity_is_current(revision) {
+            return Err(identity_error(UaService::BrowseNext));
+        }
         let next_result =
             timeout_drain(session.session.browse_next(false, &points), IO_TIMEOUT).await;
+        if next_result.is_err() {
+            session.timed_out = true;
+        }
+        if !session.identity_is_current(revision) {
+            return Err(identity_error(UaService::BrowseNext));
+        }
         let Ok(next_result) = next_result else {
             session.timed_out = true;
             return Err(BackendMsg::TimeoutBrowseNext);
@@ -146,12 +175,19 @@ pub(super) async fn browse(
         })?;
     }
 
+    if !session.identity_is_current(revision) {
+        return Err(identity_error(UaService::Browse));
+    }
     Ok(nodes)
 }
 
 /// Lists the server's Views by browsing the standard Views folder reference
 /// (`Root/Views`, ObjectId 84) and keeping only `NodeClass::View` references.
 pub(super) async fn browse_views(session: &mut UaSession) -> Result<Vec<BrowseNode>, BackendMsg> {
+    use crate::bff::model::UaService;
+    let revision = session
+        .identity_revision()
+        .ok_or_else(|| identity_error(UaService::BrowseViews))?;
     let views_node = NodeId::from(ObjectId::ViewsFolder);
     let description = BrowseDescription {
         node_id: views_node,
@@ -168,6 +204,12 @@ pub(super) async fn browse_views(session: &mut UaSession) -> Result<Vec<BrowseNo
         IO_TIMEOUT,
     )
     .await;
+    if views_result.is_err() {
+        session.timed_out = true;
+    }
+    if !session.identity_is_current(revision) {
+        return Err(identity_error(UaService::BrowseViews));
+    }
     let Ok(views_result) = views_result else {
         session.timed_out = true;
         return Err(BackendMsg::TimeoutViews);
@@ -212,6 +254,9 @@ pub(super) async fn browse_views(session: &mut UaSession) -> Result<Vec<BrowseNo
             });
         }
     }
+    if !session.identity_is_current(revision) {
+        return Err(identity_error(UaService::BrowseViews));
+    }
     // Reject an empty result: a server with no Views should surface a clear
     // message instead of silently returning nothing.
     if nodes.is_empty() {
@@ -227,6 +272,10 @@ pub(super) async fn resolve_browse_path(
     start_node: Option<String>,
     path: &str,
 ) -> Result<Vec<String>, BackendMsg> {
+    use crate::bff::model::UaService;
+    let revision = session
+        .identity_revision()
+        .ok_or_else(|| identity_error(UaService::TranslatePath))?;
     let path = path.trim();
     if path.is_empty() {
         return Err(BackendMsg::BrowsePathRequired);
@@ -249,6 +298,12 @@ pub(super) async fn resolve_browse_path(
         IO_TIMEOUT,
     )
     .await;
+    if path_result.is_err() {
+        session.timed_out = true;
+    }
+    if !session.identity_is_current(revision) {
+        return Err(identity_error(UaService::TranslatePath));
+    }
     let Ok(path_result) = path_result else {
         session.timed_out = true;
         return Err(BackendMsg::TimeoutResolvePath);
@@ -275,6 +330,9 @@ pub(super) async fn resolve_browse_path(
                 targets.push(id);
             }
         }
+    }
+    if !session.identity_is_current(revision) {
+        return Err(identity_error(UaService::TranslatePath));
     }
     if targets.is_empty() {
         return Err(BackendMsg::PathNotFound);
@@ -319,10 +377,30 @@ pub(super) fn parse_relative_path(path: &str) -> Result<Vec<RelativePathElement>
     Ok(elements)
 }
 
-pub(super) async fn read(session: &mut UaSession, keys: &[ItemKey]) -> Vec<(ItemKey, DataValue)> {
+// Local receive time records when this failure became observable, not a server timestamp.
+fn read_failure(reason: BackendMsg) -> DataValue {
+    let mut value = DataValue::bad(reason);
+    value.times.received_at = Some(chrono::Utc::now());
+    value.times.origin = crate::bff::model::ValueOrigin::Read;
+    value
+}
+
+pub(super) async fn read(
+    session: &mut UaSession,
+    keys: &[ItemKey],
+    max_age: f64,
+) -> Vec<(ItemKey, DataValue)> {
+    let revision = session.recovery.borrow().0;
     let mut requests = Vec::new();
     let mut index_of: HashMap<ItemKey, usize> = HashMap::new();
     for key in keys {
+        if !session
+            .identity_gate
+            .load(std::sync::atomic::Ordering::SeqCst)
+            || session.identity_blocked.contains(key)
+        {
+            continue;
+        }
         let Some(node_id) = session.items.get(key) else {
             continue;
         };
@@ -338,12 +416,12 @@ pub(super) async fn read(session: &mut UaSession, keys: &[ItemKey]) -> Vec<(Item
     if requests.is_empty() {
         return keys
             .iter()
-            .map(|key| (*key, DataValue::bad(BackendMsg::NodeNotSubscribed)))
+            .map(|key| (*key, read_failure(BackendMsg::NodeNotSubscribed)))
             .collect();
     }
 
     let values = match session
-        .read_values_chunked(&requests, TimestampsToReturn::Both, 0.0)
+        .read_values_chunked_scoped(&requests, TimestampsToReturn::Both, max_age, Some(revision))
         .await
     {
         Ok(values) => values,
@@ -354,10 +432,10 @@ pub(super) async fn read(session: &mut UaSession, keys: &[ItemKey]) -> Vec<(Item
                     if index_of.contains_key(key) {
                         (
                             *key,
-                            DataValue::bad(BackendMsg::context("read", message.clone())),
+                            read_failure(BackendMsg::context("read", message.clone())),
                         )
                     } else {
-                        (*key, DataValue::bad(BackendMsg::NodeNotSubscribed))
+                        (*key, read_failure(BackendMsg::NodeNotSubscribed))
                     }
                 })
                 .collect();
@@ -365,16 +443,33 @@ pub(super) async fn read(session: &mut UaSession, keys: &[ItemKey]) -> Vec<(Item
     };
 
     let mut out = Vec::with_capacity(keys.len());
+    if !session
+        .identity_gate
+        .load(std::sync::atomic::Ordering::SeqCst)
+        || session.recovery.borrow().0 != revision
+    {
+        return keys
+            .iter()
+            .map(|key| (*key, read_failure(BackendMsg::NodeNotSubscribed)))
+            .collect();
+    }
     for key in keys {
         let Some(index) = index_of.get(key) else {
-            out.push((*key, DataValue::bad(BackendMsg::NodeNotSubscribed)));
+            out.push((*key, read_failure(BackendMsg::NodeNotSubscribed)));
             continue;
         };
         let Some(dv) = values.get(*index) else {
-            out.push((*key, DataValue::bad(BackendMsg::ServerReturnedNoValue)));
+            out.push((*key, read_failure(BackendMsg::ServerReturnedNoValue)));
             continue;
         };
-        out.push((*key, ua_data_value_typed(dv, session.types.as_deref())));
+        out.push((
+            *key,
+            ua_data_value_typed(
+                dv,
+                session.types.as_deref(),
+                crate::bff::model::ValueOrigin::Read,
+            ),
+        ));
     }
     out
 }
@@ -382,7 +477,14 @@ pub(super) async fn read(session: &mut UaSession, keys: &[ItemKey]) -> Vec<(Item
 pub(super) async fn write(
     session: &mut UaSession,
     request: WriteRequest,
-) -> Result<(), BackendMsg> {
+) -> Result<crate::bff::model::WriteOutcome, BackendMsg> {
+    if !session
+        .identity_gate
+        .load(std::sync::atomic::Ordering::SeqCst)
+        || session.identity_blocked.contains(&request.key)
+    {
+        return Err(BackendMsg::NodeNotSubscribed);
+    }
     let node_id = session
         .items
         .get(&request.key)
@@ -407,18 +509,49 @@ pub(super) async fn write(
     let write_result = timeout_drain(session.session.write(&[write]), IO_TIMEOUT).await;
     let Ok(write_result) = write_result else {
         session.timed_out = true;
-        return Err(BackendMsg::TimeoutWrite);
+        return Ok(crate::bff::model::WriteOutcome::unknown_because(
+            BackendMsg::TimeoutWrite,
+        ));
     };
-    let result = write_result.map_err(|e| BackendMsg::UaServiceError {
-        service: crate::bff::model::UaService::Write,
-        detail: e.to_string(),
-    })?;
+    let result = match write_result {
+        Ok(result) => result,
+        Err(error) => {
+            return Ok(crate::bff::model::WriteOutcome::unknown_with_status(
+                crate::bff::model::NativeWriteStatus::UaService(error.status().bits()),
+                error.to_string(),
+            ));
+        }
+    };
+    Ok(write_outcome(&result))
+}
+
+fn write_outcome(result: &[StatusCode]) -> crate::bff::model::WriteOutcome {
     match result.first() {
-        Some(status) if status.is_bad() => Err(BackendMsg::WriteRejected {
-            status: format!("{} (0x{:08X})", status.to_string(), status.bits()),
-        }),
-        Some(_) => Ok(()),
-        None => Err(BackendMsg::NoWriteResult),
+        Some(status) => crate::bff::model::WriteOutcome::from_ua(status.bits(), status.to_string()),
+        None => crate::bff::model::WriteOutcome::unknown(""),
+    }
+}
+
+#[cfg(test)]
+mod write_outcome_tests {
+    use super::*;
+    use crate::bff::model::{NativeWriteStatus, WriteDisposition};
+
+    #[test]
+    fn adapter_keeps_good_async_uncertain_bad_and_missing() {
+        for (raw, expected) in [
+            (0, WriteDisposition::Accepted),
+            (0x002e_0000, WriteDisposition::AcceptedAsynchronously),
+            (0x4000_0000, WriteDisposition::Uncertain),
+            (0x8000_0000, WriteDisposition::Rejected),
+        ] {
+            let outcome = write_outcome(&[StatusCode::from(raw)]);
+            assert_eq!(outcome.raw, Some(NativeWriteStatus::Ua(raw)));
+            assert_eq!(outcome.disposition, expected);
+        }
+        let missing = write_outcome(&[]);
+        assert_eq!(missing.disposition, WriteDisposition::Unknown);
+        assert_eq!(missing.raw, None);
     }
 }
 
