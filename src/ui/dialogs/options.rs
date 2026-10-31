@@ -37,13 +37,19 @@ pub(super) fn options_dialog(app: &mut App, ui: &mut egui::Ui) {
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
                         ui.heading(tr(lang, Tr::UpdateInterval));
-                        let slider = ui.add(
-                            egui::Slider::new(
-                                &mut draft.update_interval_secs,
-                                UPDATE_INTERVAL_MIN_SECS..=UPDATE_INTERVAL_MAX_SECS,
-                            )
-                            .text(tr(lang, Tr::Seconds))
-                            .integer(),
+                        let slider = super::super::components::numeric(
+                            ui,
+                            &mut draft.update_interval_secs,
+                            |ui, value| {
+                                ui.add(
+                                    egui::Slider::new(
+                                        value,
+                                        UPDATE_INTERVAL_MIN_SECS..=UPDATE_INTERVAL_MAX_SECS,
+                                    )
+                                    .text(tr(lang, Tr::Seconds))
+                                    .integer(),
+                                )
+                            },
                         );
                         if app.dialogs.options.focus_pending {
                             slider.request_focus();
@@ -85,22 +91,44 @@ pub(super) fn options_dialog(app: &mut App, ui: &mut egui::Ui) {
                         );
                         ui.separator();
                         ui.heading(tr(lang, Tr::AdvancedTitle));
-                        ui.add(
-                            egui::DragValue::new(&mut draft.operation_timeout_secs)
-                                .range(OPERATION_TIMEOUT_MIN_SECS..=OPERATION_TIMEOUT_MAX_SECS)
-                                .suffix(tr(lang, Tr::SecondsShortSuffix)),
+                        super::super::components::numeric(
+                            ui,
+                            &mut draft.operation_timeout_secs,
+                            |ui, value| {
+                                ui.add(
+                                    egui::DragValue::new(value)
+                                        .speed(1.0)
+                                        .range(
+                                            OPERATION_TIMEOUT_MIN_SECS..=OPERATION_TIMEOUT_MAX_SECS,
+                                        )
+                                        .suffix(tr(lang, Tr::SecondsShortSuffix)),
+                                )
+                            },
                         );
                         ui.label(tr(lang, Tr::OpTimeoutLabel));
-                        ui.add(
-                            egui::DragValue::new(&mut draft.test_interval_secs)
-                                .range(TEST_INTERVAL_MIN_SECS..=TEST_INTERVAL_MAX_SECS)
-                                .suffix(tr(lang, Tr::SecondsShortSuffix)),
+                        super::super::components::numeric(
+                            ui,
+                            &mut draft.test_interval_secs,
+                            |ui, value| {
+                                ui.add(
+                                    egui::DragValue::new(value)
+                                        .speed(1.0)
+                                        .range(TEST_INTERVAL_MIN_SECS..=TEST_INTERVAL_MAX_SECS)
+                                        .suffix(tr(lang, Tr::SecondsShortSuffix)),
+                                )
+                            },
                         );
                         ui.label(tr(lang, Tr::TestIntervalLabel));
-                        ui.add(
-                            egui::DragValue::new(&mut draft.ua_deadband)
-                                .range(0.0..=1_000_000.0)
-                                .speed(0.1),
+                        super::super::components::numeric(
+                            ui,
+                            &mut draft.ua_deadband,
+                            |ui, value| {
+                                ui.add(
+                                    egui::DragValue::new(value)
+                                        .range(0.0..=1_000_000.0)
+                                        .speed(0.1),
+                                )
+                            },
                         );
                         ui.label(tr(lang, Tr::DeadbandLabel));
                         super::super::components::hint(ui, tr(lang, Tr::DeadbandHint));

@@ -690,10 +690,8 @@ pub(super) fn acquisition_editor(
         .default_open(default_open)
         .show(ui, |ui| {
             let mut enabled = draft.is_some();
-            if ui
-                .checkbox(&mut enabled, tr(lang, Tr::AcquisitionExplicit))
-                .changed()
-            {
+            super::super::components::checkbox(ui, &mut enabled, tr(lang, Tr::AcquisitionExplicit));
+            if enabled != draft.is_some() {
                 *draft = enabled.then(|| {
                     if is_da {
                         AcquisitionConfig::da_available()
@@ -734,17 +732,18 @@ pub(super) fn acquisition_editor(
                 });
                 ui.horizontal(|ui| {
                     ui.label(tr(lang, Tr::AcquisitionInterval));
-                    ui.add(egui::DragValue::new(&mut config.interval_ms).range(
-                        crate::bff::model::ACQUISITION_INTERVAL_MIN_MS
-                            ..=crate::bff::model::ACQUISITION_INTERVAL_MAX_MS,
-                    ));
+                    super::super::components::numeric(ui, &mut config.interval_ms, |ui, value| {
+                        ui.add(egui::DragValue::new(value).speed(1.0).range(
+                            crate::bff::model::ACQUISITION_INTERVAL_MIN_MS
+                                ..=crate::bff::model::ACQUISITION_INTERVAL_MAX_MS,
+                        ))
+                    });
                 });
-                let response = ui.add_enabled(
+                let response = super::super::components::checkbox_enabled(
+                    ui,
+                    &mut config.read_after_write,
+                    tr(lang, Tr::AcquisitionReadback),
                     capabilities.read_after_write,
-                    egui::Checkbox::new(
-                        &mut config.read_after_write,
-                        tr(lang, Tr::AcquisitionReadback),
-                    ),
                 );
                 unavailable_hint(
                     response,

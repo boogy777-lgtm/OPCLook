@@ -13,12 +13,55 @@ pub(super) fn checkbox(
     value: &mut bool,
     text: impl Into<String>,
 ) -> egui::Response {
+    checkbox_enabled(ui, value, text, true)
+}
+
+/// Enabled variant for controls whose availability is owned by the caller.
+pub(super) fn checkbox_enabled(
+    ui: &mut egui::Ui,
+    value: &mut bool,
+    text: impl Into<String>,
+    enabled: bool,
+) -> egui::Response {
     let previous = *value;
-    let response = ui.checkbox(value, text.into());
+    let response = ui.add_enabled(enabled, egui::Checkbox::new(value, text.into()));
     if super::ime_blocks_keys(ui.ctx())
         && response.changed()
         && !response.clicked_by(egui::PointerButton::Primary)
     {
+        *value = previous;
+    }
+    response
+}
+
+/// Render a number control and reject arrow-key changes while the IME owns
+/// candidate navigation. Normal editing and pointer input remain unchanged.
+/// As with checkbox, `Response::changed` describes egui's raw event.
+pub(super) fn numeric<T: Copy>(
+    ui: &mut egui::Ui,
+    value: &mut T,
+    render: impl FnOnce(&mut egui::Ui, &mut T) -> egui::Response,
+) -> egui::Response {
+    let previous = *value;
+    // Snapshot before the widget: egui's DragValue consumes arrow events.
+    let candidate_key = super::ime_blocks_keys(ui.ctx())
+        && ui.input(|input| {
+            input.events.iter().any(|event| {
+                matches!(
+                    event,
+                    egui::Event::Key {
+                        key: egui::Key::ArrowUp
+                            | egui::Key::ArrowDown
+                            | egui::Key::ArrowLeft
+                            | egui::Key::ArrowRight,
+                        pressed: true,
+                        ..
+                    }
+                )
+            })
+        });
+    let response = render(ui, value);
+    if candidate_key {
         *value = previous;
     }
     response

@@ -64,3 +64,57 @@ The snapshot tests need the existing headless GPU/renderer setup; inspect
 `docs/screenshots/p3-columns-focus-ru.png` and
 `docs/screenshots/p5-options-hints-ru.png` after CI. Passing synthetic tests
 and viewing these images would not close the native IME/layout gates.
+
+## Numeric controls and remaining component inventory
+
+The exact source review covers the local `src/ui` tree as follows. “Retain”
+means the similar-looking code has a distinct owner or interaction contract;
+it is not an assertion about platform accessibility.
+
+| Paths | Repetition or responsibility | Owner and decision |
+| --- | --- | --- |
+| `components.rs`, `actions.rs`, `dialogs/write.rs` | Disabled button/reason, checkbox, selectable value, supporting hint | Keep the existing local `Response` helpers; action availability and translation remain with the caller. |
+| `dialogs/options.rs`, `dialogs/connect/security.rs`, `dialogs/connect.rs`, `dialogs/acquisition.rs` | Slider and integer/float DragValue; explicit profile and readback checkboxes | Share the small `numeric` IME guard and guarded checkbox. The caller supplies range, speed, value and layout; the helper sends no actions. |
+| `dialogs/add_signal.rs`, `dialogs/write.rs`, `dialogs/connect/security.rs`, `dialogs/network.rs` | ComboBox choices | Retain the shared selection primitive; each dialog owns the selected value and popup. Do not merge their validation or focus transitions. |
+| `dialogs/confirm.rs`, `message.rs`, `csv_import.rs`, `mod.rs` | Modal choice and routing | Retain independently: confirm, message and import have different terminal actions and modality. |
+| `dialogs/palette.rs`, `add_signal.rs`, `write.rs`, `connect.rs` | Search/form text fields and Enter | Retain their separate field and Enter logic: typed parameters, connect, Add and Write have different effects and confirmation rules. |
+| `dialogs/columns.rs`, `ua_tree.rs`, `connect/results.rs` | Reorder, grouped endpoint rows and result lists | Retain: focus/drag/selection and row payload semantics differ. |
+| `dialogs/about.rs`, `network.rs`, `options.rs`, `acquisition.rs` | Informational labels and status | Existing `hint` handles matching subdued text; warnings, semantic colors and state-dependent details remain local. |
+| `navigation.rs`, `navigation/tree_rows.rs`, `tree.rs`, `servers.rs` | Server list, hierarchical tree and tabs | Retain: region focus, expansion, session identity and close/selection ownership differ; painter geometry is not a shared generic row contract. |
+| `table.rs`, `table/cells.rs` | Table cells, multiselection, structured values and time | Retain existing local cell models; table focus, selection and value rendering have different response semantics from tree rows. |
+| `paint.rs`, `colors.rs`, `style.rs` | Icons, token palette and theme | Retain existing painter/style helpers: icon accessibility, enabled state and painting callbacks differ from ordinary buttons. |
+| `menu.rs`, `panels.rs`, `status.rs` | Menus, footer widgets, journal/script and status popup | Retain: region navigation, popup stacking and editor focus are distinct; shared button logic would own UI state. |
+| `keymap.rs`, `shortcuts.rs`, `regions.rs`, `mod.rs` | Keyboard routing, IME state and region ownership | Keep these as routing infrastructure, not presentation widgets. |
+| `csv.rs`, `files.rs`, `test_hooks.rs` | CSV/file operations and test hooks | Not render primitives; keep effects and test instrumentation separate. |
+
+The `numeric` helper snapshots whether an IME candidate arrow is present
+*before* egui consumes it and restores the prior value after rendering. It
+leaves committed text and pointer interaction intact when no simultaneous IME
+arrow is present; an ambiguous same-frame pointer plus candidate-arrow change
+is conservatively discarded. The raw `Response::changed` still describes the
+event observed by egui; callers compare the final value rather than treating
+that flag as a domain action. Existing ranges and float speed are unchanged.
+Integer acquisition interval, UA session timeout and integer Options
+DragValues now use speed 1.0 instead of egui's default 0.25: a keyboard arrow
+can change an integer by one, and pointer dragging correspondingly changes at
+one unit per point rather than a quarter. Slider styling is unchanged.
+
+Local Linux `egui_kittest` measurement on this revision: all 39 `p3_` UI
+interaction tests and all 4 local component tests passed. The acquisition
+interval normal arrow, text entry, synthetic IME committed text, held repeat,
+pointer drag during IME, IME arrow, explicit-profile
+checkbox, Connect timeout and Options slider/deadband scenarios are included. A targeted P4 IME/repeat
+test also passed.
+A controlled before/after of the explicit-profile checkbox ran the actual test:
+raw checkbox failed by losing its draft, guarded checkbox passed. For the
+integer IME arrow, a counterfactual with the approved speed 1.0 but without the
+IME guard changed 1000 to 1001; the guard restored 1000. The default 0.25
+integer control also left ordinary arrow changes rounded back to the original
+integer in this test. These are synthetic input results, not physical Windows
+IME evidence. The previous columns focus-guard counterfactual was also run:
+the named assertion failed with the guard disabled and passed after restoration.
+
+Remaining checks: integrate and rerun the full UI suite on the final combined
+head, observe actual native Windows layout/IME and accessibility behavior,
+and inspect the separately requested visual snapshots. No new drawing style or
+component layout is introduced by this numeric change.

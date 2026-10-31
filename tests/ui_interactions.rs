@@ -8553,3 +8553,348 @@ fn p3_ime_candidate_does_not_switch_add_signal_session() {
     assert_eq!(h.state().dialogs.add_signal.session, Some(sid(1)));
     assert!(h.state().dialogs.add_signal.open);
 }
+
+#[test]
+fn p3_acquisition_numeric_ime_candidate_does_not_change_interval() {
+    use opclook::bff::model::AcquisitionConfig;
+    let mut app = App::new_test(&egui::Context::default());
+    let mut endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+    endpoint.acquisition = Some(AcquisitionConfig::ua_default());
+    app.seed_session(sid(1), endpoint);
+    app.open_acquisition_editor(sid(1));
+    app.record_dispatches_for_test();
+    let mut h = harness(app);
+    h.run_steps(4);
+    h.get_by_value("1000").focus();
+    h.run_steps(1);
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit {
+        text: "a".into(),
+        active_range_chars: None,
+    }));
+    h.key_press(Key::ArrowUp);
+    h.run_steps(2);
+    assert_eq!(
+        h.state()
+            .dialogs
+            .acquisition
+            .draft
+            .as_ref()
+            .unwrap()
+            .interval_ms,
+        1000
+    );
+    assert!(h.state().dialogs.acquisition.open);
+    assert!(h.state().dispatched_for_test().is_empty());
+}
+
+#[test]
+fn p3_acquisition_numeric_normal_keyboard_stays_in_editor() {
+    use opclook::bff::model::AcquisitionConfig;
+    let mut app = App::new_test(&egui::Context::default());
+    let mut endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+    endpoint.acquisition = Some(AcquisitionConfig::ua_default());
+    app.seed_session(sid(1), endpoint);
+    app.open_acquisition_editor(sid(1));
+    app.record_dispatches_for_test();
+    let mut h = harness(app);
+    h.run_steps(4);
+    h.get_by_value("1000").click();
+    h.run_steps(1);
+    h.key_press(Key::ArrowUp);
+    h.run_steps(2);
+    assert!(
+        h.state()
+            .dialogs
+            .acquisition
+            .draft
+            .as_ref()
+            .unwrap()
+            .interval_ms
+            > 1000
+    );
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().dialogs.acquisition.open);
+    assert!(h.state().dispatched_for_test().is_empty());
+}
+
+#[test]
+fn p3_connect_timeout_numeric_ime_and_enter_keep_dialog_owned() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.open_connect_dialog();
+    app.dialogs.connect.pane = opclook::app::ConnectPane::Ua;
+    app.dialogs.connect.ua_session_timeout = 120_000;
+    app.record_dispatches_for_test();
+    let mut h = harness(app);
+    h.run_steps(4);
+    h.get_by_value("120000").click();
+    h.run_steps(1);
+    h.key_press(Key::ArrowUp);
+    h.run_steps(2);
+    assert_eq!(h.state().dialogs.connect.ua_session_timeout, 120_001);
+    h.query_all_by_value("120001")
+        .find(|node| node.accesskit_node().role() == egui::accesskit::Role::SpinButton)
+        .expect("session timeout control")
+        .focus();
+    h.run_steps(1);
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit {
+        text: "a".into(),
+        active_range_chars: None,
+    }));
+    h.key_press(Key::ArrowUp);
+    h.run_steps(2);
+    assert_eq!(h.state().dialogs.connect.ua_session_timeout, 120_001);
+    assert!(h.state().dialogs.connect.open);
+    assert!(h.state().dispatched_for_test().is_empty());
+}
+
+#[test]
+fn p3_acquisition_checkbox_ime_candidate_keeps_draft() {
+    use opclook::bff::model::AcquisitionConfig;
+    use opclook::i18n::{Lang, Tr, tr};
+    let mut app = App::new_test(&egui::Context::default());
+    let mut endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+    endpoint.acquisition = Some(AcquisitionConfig::ua_default());
+    app.seed_session(sid(1), endpoint);
+    app.open_acquisition_editor(sid(1));
+    app.record_dispatches_for_test();
+    let mut h = harness(app);
+    h.run_steps(4);
+    h.get_by_label(tr(Lang::Ru, Tr::AcquisitionExplicit))
+        .focus();
+    h.run_steps(1);
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit {
+        text: "a".into(),
+        active_range_chars: None,
+    }));
+    h.key_press(Key::Space);
+    h.run_steps(2);
+    assert!(h.state().dialogs.acquisition.draft.is_some());
+    assert!(h.state().dialogs.acquisition.open);
+    assert!(h.state().dispatched_for_test().is_empty());
+}
+
+#[test]
+fn p3_options_slider_normal_and_ime_keys_do_not_save_dialog() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.open_options_dialog();
+    app.dialogs.options.draft.update_interval_secs = 5;
+    app.record_dispatches_for_test();
+    let mut h = harness(app);
+    h.run_steps(4);
+    let slider = h
+        .query_all_by_value("5")
+        .find(|node| {
+            matches!(
+                node.accesskit_node().role(),
+                egui::accesskit::Role::Slider | egui::accesskit::Role::SpinButton
+            )
+        })
+        .expect("update slider");
+    slider.focus();
+    h.run_steps(1);
+    h.key_press(Key::ArrowUp);
+    h.run_steps(2);
+    let changed = h.state().dialogs.options.draft.update_interval_secs;
+    assert!(changed > 5, "ordinary keyboard changes the focused slider");
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit {
+        text: "a".into(),
+        active_range_chars: None,
+    }));
+    h.key_press(Key::ArrowUp);
+    h.run_steps(2);
+    assert_eq!(
+        h.state().dialogs.options.draft.update_interval_secs,
+        changed
+    );
+    assert!(h.state().dialogs.options.open);
+    assert!(h.state().dispatched_for_test().is_empty());
+}
+
+#[test]
+fn p3_acquisition_numeric_held_arrow_repeats_without_dispatch() {
+    use opclook::bff::model::AcquisitionConfig;
+    let mut app = App::new_test(&egui::Context::default());
+    let mut endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+    endpoint.acquisition = Some(AcquisitionConfig::ua_default());
+    app.seed_session(sid(1), endpoint);
+    app.open_acquisition_editor(sid(1));
+    app.record_dispatches_for_test();
+    let mut h = harness(app);
+    h.run_steps(4);
+    h.get_by_value("1000").click();
+    h.run_steps(1);
+    let key = |pressed, repeat| egui::Event::Key {
+        key: Key::ArrowUp,
+        physical_key: None,
+        pressed,
+        repeat,
+        modifiers: Modifiers::NONE,
+    };
+    h.event(key(true, false));
+    h.run_steps(1);
+    let first = h
+        .state()
+        .dialogs
+        .acquisition
+        .draft
+        .as_ref()
+        .unwrap()
+        .interval_ms;
+    assert!(first > 1000);
+    h.event(key(true, true));
+    h.run_steps(1);
+    let repeated = h
+        .state()
+        .dialogs
+        .acquisition
+        .draft
+        .as_ref()
+        .unwrap()
+        .interval_ms;
+    // egui can transfer focus to its inner text editor after the first step;
+    // a repeat may be handled there, but must not trigger a domain command.
+    assert!(repeated >= first);
+    h.event(key(false, false));
+    h.run_steps(2);
+    assert!(h.state().dialogs.acquisition.open);
+    assert!(h.state().dispatched_for_test().is_empty());
+}
+
+#[test]
+fn p3_acquisition_numeric_text_entry_is_preserved() {
+    use opclook::bff::model::AcquisitionConfig;
+    let mut app = App::new_test(&egui::Context::default());
+    let mut endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+    endpoint.acquisition = Some(AcquisitionConfig::ua_default());
+    app.seed_session(sid(1), endpoint);
+    app.open_acquisition_editor(sid(1));
+    app.record_dispatches_for_test();
+    let mut h = harness(app);
+    h.run_steps(4);
+    h.get_by_value("1000").click();
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.event(egui::Event::Text("1234".into()));
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(
+        h.state()
+            .dialogs
+            .acquisition
+            .draft
+            .as_ref()
+            .unwrap()
+            .interval_ms,
+        1234
+    );
+    assert!(h.state().dialogs.acquisition.open);
+    assert!(h.state().dispatched_for_test().is_empty());
+}
+
+#[test]
+fn p3_options_deadband_ime_arrow_does_not_change_draft() {
+    let mut app = App::new_test(&egui::Context::default());
+    app.open_options_dialog();
+    app.dialogs.options.draft.ua_deadband = 0.1;
+    app.record_dispatches_for_test();
+    let mut h = harness(app);
+    h.run_steps(4);
+    h.get_by_value("0.1").focus();
+    h.run_steps(1);
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit {
+        text: "a".into(),
+        active_range_chars: None,
+    }));
+    h.key_press(Key::ArrowUp);
+    h.run_steps(2);
+    assert_eq!(h.state().dialogs.options.draft.ua_deadband, 0.1);
+    assert!(h.state().dialogs.options.open);
+    assert!(h.state().dispatched_for_test().is_empty());
+}
+
+#[test]
+fn p3_acquisition_numeric_pointer_drag_remains_available_during_ime() {
+    use opclook::bff::model::AcquisitionConfig;
+    let mut app = App::new_test(&egui::Context::default());
+    let mut endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+    endpoint.acquisition = Some(AcquisitionConfig::ua_default());
+    app.seed_session(sid(1), endpoint);
+    app.open_acquisition_editor(sid(1));
+    app.record_dispatches_for_test();
+    let mut h = harness(app);
+    h.run_steps(4);
+    let pos = h.get_by_value("1000").rect().center();
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit {
+        text: "a".into(),
+        active_range_chars: None,
+    }));
+    h.event(egui::Event::PointerMoved(pos));
+    h.event(egui::Event::PointerButton {
+        pos,
+        button: PointerButton::Primary,
+        pressed: true,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(1);
+    let end = pos + egui::vec2(50.0, 0.0);
+    h.event(egui::Event::PointerMoved(end));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton {
+        pos: end,
+        button: PointerButton::Primary,
+        pressed: false,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(2);
+    assert_ne!(
+        h.state()
+            .dialogs
+            .acquisition
+            .draft
+            .as_ref()
+            .unwrap()
+            .interval_ms,
+        1000
+    );
+    assert!(h.state().dialogs.acquisition.open);
+    assert!(h.state().dispatched_for_test().is_empty());
+}
+
+#[test]
+fn p3_acquisition_numeric_ime_committed_text_is_preserved() {
+    use opclook::bff::model::AcquisitionConfig;
+    let mut app = App::new_test(&egui::Context::default());
+    let mut endpoint = EndpointSpec::ua("opc.tcp://127.0.0.1:4840");
+    endpoint.acquisition = Some(AcquisitionConfig::ua_default());
+    app.seed_session(sid(1), endpoint);
+    app.open_acquisition_editor(sid(1));
+    app.record_dispatches_for_test();
+    let mut h = harness(app);
+    h.run_steps(4);
+    h.get_by_value("1000").click();
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(1);
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit {
+        text: "1234".into(),
+        active_range_chars: None,
+    }));
+    h.event(egui::Event::Ime(egui::ImeEvent::Commit("1234".into())));
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(
+        h.state()
+            .dialogs
+            .acquisition
+            .draft
+            .as_ref()
+            .unwrap()
+            .interval_ms,
+        1234
+    );
+    assert!(h.state().dialogs.acquisition.open);
+    assert!(h.state().dispatched_for_test().is_empty());
+}
