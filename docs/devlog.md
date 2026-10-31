@@ -1,5 +1,26 @@
 ## 2026-10-30 — R2.ROUTE/R2.REUSE: источники OPC Foundation и вход LLM
 
+## 2026-10-31 — 77d8a42: 7/9 jobs; portable fixture and prepared recovery repairs
+
+SDK4 (41163828310), COM2 (41163828217) and Windows App (41163828213) passed.
+Package stopped at the notice-test root alias comparison; collector source and
+its profile hashes remain unchanged. The fixture now resolves the Cargo.toml
+parent before controlled case-entry enumeration and asserts injection happened.
+An alias/.. baseline reproduced the exact missing-ValueError failure; repaired
+notice14/14, package8/8, inventory4/4 and profile19/19 passed locally.
+
+Linux backend passed264 with one failure and one known ignored probe: metadata
+restart did not see Reconnected. A controlled witness kept the replacement
+offline until real SDK Stopped, proving that delayed startup can exhaust the
+three-attempt retry budget; this does not prove the particular CI failure cause.
+The test now builds the replacement server/RSA before the outage and binds the
+original port only after observed Lost. Current-nonce/reconnect-revision and
+Double/RW metadata assertions remain strict; bounded transition diagnostics are
+retained. New full real-source backend265/265 passed, plus the one explicitly
+ignored timing-sensitive notification probe (79.98s). Windows exact repair head
+still pending. No production behavior or SDK pin changed by these test repairs.
+
+
 ## 2026-10-31 — 08a105d: App2/COM2/source2 success; test-stand repairs
 
 Exact head 08a105da5794b15cd277af84b76d858abbebe6d5 completed all9jobs:6success,
