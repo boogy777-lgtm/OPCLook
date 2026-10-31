@@ -269,6 +269,16 @@ unsafe extern "C" {
     #[cfg(feature = "native-da-test-hooks")]
     fn opcl_da_test_async_prepare(session: *mut c_void) -> i32;
     #[cfg(feature = "native-da-test-hooks")]
+    fn opcl_da_test_async_read_value(
+        session: *mut c_void,
+        item: *mut c_void,
+        age: u32,
+        timeout: u32,
+        out: *mut NativeReadOutcome,
+        payload: *mut c_char,
+        capacity: u32,
+    ) -> i32;
+    #[cfg(feature = "native-da-test-hooks")]
     fn opcl_da_test_async_read_i4(
         session: *mut c_void,
         item: *mut c_void,
@@ -612,6 +622,51 @@ impl TestAsyncSessionLease {
         let status = unsafe { opcl_da_test_async_is_pending(session.ptr.as_ptr(), &mut pending) };
         self.pending = status < 0 || pending != 0;
         Ok((hr, out))
+    }
+    pub fn read_value(&mut self, key: u64, age: u32, timeout: u32) -> Result<ReadOutcome, Error> {
+        if self.pending {
+            return Err(Error::Busy);
+        }
+        let session = self.session.as_ref().ok_or(Error::InvalidHandle)?;
+        let item = session.items.get(&key).ok_or(Error::InvalidHandle)?;
+        let mut out = NativeReadOutcome::default();
+        let mut payload = vec![0u8; 65_536];
+        // SAFETY: the unique lease keeps session/item live; buffers are used only until this call returns.
+        let adapter_result = unsafe {
+            opcl_da_test_async_read_value(
+                session.ptr.as_ptr(),
+                item.as_ptr(),
+                age,
+                timeout,
+                &mut out,
+                payload.as_mut_ptr().cast(),
+                payload.len() as u32,
+            )
+        };
+        let mut pending = 1;
+        // SAFETY: session remains owned by this lease and pending is writable.
+        let status = unsafe { opcl_da_test_async_is_pending(session.ptr.as_ptr(), &mut pending) };
+        self.pending = status < 0 || pending != 0;
+        let payload = if adapter_result >= 0
+            && out.available & READ_SAMPLE != 0
+            && (out.value.vartype == 8 || out.value.vartype & 0x2000 != 0)
+        {
+            match usize::try_from(out.value.text_len) {
+                Ok(count) if count <= payload.len() => {
+                    payload.truncate(count);
+                    Ok(Some(payload))
+                }
+                _ => Err(ReadPayloadError::InvalidLength),
+            }
+        } else {
+            Ok(None)
+        };
+        Ok(ReadOutcome {
+            adapter_result,
+            available: out.available,
+            value: out.value,
+            payload,
+        })
     }
     pub fn wait_retire(&mut self, timeout: u32) -> Result<(i32, ReadI4), Error> {
         let session = self.session.as_ref().ok_or(Error::InvalidHandle)?;
@@ -1305,6 +1360,31 @@ mod tests {
     }
     #[cfg(feature = "native-da-test-hooks")]
     #[unsafe(no_mangle)]
+    unsafe extern "C" fn opcl_da_test_async_read_value(
+        _: *mut c_void,
+        _: *mut c_void,
+        age: u32,
+        _: u32,
+        out: *mut NativeReadOutcome,
+        payload: *mut c_char,
+        capacity: u32,
+    ) -> i32 {
+        if age == 123 {
+            return 0x80070102_u32 as i32;
+        }
+        assert!(capacity >= 2);
+        // SAFETY: mock receives the wrapper's live output buffers and writes two bytes.
+        unsafe {
+            (*out).available = READ_SERVICE | READ_ITEM | READ_SAMPLE;
+            (*out).value.vartype = 8;
+            (*out).value.quality = 0xc0;
+            (*out).value.text_len = 2;
+            std::ptr::copy_nonoverlapping(b"ok".as_ptr(), payload.cast::<u8>(), 2);
+        }
+        0
+    }
+    #[cfg(feature = "native-da-test-hooks")]
+    #[unsafe(no_mangle)]
     unsafe extern "C" fn opcl_da_test_async_read_i4(
         _: *mut c_void,
         _: *mut c_void,
@@ -1340,6 +1420,42 @@ mod tests {
             *pending = 1;
         }
         0
+    }
+    #[cfg(feature = "native-da-test-hooks")]
+    #[test]
+    fn generic_async_lease_copies_bstr_and_keeps_pending_fence() {
+        let host = Host::new().unwrap();
+        let shared = host.shared();
+        let guid = Guid {
+            data1: 1,
+            data2: 2,
+            data3: 3,
+            data4: [0; 8],
+        };
+        let session = shared.open("server", "localhost", &guid).unwrap();
+        drop(shared);
+        let mut lease = TestAsyncSessionLease::new(session);
+        lease.prepare().unwrap();
+        let key = lease.session_mut().unwrap().add("item").unwrap().0;
+        let raw = lease.read_value(key, 0, 10).unwrap();
+        assert_eq!(raw.available, READ_SERVICE | READ_ITEM | READ_SAMPLE);
+        assert_eq!(raw.value.vartype, 8);
+        assert_eq!(raw.payload.unwrap().unwrap(), b"ok");
+        assert!(lease.session_mut().is_none());
+        assert!(matches!(lease.read_value(key, 0, 10), Err(Error::Busy)));
+        assert_eq!(lease.wait_retire(10).unwrap().0, 0);
+        let timed_out = lease.read_value(key, 123, 10).unwrap();
+        assert_eq!(timed_out.adapter_result, 0x80070102_u32 as i32);
+        assert_eq!(timed_out.available, 0);
+        assert!(lease.session_mut().is_none());
+        assert!(matches!(lease.read_value(key, 0, 10), Err(Error::Busy)));
+        assert_eq!(lease.wait_retire(10).unwrap().0, 0);
+        let session = match lease.into_session() {
+            Ok(session) => session,
+            Err(_) => panic!("still pending"),
+        };
+        session.close().unwrap();
+        host.close().unwrap();
     }
     #[cfg(feature = "native-da-test-hooks")]
     #[test]

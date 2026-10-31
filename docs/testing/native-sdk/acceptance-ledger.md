@@ -1,15 +1,24 @@
 # Native DA acceptance ledger: N2/N3/N4
 
-Source snapshot: `ffe236c`, 2026-10-31. This is an engineering map of the
-current implementation and available tests, not a declaration of production
-readiness. The last fully accepted public baseline recorded in `docs/status.md`
-is `94773fac64bb925a32cae0d21ca914279f111002`: nine jobs, including both COM
-input variants and the no-hook packaged CLI fixture. The newer lease, direct
-primitive-array and async-isolation tests below are present in this snapshot;
-primitive arrays and manager lease passed in both94773fa COM inputs. Async
-isolation, SDK base-destruction correction, late callback and subscription
-one-shot gates require their own later exact-head CI.
-A Linux source/mock or extracted C++ stub test is not a Windows COM result.
+Source snapshot: `2dd17bc`, 2026-10-31. This is an engineering map, not a
+production-readiness declaration. Public exact head
+`81feb13831c1d1f4707db3f0c41139d09cdd436f` passed nine jobs across
+[COM run 41171347707](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41171347707),
+[SDK run 41171347759](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41171347759),
+[App run 41171347718](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41171347718)
+and [package run 41171347736](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41171347736).
+The COM matrix jobs [official MIT inputs 124449766321](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41171347707/job/124449766321)
+and [SDK control inputs 124449766459](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41171347707/job/124449766459)
+independently passed the following local fixture checks with server/proxy cleanup.
+Linux source/mock and extracted C++ stub tests are not Windows COM results.
+
+| Measured Windows fixture gate | Observed scope |
+| --- | --- |
+| A09 `sdk_partial_read_live` | One SDK `syncRead(2)` returned mixed `S_FALSE` with per-item availability. A separate Gateway batch issued individual SDK reads and preserved Good, denied, Uncertain and Bad facts. |
+| `sdk_async_isolation_live` | While A's test-only async SDK task was held and its caller had timed out, B progressed; manager finish was Busy until A retired and final cleanup succeeded. The barrier is before SDK async submit, not delayed device I/O. |
+| A08 `sdk_late_callback_live` | A real callback carrying 88 was held while the registration was removed and re-added; after release the retired callback was rejected and a new 99 push arrived. Unadvise/disconnect during that hold is not covered. |
+| O23 `sdk_subscription_one_shot_live` | Active SDK subscription remained usable across a correlated one-shot Fresh read and subsequent unsolicited push. SDK fixture request counters showed no extra client Sync poll during the bounded 1.5-second observation, after initial activity settled; SDK server cyclic work is not called client polling. |
+| O24/O25 `softing_core_probe --live-da1-inactive` | The SDK reported forced and selected version 257; inactive Cache quality was `0x001c`, Device `0x00c0`. Fixture request counters finished at Cache 2 / Device 1, including baseline Cache 1. This is forced SDK DA1 against the local newer fixture, not a physical DA1-only or remote server. |
 
 ## What is enabled
 
@@ -25,12 +34,12 @@ A Linux source/mock or extracted C++ stub test is not a Windows COM result.
 | IDs | Existing entry point or evidence | Open acceptance work |
 | --- | --- | --- |
 | A04, A05 | `sdk_device_read_live`: SDK fixture distinguishes cached and device reads with a server-side device counter; readback follows a correlated accepted write. `sdk_device_profile_live` covers the Engine profile path. | Verify server/version negotiation and actual Cache/Device outcomes beyond the selected local SDK fixture. Do not claim a strict cache hit for all CacheAllowed servers. |
-| A06, A10 | A10 currently fails closed in `validate_acquisition` and router tests. `softing_core_probe --live-async` exercises test-only SDK I4 callback; checked lease and manager tests add timeout/retirement coverage when their exact-head Windows CI passes. | A06 product RequestId/epoch correlation, all supported shapes, submission/retirement/error paths, callback-unavailable negotiation, and exactly-once bounded teardown remain open. DA1 transaction behavior needs a separate design. No sync facade may be called Async. |
-| A07, O23 | `sdk_gateway_live` exercises real subscription activation, initial SDK DataChange, write-driven update and remove/re-add. `RuntimeGroup::onReadAdvise` separates unsolicited mode 1 from read completion. | A single test that combines active Subscription with a correlated one-shot Sync read and verifies no hidden persistent Poll remains a live gap. Other server negotiation and errors remain open. |
-| A08 | SDK callback state, bounded push queue, item registration and retired SDK item retention exist in `runtime.cpp`/`softing_da.rs`; Gateway fixture covers ordinary remove/re-add. `sdk_pending_shutdown_live`, `sdk_host_reuse_live` and `sdk_session_isolation_live` cover blocked **sync device write**, host Busy/cleanup and independent sessions. | A deliberately delayed callback released after remove/re-add or Unadvise/disconnect must not mutate a later epoch; ordinary re-add and mocked stale checks do not establish that race. Full failure/timeout and remote teardown remain open. `sdk_async_isolation_live` is a separate prepared test; do not call it passed without exact-head CI. |
-| A09 | `sdk_read_failure_facts_live` checks an actual successful SDK read followed by an adapter codec failure and retains attested service/item HRESULT, quality and FILETIME while displaying Bad. SDK source/offline callback probes check mixed item results and non-S_OK values. | That fixture is not a live mixed-item `S_FALSE` server response. Real per-item partial failures, bad/uncertain quality and missing facts need server-backed negative cases across negotiated versions. |
-| O24, O25 | SDK Sync path accepts max-age/source and preserves supplied quality/error facts. | Actual DA 1.0 inactive group/item Cache and Device cases have not been measured; do not generalize DA 1.0 inactive-quality behavior to all methods and versions. |
-| O26 | `onReadAdvise` classifies data change vs read completion; private I4 probe matches transaction and item handle, ignores late/stale tokens, and preserves a matching empty failed-master envelope. | Test-only I4 correlation and synthetic callback checks are not an integrated production Async/stream coexistence proof. DA1, late callbacks, queue overflow and generation changes require explicit real-SDK tests. |
+| A06, A10 | `validate_acquisition` and router reject Async. Test-only `softing_core_probe --live-async`, `sdk_async_lease_live` and `sdk_async_isolation_live` passed in both 81f COM jobs; their I4 callback, SDK worker and host lifetime evidence is scoped to the fixture. | Production RequestId/epoch correlation, supported shapes, accepted-vs-terminal errors, callback negotiation, cancellation, timeouts and bounded teardown remain open. DA1 needs its own transaction design. |
+| A07, O23 | `sdk_gateway_live` exercises subscriptions; `sdk_subscription_one_shot_live` passed the active subscription + one-shot Fresh + no hidden Sync poll gate in both 81f COM jobs. | The no-poll observation is bounded and local, not a guarantee for all negotiated servers and errors. |
+| A08 | `sdk_late_callback_live` passed held real callback 88 / remove-readd / new 99 and cleanup in both 81f COM jobs; sync blocked-write isolation and shutdown are separate gates. | Held callback across Unadvise/disconnect, other epochs, timeout/failure and remote teardown remain open. |
+| A09 | `sdk_partial_read_live` passed actual SDK group mixed `S_FALSE` and separate per-key Gateway outcomes in both 81f COM jobs. `sdk_read_failure_facts_live` separately covers codec failure after an attested SDK sample. | Other versions and remote servers remain untested; unavailable quality/time must stay absent and operation failure must not become Good. |
+| O24, O25 | `--live-da1-inactive` passed forced and selected SDK DA1 against the local fixture in both 81f COM jobs, with separately counted SDK request kinds. | A physically DA1-only server and remote interoperability remain open. Do not generalize this inactive-quality observation to other methods or versions. |
+| O26 | `onReadAdvise` classifies data change vs read completion; test-only I4 matches transaction/handle, ignores stale tokens and preserves the empty failed-master envelope. | This is not integrated production Async/stream coexistence. DA1, error and queue-overflow paths, generation changes and remote servers require separate evidence. |
 
 ## Value shapes, ownership and distribution
 
@@ -42,8 +51,8 @@ arrays are limited to 256 elements and payloads to 64 KiB; nested conversion
 has a depth limit, and BYREF/multidimensional input is rejected. Existing
 coverage is not a claim that every VARIANT/SAFEARRAY shape or server conversion
 is supported. `sdk_primitive_arrays_live` prepares direct R8/BOOL/I8/UI8 exact
-read/write/readback and read-only/negative cases; its new Windows result is
-pending unless confirmed on the tested head. `test-primitive-array-source.py`
+read/write/readback and read-only/negative cases and passed in both 81f COM
+jobs. `test-primitive-array-source.py`
 checks actual validation code with SDK stubs, not COM.
 
 SDK owns server/group/item objects, worker, callbacks, COM and wire transport;
@@ -73,6 +82,13 @@ inputs and test fixture/bridge builds described in `async-session-lease.md`:
 # Precompile outside the fixture, then launch each target in a fresh fixture.
 cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_async_isolation_live --no-run
 python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- python scripts/ci-cargo-live.py -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_async_isolation_live -- --nocapture
+cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_partial_read_live --no-run
+python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- python scripts/ci-cargo-live.py -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_partial_read_live -- --nocapture
+cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_late_callback_live --no-run
+python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- python scripts/ci-cargo-live.py -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-test-hooks --test sdk_late_callback_live -- --nocapture
+cargo test --locked -p opclook-engine --target i686-pc-windows-msvc --features native-da-preview --test sdk_subscription_one_shot_live --no-run
+python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- python scripts/ci-cargo-live.py -- cargo test --locked -p opclook-engine --target i686-pc-windows-msvc --features native-da-preview --test sdk_subscription_one_shot_live -- --ignored --nocapture
+python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- ../softing-build/Release/softing_core_probe.exe --live-da1-inactive
 cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-preview --test sdk_primitive_arrays_live --no-run
 python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture-build/Release/opcl_da_server.exe --proxy ../fixture-build/Release/opcl_opcproxy.dll -- python scripts/ci-cargo-live.py -- cargo test --locked -p opclook-backend --target i686-pc-windows-msvc --features native-da-preview --test sdk_primitive_arrays_live -- --nocapture
 ```
@@ -84,29 +100,64 @@ Other strict entries and matrix settings are in
 source, test fixture, CLI package, and Windows system/toolchain dependencies
 have distinct receipts and scopes.
 
-## Next bounded engineering slice
+## Production Async: source facts and remaining engineering route
 
-Prioritize A08: build a deterministic test around the existing SDK fixture and
-callback extension point that proves a real callback is held, performs
-remove/re-add or disconnect/reconnect, then releases the old callback and
-checks the current epoch/registration and cleanup. First verify the SDK can
-safely hold and release that callback without adding a COM owner, second
-scheduler or a fabricated protocol response. If the existing extension point
-cannot produce the ordering, document exact source and a minimal SDK-owned
-seam. Follow with the O23 active-subscription one-shot read/no-hidden-poll
-case. Neither step enables native Async or substitutes for the separate
-remote/other-server and release-rights gates.
+The current production selector deliberately rejects `DaReadMethod::Async`; no
+capability is enabled by these tests. The SDK owner remains the existing
+server/group worker, callback and COM transport. Async fields within
+`PushState`, `TestAsyncReadTask` and `TestAsyncSessionLease` are gated by
+`OPCL_DA_TESTING`/`native-da-test-hooks`; they cover one pending I4 read,
+non-reused transaction tokens and retained host/session ownership. This is a
+prototype, not a generic asynchronous Gateway route. Source and test details
+are in [DA Async audit](da-async-audit.md) and [session lease](async-session-lease.md).
+
+The next implementation should remain bounded and preserve SDK ownership:
+
+1. Define a production outcome/ownership contract for `RequestId`, Connect
+   epoch, registration and SDK transaction, with a bounded pending budget,
+   no token reuse within a group and an explicit terminal error on admission,
+   queue overflow or unsupported callback. Do not infer successful item I/O
+   from an accepted SDK submit; service, item, quality and timestamp are facts
+   only when provided.
+2. Reuse the existing bounded Sync scalar/array value codec for copied callback
+   results, including its byte, element and depth limits. Cover scalar, text,
+   arrays, per-item failures and unavailable facts before advertising those
+   shapes. Async Write is a separate outcome/readback scope.
+3. Negotiate a working SDK advise connection before accepting requests; classify
+   unsolicited subscription data separately from read completion, and prove
+   early completion, stale registration, timeout and removal under the actual
+   SDK. Preserve current fail-closed behavior when callback support is absent.
+4. Keep accepted task, item/group, session and manager host alive until the SDK
+   has retired both task and completion. Test queued, executing, timed-out,
+   disconnected and never-callback cases. The current test lease intentionally
+   quarantines an unretired owner indefinitely; it does **not** prove bounded
+   resource reclamation. Define an honest resource limit and visible outcome
+   rather than freeing live SDK state or adding another worker/retry loop.
+5. Cancellation requires a separate library-owner review and real valid,
+   non-null interface coverage for the SDK's `Cancel2` path. The existing
+   pinned-source candidate and synthetic test are not a production SDK patch
+   or real Win32 cancellation proof; do not repeat the old null-pointer crash
+   diagnostic. Cancellation must not be presented as guaranteed completion.
+6. DA2 device semantics and DA3 max-age need explicit negotiated-path tests.
+   DA1's server-assigned cancel ID and early-completion ordering need a
+   separate correlation design; do not silently route it through a DA2/3
+   transaction assumption. The local forced DA1 **Sync** result above is not
+   Async coverage.
+
+These gates do not close remote interoperability, release/redistribution rights
+or N4. No current N4 production flip, default DA change, full-history claim or
+new protocol owner follows from the 81f fixture results.
 
 
-### Prepared follow-ups after the original source snapshot
+### Prepared generic Async probe after81f
 
-[Late callback](late-callback-proof.md) prepares a genuine SDK callback held
-through Remove/re-add, not a synthetic onReadAdvise invocation; Unadvise during
-the server advise lock is not claimed. [One-shot subscription](subscription-one-shot.md)
-uses actual Engine scheduling and public SDK request-factory counters, including
-cache-served client Sync reads while excluding server cyclic work. Their Windows
-results are pending. The SDK base-destructor ordering defect is separately fixed
-and source-tested in [lease](async-session-lease.md). A09 real item/quality failure fixtures are prepared in
-[partial read facts](partial-read-facts.md): one SDK syncRead(2), separate Gateway
-per-key calls, and strict availability/quality assertions. Their Windows result
-is pending; none is replaced by the earlier codec-failure test.
+[Generic single-value probe](async-generic-value-probe.md) extends the shared
+test-only I4 slot with the existing Sync codec/ReadOutcome decoder. Root mock
+stand53/53 and actual-source stub checks passed. Its actual Win32 shape/ABI
+fixture result is pending and production Async remains Unsupported. Unknown
+SDK per-item output does not permit early retirement; entering SDK and throwing
+without a return is unknown admission, not proof that nothing was accepted.
+Caller gets one adapter error, keeps the lease and consumes later callback only
+as a cleanup acknowledgement. This fault was modeled against actual task code,
+not reproduced as a Windows SDK crash. Generic batching, cancellation negotiation,
+version/capability/cleanup policy and production facade are still separate gates.

@@ -142,6 +142,9 @@ pub struct TestManagerAsyncLease {
 #[cfg(feature = "native-da-test-hooks")]
 impl TestManagerAsyncLease {
     pub fn open_fixture() -> Result<Self, String> {
+        Self::open_fixture_item("Fixture.DeviceValue")
+    }
+    pub fn open_fixture_item(item_id: &str) -> Result<Self, String> {
         use super::softing_runtime::TestAsyncSessionLease;
         let host = acquire_host()?;
         let guid = Guid {
@@ -161,7 +164,7 @@ impl TestManagerAsyncLease {
         let (key, _, _) = lease
             .session_mut()
             .ok_or("missing session")?
-            .add("Fixture.DeviceValue")
+            .add(item_id)
             .map_err(|e| format!("item add: {e:?}"))?;
         Ok(Self { lease, key })
     }
@@ -169,6 +172,12 @@ impl TestManagerAsyncLease {
         self.lease
             .read(self.key, 0, timeout_ms)
             .map(|(hr, _)| hr)
+            .map_err(|e| format!("async read: {e:?}"))
+    }
+    pub fn read_value(&mut self, timeout_ms: u32) -> Result<DataValue, String> {
+        self.lease
+            .read_value(self.key, 0, timeout_ms)
+            .map(super::softing_scalar::decode_read_outcome)
             .map_err(|e| format!("async read: {e:?}"))
     }
     pub fn retire(&mut self, timeout_ms: u32) -> Result<(i32, i32), String> {

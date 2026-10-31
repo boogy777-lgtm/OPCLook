@@ -125,6 +125,8 @@ int32_t opcl_da_test_async_gate_held(void);
 int32_t opcl_da_test_async_gate_release(void);
 int32_t opcl_da_test_async_gate_close(void);
 int32_t opcl_da_test_async_prepare(OpclDaSession* session);
+int32_t opcl_da_test_async_read_value(OpclDaSession* session, OpclDaItem* item, uint32_t max_age,
+                                       uint32_t timeout_ms, OpclDaReadOutcome* out, char* payload, uint32_t capacity);
 int32_t opcl_da_test_async_read_i4(OpclDaSession* session, OpclDaItem* item, uint32_t max_age,
                                     uint32_t timeout_ms, OpclDaReadI4* out);
 #endif

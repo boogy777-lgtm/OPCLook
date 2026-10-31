@@ -90,11 +90,17 @@ struct PushState {
     bool async_done = false;
     bool async_timeout = false;
     bool async_submit_done = false;
+    bool async_call_attempted = false;
+    bool async_sdk_returned = false;
+    bool async_sdk_item_known = false;
     bool async_task_done = false;
     HRESULT async_submit_result = E_FAIL;
     HRESULT async_submit_item = E_FAIL;
     HRESULT async_result = E_FAIL;
     OpclDaReadI4 async_value{};
+    OpclDaReadOutcome async_outcome{};
+    std::vector<char> async_payload;
+    HRESULT async_copy_result = S_OK;
 #endif
 };
 class RuntimeGroup : public SODaCComGroupDefault {
@@ -825,6 +831,32 @@ void RuntimeGroup::onReadAdvise(BYTE mode, DWORD transaction, HRESULT master_qua
             const bool empty_master_failure = n == 0 && FAILED(master_error);
             if (!empty_master_failure &&
                 (n != 1 || !items || !items[0] || items[0]->getClientHandle() != state->async_handle)) return;
+            state->async_outcome = {};
+            state->async_payload.clear();
+            state->async_copy_result = S_OK;
+            state->async_outcome.value.service_result = master_error;
+            state->async_outcome.available = OPCL_DA_READ_SERVICE;
+            if (SUCCEEDED(master_error) && n == 1 && items && items[0] && errors && items[0]->getClientHandle() == state->async_handle) {
+                state->async_outcome.value.item_result = errors[0];
+                state->async_outcome.available |= OPCL_DA_READ_ITEM;
+                if (SUCCEEDED(master_error) && SUCCEEDED(errors[0]) && values && qualities && times) {
+                    FILETIME actual_time{}; times[0].get(&actual_time);
+                    auto& result = state->async_outcome.value;
+                    result.vartype = values[0].vt; result.quality = qualities[0];
+                    result.filetime_low = actual_time.dwLowDateTime; result.filetime_high = actual_time.dwHighDateTime;
+                    state->async_outcome.available |= OPCL_DA_READ_SAMPLE;
+                    try {
+                        state->async_payload.resize(OPCL_DA_VALUE_BYTES);
+                        state->async_copy_result = copy_sdk_value(values[0], &result, state->async_payload.data(), OPCL_DA_VALUE_BYTES);
+                        if (SUCCEEDED(state->async_copy_result) && result.text_len <= OPCL_DA_VALUE_BYTES)
+                            state->async_payload.resize(result.text_len);
+                        else {
+                            if (SUCCEEDED(state->async_copy_result)) state->async_copy_result = E_UNEXPECTED;
+                            state->async_payload.clear();
+                        }
+                    } catch (...) { state->async_payload.clear(); state->async_copy_result = E_OUTOFMEMORY; }
+                }
+            }
             state->async_value = {};
             state->async_value.service_result = master_error;
             state->async_value.item_result = E_FAIL;
@@ -981,7 +1013,11 @@ public:
     }
     ~TestAsyncReadTask() override { item_->release(); }
     void execute() override {
-        HRESULT hr = E_UNEXPECTED, item_result = E_FAIL;
+        // SDK may leave pErrors untouched when its returned errors pointer is null.
+        // An actual HRESULT equal to this sentinel remains conservatively unknown.
+        constexpr HRESULT item_unset = static_cast<HRESULT>(0x8004fffeUL);
+        HRESULT hr = E_UNEXPECTED, item_result = item_unset;
+        bool sdk_returned = false;
         try {
             if (test_async_entered && test_async_release) {
                 SetEvent(test_async_entered);
@@ -993,14 +1029,21 @@ public:
                 }
             }
             SODaCItem* items[] = {item_}; DWORD cancel = 0;
+            {
+                std::lock_guard<std::mutex> lock(state_->mutex);
+                if (state_->async_pending == transaction_) state_->async_call_attempted = true;
+            }
             hr = group_->asyncRead(1, items, age_, transaction_, &cancel, &item_result);
+            sdk_returned = true;
         } catch (...) { hr = E_UNEXPECTED; }
         setResult(hr);
         std::lock_guard<std::mutex> lock(state_->mutex);
         if (state_->async_pending == transaction_) {
             state_->async_submit_done = true;
+            state_->async_sdk_returned = sdk_returned;
+            state_->async_sdk_item_known = sdk_returned && SUCCEEDED(hr) && item_result != item_unset;
             state_->async_submit_result = hr;
-            state_->async_submit_item = item_result;
+            state_->async_submit_item = item_result == item_unset ? E_FAIL : item_result;
             state_->async_ready.notify_all();
         }
     }
@@ -1008,9 +1051,16 @@ private:
     SODaCGroup* group_; SODaCItem* item_; DWORD age_; DWORD transaction_;
     std::shared_ptr<PushState> state_;
 };
+// If the SDK call threw after entry, acceptance is unknown: a completion can
+// still arrive. Do not release the SDK owner until that callback is retired.
+static bool test_async_admission_unknown(const PushState& state) {
+    return state.async_task_done && state.async_submit_done && state.async_call_attempted &&
+           !state.async_sdk_returned && FAILED(state.async_submit_result);
+}
 static bool test_async_terminal(const PushState& state) {
     return state.async_task_done && state.async_submit_done &&
-        (FAILED(state.async_submit_result) || FAILED(state.async_submit_item) || state.async_done);
+        (test_async_admission_unknown(state) ? state.async_done :
+         (FAILED(state.async_submit_result) || (state.async_sdk_item_known && FAILED(state.async_submit_item)) || state.async_done));
 }
 // Nonblocking poll: a timed-out request remains pinned until the SDK task and
 // completion are terminal. Only the serialized session owner may call this.
@@ -1047,11 +1097,9 @@ extern "C" int32_t opcl_da_test_async_wait_retire(OpclDaSession* session, uint32
     if (SUCCEEDED(opcl_da_test_async_is_pending(session, &pending)) && !pending) *retired = 1;
     return result;
 } catch (...) { return E_UNEXPECTED; }
-extern "C" int32_t opcl_da_test_async_read_i4(OpclDaSession* session, OpclDaItem* item,
-                                               uint32_t max_age, uint32_t timeout_ms,
-                                               OpclDaReadI4* out) try {
-    if (!out || !owns(session, item) || !timeout_ms || timeout_ms > 30000) return E_INVALIDARG;
-    *out = {}; out->service_result = E_FAIL; out->item_result = E_FAIL;
+static int32_t test_async_submit_wait(OpclDaSession* session, OpclDaItem* item,
+                                      uint32_t max_age, uint32_t timeout_ms) try {
+    if (!owns(session, item) || !timeout_ms || timeout_ms > 30000) return E_INVALIDARG;
     auto state = session->push;
     auto group = static_cast<RuntimeGroup*>(session->group);
     if (!state || !group->test_has_correlated_callback() || !group->test_disable_initial_read.load()) return E_NOINTERFACE;
@@ -1066,7 +1114,7 @@ extern "C" int32_t opcl_da_test_async_read_i4(OpclDaSession* session, OpclDaItem
         if (!handle) return E_INVALIDARG;
         token = state->async_next++;
         state->async_pending = token; state->async_handle = handle;
-        state->async_done = false; state->async_timeout = false; state->async_submit_done = false; state->async_task_done = false;
+        state->async_done = false; state->async_timeout = false; state->async_submit_done = false; state->async_call_attempted = false; state->async_sdk_returned = false; state->async_sdk_item_known = false; state->async_task_done = false;
     }
     TestAsyncReadTask* task = new (std::nothrow) TestAsyncReadTask(session->group, item->sdk, max_age, token, state);
     if (!task) { std::lock_guard<std::mutex> lock(state->mutex); state->async_pending = 0; return E_OUTOFMEMORY; }
@@ -1087,13 +1135,56 @@ extern "C" int32_t opcl_da_test_async_read_i4(OpclDaSession* session, OpclDaItem
     {
         std::unique_lock<std::mutex> lock(state->mutex);
         if (!state->async_ready.wait_for(lock, std::chrono::milliseconds(timeout_ms),
-                                        [&] { return test_async_terminal(*state); })) {
+                                        [&] { return test_async_terminal(*state) || test_async_admission_unknown(*state); })) {
             state->async_timeout = true;
             return HRESULT_FROM_WIN32(WAIT_TIMEOUT);
         }
+        if (test_async_admission_unknown(*state)) {
+            state->async_timeout = true; // adapter error now; future retirement is cleanup only
+            return state->async_submit_result;
+        }
     }
-    return opcl_da_test_async_retire(session, out);
+    return S_OK;
 } catch (...) { return E_UNEXPECTED; }
+extern "C" int32_t opcl_da_test_async_read_i4(OpclDaSession* session, OpclDaItem* item,
+                                               uint32_t max_age, uint32_t timeout_ms,
+                                               OpclDaReadI4* out) {
+    if (!out) return E_INVALIDARG;
+    *out = {}; out->service_result = E_FAIL; out->item_result = E_FAIL;
+    const HRESULT hr = test_async_submit_wait(session, item, max_age, timeout_ms);
+    return FAILED(hr) ? hr : opcl_da_test_async_retire(session, out);
+}
+extern "C" int32_t opcl_da_test_async_read_value(OpclDaSession* session, OpclDaItem* item,
+                                                  uint32_t max_age, uint32_t timeout_ms,
+                                                  OpclDaReadOutcome* out, char* payload, uint32_t capacity) try {
+    if (!out || !payload || capacity < OPCL_DA_VALUE_BYTES) return E_INVALIDARG;
+    *out = {};
+    const HRESULT hr = test_async_submit_wait(session, item, max_age, timeout_ms);
+    if (FAILED(hr)) return hr;
+    auto state = session->push;
+    std::lock_guard<std::mutex> lock(state->mutex);
+    if (!state->async_pending || !test_async_terminal(*state)) return E_PENDING;
+    HRESULT result = S_OK;
+    if (!state->async_timeout) {
+        if (!state->async_sdk_returned) {
+            result = FAILED(state->async_submit_result) ? state->async_submit_result : E_UNEXPECTED;
+        } else if (FAILED(state->async_submit_result) || (state->async_sdk_item_known && FAILED(state->async_submit_item))) {
+            out->value.service_result = state->async_submit_result;
+            out->available = OPCL_DA_READ_SERVICE;
+            if (SUCCEEDED(state->async_submit_result)) {
+                out->value.item_result = state->async_submit_item;
+                out->available |= OPCL_DA_READ_ITEM;
+            }
+        } else {
+            *out = state->async_outcome;
+            result = state->async_copy_result;
+            if (!state->async_payload.empty()) std::memcpy(payload, state->async_payload.data(), state->async_payload.size());
+        }
+    }
+    state->async_payload.clear(); state->async_pending = 0;
+    return result;
+} catch (...) { return E_UNEXPECTED; }
+
 extern "C" int32_t opcl_da_test_async_callback_state(void) try {
     auto state = std::make_shared<PushState>();
     RuntimeGroup* group = new (std::nothrow) RuntimeGroup();
