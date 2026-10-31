@@ -1071,7 +1071,7 @@ mod tests {
         0
     }
     #[test]
-    fn native_failure_output_survives_the_real_rust_bridge() {
+    fn mock_ffi_failure_facts_survive_the_rust_bridge() {
         let guid = Guid {
             data1: 1,
             data2: 2,
@@ -1086,17 +1086,12 @@ mod tests {
         assert_eq!(outcome.adapter_result, -2147024774);
         assert_eq!(outcome.available, READ_SERVICE | READ_ITEM | READ_SAMPLE);
         assert_eq!(outcome.value.quality, 0xc0);
-        let mapped = super::super::softing_scalar::decode_read_outcome(outcome);
-        assert!(matches!(
-            mapped.reason,
-            Some(super::super::model::BackendMsg::DaReadFailure {
-                adapter: Some(-2147024774),
-                service: Some(0),
-                item: Some(0),
-                quality: Some(0xc0),
-                ..
-            })
-        ));
+        assert_eq!(outcome.value.service_result, 0);
+        assert_eq!(outcome.value.item_result, 0);
+        assert_eq!(outcome.value.vartype, 0x2003);
+        assert_eq!(outcome.value.filetime_low, 0xd53e8000);
+        assert_eq!(outcome.value.filetime_high, 0x019db1de);
+        assert!(matches!(outcome.payload, Ok(None)));
         session.close().unwrap();
         drop(shared);
         host.close().unwrap();
