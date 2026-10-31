@@ -6,11 +6,19 @@
 
 ## Последний подтверждённый срез
 
-`81feb138` прошёл все9 jobs, включая обе COM matrix с пятью новыми native
-gates, primitive arrays/manager lease и nohook packaged CLI
-с cleanup. Это заменяет pending verdict старых строк ниже только для уже вошедшего
-в тот head кода. Generic async-value extension требует нового Windows CI. SDK replay patches остаются research; Engine gate/snapshot
-boundary проверен отдельно, secure/Transfer/full history ещё открыты.
+`6c5349c` прошёл все 9 jobs (SDK4/COM2/App2/package1). Новый test-only
+single-slot generic Async value fixture выполнен в обоих i686 COM inputs
+(по 1/1) со strict cleanup; старые native gates также прошли. Production Async
+остаётся Unsupported. Это заменяет pending verdict исторических строк ниже
+только для кода, вошедшего в этот head.
+
+SDK readiness/racefix/drain принят как воспроизводимый исследовательский
+артефакт: [точные измерения и границы](testing/ua-sdk-readiness-drain-proof.md).
+Fresh Engine/Gateway15.45с, SDK-observed Closed/Complete30.93с, recovery16/16,
+ACK Drop/incarnation2/2. Одна ReactivatedSession/subscription, closed gate →
+metadata-ready ACK → SDK replay/drain → snapshot53.5 → push54.5; history unknown.
+Production SDK pin/App не меняются; общий порядок Push/Read, NewSession,
+несколько subscriptions и secure recovery этим кандидатом не приняты.
 
 ## Правило исполнения
 
@@ -62,8 +70,9 @@ boundary проверен отдельно, secure/Transfer/full history ещё 
 | 22 | Native async two-session isolation, secured UA reconnect | Mock51/51; real secure1/1 + fresh runner1/1 NewSession; found/fixed SDK base-destruction retirement order, new Win CI pending |
 | 23 | A08 late SDK callback, TransferSubscriptions acceptance | Held actual-callback gate prepared, Win pending; public secure Transfer Good raw observer1/1+fresh1/1, destination mapped state still absent |
 | 24 | O23 active subscription + Sync one-shot, secure token renewal | Engine/SDK request-counter gate prepared, Win pending; original SDK verified secure token1→2, same Session/sub/item,1/1+fresh1/1 |
-| 25 | A09 actual item/quality failures, SDK bounded readiness handoff | A09 passed both81f COM; readiness candidate fixes under independent review, no production pin/Async switch |
-| 26 | Forced SDK DA1 source route, generic single-slot Async values | DA1 passed both81f COM; generic extension/source/mock53 prepared, new Win pending; no physical DA1/productionAsync claim |
+| 25 | A09 actual item/quality failures, SDK bounded readiness handoff | A09 passed both81f/6c COM; readiness fixes reviewed as research, no production pin/Async switch |
+| 26 | Forced SDK DA1 source route, generic single-slot Async values | DA1 passed both81f COM; generic fixture passed both6c COM with cleanup; no physical DA1/productionAsync claim |
+| 27 | Native generic CI acceptance, SDK shared recovery guard and scoped drain | 6c all9green; SDK16+ACK2 and fresh Engine15.45с/Closed30.93с research accepted; one-subscription ReactivatedSession only |
 
 Пара 01 исправила начальное состояние fixture после честного отрицательного
 NOCONFIG verdict на `a004b226`. Проверка на `36fa668` подтвердила
@@ -91,8 +100,10 @@ RUNNING → FAILED → RUNNING во всех трёх процессах и read
 | N4 | Production native DA и удаление прежнего OPC COM data-plane | Native SDK capability, interop/lifetime/license gates закрыты; системный WinAPI/helper не удалён как OPC code |
 | R2.6 / N6 | Полная матрица G/D/E/S/T/C/U/M/A/O, упаковка и согласование планов | Доказательства по стабильным ID, точный code head, итоговые настройки/документы и CI; число строк CSV не число пройденных тестов |
 
-После текущего integration/CI — оставшиеся DA method/capability и UA SDK replay
-acceptance срезы по фактическому source audit. P2 и автоматизируемые P3/P4 gates
+Следующая пара — SDK-owned namespace-cache stale commit при NewSession и
+test-only DA Async Gateway RequestId/epoch/registration correlation. Сначала
+реальный source defect/contract и before/after, без production pin/default flip.
+Остальные DA method/capability и UA recovery gates выбирать по source audit. P2 и автоматизируемые P3/P4 gates
 уже выполнены; physical Windows и N4 нельзя закрыть локальными mock/fixtures. Подтверждённые regressions исправлять перед новым
 функциональным пакетом. Дальнейшие пары выбирать по фактическим зависимостям.
 

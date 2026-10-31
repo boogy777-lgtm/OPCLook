@@ -46,9 +46,10 @@ python docs/testing/native-sdk/server-fixture/run-interop.py --server ../fixture
 
 Linux `test-async-empty-callback.py` and `test-async-generic-source.py` compile
 actual callback/handoff branches against SDK stubs; Rust runtime stand uses a
-mock FFI. Neither is an i686 SDK or COM execution. Windows fixture execution,
-cleanup and real ABI compilation are pending CI; no production capability
-follows from a passing test-only probe.
+mock FFI. Neither is an i686 SDK or COM execution. Exact `6c5349c87334860c52a8317f8fdc5e34a9568dd1` compiled and ran this fixture
+on i686 Windows with both SDK and official-MIT COM inputs: 1/1 per variant,
+strict server/proxy cleanup passed ([COM run](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41176472844)).
+No production capability follows from a passing test-only probe.
 
 `test-async-task-destruction.py --task-source <pinned-SOCltTask.cpp>` uses the
 actual task, retirement predicate and pinned SDK base destructor with stubs.

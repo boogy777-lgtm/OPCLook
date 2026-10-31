@@ -1,12 +1,16 @@
 # Native DA acceptance ledger: N2/N3/N4
 
-Source snapshot: `2dd17bc`, 2026-10-31. This is an engineering map, not a
+Evidence updated 2026-10-31. This is an engineering map, not a
 production-readiness declaration. Public exact head
-`81feb13831c1d1f4707db3f0c41139d09cdd436f` passed nine jobs across
-[COM run 41171347707](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41171347707),
-[SDK run 41171347759](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41171347759),
-[App run 41171347718](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41171347718)
-and [package run 41171347736](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41171347736).
+`6c5349c87334860c52a8317f8fdc5e34a9568dd1` passed nine jobs across
+[COM 41176472844](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41176472844),
+[SDK 41176472728](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41176472728),
+[App 41176472851](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41176472851)
+and [package 41176472772](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41176472772).
+Both COM jobs (sdk124464956471 and official-mit124464956639) passed the new
+generic test-only Async value fixture and strict cleanup, as well as all
+existing gates. This does not enable production Async. The following five
+earlier gates also passed on exact `81feb138`:
 The COM matrix jobs [official MIT inputs 124449766321](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41171347707/job/124449766321)
 and [SDK control inputs 124449766459](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41171347707/job/124449766459)
 independently passed the following local fixture checks with server/proxy cleanup.
@@ -149,12 +153,13 @@ or N4. No current N4 production flip, default DA change, full-history claim or
 new protocol owner follows from the 81f fixture results.
 
 
-### Prepared generic Async probe after81f
+### Accepted generic test-only Async probe on6c
 
 [Generic single-value probe](async-generic-value-probe.md) extends the shared
 test-only I4 slot with the existing Sync codec/ReadOutcome decoder. Root mock
 stand53/53 and actual-source stub checks passed. Its actual Win32 shape/ABI
-fixture result is pending and production Async remains Unsupported. Unknown
+fixture passed 1/1 in both COM variants on6c, with strict cleanup. Production
+Async remains Unsupported. Unknown
 SDK per-item output does not permit early retirement; entering SDK and throwing
 without a return is unknown admission, not proof that nothing was accepted.
 Caller gets one adapter error, keeps the lease and consumes later callback only

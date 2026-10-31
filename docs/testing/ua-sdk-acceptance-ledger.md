@@ -1,13 +1,13 @@
 # R2.6 / R07 UA recovery: acceptance ledger
 
-**Scope and source:** this ledger separates current application behavior from experiments as of the source tree based on `2acea0e` plus transfer proof `0e57c55`. It is not a claim that the whole R2.6/R07 plan is complete. The application uses the locked crates.io `async-opcua` client 0.19; the installed client VCS receipt identifies `9ad28fc011002398f2e8a95696a50408a14531d9` ([source audit](ua-sdk-0.19-recovery-audit.md)). The SDK owns UA connection, Publish, callback and subscription transfer/recreation. OPCLook does not add an independent Publish or replay owner.
+**Scope and source:** this ledger separates current application behavior from experiments updated on 2026-10-31, including the reviewed readiness/drain research packet. It is not a claim that the whole R2.6/R07 plan is complete. The application uses the locked crates.io `async-opcua` client 0.19; the installed client VCS receipt identifies `9ad28fc011002398f2e8a95696a50408a14531d9` ([source audit](ua-sdk-0.19-recovery-audit.md)). The SDK owns UA connection, Publish, callback and subscription transfer/recreation. OPCLook does not add an independent Publish or replay owner.
 
 **Evidence labels:** “source” is inspected code; “unit” is an actual code-path test with a controlled boundary; “live” is a measured local SDK/sample-server run; “research” means an isolated, unshipped patch or test stand. Live results are individual measured scenarios, not guarantees for all servers or platforms. None of the research SDK or server patches changes the production pin.
 
 | Route | Current application and evidence | Remaining acceptance |
 | --- | --- | --- |
 | O10: transport loss, local Connect epoch retained | **Source/unit/live:** SDK event stream drives scoped Lost and Reconnected; Engine checks Connect nonce plus SDK revision. A local None-security reactivation was exercised; the separate secure test measured verified Basic256Sha256/SignAndEncrypt Lost → **NewSession**, not reactivation ([secure proof](ua-sdk-secure-reconnect-proof.md)). | Stock SDK [token renewal](ua-sdk-token-renewal-proof.md) measured one same-channel token1→2 with the same Session/subscription/item and fresh Read/push. Broader secure endpoints, repeated loss/renewals and loss during renewal are not proven. Do not infer remote Session identity from a transport reconnect or local epoch. |
-| O11: available missed sequence | **Stock SDK live gap:** a dropped retained value was returned by manual public Republish but was not automatically replayed to its callback ([proof](ua-sdk-republish-proof.md)). **Research:** a bounded SDK-owner prototype replayed 52.5 in a same-Session case ([prototype](ua-sdk-republish-library-proof.md), [v2](ua-sdk-republish-v2-proof.md)). | Production automatic recovery is not established. The research callback is invoked before Reconnected, while the adapter identity gate is closed; a direct SDK callback is not an accepted application value. |
+| O11: available missed sequence | **Stock SDK live gap:** a dropped retained value was returned by manual public Republish but was not automatically replayed to its callback ([proof](ua-sdk-republish-proof.md)). **Research:** a bounded SDK-owner prototype replayed 52.5 in a same-Session case ([prototype](ua-sdk-republish-library-proof.md), [v2](ua-sdk-republish-v2-proof.md)). | Production automatic recovery is not established. Earlier v2 callback replay occurred before Reconnected and met the closed identity gate. The later [readiness/drain prototype](ua-sdk-readiness-drain-proof.md) deliberately suppresses replay behind that gate and accepts one post-drain Engine snapshot; it does not provide application history replay. |
 | O12: unavailable/uncertain gap | **Source/unit:** Engine marks history uncertain on Lost and incomplete on observed gap/overflow; App surfaces recovery/facts and CLI emits recovery/notification records. A successful fresh Read does not clear those facts within the current Connect epoch. **Research live:** a synthetic out-of-window sequence led to SDK `SequenceUncertain`, no Republish and later value ([wide-gap proof](ua-sdk-republish-wide-gap-proof.md)); timeout/cut tests and sticky unknown are [separate](ua-sdk-republish-fault-proof.md). | Research typed replay outcomes are not a production adapter event. A bounded outcome and snapshot can support a current view; neither proves all missed history. The latest-value watch may overwrite a detailed cancellation. |
 | O13: new remote Session/subscription | **Source/unit/live:** revision-scoped reconciliation distinguishes NewSession from ReactivatedSession, clears stale SDK type/negotiation state, checks namespace identity, and reports missing/ambiguous registrations. The sample restart and metadata-reload tests exercise selected NewSession paths. Secure research observed NewSession and a subsequent fresh Read. | Research SDK v2 emits no typed replay result for its NewSession branch. Reconciliation and transfer/recreation are not evidence of a continuous stream or complete history for arbitrary servers. |
 | O27: stale callback, registration or alias | **Source/unit/live:** captured callback scope, current revision, gate, registration and namespace checks reject stale/unknown identity. Engine rejects old scoped values/facts and current missing keys; NewSession invalidates UI tree context. A deliberately changed namespace and delayed operation were tested in local fixture scenarios. OPCLook does not use RegisterNodes aliases in this path. | Same-epoch lifetime races and all namespace/server combinations are not exhaustively proven. If aliases are added later, they must be scoped and reconciled; current absence is not a test of alias transfer. |
@@ -27,4 +27,38 @@ The [Engine/Gateway research stand](ua-sdk-replay-engine-proof.md) measured the 
 4. **Boundary tests:** run secure-channel recovery with retained notifications and token renewal, transfer with retained subscriptions, bounded out-of-order/duplicate/wrap cases, outage/cancellation and realistic server variants. Verify current-value/readback behavior separately from loss/history. Cross-platform and Windows results must be reported on their exact code heads.
 5. **Candidate adoption:** choose a reviewable SDK library patch or replacement and its source/distribution and license evidence, then change the production dependency only after the above behavior is testable and reviewed. The owner has authorized library-candidate research; this ledger does not assume an external hosting or approval blocker. It does not authorize an upstream message or creating a remote repository.
 
-The smallest next code slice is a **disposable SDK-only readiness-phase prototype**: expose a bounded post-Reconnected handoff, keep the SDK transport driver running, and test delayed acceptance, disconnect/cancellation and no premature acknowledgement/callback using the existing SDK transport and identity gate in an isolated stand. Follow it with the narrow adapter handoff only after its contract is reviewed; do not introduce an application replay owner. Transfer map migration remains open; one stock-SDK secure token renewal is independently measured, without implying repeated renewals or replay during renewal.
+The earlier next-step proposal was a **disposable SDK-only readiness-phase prototype**: expose a bounded post-Reconnected handoff, keep the SDK transport driver running, and test delayed acceptance, disconnect/cancellation and no premature acknowledgement/callback using the existing SDK transport and identity gate in an isolated stand. Follow it with the narrow adapter handoff only after its contract is reviewed; do not introduce an application replay owner. Transfer map migration remains open; one stock-SDK secure token renewal is independently measured, without implying repeated renewals or replay during renewal.
+
+
+## Reviewed bounded readiness/drain research
+
+The [original readiness layer](ua-sdk-readiness-proof.md),
+[racefix layer](ua-sdk-readiness-racefix-proof.md), and final
+[shared-guard drain proof](ua-sdk-readiness-drain-proof.md) form ordered,
+disposable SDK overlays. The original and fix-only layers are historical
+baselines, not the final cancellation design. VCS/blob-verified runners apply
+v2 → sticky → readiness → racefix → drain; diagnostic Closed barriers are separate.
+Production Cargo dependencies and App sources are unchanged.
+
+Measured final candidate: SDK recovery16/16, ACK Drop/incarnation2/2,
+revision/generation predicate1/1; fresh Engine/Gateway15.45s and instrumented
+SDK-observed Closed/Complete30.93s. One guard remains through nonterminal phases;
+metadata-only Reads run under a narrower revision scope while the value gate
+is closed. Matching metadata-ready ACK enables bounded SDK-owned replay then
+single-flight Publish drain (one subscription, five seconds/64 calls).
+DrainComplete → Reconciled → one RecoverySnapshot53.5 → later push54.5 was
+observed; replay52.5 was discarded by the closed gate and history stayed unknown.
+The SDK network driver remains the transport owner. No adapter Publish loop or
+payload queue is added.
+
+This accepts a same-Session ReactivatedSession research scenario only. The first
+`more_notifications=false` is not full history, no future server-change promise,
+and no general Read/Push ordering proof. Guard cancellation is once before
+terminal stream delivery; a watch receiver may separately observe failure then
+Cancelled. ACK requeue covers local cancellation/incarnation reuse, not all
+per-ACK statuses or requests already sent. Namespace-array cache mutation occurs
+inside the SDK before the adapter's post-revision check; NewSession safety needs
+its own scoped-commit proof. Stale Connect/late ACK/loss during drain wire tests,
+multi-subscription, mapped transfer, secure interleavings, GUI and candidate
+adoption remain open. Next independent slice: namespace-cache stale commit;
+manual/secure fixtures already measured are not rerun as substitutes for it.
