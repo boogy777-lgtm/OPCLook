@@ -166,13 +166,28 @@ checksum = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         with self.assertRaisesRegex(ValueError, "symlink escapes"):
             self.run_collect()
 
-    def test_rejects_ambiguous_case_and_untrusted_manifest(self):
+    def test_rejects_ambiguous_case_independent_of_filesystem(self):
+        # One real file is valid on both case-sensitive and case-insensitive
+        # filesystems. Only directory enumeration is simulated for the negative
+        # case: it presents two spellings of the same candidate name.
         (self.pkg / "LICENSE").write_text("one")
-        (self.pkg / "license").write_text("two")
-        with self.assertRaisesRegex(ValueError, "ambiguous"):
-            self.run_collect()
-        (self.pkg / "license").unlink()
-        self.output = self.root / "second-output"
+        valid = self.run_collect()
+        self.assertEqual(valid["missing"], [])
+        self.assertEqual(valid["packages"][1]["files"][0]["path"], "LICENSE")
+        real_iterdir = Path.iterdir
+
+        def ambiguous_iterdir(path):
+            entries = list(real_iterdir(path))
+            if path == self.pkg:
+                entries.append(path / "license")
+            return iter(entries)
+
+        with patch.object(Path, "iterdir", ambiguous_iterdir):
+            with self.assertRaisesRegex(ValueError, "ambiguous case-insensitive notice name"):
+                collector.collect(self.metadata, self.rows, self.workspace, self.home,
+                                  self.root / "ambiguous-output")
+
+    def test_rejects_untrusted_manifest(self):
         self.rows[1]["manifest_path"] = str(self.workspace / "cli/Cargo.toml")
         with self.assertRaisesRegex(ValueError, "outside trusted package root"):
             self.run_collect()
