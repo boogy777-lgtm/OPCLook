@@ -1,5 +1,37 @@
 # Текущий статус
 
+## 2026-10-31 — пара28: Async Gateway fixture и namespace source audit
+
+Предыдущий опубликованный exact `5eb9912bdafedf81deb034e9aa49219a73224b1f`
+прошёл все9 jobs: [SDK4](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41177513731),
+[COM2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41177513818),
+[App2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41177513808),
+[package1](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41177513730).
+Это CI совместимости опубликованных research artifacts с неизменённым
+production SDK/App, не повторный запуск SDK overlay стендов. Новый Gateway
+fixture ниже требует своего следующего exact-head CI.
+
+В test-only native режиме один arm связывает owner, Connect epoch, RequestId
+и ItemKey с существующим SDK Async slot. Timeout даёт один Error/TimeoutRead;
+последующий retire — cleanup, не повторный результат. Pending Disconnect и
+закрытие канала завершают worker, сохраняя живой SDK lease в явном quarantine.
+Другой Gateway в подготовленном live fixture читает, пока первая задача held;
+следующая эпоха проверяется только после полного retirement прежней.
+Allocated token не доказывает SDK/server admission; отдельный barrier подтверждает
+вход SDK worker. Production Async остаётся Unsupported, нового owner нет.
+
+Root actual-source/mock54/54, source/stub getter и Linux Rust typecheck нового
+теста прошли. Agent no-default-features49/49 и три C++ source/stub guards прошли;
+это не Win32 ABI/link/COM. Новый `sdk_async_gateway_live` precompile+nonzero-test
+gate включён в оба COM inputs. Actual Windows outcome pending следующего head;
+[scope](testing/native-sdk/async-gateway-correlation.md).
+
+[Namespace cache audit](testing/ua-sdk-namespace-cache-audit.md) принят только
+по закреплённым SDK исходникам: SDK cache write предшествует adapter post-check.
+Потенциальный NewSession interleaving не воспроизведён, candidate не проверен и
+не включён в PR. Никакого namespace fix/runtime acceptance не заявлено.
+N4/remote/physical Windows/legal и остальные UA/DA capability gates открыты.
+
 ## 2026-10-31 — 6c5349c: 9/9; SDK readiness/drain reviewed research
 
 Точный `6c5349c87334860c52a8317f8fdc5e34a9568dd1` прошёл все 9 jobs:

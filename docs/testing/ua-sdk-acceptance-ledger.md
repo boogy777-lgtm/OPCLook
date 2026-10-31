@@ -62,3 +62,10 @@ its own scoped-commit proof. Stale Connect/late ACK/loss during drain wire tests
 multi-subscription, mapped transfer, secure interleavings, GUI and candidate
 adoption remain open. Next independent slice: namespace-cache stale commit;
 manual/secure fixtures already measured are not rerun as substitutes for it.
+
+
+The subsequent [namespace-cache source audit](ua-sdk-namespace-cache-audit.md)
+records exact locked SDK blob identities and the unguarded post-Read commit
+path. Independent static review accepted the source-only description. There is
+no reproduced NewSession cache failure or verified fix for that slice; its
+unfinished SDK/test copies are excluded. This remains an adoption gate.

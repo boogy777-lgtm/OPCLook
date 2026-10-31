@@ -166,3 +166,21 @@ Caller gets one adapter error, keeps the lease and consumes later callback only
 as a cleanup acknowledgement. This fault was modeled against actual task code,
 not reproduced as a Windows SDK crash. Generic batching, cancellation negotiation,
 version/capability/cleanup policy and production facade are still separate gates.
+
+
+### Prepared Gateway correlation fixture after5eb
+
+[Gateway probe](async-gateway-correlation.md) routes one explicitly armed
+ReadFresh through the existing SDK slot, scoped by owner, Connect epoch,
+RequestId and current registration. One timeout terminal is followed only by
+cleanup retirement. Pending Disconnect/channel close exits the logical worker
+while the SDK lease is quarantined; no bounded reclamation claim is made.
+A later Connect is tested after full retirement, not with a late old callback
+crossing that Connect. The allocated token alone is not SDK/server acceptance.
+Root source/mock54/54, getter source/stub and Linux Rust-only typecheck passed;
+agent no-default-features49/49 and three C++ guards passed. A distinct i686 live
+fixture is wired into both COM inputs with precompile/nonzero-test guard.
+Its actual Win32 ABI/SDK/Gateway/cleanup outcome is pending a new published head;
+6c/5eb results do not cover this extension. Exact5eb also passed all9 jobs
+([COM](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41177513818));
+its DA implementation was unchanged from6c. Production Async remains Unsupported.

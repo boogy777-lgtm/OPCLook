@@ -6,11 +6,13 @@
 
 ## Последний подтверждённый срез
 
-`6c5349c` прошёл все 9 jobs (SDK4/COM2/App2/package1). Новый test-only
+`5eb9912` прошёл все 9 jobs (SDK4/COM2/App2/package1), включая совместимость
+SDK research artifacts. Ранее в6c и повторно5eb test-only
 single-slot generic Async value fixture выполнен в обоих i686 COM inputs
 (по 1/1) со strict cleanup; старые native gates также прошли. Production Async
 остаётся Unsupported. Это заменяет pending verdict исторических строк ниже
-только для кода, вошедшего в этот head.
+только для кода, вошедшего в этот head. Новый Gateway fixture пары28 требует
+следующего exact-head Windows CI.
 
 SDK readiness/racefix/drain принят как воспроизводимый исследовательский
 артефакт: [точные измерения и границы](testing/ua-sdk-readiness-drain-proof.md).
@@ -73,6 +75,7 @@ Production SDK pin/App не меняются; общий порядок Push/Rea
 | 25 | A09 actual item/quality failures, SDK bounded readiness handoff | A09 passed both81f/6c COM; readiness fixes reviewed as research, no production pin/Async switch |
 | 26 | Forced SDK DA1 source route, generic single-slot Async values | DA1 passed both81f COM; generic fixture passed both6c COM with cleanup; no physical DA1/productionAsync claim |
 | 27 | Native generic CI acceptance, SDK shared recovery guard and scoped drain | 6c all9green; SDK16+ACK2 and fresh Engine15.45с/Closed30.93с research accepted; one-subscription ReactivatedSession only |
+| 28 | SDK namespace-cache identity audit, test-only native Async Gateway correlation | Namespace source-only risk, no measured fix; Gateway mock54/49-nohooks and Linux typecheck passed, actual Windows gate wired/pending |
 
 Пара 01 исправила начальное состояние fixture после честного отрицательного
 NOCONFIG verdict на `a004b226`. Проверка на `36fa668` подтвердила
@@ -100,9 +103,11 @@ RUNNING → FAILED → RUNNING во всех трёх процессах и read
 | N4 | Production native DA и удаление прежнего OPC COM data-plane | Native SDK capability, interop/lifetime/license gates закрыты; системный WinAPI/helper не удалён как OPC code |
 | R2.6 / N6 | Полная матрица G/D/E/S/T/C/U/M/A/O, упаковка и согласование планов | Доказательства по стабильным ID, точный code head, итоговые настройки/документы и CI; число строк CSV не число пройденных тестов |
 
-Следующая пара — SDK-owned namespace-cache stale commit при NewSession и
-test-only DA Async Gateway RequestId/epoch/registration correlation. Сначала
-реальный source defect/contract и before/after, без production pin/default flip.
+Пара28 подготовила test-only DA Async Gateway RequestId/epoch/registration
+fixture; дождаться его нового exact-head Win32 результата. Namespace-cache
+[source audit](testing/ua-sdk-namespace-cache-audit.md) выявил риск по SDK source,
+но не дал измеренного defect/fix: этот gate остаётся открытым. Непроверенный
+SDK prototype не включать в production или в accepted patch packet.
 Остальные DA method/capability и UA recovery gates выбирать по source audit. P2 и автоматизируемые P3/P4 gates
 уже выполнены; physical Windows и N4 нельзя закрыть локальными mock/fixtures. Подтверждённые regressions исправлять перед новым
 функциональным пакетом. Дальнейшие пары выбирать по фактическим зависимостям.
