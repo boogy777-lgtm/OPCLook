@@ -20,6 +20,10 @@ S_FALSE/OPC_E_BADRIGHTS прошёл оба COM inputs. Exact5fcaab98 приня
 forced DA2/DA3 Async routes прошли Windows, оба COM/cleanup. Следующая33
 в remaining-work — source candidates, не выполненные tests. Подробные scope
 и результаты в status и обоих ledgers.
+Пара33: native held subscription callback через новый Connect gate prepared,
+свой COM CI pending. SDK drain mutation диагностический прогон остановлен
+автоматической проверкой possible cybersecurity risk; только source audit,
+0 mutation tests, no fix accepted. Gate открыт; frozen9ba/pins неизменны.
 Исторические snapshots ниже не заменяют текущий status.
 Пара28 приняла test-only Gateway Async fixture в обоих Win32 COM inputs и
 [namespace source audit](testing/ua-sdk-namespace-cache-audit.md), без принятого

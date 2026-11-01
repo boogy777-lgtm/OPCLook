@@ -1,3 +1,25 @@
+## 2026-11-01 — пара33: native reconnect gate и ограниченный SDK audit
+
+Native N3/A08 добавляет отдельный `sdk_late_reconnect_live`: реальный subscription
+callback88 должен оставаться held через Disconnect и новый Connect/registration
+того же SessionId. После release требуются новый77→99 push и FreshRead99,
+без88 в новом epoch, Gateway Joined и SDK/server/proxy cleanup. Если SDK locks
+не позволят точное overlap — gate не считается пройденным. Новых owners,
+transport или production Async нет. Test-only held() теперь требует claimed и
+unprocessed; старый helper провалил новый assertion, новый прошёл на actual
+извлечённом C++ со SDK/WinEvent stubs. Root real-file runtime stand54/54 passed;
+реальное i686/COM interleaving пока pending обоих matrix inputs.
+
+R07/O11–O12 ограничен [source-only audit](testing/ua-sdk-drain-scope-audit.md).
+Автоматическая проверка остановила dynamic subscription-mutation/drain diagnostic
+с причиной possible cybersecurity risk. Его не повторяли: mutation tests0,
+verified defects0, accepted fixes0. Source observations не заменяют измерений;
+исходный gate открыт. Непринятые scratch overlays не публикуются. Frozen9ba
+Engine receipts, production pins/default DA/Async Unsupported и N4 сохранены.
+
+Baseline3bd0c5af прошёл все workflow; его code84396da7 ранее принят9/9. Пара33
+требует собственной Windows приёмки. Дата записей — Asia/Yekaterinburg.
+
 ## 2026-11-01 — пара32 принята: exact code84396da7,9/9
 
 Exact `84396da7c815f3c1d2b911120eb5eaac58011724` прошёл9/9:

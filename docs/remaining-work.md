@@ -6,6 +6,11 @@
 
 ## Последний подтверждённый срез
 
+Пара33: native overlap gate prepared, собственный i686/COM результат pending.
+SDK mutation diagnostic остановлен автоматической проверкой (possible
+cybersecurity risk); только source audit,0 mutation tests, gate открыт.
+
+
 Пара32 принята: exact84396da7 прошёл9/9, включая metadata cap guard и оба
 forced Async DA2/DA3 COM inputs. Root backend270/0/1knownignored74.38с.
 Следующая пара33 ниже ещё не выполнена.
@@ -100,6 +105,7 @@ SDK readiness/drain Engine research остаётся на frozen9ba source; не
 | 30 | UA Read OperationLimits, native Async failure/quality facts | Original Read5/limit3 fails, O18/O19 live and root backend268+1knownignored pass; native facts both COM accepted; repaired266 all9 accepted |
 | 31 | UA data Read excess response, native Async admission | Source before/fail after/pass, normal live O18/O19 2/2; native54/source pass, admission both5fca COM accepted; exact5fca all9 accepted |
 | 32 | UA metadata-cap cardinality, forced Async DA2/DA3 | Source before/fail after2/2; Windows317/0/1+1filtered, both843 COM routes/cleanup accepted, all9 passed |
+| 33 | Native callback across reconnect; SDK drain scope audit | Native local54/source passed, exact COM pending. SDK dynamic mutation stopped; source audit only, original gate open |
 
 Пара 01 исправила начальное состояние fixture после честного отрицательного
 NOCONFIG verdict на `a004b226`. Проверка на `36fa668` подтвердила
@@ -121,19 +127,20 @@ Exact84396da7 прошёл9/9. Metadata cap требует ровно один �
 локальном multi-version server, source max_age0, не physical/freshness proof.
 [Native proof](testing/native-sdk/async-version-routes.md).
 
-## Следующая пара33: source-reviewed candidates, не выполнены
+## Пара33: исходные candidates и текущий ограниченный scope
 
-Пара32 принята; перед реализацией проверить locks/owners и условия
-воспроизведения, не считать гипотезы найденными production defects.
+Пара32 принята. Native gate реализован для проверки CI; SDK dynamic candidate
+остановлен автоматической проверкой и не возобновляется. Исходные требования
+ниже не являются найденными production defects.
 
 | Ветка | Следующий bounded gate | Точный scope и границы |
 | --- | --- | --- |
 | Native N3.LIFETIME/A08 | Held subscription callback через Disconnect/new Connect epoch того же SessionId | Existing `sdk_late_callback_live`/`opcl_da_test_late_*` barrier держит старое88. Router detaches old worker на Disconnect; требуются новый Connected/registration пока callback held, затем release, отсутствие88 в новом epoch и новый99/fresh Read, strict cleanup. Existing A08 remove/re-add same epoch и Async reconnect after retirement это не доказывают. Если SDK locks блокируют interleaving — recorded blocked/fail, не post-retirement pass. Event deadlines и release-on-drop обязательны; это subscription, не Async Read callback или remote proof. |
-| UA R07/O11–O12 research | Multiple subscriptions / mutation во время SDK readiness drain | Disposable SDK-only actual-source stand: initial2 subscriptions → UnsupportedSubscriptions; held in-flight Publish + create/delete/replacement → проверить scope до Complete/Normal, baseline single-sub/ACK/cancellation. Patch проверяет len==1 перед await, public SDK Create/Delete async позволяют исследовать interleaving; это source hypothesis, не измеренный defect. Review serialization и identity, не только count. Один SDK Publish owner, bounded budget/calls, history uncertainty; frozen9ba Engine receipts не менять, App/pin adoption не подразумевается. |
+| UA R07/O11–O12 research | Source audit only; dynamic gate blocked | Автоматическая проверка остановила diagnostic: possible cybersecurity risk. Mutation tests0, verified defects/fixes0. [Source audit](testing/ua-sdk-drain-scope-audit.md); frozen9ba/pins не менялись. Не повторять dynamic mutation diagnostic. |
 
 Native pending Async lease `mem::forget` не превращать в cleanup proof; не
 создавать новый owner/worker ради теста. Не возобновлять namespace/Cancel2 crash
-diagnostics. Remote/secure/physical/vendor и production/legal/N4 gates отдельно.
+diagnostics или остановленный SDK subscription-mutation/drain diagnostic. Remote/secure/physical/vendor и production/legal/N4 gates отдельно.
 
 ## Очередь по зависимостям
 

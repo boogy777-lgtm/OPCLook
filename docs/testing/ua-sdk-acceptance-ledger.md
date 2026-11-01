@@ -151,3 +151,11 @@ Final receipt2026-11-01 Asia/Yekaterinburg: exact84396da7 passed9/9
 Windows metadata cardinality regression and O18/O19 passed; backend317/0/1
 known ignored/1 isolated filtered249.56s. No malformed wire, new cap-query
 timeout/revision race or SDK recovery adoption claim. Root270/0/1 in74.38s.
+
+## Pair33 — SDK drain source audit only; dynamic gate remains open
+
+[Source audit](ua-sdk-drain-scope-audit.md) records the one-subscription pre-await
+check and SDK service lock boundaries as observations, not measured interleavings.
+Automatic safety check stopped the dynamic mutation diagnostic for possible
+cybersecurity risk. No retry; mutation tests0, verified defects/fixes0. The
+original gate remains open; no new patch, pin or frozen9ba receipt change.

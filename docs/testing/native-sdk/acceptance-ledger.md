@@ -286,3 +286,11 @@ Pair32 full acceptance: exact84396da7 passed9/9, SDK41237089913/
 COM41237090071/App41237090037/package41237090066. Windows317/0/1ignored/
 1isolatedfiltered passed. The final Markdown receipt preserves this code.
 Production Async/N4/remote/physical/license gates remain open.
+
+## Pair33 — held subscription callback across reconnect, Windows pending
+
+[Gate scope](late-reconnect.md): new Connect/registration must finish while old88
+is held, then release and new77→99/FreshRead99 with new epoch and cleanup.
+Test-only held helper before/fail and after/pass on extracted C++ stubs; root
+real-file runtime stand54/54 passed. Actual i686/COM gate pending both inputs.
+Post-retirement reconnect is not a substitute for overlap.
