@@ -5280,6 +5280,72 @@ fn browse_filter_control_is_ua_only_and_changes_ua_filter() {
 }
 
 #[test]
+fn ua_browse_filter_respects_ime_and_intentional_activation() {
+    use opclook::bff::model::NodeClassFilter;
+    // Separate harnesses avoid carrying IME and focus state between cases.
+    for (ime, pointer, changes) in [
+        (true, false, false),
+        (false, false, true),
+        (true, true, true),
+    ] {
+        let mut app = App::new_test(&egui::Context::default());
+        app.record_dispatches_for_test();
+        app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+        app.seed_tree_item(
+            sid(1),
+            None,
+            0,
+            BrowseNode {
+                node_id: "ns=1;s=kept".into(),
+                name: "Kept".into(),
+                kind: NodeKind::Item,
+                has_children: false,
+            },
+        );
+        let mut h = harness(app);
+        h.run_steps(3);
+        h.get_by_label("Только переменные").focus();
+        h.run_steps(1);
+        if ime {
+            h.event(egui::Event::Ime(egui::ImeEvent::Preedit {
+                text: "a".into(),
+                active_range_chars: None,
+            }));
+            h.run_steps(1);
+        }
+        if pointer {
+            h.get_by_label("Только переменные").click();
+        } else {
+            h.key_press(Key::Space);
+        }
+        h.run_steps(2);
+        assert_eq!(
+            h.state().sessions[0].ua().unwrap().ua_browse_filter,
+            if changes {
+                NodeClassFilter::Variables
+            } else {
+                NodeClassFilter::All
+            },
+            "filter: ime={ime} pointer={pointer}"
+        );
+        assert_eq!(
+            h.state().sessions[0].tree().is_empty(),
+            changes,
+            "tree: ime={ime} pointer={pointer}"
+        );
+        assert_eq!(
+            h.state()
+                .dispatched_for_test()
+                .iter()
+                .filter(|c| matches!(c.kind, CommandKind::Browse { .. }))
+                .count(),
+            usize::from(changes),
+            "dispatch: ime={ime} pointer={pointer}"
+        );
+    }
+}
+
+#[test]
 fn ua_result_tree_rebuilds_after_same_length_replacement() {
     use opclook::bff::model::{AdvertisedMode, AdvertisedPolicy, UaEndpointInfo, UaServerInfo};
     let ctx = egui::Context::default();

@@ -1877,3 +1877,7 @@ mod tests {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "settings_capacity_live_tests.rs"]
+mod capacity_live_tests;

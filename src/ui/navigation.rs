@@ -459,7 +459,9 @@ pub(super) fn navigation(app: &mut App, ui: &mut egui::Ui) {
                             ua.ua_browse_filter == crate::bff::model::NodeClassFilter::Variables
                         })
                     });
-                if ui.checkbox(&mut only, tr(lang, Tr::OnlyVars)).changed() {
+                let previous = only;
+                super::components::checkbox(ui, &mut only, tr(lang, Tr::OnlyVars));
+                if only != previous {
                     // U5: the filter applies to what is loaded, so the
                     // tree is re-read.
                     vars_only_changed = Some(only);
