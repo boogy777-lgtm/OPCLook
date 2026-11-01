@@ -106,6 +106,7 @@ SDK readiness/drain Engine research остаётся на frozen9ba source; не
 | 31 | UA data Read excess response, native Async admission | Source before/fail after/pass, normal live O18/O19 2/2; native54/source pass, admission both5fca COM accepted; exact5fca all9 accepted |
 | 32 | UA metadata-cap cardinality, forced Async DA2/DA3 | Source before/fail after2/2; Windows317/0/1+1filtered, both843 COM routes/cleanup accepted, all9 passed |
 | 33 | Native callback across reconnect; SDK drain scope audit | Native d401 bothCOM1/1 cleanupPASS, exactall9. SDK dynamic mutation stopped; source audit only, original gate open |
+| 34 | OnlyVars IME; migrated UA profile at monitored capacity | `45e73026` 9/9; UI before/fail→after/pass, live sample 1/1, explicit no due vs legacy real fallback; physical IME and external servers open |
 
 Пара 01 исправила начальное состояние fixture после честного отрицательного
 NOCONFIG verdict на `a004b226`. Проверка на `36fa668` подтвердила
@@ -142,18 +143,16 @@ Native pending Async lease `mem::forget` не превращать в cleanup pr
 создавать новый owner/worker ради теста. Не возобновлять namespace/Cancel2 crash
 diagnostics или остановленный SDK subscription-mutation/drain diagnostic. Remote/secure/physical/vendor и production/legal/N4 gates отдельно.
 
-## Следующая пара34: доступные source-reviewed candidates
+## Пара34: исходные source-reviewed candidates
 
-Native33 принят; перед34 проверить актуальный источник и scope. Остановленный SDK drain-mutation diagnostic
-не входит в эту очередь и не повторяется. Следующие гипотезы не проверялись.
+Native33 принят; исходные гипотезы пары34 приведены ниже для истории. Результат пары34 — в последней записи status; CI code head прошёл 9/9. Остановленный SDK drain-mutation diagnostic не повторяется.
 
 | Ветка | Доступный gate | Исходные evidence и границы |
 | --- | --- | --- |
 | P5/P3 UI | OnlyVars checkbox при IME composition | `src/ui/navigation.rs` использует raw checkbox, общий `components::checkbox` уже защищает keyboard IME. `App::set_ua_browse_vars_only` может сбрасывать/перечитывать подключённое дерево. Existing UI test покрывает pointer, не IME. Требуется actual UI before/fail, existing helper и final-value difference (raw Response::changed может остаться true), normal keyboard + intentional pointer во время IME, headless/render QA. Без нового backend/state owner; physical Windows IME отдельно. |
 | M09/M03–M04 | Migrated UA profile + limited monitored capacity через actual Engine/Gateway | Existing migration test проверяет persistence/warning; capacity test использует legacy None; Engine no-fallback test вручную seeds failed session. Нет сквозного среза old settings seconds5 → explicit migrated profile → limited sample server → warning/finite initial Read/no hidden periodic fallback, при сохранении monitored push и comparison legacy None. Source `PollOnly` projection при explicit no-fallback потенциально неоднозначен; сначала измерить contract/UI wording, defect не заявлен. Никаких SDK drain/recovery mutation, pin или новых protocol owners. |
 
-Это source audit recommendations, не выполненные tests, найденные defects или
-обещание нового механизма. Использовать существующие GUI/Engine/SDK способности.
+OnlyVars defect подтверждён и исправлен; M09 live gate пройден локально, дефект PollOnly не подтверждён. См. status; CI точного head прошёл 9/9. Следующая пара выбирается по реальным источникам: P4 ввод параметров команд и R2.1–R2.2 fairness/coalescing — кандидаты для проверки существующего покрытия, не утверждения о дефекте.
 
 ## Очередь по зависимостям
 

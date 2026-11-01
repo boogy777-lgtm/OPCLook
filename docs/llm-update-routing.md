@@ -8,7 +8,9 @@
 Это входное задание для нового чата. Маршруты направляют к существующим механизмам; текущий частичный runtime срез
 ExplicitRefresh и CLI opt-in WriteReadback описан в status.md. Полный R2 не завершён.
 
-Последний принятый exact code head — `d401c27d`, все9 jobs; generic test-only
+Пара34 code `45e730269cf4de67018274c58f49faa97ff2cc0a`: IME fix и live migrated capacity gate; CI точного head прошёл 9/9. Результаты и ограничения — в status.
+
+Предыдущий принятый exact code head — `d401c27d`, все9 jobs; generic test-only
 Async fixture прошёл обе i686 COM matrix. SDK readiness/racefix/drain — отдельный
 reviewed research packet, без production pin/App change, только одна subscription
 в ReactivatedSession. Актуальные scope/gaps и следующая пара находятся в

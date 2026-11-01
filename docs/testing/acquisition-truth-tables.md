@@ -459,3 +459,15 @@ sink — две проекции одного terminal, не две операц
 Initial push/E02, frontend consumers и Drop без explicit shutdown ещё не
 закрыты API этого среза; E02/front projection выполняет пара07. P4 actual UI,
 2 counterfactual guard regressions и4PNG ожидают новогоCI.
+
+### Пара34: M03/M04/M09 ограниченный сквозной gate
+
+Code `45e730269cf4de67018274c58f49faa97ff2cc0a`: настоящий Settings loader
+мигрирует старые 5-секундные UA настройки и сохраняет explicit профиль и
+notice. Live sample server с одним monitored slot через Engine/Gateway:
+initial terminal Read, monitored push и warning проверены; Engine с управляемым
+временем не назначил periodic fallback explicit, legacy None назначил и
+завершил fallback Read. Повтор 1/1 за 13.99 с; отсутствие due — не независимый
+wire counter, не внешние серверы и не Windows. Полные матрицы остаются открыты.
+CI точного code head прошёл 9/9. Более ранние общие формулировки выше не
+отменяют этот точный receipt.

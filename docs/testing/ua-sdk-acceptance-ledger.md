@@ -165,3 +165,16 @@ gate/source audit. This does not execute or accept the SDK mutation gate.
 Automatic safety stop (possible cybersecurity risk), mutation tests0, no
 verified defect/fix remain recorded in [audit](ua-sdk-drain-scope-audit.md).
 No retry, SDK patch/pin adoption or frozen9ba receipt change.
+
+## M09/M03–M04: migrated profile under limited capacity, pair34
+
+On code `45e730269cf4de67018274c58f49faa97ff2cc0a`, local live sample
+server / actual Settings loader / Engine / Gateway test passed 1/1 in 13.99 s.
+Five-second legacy settings migrate and persist as explicit subscription profile.
+With capacity one, initial read terminates for the unmonitored item and monitored
+push continues; explicit-profile warning says polling is disabled. Controlled
+Engine time yields no periodic fallback due for explicit profile; legacy None
+produces a real fallback Read and Values. This is not a wire-level count of all
+requests, external server proof or Windows proof. PollOnly means no monitored
+subscription; no defect established. Test fixture port selection has bind/drop
+race. Exact code head CI passed 9/9; Windows i686 library 269/269, including this test. SDK research pins and drain gate unchanged.

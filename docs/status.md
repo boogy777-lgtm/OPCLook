@@ -1407,3 +1407,29 @@ A09 подготовлен отдельно: один test-only SDK syncRead(2) 
 независимые reads на4 keys Good/denied/uncertain/bad. Это не один групповой вызов
 Gateway. Actual SDK HRESULT/quality/AddItems и cleanup ещё проверит Win32 CI;
 локальный source/mock runtime52/52 и mixed-read C++ stub прошли.
+
+## 2026-11-01 — пара34: IME и мигрированный профиль UA
+
+Code head `45e730269cf4de67018274c58f49faa97ff2cc0a`; CI точного
+head прошёл 9/9: [SDK4](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41332998789), [COM2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41332998718), [App2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41332998908), [package1](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41332998737). Windows i686 library 269/269, оба новых теста выполнены и прошли. P3: реальный headless UI тест до фикса обнаружил
+переключение OnlyVars при IME preedit + Space; существующий checkbox и сравнение
+итогового значения устранили это. После исправления тест 1/1, весь
+`ui_interactions` 258 passed / 1 Windows-only ignored; PNG актуального UI
+отрендерен и просмотрен. Обычный Space и pointer при preedit сохранены.
+Это синтетические события, не physical Windows IME.
+
+M09/M03–M04: старые настройки с 5 с через Settings::load сохраняют явный
+Subscription/FreshSource профиль и предупреждение о миграции. Live sample
+server, ограниченный одним monitored item, вместе с Engine/Gateway проверил
+initial terminal Read, push первого item и предупреждение; управляемое время
+показало отсутствие periodic due для явного профиля, а legacy None выдал и
+завершил реальный fallback Read. Финальный повтор 1/1 за 13.99 с. Отсутствие
+due не является независимым wire-счётчиком. PollOnly — внутренний признак
+отсутствия мониторинга, warning для явного профиля сообщает об отключённом
+опросе; дефект не подтверждён. Возможна гонка выделения порта в тестовой
+фикстуре bind(0)/drop. Внешний UA и Windows не проверены.
+
+Взаимное ревью выполнено; `cargo fmt --all -- --check` и `git diff --check`
+прошли на интегрированном дереве. SDK pins, frozen9ba, default legacy DA,
+production Async Unsupported и открытый N4 сохранены. Остановленный SDK
+mutation/drain diagnostic не повторялся.
