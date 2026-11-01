@@ -788,9 +788,11 @@ extern "C" int32_t opcl_da_test_late_entered(uint32_t timeout_ms) {
     if (!timeout_ms || timeout_ms > 30000) return E_INVALIDARG;
     return test_late_entered && WaitForSingleObject(test_late_entered, timeout_ms) == WAIT_OBJECT_0 ? S_OK : E_FAIL;
 }
-extern "C" int32_t opcl_da_test_late_held(void) {
-    return test_late_release && WaitForSingleObject(test_late_release, 0) == WAIT_TIMEOUT ? S_OK : E_FAIL;
-}
+extern "C" int32_t opcl_da_test_late_held(void) try {
+    std::lock_guard<std::mutex> lock(test_late_mutex);
+    return test_late_armed.load() == 2 && !test_late_processed && test_late_release &&
+        WaitForSingleObject(test_late_release, 0) == WAIT_TIMEOUT ? S_OK : E_FAIL;
+} catch (...) { return E_UNEXPECTED; }
 extern "C" int32_t opcl_da_test_late_release(void) {
     return test_late_release && SetEvent(test_late_release) ? S_OK : E_FAIL;
 }

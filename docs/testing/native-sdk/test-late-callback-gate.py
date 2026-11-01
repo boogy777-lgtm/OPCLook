@@ -33,12 +33,12 @@ void callback(BYTE mode, DWORD transaction, DWORD n, Item** items, Variant* valu
 }
 int main() {
  assert(opcl_da_test_late_arm(88)==S_OK); assert(opcl_da_test_late_entered(0)==E_INVALIDARG); Item item; Item* items[]={&item}; Variant not_target{VT_I4,99};
- callback(1,0,1,items,&not_target); assert(opcl_da_test_late_entered(1)==E_FAIL);
+ callback(1,0,1,items,&not_target); assert(opcl_da_test_late_entered(1)==E_FAIL); assert(opcl_da_test_late_held()==E_FAIL);
  Variant target{VT_I4,88}; std::thread worker([&]{callback(1,0,1,items,&target);});
  assert(opcl_da_test_late_entered(1000)==S_OK); assert(opcl_da_test_late_held()==S_OK);
  assert(opcl_da_test_late_processed(1)==E_PENDING); assert(opcl_da_test_late_close()==E_PENDING);
  assert(opcl_da_test_late_release()==S_OK); assert(opcl_da_test_late_processed(1000)==S_OK);
- worker.join(); assert(opcl_da_test_late_close()==S_OK);
+ worker.join(); assert(opcl_da_test_late_held()==E_FAIL); assert(opcl_da_test_late_close()==S_OK);
 }
 '''
 with tempfile.TemporaryDirectory() as d:
