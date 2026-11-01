@@ -1,5 +1,32 @@
 # Текущий статус
 
+## 2026-11-01 — пара33: native gate принят; SDK audit ограничен
+
+Exact code `d401c27dbed157632425a48e11481062422a52e3` прошёл9/9:
+[SDK4](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41324912191),
+[COM2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41324912229),
+[App2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41324912172),
+[package1](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41324912165).
+Native reconnect test1/1 passed в обоих COM inputs, SDK0.33с/MIT0.34с,
+strict cleanup PASS. Новый Connect и registration того же SessionId завершились
+при held старом88; после release проверены новый77→99 push/FreshRead99,
+нет88 в новом epoch, Gateway Joined и SDK finish. Это local fixture scope,
+не remote/vendor/arbitrary-crash proof. Test-only held helper regression
+before/fail→after/pass, root real-file runtime stand54/54 passed.
+Windows backend317/0/1knownignored/1isolatedfiltered за159.78с.
+
+SDK drain scope остаётся source-only audit: automatic safety check остановил
+subscription-mutation diagnostic с причиной possible cybersecurity risk. Нет
+повторного запуска, mutation tests0, verified defects/fixes0; исходный gate
+не закрыт. Непринятые scratch overlays не опубликованы. Это ограничение проверки,
+не найденная уязвимость. Frozen9ba Engine receipts и production pins неизменны.
+
+Следующая34 — UI OnlyVars/IME и migrated UA profile/limited capacity, только
+source-reviewed candidates. Остановленные drain/namespace/Cancel2 diagnostics
+не входят в выполнение. Production Async Unsupported/default legacy/N4 open.
+Итоговый Markdown receipt сохраняет код принятогоd401; дата Asia/Yekaterinburg.
+
+
 ## 2026-11-01 — пара33: native reconnect gate и ограниченный SDK audit
 
 Native N3/A08 добавляет отдельный `sdk_late_reconnect_live`: реальный subscription

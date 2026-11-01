@@ -287,10 +287,19 @@ COM41237090071/App41237090037/package41237090066. Windows317/0/1ignored/
 1isolatedfiltered passed. The final Markdown receipt preserves this code.
 Production Async/N4/remote/physical/license gates remain open.
 
-## Pair33 — held subscription callback across reconnect, Windows pending
+## Pair33 — held subscription callback source scope (pre-CI)
 
 [Gate scope](late-reconnect.md): new Connect/registration must finish while old88
 is held, then release and new77→99/FreshRead99 with new epoch and cleanup.
 Test-only held helper before/fail and after/pass on extracted C++ stubs; root
 real-file runtime stand54/54 passed. Actual i686/COM gate pending both inputs.
 Post-retirement reconnect is not a substitute for overlap.
+
+## Pair33 — actual local reconnect gate accepted
+
+Exactd401c27d passed9/9. New reconnect test1/1 passed in both COM inputs,
+SDK0.33s/MIT0.34s, strict cleanup PASS. Assertions require same-ID new Connect
+and registration before old88 release, new77→99/FreshRead99 with epoch8 and
+joined Gateway/SDK finish. [Proof](late-reconnect.md). This is separate from
+old same-epoch remove/readd and Async post-retirement reconnect, and remains
+local fixture evidence, not production Async or remote/vendor acceptance.

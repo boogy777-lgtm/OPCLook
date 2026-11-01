@@ -8,7 +8,7 @@
 Это входное задание для нового чата. Маршруты направляют к существующим механизмам; текущий частичный runtime срез
 ExplicitRefresh и CLI opt-in WriteReadback описан в status.md. Полный R2 не завершён.
 
-Последний принятый exact code head — `84396da7`, все9 jobs; generic test-only
+Последний принятый exact code head — `d401c27d`, все9 jobs; generic test-only
 Async fixture прошёл обе i686 COM matrix. SDK readiness/racefix/drain — отдельный
 reviewed research packet, без production pin/App change, только одна subscription
 в ReactivatedSession. Актуальные scope/gaps и следующая пара находятся в
@@ -20,8 +20,8 @@ S_FALSE/OPC_E_BADRIGHTS прошёл оба COM inputs. Exact5fcaab98 приня
 forced DA2/DA3 Async routes прошли Windows, оба COM/cleanup. Следующая33
 в remaining-work — source candidates, не выполненные tests. Подробные scope
 и результаты в status и обоих ledgers.
-Пара33: native held subscription callback через новый Connect gate prepared,
-свой COM CI pending. SDK drain mutation диагностический прогон остановлен
+Пара33: native held subscription callback через новый Connect принят в обоих
+COM inputs; exactd401c27d9/9. SDK drain mutation диагностический прогон остановлен
 автоматической проверкой possible cybersecurity risk; только source audit,
 0 mutation tests, no fix accepted. Gate открыт; frozen9ba/pins неизменны.
 Исторические snapshots ниже не заменяют текущий status.

@@ -21,8 +21,12 @@ callback as well as an unsignalled release event. The new regression failed with
 the old helper (held before callback claim) and passed with the new actual C++
 fragment using SDK/Windows event stubs. The real-file Linux runtime stand passed
 54/54. The new live test body was typechecked against the real contract and
-API-shaped stubs; this is not actual COM or real Gateway behavior. Windows i686
-build, both COM inputs, overlap and strict cleanup are pending CI.
+API-shaped stubs; this is not actual COM or real Gateway behavior. Exact code `d401c27dbed157632425a48e11481062422a52e3` passed the live gate1/1
+in both i686 COM inputs (SDK0.33s, official-MIT0.34s), strict cleanup PASS.
+The test assertions require the new Connect and registration while held,
+processed release, new77→99 pushes and FreshRead99 in the new epoch, then
+Gateway Joined and SDK finish. All9 jobs passed on that exact code; links
+are in status/packet. The later Markdown receipt does not change this code.
 
 This is a local SDK fixture subscription case, distinct from accepted same-epoch
 remove/re-add and Async Gateway reconnect after retirement. It does not establish

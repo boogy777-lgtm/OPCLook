@@ -159,3 +159,9 @@ check and SDK service lock boundaries as observations, not measured interleaving
 Automatic safety check stopped the dynamic mutation diagnostic for possible
 cybersecurity risk. No retry; mutation tests0, verified defects/fixes0. The
 original gate remains open; no new patch, pin or frozen9ba receipt change.
+
+Final pair33 receipt: exactd401c27d passed9/9 CI for the delivered native
+gate/source audit. This does not execute or accept the SDK mutation gate.
+Automatic safety stop (possible cybersecurity risk), mutation tests0, no
+verified defect/fix remain recorded in [audit](ua-sdk-drain-scope-audit.md).
+No retry, SDK patch/pin adoption or frozen9ba receipt change.
