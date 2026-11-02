@@ -1148,6 +1148,46 @@ mod tests {
     }
 
     #[test]
+    fn shutdown_reports_both_panicked_and_blocked_workers() {
+        let (host, release, _d) = MockHost::new();
+        let (mut router, _rx) = router_with(Arc::clone(&host));
+        router.dispatch(connect(1, sid(1), "block"));
+        let deadline = Instant::now() + WAIT;
+        while host
+            .release
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some()
+        {
+            assert!(
+                Instant::now() < deadline,
+                "blocked worker never entered Connect"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let failed = std::thread::spawn(|| panic!("synthetic retired worker failure"));
+        let deadline = Instant::now() + WAIT;
+        while !failed.is_finished() {
+            assert!(Instant::now() < deadline, "failure worker never finished");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        router.retired.push(failed);
+        assert_eq!(
+            router.shutdown(Duration::from_millis(150)),
+            RouterShutdown {
+                detached: 1,
+                panicked: true
+            }
+        );
+        release.send(()).unwrap();
+        let deadline = Instant::now() + WAIT;
+        while host.torn_down() != vec![sid(1)] {
+            assert!(Instant::now() < deadline, "released worker never retired");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
     fn run_router_ends_when_the_channel_closes() {
         let (host, _r, _d) = MockHost::new();
         let (cmd_tx, cmd_rx) = unbounded_channel();

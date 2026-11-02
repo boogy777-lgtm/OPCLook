@@ -1,6 +1,7 @@
 use super::dialog_spacing;
 use crate::app::{App, SessionState};
 use crate::i18n::{Tr, tr};
+use crate::ui::ImeSafeClick;
 
 pub(super) fn about_dialog(app: &mut App, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
@@ -80,7 +81,7 @@ pub(super) fn about_dialog(app: &mut App, ui: &mut egui::Ui) {
                 }
             }
             ui.separator();
-            if ui.button(tr(lang, Tr::Close)).clicked() {
+            if ui.button(tr(lang, Tr::Close)).ime_safe_clicked() {
                 close = true;
             }
             if esc {

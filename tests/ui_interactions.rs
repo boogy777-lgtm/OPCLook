@@ -5518,6 +5518,40 @@ fn p2_open_connect_menu_button_and_keyboard_are_equivalent() {
 }
 
 #[test]
+fn about_close_respects_ime_and_pointer_intent() {
+    for (ime, pointer, closes) in [
+        (true, false, false),
+        (false, false, true),
+        (true, true, true),
+    ] {
+        let mut app = App::new_test(&egui::Context::default());
+        app.dialogs.about.open = true;
+        let mut h = harness(app);
+        h.run_steps(3);
+        h.get_by_label("Закрыть").focus();
+        h.run_steps(1);
+        if ime {
+            h.event(egui::Event::Ime(egui::ImeEvent::Preedit {
+                text: "a".into(),
+                active_range_chars: None,
+            }));
+            h.run_steps(1);
+        }
+        if pointer {
+            h.get_by_label("Закрыть").click();
+        } else {
+            h.key_press(Key::Space);
+        }
+        h.run_steps(2);
+        assert_eq!(
+            h.state().dialogs.about.open,
+            !closes,
+            "ime={ime} pointer={pointer}"
+        );
+    }
+}
+
+#[test]
 fn p2_availability_is_pure_and_execution_rechecks_modal_state() {
     use opclook::app::actions::UiAction;
     use opclook::i18n::Tr;
