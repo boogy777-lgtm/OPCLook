@@ -2978,6 +2978,7 @@ struct HeldBrowseProxy {
     url: String,
     armed: Arc<std::sync::atomic::AtomicBool>,
     hold_read: Arc<std::sync::atomic::AtomicBool>,
+    read_target: Arc<std::sync::Mutex<Option<NodeId>>>,
     held: tokio::sync::mpsc::UnboundedReceiver<()>,
     release: Arc<tokio::sync::Notify>,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
@@ -2992,11 +2993,13 @@ impl HeldBrowseProxy {
         let server_port = server.port;
         let armed = Arc::new(AtomicBool::new(false));
         let hold_read = Arc::new(AtomicBool::new(false));
+        let read_target = Arc::new(std::sync::Mutex::new(None::<NodeId>));
         let release = Arc::new(tokio::sync::Notify::new());
         let (held_tx, held) = tokio::sync::mpsc::unbounded_channel();
         let (stop, stopped) = tokio::sync::oneshot::channel();
         let proxy_armed = armed.clone();
         let proxy_hold_read = hold_read.clone();
+        let proxy_read_target = read_target.clone();
         let proxy_release = release.clone();
         let thread = std::thread::spawn(move || {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -3016,6 +3019,7 @@ impl HeldBrowseProxy {
                             let Ok((client, _)) = accepted else { break };
                             let armed = proxy_armed.clone();
                             let hold_read = proxy_hold_read.clone();
+                            let read_target = proxy_read_target.clone();
                             let release = proxy_release.clone();
                             let held_tx = held_tx.clone();
                             tasks.spawn(async move {
@@ -3031,11 +3035,15 @@ impl HeldBrowseProxy {
                                         let mut frame = vec![0; len]; frame[..8].copy_from_slice(&header);
                                         if cr.read_exact(&mut frame[8..]).await.is_err() { break; }
                                         if &header[..4] == b"MSGF" && len > 24 {
-                                            use opcua::types::{BinaryDecodable, ContextOwned};
+                                            use opcua::types::{BinaryDecodable, ContextOwned, ReadRequest};
                                             let context = ContextOwned::default();
                                             let mut body = std::io::Cursor::new(&frame[24..]);
-                                            if NodeId::decode(&mut body, &context.context()).is_ok_and(|id| id == NodeId::from(if hold_read.load(std::sync::atomic::Ordering::SeqCst) { ObjectId::ReadRequest_Encoding_DefaultBinary } else { ObjectId::BrowseRequest_Encoding_DefaultBinary }))
-                                                && armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                                            let is_read = hold_read.load(std::sync::atomic::Ordering::SeqCst);
+                                            let id = NodeId::decode(&mut body, &context.context());
+                                            let target = read_target.lock().unwrap().clone();
+                                            let matching = id.is_ok_and(|id| id == NodeId::from(if is_read { ObjectId::ReadRequest_Encoding_DefaultBinary } else { ObjectId::BrowseRequest_Encoding_DefaultBinary }))
+                                                && (!is_read || target.is_none() || ReadRequest::decode(&mut body, &context.context()).is_ok_and(|request| request.nodes_to_read.as_ref().is_some_and(|nodes| nodes.iter().any(|n| Some(&n.node_id) == target.as_ref()))));
+                                            if matching && armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
                                                 let _ = held_tx.send(());
                                                 release.notified().await;
                                             }
@@ -3056,6 +3064,7 @@ impl HeldBrowseProxy {
             url: format!("opc.tcp://127.0.0.1:{port}/"),
             armed,
             hold_read,
+            read_target,
             held,
             release,
             stop: Some(stop),
@@ -3072,6 +3081,84 @@ impl Drop for HeldBrowseProxy {
             let _ = thread.join();
         }
     }
+}
+
+#[test]
+fn read_timeout_closes_session_rejects_queued_read_and_reconnects() {
+    use std::sync::atomic::Ordering;
+
+    let server = TestServer::start(free_port());
+    let mut proxy = HeldBrowseProxy::start(&server);
+    let mut app = Harness::new();
+    let session = SessionId::FIRST;
+    let key = ItemKey::FIRST;
+    app.connect(session, Harness::endpoint(&proxy.url)).unwrap();
+    assert!(
+        app.add_items(session, &[(key, server.node("Level"))])[0]
+            .1
+            .is_ok()
+    );
+
+    // Prime the per-revision OperationLimits cache before the held data Read.
+    let prime = app.send(session.into(), CommandKind::Read { keys: vec![key] });
+    assert!(
+        matches!(app.reply(prime, Duration::from_secs(30)).unwrap().kind,
+        EventKind::Values { values } if matches!(&values[..], [(_, value)] if value.reason.is_none()))
+    );
+    proxy.hold_read.store(true, Ordering::SeqCst);
+    *proxy.read_target.lock().unwrap() = Some(NodeId::new(server.ns, "Level"));
+    proxy.armed.store(true, Ordering::SeqCst);
+    let timed = app.send(session.into(), CommandKind::Read { keys: vec![key] });
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        tokio::time::timeout(Duration::from_secs(10), proxy.held.recv())
+            .await
+            .unwrap()
+            .unwrap();
+    });
+    let queued = app.send(session.into(), CommandKind::Read { keys: vec![key] });
+    let first = app
+        .reply(timed, Duration::from_secs(40))
+        .expect("timed Read result");
+    assert!(
+        matches!(&first.kind, EventKind::Values { values } if matches!(&values[..], [(_, value)] if matches!(&value.reason, Some(BackendMsg::Context { cause, .. }) if matches!(cause.as_ref(), BackendMsg::TimeoutRead)))),
+        "{first:?}"
+    );
+    assert!(
+        app.wait(Duration::from_secs(20), |event| matches!(
+            event.kind,
+            EventKind::Disconnected {
+                reason: BackendMsg::SessionClosedAfterTimeout
+            }
+        )
+        .then_some(()))
+            .is_some()
+    );
+    let second = app
+        .reply(queued, Duration::from_secs(10))
+        .expect("queued Read terminal");
+    assert!(
+        matches!(&second.kind, EventKind::Values { values } if matches!(&values[..], [(_, value)] if matches!(value.reason, Some(BackendMsg::NoConnection)))),
+        "{second:?}"
+    );
+
+    // A fresh connection and registration may read again after quarantine.
+    proxy.release.notify_one();
+    app.connect(session, Harness::endpoint(&server.url))
+        .unwrap();
+    assert!(
+        app.add_items(session, &[(key, server.node("Level"))])[0]
+            .1
+            .is_ok()
+    );
+    let fresh = app.send(session.into(), CommandKind::Read { keys: vec![key] });
+    assert!(
+        matches!(app.reply(fresh, Duration::from_secs(30)).unwrap().kind,
+        EventKind::Values { values } if matches!(&values[..], [(_, value)] if value.reason.is_none()))
+    );
 }
 
 #[test]

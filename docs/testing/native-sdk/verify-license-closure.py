@@ -37,6 +37,12 @@ def verify(sdk, project, manifest):
     if observed != expected:
         changed = sorted(k for k in set(observed) | set(expected) if observed.get(k) != expected.get(k))
         raise ValueError(f"SDK tree manifest mismatch: {changed}")
+    # Git diff may skip working-tree checks for assume-unchanged or
+    # skip-worktree entries. Reject these index states without changing them.
+    index = git(sdk, "ls-files", "-v", "-z", "--", *paths)
+    for entry in index.split(b"\0"):
+        if entry and (len(entry) < 3 or entry[:2] != b"H "):
+            raise ValueError(f"SDK index hides or alters tracked input: {entry!r}")
     # Git's clean filters account for normal Windows CRLF checkout conversion.
     # --no-ext-diff prevents external diff drivers from hiding modifications.
     subprocess.run(["git", "-C", str(sdk), "diff", "--no-ext-diff", "--quiet", "HEAD", "--", *paths], check=True)

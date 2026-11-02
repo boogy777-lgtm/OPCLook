@@ -70,6 +70,18 @@ class LicenseInventoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "untracked SDK inputs"):
             self.check()
 
+    def test_index_flags_cannot_hide_modified_selected_inputs(self):
+        for flag, reset in (("--assume-unchanged", "--no-assume-unchanged"),
+                            ("--skip-worktree", "--no-skip-worktree")):
+            with self.subTest(flag=flag):
+                run(self.sdk, "update-index", flag, "src/one.cpp")
+                (self.sdk / "src" / "one.cpp").write_text("modified\n")
+                with self.assertRaisesRegex(ValueError, "SDK index hides or alters tracked input"):
+                    self.check()
+                run(self.sdk, "update-index", reset, "src/one.cpp")
+                run(self.sdk, "checkout", "--", "src/one.cpp")
+                self.assertEqual(self.check(), 2)
+
     def test_manifest_or_pin_mismatch(self):
         self.data["paths"]["src/one.cpp"] = "0" * 40
         self.save()
