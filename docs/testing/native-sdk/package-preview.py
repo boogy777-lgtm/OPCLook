@@ -25,6 +25,14 @@ PATCHED = {
 }
 FORBIDDEN_PREFIX = "opcl_da_test_"
 
+# Both the clean SDK inventory and the patched SDK packaging gate must use
+# the same index-visibility rule before relying on git diff.
+_index_spec = importlib.util.spec_from_file_location(
+    "license_closure", Path(__file__).with_name("verify-license-closure.py")
+)
+_index_guard = importlib.util.module_from_spec(_index_spec)
+_index_spec.loader.exec_module(_index_guard)
+
 
 def sha256(data):
     return hashlib.sha256(data).hexdigest()
@@ -43,6 +51,7 @@ def verify_sdk(sdk):
     if run("git", "-C", sdk, "rev-parse", "HEAD").decode().strip() != SDK_PIN:
         raise ValueError("SDK commit mismatch")
     prefixes = json.loads((HERE / "license-sdk-tree.json").read_text())["selection_prefixes"]
+    _index_guard.verify_visible_index(sdk, ["LICENSE", *prefixes])
     tracked = run("git", "-C", sdk, "diff", "--name-only", "-z", "HEAD", "--", "LICENSE", *prefixes)
     changed = set(tracked.decode().strip("\0").split("\0")) if tracked else set()
     if changed != set(PATCHED):
@@ -229,6 +238,7 @@ def assemble(args):
         "evidence/CMakeCache.txt": args.bridge / "CMakeCache.txt",
         "evidence/license-sdk-tree.json": HERE / "license-sdk-tree.json",
         "evidence/package-preview.py": HERE / "package-preview.py",
+        "evidence/verify-license-closure.py": HERE / "verify-license-closure.py",
         "evidence/collect-cargo-notices.py": HERE / "collect-cargo-notices.py",
         "evidence/upstream-notices/async-opcua-0.19.0-LICENSE.md": HERE / "upstream-notices/async-opcua-0.19.0-LICENSE.md",
         "evidence/softing-expat.gitsha": HERE / "softing-expat.gitsha",

@@ -124,6 +124,7 @@ struct HeldBrowseProxy {
     release: Arc<tokio::sync::Notify>,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     thread: Option<std::thread::JoinHandle<()>>,
+    thread_failed: bool,
 }
 impl HeldBrowseProxy {
     fn start(server_port: u16) -> Self {
@@ -209,18 +210,116 @@ impl HeldBrowseProxy {
             release,
             stop: Some(stop),
             thread: Some(thread),
+            thread_failed: false,
         }
+    }
+
+    // Report actual thread completion; a timeout must not block the test in join.
+    fn shutdown(&mut self, timeout: Duration) -> bool {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        let Some(thread) = self.thread.as_ref() else {
+            return !self.thread_failed;
+        };
+        let deadline = Instant::now() + timeout;
+        loop {
+            if Instant::now() >= deadline {
+                // Keep the handle: a repeated check cannot claim it joined.
+                return false;
+            }
+            if thread.is_finished() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        if let Some(thread) = self.thread.take() {
+            self.thread_failed = thread.join().is_err();
+        }
+        !self.thread_failed
     }
 }
 impl Drop for HeldBrowseProxy {
     fn drop(&mut self) {
-        if let Some(stop) = self.stop.take() {
-            let _ = stop.send(());
-        }
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+        let _ = self.shutdown(Duration::from_secs(5));
+    }
+}
+
+#[test]
+fn proxy_shutdown_is_bounded_and_reports_thread_failure() {
+    use std::sync::atomic::AtomicBool;
+
+    fn fixture(
+        stop: tokio::sync::oneshot::Sender<()>,
+        thread: std::thread::JoinHandle<()>,
+    ) -> HeldBrowseProxy {
+        let (_, held) = tokio::sync::mpsc::unbounded_channel();
+        HeldBrowseProxy {
+            url: String::new(),
+            armed: Arc::new(AtomicBool::new(false)),
+            hold_read: Arc::new(AtomicBool::new(false)),
+            read_target: Arc::new(Mutex::new(None)),
+            held,
+            release: Arc::new(tokio::sync::Notify::new()),
+            stop: Some(stop),
+            thread: Some(thread),
+            thread_failed: false,
         }
     }
+
+    // A thread that has not retired cannot force an unbounded join.
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let (finished_tx, finished_rx) = std::sync::mpsc::channel::<()>();
+    let thread = std::thread::spawn(move || {
+        let _ = release_rx.recv();
+        let _ = finished_tx.send(());
+    });
+    let (stop, _) = tokio::sync::oneshot::channel();
+    let mut proxy = fixture(stop, thread);
+    let start = Instant::now();
+    assert!(!proxy.shutdown(Duration::from_millis(100)));
+    assert!(start.elapsed() < Duration::from_secs(2));
+    assert!(!proxy.shutdown(Duration::from_millis(100)));
+    release_tx.send(()).unwrap();
+    finished_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(proxy.shutdown(Duration::from_secs(2)));
+    assert!(proxy.shutdown(Duration::from_millis(1)));
+
+    // A completion first observed with no time budget cannot pass the check.
+    let (stop, _) = tokio::sync::oneshot::channel();
+    let thread = std::thread::spawn(|| {});
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !thread.is_finished() {
+        assert!(Instant::now() < deadline, "synthetic thread did not finish");
+        std::thread::yield_now();
+    }
+    let mut proxy = fixture(stop, thread);
+    assert!(!proxy.shutdown(Duration::ZERO));
+    assert!(proxy.shutdown(Duration::from_secs(2)));
+
+    // Completed but panicked is not reported as a successful cleanup.
+    let (stop, _) = tokio::sync::oneshot::channel();
+    let mut proxy = fixture(
+        stop,
+        std::thread::spawn(|| panic!("synthetic proxy failure")),
+    );
+    assert!(!proxy.shutdown(Duration::from_secs(2)));
+    assert!(!proxy.shutdown(Duration::from_millis(1)));
+
+    // Drop signals stop while another panic is unwinding; the worker exits.
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let (finished_tx, finished_rx) = std::sync::mpsc::channel::<()>();
+    let thread = std::thread::spawn(move || {
+        let _ = stopped.blocking_recv();
+        let _ = finished_tx.send(());
+    });
+    let proxy = fixture(stop, thread);
+    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _proxy = proxy;
+        panic!("synthetic test failure");
+    }));
+    assert!(unwind.is_err());
+    finished_rx.recv_timeout(Duration::from_secs(2)).unwrap();
 }
 
 fn wait_event(
@@ -462,4 +561,10 @@ fn engine_gateway_timeout_quarantines_pending_readback_and_reconnects() {
     let shutdown = engine.shutdown();
     assert_eq!(shutdown.ua, opclook_backend::bff::ShutdownOutcome::Joined);
     assert_eq!(shutdown.da, opclook_backend::bff::ShutdownOutcome::Joined);
+    let cleanup_started = Instant::now();
+    assert!(
+        proxy.shutdown(Duration::from_secs(5)),
+        "proxy thread did not terminate within the deadline"
+    );
+    eprintln!("proxy thread joined in {:?}", cleanup_started.elapsed());
 }

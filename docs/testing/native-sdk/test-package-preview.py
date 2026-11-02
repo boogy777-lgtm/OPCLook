@@ -88,6 +88,10 @@ class PreviewPackagingTests(unittest.TestCase):
                 file.write_bytes((name + " original\n").encode())
                 original[name] = preview.blob_hash(file.read_bytes())
             (sdk / "LICENSE").write_text("license")
+            extra = sdk / "development/core/src/other.cpp"
+            extra.write_text("reviewed\n")
+            outside = sdk / "outside.txt"
+            outside.write_text("reviewed\n")
             git("add", ".")
             git("commit", "-qm", "baseline")
             commit = git("rev-parse", "HEAD").decode().strip()
@@ -103,6 +107,25 @@ class PreviewPackagingTests(unittest.TestCase):
                     for file, content in zip(patches, originals):
                         file.write_bytes(content.replace(b"\n", newline))
                     preview.verify_sdk(sdk)
+                for flag, reset in (("--assume-unchanged", "--no-assume-unchanged"),
+                                    ("--skip-worktree", "--no-skip-worktree")):
+                    for modified in (False, True):
+                        with self.subTest(flag=flag, modified=modified):
+                            git("update-index", flag, "development/core/src/other.cpp")
+                            try:
+                                if modified:
+                                    extra.write_text("unreviewed\n")
+                                with self.assertRaisesRegex(ValueError, "SDK index hides or alters tracked input"):
+                                    preview.verify_sdk(sdk)
+                            finally:
+                                git("update-index", reset, "development/core/src/other.cpp")
+                                git("checkout", "--", "development/core/src/other.cpp")
+                            preview.verify_sdk(sdk)
+                git("update-index", "--assume-unchanged", "outside.txt")
+                outside.write_text("outside selected scope\n")
+                preview.verify_sdk(sdk)
+                git("update-index", "--no-assume-unchanged", "outside.txt")
+                git("checkout", "--", "outside.txt")
                 with (sdk / files[0]).open("ab") as stream:
                     stream.write(b"unreviewed\n")
                 with self.assertRaises((ValueError, subprocess.CalledProcessError)):
