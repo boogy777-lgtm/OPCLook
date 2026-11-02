@@ -331,3 +331,12 @@ fixture baseline fails four flag/clean-or-modified cases, corrected package
 The shared helper is included in package evidence; only package-preview profile
 hash changed, SDK pins unchanged. No legal clearance or production flip.
 CI exact head 9/9; tests passed Linux and Windows i686.
+
+## Pair40: scoped fixture evidence
+
+Code `5ade14eec04618d4a34b5ed814f7269da5a9bf23`: test UA server hands
+OS-bound listener to SDK run_with; controlled old free_port race reproduces,
+real fallback/OPC Connect and real-file tests passed. Other free_port uses and
+readiness heuristic remain. DA Router test with mock host shows healthy B
+teardown while blocked A is detached, then A teardown on release; no actual
+COM or OS deadline claim. CI 9/9; no production switch or pin change.

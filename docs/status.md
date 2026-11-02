@@ -1577,3 +1577,20 @@ subscription-mutation/drain diagnostic не повторялся.
 real-file stand collision/silent 2/2. Внутренний TestServer fallback всё ещё
 использует free_port bind/drop и имеет отдельную потенциальную гонку.
 CI нового точного head прошёл 9/9; прошлый failure не переименован в pass.
+
+## 2026-11-02 — пара40: UA test listener и DA shutdown isolation
+
+Code head `5ade14eec04618d4a34b5ed814f7269da5a9bf23`; CI exact head 9/9: [SDK4](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41468743723), [COM2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41468743647), [App2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41468743779), [package1](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41468743680). Windows i686 ran both new tests and fallback test.
+UA test-only TestServer теперь удерживает OS-bound listener и передаёт его
+в существующий SDK `Server::run_with`, fallback bind port 0; URL/port из
+listener. Controlled source-extracted baseline проиграл конкуренту порт,
+после fix listener удержан; actual fallback и OPC Connect 1/1, reservation
+1/1, real-file stand 2/2, backend lib 272 passed/1 ignored. Это не устранение
+всех других free_port calls и не proof readiness heuristic.
+
+DA N3 test-only MockHost: blocked Connect A и healthy B при shutdown — B
+teardown, detached=1, после release A teardown. Actual Router test 1/1
+2.02с и real-file stand 1/1 2.01с; это не real COM, независимый join или
+OS deadline proof. Production defect не заявлен. Взаимное ревью и fmt
+прошли; SDK pins, default legacy DA, production Async Unsupported и N4
+не менялись. Остановленные SDK diagnostics не запускались.

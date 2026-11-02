@@ -112,6 +112,7 @@ SDK readiness/drain Engine research остаётся на frozen9ba source; не
 | 37 | UA Read timeout worker; N1 SDK index guard | `7512ede9` local live worker 1/1 + stand 1/1; verifier before/fail→after/pass, 271 entries; exact-head CI 9/9 |
 | 38 | S03 Engine timeout gate; N1 Cargo metadata integrity | `2c52d547` live baseline/fail→after/pass, Engine103/103; registry manifests/metadata tamper checks; exact-head CI 9/9 |
 | 39 | S03 test proxy cleanup; N1 final SDK index guard | `476fcec0` local fixture 2/2, verifier regressions after/pass; exact-head CI 9/9 |
+| 40 | UA test listener handoff; DA mixed shutdown | `5ade14ee` backend272/1ignored, Router mock 1/1, exact-head CI 9/9 |
 
 Пара 01 исправила начальное состояние fixture после честного отрицательного
 NOCONFIG verdict на `a004b226`. Проверка на `36fa668` подтвердила
