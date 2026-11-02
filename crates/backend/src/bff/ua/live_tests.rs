@@ -846,8 +846,9 @@ struct SilentServer {
 }
 
 impl SilentServer {
-    fn start(port: u16) -> Self {
-        let listener = std::net::TcpListener::bind(("127.0.0.1", port)).expect("bind stub");
+    fn start() -> Self {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind stub");
+        let port = listener.local_addr().expect("stub address").port();
         listener.set_nonblocking(true).expect("nonblocking");
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let flag = Arc::clone(&stop);
@@ -888,7 +889,7 @@ const PROMPT: Duration = Duration::from_secs(4);
 #[test]
 fn u1_hung_connect_does_not_block_other_sessions() {
     let server = TestServer::start(48611);
-    let silent = SilentServer::start(48612);
+    let silent = SilentServer::start();
     let mut app = Harness::new();
     app.connect(SessionId::new(1).unwrap(), Harness::endpoint(&server.url))
         .expect("connect to the live server");
@@ -960,7 +961,7 @@ fn u1_hung_connect_does_not_block_other_sessions() {
 
 #[test]
 fn u1_disconnect_cancels_a_pending_connect_with_one_error_reply() {
-    let silent = SilentServer::start(48613);
+    let silent = SilentServer::start();
     let mut app = Harness::new();
     let connect = app.send(
         SessionId::new(7).unwrap().into(),
@@ -1189,7 +1190,7 @@ fn u1_a_failed_connect_answers_the_commands_queued_behind_it() {
 #[test]
 fn u1_shutdown_closes_live_sessions_and_pending_connects_promptly() {
     let server = TestServer::start(48616);
-    let silent = SilentServer::start(48617);
+    let silent = SilentServer::start();
     let mut app = Harness::new();
     app.connect(SessionId::new(1).unwrap(), Harness::endpoint(&server.url))
         .expect("connect");
@@ -2059,12 +2060,16 @@ fn p1_tags_past_every_limit_are_reported_poll_only() {
 /// the server stop before listening. The start moves to a free port.
 #[test]
 fn test_server_moves_off_a_taken_port() {
-    let _holder = std::net::TcpListener::bind(("127.0.0.1", 48710)).expect("hold the port");
-    let server = TestServer::start(48710);
-    assert_ne!(server.port, 48710);
+    // Bind port zero and keep its listener alive throughout the fallback test:
+    // no other test can race us between choosing and occupying the port.
+    let holder = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("hold an OS-assigned port");
+    let taken_port = holder.local_addr().expect("held address").port();
+    let server = TestServer::start(taken_port);
+    assert_ne!(server.port, taken_port);
     let mut app = Harness::new();
     app.connect(SessionId::new(1).unwrap(), Harness::endpoint(&server.url))
         .expect("connect on the moved port");
+    assert_eq!(holder.local_addr().unwrap().port(), taken_port);
 }
 
 const KEY_1: ItemKey = ItemKey::FIRST;
