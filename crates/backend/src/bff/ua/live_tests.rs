@@ -186,16 +186,21 @@ impl TestServer {
                 Ok(server) => return server,
                 Err(taken) => {
                     eprintln!("test server port {taken} taken, retrying on a free port");
-                    port = free_port();
+                    port = 0;
                 }
             }
         }
         panic!("test server could not start on any port");
     }
 
-    /// One start attempt; `Err(port)` when the server task ended before it
-    /// listened (the port is taken).
+    /// One start attempt; reserve the listener before constructing the server.
+    /// `Err(port)` means the requested bind or subsequent start failed.
     fn try_start(port: u16, limits: &impl Fn(&mut opcua::server::Limits)) -> Result<Self, u16> {
+        let listener = bind_test_listener(port).map_err(|_| port)?;
+        let port = listener.local_addr().expect("listener address").port();
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking listener");
         init_pki();
         let dir =
             std::env::temp_dir().join(format!("opclook-ua-server-{}-{port}", std::process::id()));
@@ -226,7 +231,11 @@ impl TestServer {
             .build()
             .expect("sample server builds");
         drop(guard);
-        let running = rt.spawn(server.run());
+        let listener = {
+            let _guard = rt.enter();
+            tokio::net::TcpListener::from_std(listener).expect("tokio listener")
+        };
+        let running = rt.spawn(server.run_with(listener));
 
         let ns = handle
             .get_namespace_index(NS_URI)
@@ -414,6 +423,18 @@ fn add_pump_structure(space: &mut opcua::server::address_space::AddressSpace, ns
         .user_access_level(rw)
         .build();
     space.add_variables(vec![pump], &ObjectId::ObjectsFolder.into());
+}
+
+// Keep the selected address reserved until the SDK takes the listener.
+fn bind_test_listener(port: u16) -> std::io::Result<std::net::TcpListener> {
+    std::net::TcpListener::bind(("127.0.0.1", port))
+}
+
+#[test]
+fn selected_test_listener_stays_reserved_until_handoff() {
+    let listener = bind_test_listener(0).expect("bind");
+    let port = listener.local_addr().expect("address").port();
+    assert!(std::net::TcpListener::bind(("127.0.0.1", port)).is_err());
 }
 
 /// A loopback port the OS reports free right now.

@@ -1068,6 +1068,43 @@ mod tests {
     }
 
     #[test]
+    fn shutdown_retires_healthy_session_while_other_is_blocked() {
+        let (host, release, _d) = MockHost::new();
+        let (mut router, rx) = router_with(Arc::clone(&host));
+        router.dispatch(connect(1, sid(1), "block"));
+        let deadline = Instant::now() + WAIT;
+        while host
+            .release
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some()
+        {
+            assert!(
+                Instant::now() < deadline,
+                "blocked worker never entered Connect"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        router.dispatch(connect(2, sid(2), "ok"));
+        assert!(matches!(next(&rx).kind, EventKind::Connected { .. }));
+        let outcome = router.shutdown(Duration::from_secs(2));
+        assert_eq!(
+            outcome,
+            RouterShutdown {
+                detached: 1,
+                panicked: false
+            }
+        );
+        assert_eq!(host.torn_down(), vec![sid(2)]);
+        release.send(()).unwrap();
+        let deadline = Instant::now() + WAIT;
+        while host.torn_down() != vec![sid(1), sid(2)] {
+            assert!(Instant::now() < deadline, "released worker never retired");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
     fn reaped_discovery_panic_is_reported_and_retained_for_shutdown() {
         let (host, _release, _d) = MockHost::new();
         let (mut router, rx) = router_with(host);
