@@ -85,7 +85,7 @@ assertions. Теперь исполняются asyncDevice/asyncMaxAge incremen
 initial/cyclic/sync/write/other-tag, оба saturation cases и cache release order.
 Before compile-fail и after root pass измерены. Других Python/sh extractors
 FixtureCreator не найдено. Backend/native runtime source не менялись; ранее
-подтверждённые270/0/1knownignored и54 hooks сохранены. Новый exact-head CI pending.
+подтверждённые270/0/1knownignored и54 hooks сохранены. Новый exact-head CI 9/9.
 
 ## 2026-11-01 — пара32: metadata Read cardinality и Async DA2/DA3
 
@@ -366,7 +366,7 @@ as distinct physical files. Windows overwrites one. The repaired fixture uses
 one real file and controlled duplicate-name enumeration; production collector
 and ambiguity guard unchanged. Windows-like baseline failed; repaired collector
 13/13, Windows-like2/2, packager8/8 passed, disabled guard still fails.
-These are narrow test repairs; new exact-head CI pending. The prior adbd315
+These are narrow test repairs; new exact-head CI 9/9. The prior adbd315
 package/read/cleanup result is not a claim that 08 packaged the new notices.
 
 
@@ -1922,3 +1922,28 @@ wire maxAge proof. Тест покрывает путь отказа без prod
 одновременного wire I/O. Более широкий контракт остаётся предметом проверки.
 Взаимное ревью и fmt интеграции прошли; legacy DA, production Async Unsupported,
 N4 и SDK pins не менялись. Остановленный SDK mutation/drain не повторялся.
+
+## 2026-11-02 — пара37: UA Read timeout и SDK inventory
+
+Code head `7512ede914548b3a1c57cb892ccf2ee4014bfc2d`; CI точного head прошёл 9/9: [SDK4](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41437651018), [COM2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41437651016), [App2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41437651049), [package1](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41437651012). Новый live test выполнен на Linux и Windows i686. UA O29/S03 частично: test-only loopback proxy задерживает
+ReadRequest конкретного Level NodeId, после предварительного Read для кеша
+OperationLimits. На действительном UA worker и sample server получены
+TimeoutRead, Disconnected(SessionClosedAfterTimeout), NoConnection для
+queued Read, затем новый Connect/Add/Read прошёл. Реальный целевой тест 1/1
+за 37.55 с; внешний stand с актуальным backend lib.rs 1/1 за 38.18 с.
+Это не полная проверка Engine S03, не независимый wire-counter отсутствия
+повторного Read и не доказательство bounded join тестового proxy. Первое
+построение прервалось до теста из-за ошибки архива зависимости; повтор с
+codegen-units=1 прошёл. Production SDK pins/код не менялись.
+
+N1: verify-license-closure.py теперь отклоняет скрывающие tracked изменения
+index-флаги assume-unchanged и skip-worktree в проверяемых SDK путях. До
+исправления реальный временный Git fixture ошибочно принимал изменённый source
+в обоих случаях, после исправления оба subtests проходят; verifier suite 5/5,
+package tests 8/8, Cargo notices 14/14, чистый pinned SDK inventory 271 entries.
+Это source inventory guard, не legal clearance, не выпуск и не N4 switch.
+
+Взаимное ревью выполнено, fmt интегрированного дерева прошёл. Production DA
+остаётся legacy, Async Unsupported, N4 и внешние gates открыты. SDK
+subscription-mutation/drain diagnostic, остановленный automatic check с причиной
+possible cybersecurity risk, не повторялся; его gate не закрыт.

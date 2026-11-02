@@ -303,3 +303,12 @@ and registration before old88 release, new77→99/FreshRead99 with epoch8 and
 joined Gateway/SDK finish. [Proof](late-reconnect.md). This is separate from
 old same-epoch remove/readd and Async post-retirement reconnect, and remains
 local fixture evidence, not production Async or remote/vendor acceptance.
+
+## Pair37: SDK inventory index flags
+
+Code `7512ede914548b3a1c57cb892ccf2ee4014bfc2d` rejects selected SDK tracked
+inputs hidden by assume-unchanged or skip-worktree. Both real temporary Git
+fixture counterfactuals fail against baseline and pass after fix; guard 5/5,
+package 8/8, notices 14/14 and pinned SDK inventory 271 entries pass locally.
+This strengthens source identity, not redistribution/legal clearance. No pin,
+production DA default or Async change; exact-head CI 9/9.

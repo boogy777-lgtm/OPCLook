@@ -109,6 +109,7 @@ SDK readiness/drain Engine research остаётся на frozen9ba source; не
 | 34 | OnlyVars IME; migrated UA profile at monitored capacity | `45e73026` 9/9; UI before/fail→after/pass, live sample 1/1, explicit no due vs legacy real fallback; physical IME and external servers open |
 | 35 | P4 pointer/IME; S11 held Browse coalescing | `18318996` local UI before/fail→after/pass and Engine98/98; exact-head CI 9/9; synthetic UI and controlled Gateway scope |
 | 36 | CSV controls/IME; S11 Browse error | `1c714b5f` local UI before/fail→after/pass, Engine99/99; CI exact head 9/9; synthetic UI/controlled Gateway |
+| 37 | UA Read timeout worker; N1 SDK index guard | `7512ede9` local live worker 1/1 + stand 1/1; verifier before/fail→after/pass, 271 entries; exact-head CI 9/9 |
 
 Пара 01 исправила начальное состояние fixture после честного отрицательного
 NOCONFIG verdict на `a004b226`. Проверка на `36fa668` подтвердила

@@ -178,3 +178,13 @@ produces a real fallback Read and Values. This is not a wire-level count of all
 requests, external server proof or Windows proof. PollOnly means no monitored
 subscription; no defect established. Test fixture port selection has bind/drop
 race. Exact code head CI passed 9/9; Windows i686 library 269/269, including this test. SDK research pins and drain gate unchanged.
+
+## Pair37: O29 worker Read timeout and reconnect
+
+Code `7512ede914548b3a1c57cb892ccf2ee4014bfc2d`: local sample server +
+real UA worker and loopback proxy holding a ReadRequest for a specific NodeId.
+Observed TimeoutRead, SessionClosedAfterTimeout, queued NoConnection and
+successful new Connect/Add/Read. Root 1/1 37.55s, real-file stand 1/1 38.18s.
+No independent wire counter, bounded proxy-thread join or complete Engine S03
+proof. SDK pins unchanged; stopped mutation/drain diagnostic not retried.
+Exact-head CI 9/9; live test passed Linux and Windows i686.

@@ -8,6 +8,8 @@
 Это входное задание для нового чата. Маршруты направляют к существующим механизмам; текущий частичный runtime срез
 ExplicitRefresh и CLI opt-in WriteReadback описан в status.md. Полный R2 не завершён.
 
+Пара37 code `7512ede914548b3a1c57cb892ccf2ee4014bfc2d`: live UA worker Read timeout/reconnect и SDK inventory guard; CI точного head прошёл 9/9. Engine S03, wire counter и bounded proxy join остаются отдельно.
+
 Пара36 code `1c714b5ff5a21efcf839a57e3b4814d5d4369870`: CSV IME fix и controlled Browse-error/Refresh gate; CI точного head прошёл 9/9. Подробности и границы — в status.
 
 Пара35 code `18318996be83962aefbf6fcdbba15c017cbcc9d8`: P4 pointer/IME fix и S11 held Browse controlled Engine test; CI точного head прошёл 9/9. Подробности и границы — в status.
