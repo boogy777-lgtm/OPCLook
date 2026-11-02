@@ -471,3 +471,13 @@ initial terminal Read, monitored push и warning проверены; Engine с �
 wire counter, не внешние серверы и не Windows. Полные матрицы остаются открыты.
 CI точного code head прошёл 9/9. Более ранние общие формулировки выше не
 отменяют этот точный receipt.
+
+### Пара35: S11/E удержанный Browse и coalesced needs
+
+На code `18318996be83962aefbf6fcdbba15c017cbcc9d8` controlled Engine
+unit при test_skip_dispatch проверяет удержанный Browse A, повторный Refresh и
+WriteReadback, независимый terminal MissingResult B, а затем один Fresh Read
+A с terminal обоих needs. Poll/CacheAllowed и команда Read различают выбранную
+семантику от обычного CacheAllowed. Synthetic reply/controlled time, не live
+Gateway и не network maxAge proof. Engine suite 98/98, real-file stand 1/1;
+CI точного head прошёл 9/9. Оставшиеся S/E и внешние gates не закрыты.

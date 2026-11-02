@@ -1867,3 +1867,34 @@ due не является независимым wire-счётчиком. PollOn
 прошли на интегрированном дереве. SDK pins, frozen9ba, default legacy DA,
 production Async Unsupported и открытый N4 сохранены. Остановленный SDK
 mutation/drain diagnostic не повторялся.
+
+## 2026-11-02 — пара35: палитра и ожидание Browse
+
+Code head `18318996be83962aefbf6fcdbba15c017cbcc9d8`; CI точного head прошёл 9/9: [SDK4](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41364953966), [COM2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41364953997), [App2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41364953969), [package1](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41364953960). Оба новых теста выполнялись и прошли на Windows i686. Исторические записи о неготовых P4 открытии и параметрах устарели:
+`shortcuts.rs` уже открывает палитру Mod+P, typed Browse/Write используют
+существующие действия и покрыты `p4_keyboard_palette_typed_browse_and_unknown_result`,
+`p4_palette_write_reuses_typed_dialog_and_confirmation` и IME-тестом.
+
+P4/P3: pointer double click по доступной команде во время IME preedit был
+ошибочно заблокирован как клавиатурное действие. На реальном UI harness с
+корректным интервалом двойного клика 16 мс старый код fail, исправленный 1/1
+pass; disabled Write остаётся недоступным. Удалён только keyboard IME guard
+с pointer-события, существующие availability и keyboard guards сохранены.
+Первый ошибочный вариант фикстуры с неверным временем не является доказательством.
+Полный Linux headless UI 259 passed / 1 Windows-only ignored, отдельный
+real-file stand 1/1, render p4_palette_ru 1/1 и PNG просмотрен с Linux DejaVu
+fallback. Physical Windows IME и CJK-рендер не проверялись.
+
+S11/E: тест реального Engine с test_skip_dispatch, управляемым временем и
+синтетическими ответами удерживает Browse A; Refresh и WriteReadback для
+одного key объединяются, B получает конечный MissingResult без ожидания A,
+после Browse A один Fresh Read возвращает terminal с обоими видами demand.
+Poll/CacheAllowed делает различие Fresh видимым в выбранной команде. Это unit,
+не live OPC и не измерение сетевого maxAge. Целевой тест 1/1, Engine lib 98/98,
+внешний stand с реальным lib.rs 1/1. Нового scheduler или production defect
+по Engine не заявлено. Взаимное ревью и fmt интегрированного дерева прошли.
+
+Возможность прямого `Engine::send(Read)` при занятом Browse — отдельная
+непроверенная гипотеза; сначала сверить контракт и Gateway, не объявлять баг.
+Production DA legacy, Async Unsupported, N4 и SDK pins без изменения.
+Остановленный SDK mutation/drain diagnostic не возобновлялся.
