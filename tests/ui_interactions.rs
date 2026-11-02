@@ -6791,6 +6791,57 @@ fn p4_ime_and_repeated_enter_do_not_execute() {
 }
 
 #[test]
+fn p4_palette_pointer_double_click_during_ime_respects_availability() {
+    for available in [true, false] {
+        let mut app = App::new_test(&egui::Context::default());
+        app.open_command_palette();
+        app.dialogs.palette.query = if available {
+            "ui.connect.open"
+        } else {
+            "session.write"
+        }
+        .into();
+        app.record_dispatches_for_test();
+        let mut h = Harness::builder()
+            .with_size([1200.0, 900.0])
+            .with_step_dt(0.016)
+            .with_accessibility_check(false)
+            .allow_missing_glyphs()
+            .build_ui_state(|ui, app| opclook::ui::draw(app, ui), app);
+        h.run_steps(3);
+        let label = if available {
+            "ui.connect.open"
+        } else {
+            "session.write"
+        };
+        assert_eq!(h.query_all_by_label_contains(label).count(), 1);
+        h.query_by_label_contains(label).unwrap().focus();
+        h.run_steps(1);
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit {
+            text: "a".into(),
+            active_range_chars: None,
+        }));
+        h.run_steps(1);
+        assert_eq!(h.query_all_by_label_contains(label).count(), 1);
+        h.query_by_label_contains(label).unwrap().click();
+        h.run_steps(1);
+        h.query_by_label_contains(label).unwrap().click();
+        h.run_steps(2);
+        assert_eq!(
+            h.state().dialogs.connect.open,
+            available,
+            "available={available}"
+        );
+        assert_eq!(
+            h.state().dialogs.palette.open,
+            !available,
+            "available={available}"
+        );
+        assert!(h.state().dispatched_for_test().is_empty());
+    }
+}
+
+#[test]
 fn p4_unavailable_other_modal_cannot_be_bypassed_by_palette() {
     let mut app = App::new_test(&egui::Context::default());
     app.dialogs.palette.open = true;

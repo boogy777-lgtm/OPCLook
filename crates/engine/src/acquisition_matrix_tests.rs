@@ -627,6 +627,180 @@ fn pending_refresh_must_not_starve_under_continuous_browse_and_other_session_pro
 }
 
 #[test]
+fn held_browse_coalesces_strong_demands_without_blocking_another_session() {
+    use opclook_contract::model::{
+        DataValue, NodeClassFilter, PollFreshness, Quality, ReadNeed, ReadTerminalStatus,
+        UpdateMode, Value, WriteOutcome, WriteRequest,
+    };
+    let now = Instant::now();
+    let mut engine = Engine::<()>::default();
+    engine.test_skip_dispatch = true;
+    let mut profile = AcquisitionConfig::ua_default();
+    profile.update_mode = UpdateMode::Poll;
+    profile.interval_ms = 60_000;
+    profile.poll_freshness = PollFreshness::CacheAllowed;
+    profile.read_after_write = true;
+    let (a, key) = register_as(&mut engine, now, profile.clone(), true, SessionId::FIRST);
+    let (b, _) = register_as(&mut engine, now, profile, true, SessionId::new(2).unwrap());
+    for session in [a, b] {
+        let initial = engine
+            .send(
+                session,
+                Protocol::OpcUa,
+                CommandKind::Read { keys: vec![key] },
+                (),
+            )
+            .unwrap();
+        finish_read(&mut engine, session, initial, now);
+    }
+    let browse = || CommandKind::Browse {
+        node_id: String::new(),
+        filter: NodeClassFilter::All,
+        view_id: None,
+    };
+    let held = engine.send(a, Protocol::OpcUa, browse(), ()).unwrap();
+    engine.request_refresh(a, key).unwrap();
+    engine.request_refresh(a, key).unwrap();
+    let write = engine
+        .send(
+            a,
+            Protocol::OpcUa,
+            CommandKind::Write {
+                request: WriteRequest {
+                    key,
+                    value: Value::I64(42),
+                    type_hint: None,
+                },
+            },
+            (),
+        )
+        .unwrap();
+    engine
+        .accept_at(
+            &Event {
+                owner: a.into(),
+                origin: Origin::Reply(write),
+                kind: EventKind::Wrote {
+                    key,
+                    result: Ok(WriteOutcome::from_ua(0, "good")),
+                },
+            },
+            now,
+        )
+        .unwrap();
+    engine.request_refresh(b, key).unwrap();
+    let due = engine.due(now, Duration::from_secs(60), None);
+    let [
+        Due::Read {
+            session,
+            protocol,
+            keys,
+            permit,
+        },
+    ] = due.as_slice()
+    else {
+        panic!("only session B may read while A Browse is held")
+    };
+    assert_eq!(*session, b);
+    assert_eq!(keys, &[key]);
+    let b_read = engine
+        .send_due_read(*session, *protocol, keys.clone(), *permit, ())
+        .unwrap();
+    let b_terminal = finish_read(&mut engine, b, b_read, now);
+    assert_eq!(b_terminal.read_terminals.len(), 1);
+    assert!(
+        b_terminal.read_terminals[0]
+            .needs
+            .contains(&ReadNeed::ExplicitRefresh)
+    );
+    assert!(matches!(
+        b_terminal.read_terminals[0].status,
+        ReadTerminalStatus::MissingResult
+    ));
+    assert!(engine.due(now, Duration::from_secs(60), None).is_empty());
+    assert!(matches!(
+        engine.send(a, Protocol::OpcUa, browse(), ()),
+        Err(DispatchError::ActionUnavailable(
+            ActionUnavailable::ReadPending
+        ))
+    ));
+    engine
+        .accept_at(
+            &Event {
+                owner: a.into(),
+                origin: Origin::Reply(held),
+                kind: EventKind::Browse {
+                    node_id: String::new(),
+                    children: vec![],
+                },
+            },
+            now,
+        )
+        .unwrap();
+    assert!(matches!(
+        engine.send(a, Protocol::OpcUa, browse(), ()),
+        Err(DispatchError::ActionUnavailable(
+            ActionUnavailable::ReadPending
+        ))
+    ));
+    let due = engine.due(now, Duration::from_secs(60), None);
+    let [
+        Due::Read {
+            session,
+            protocol,
+            keys,
+            permit,
+        },
+    ] = due.as_slice()
+    else {
+        panic!("coalesced A read must become due")
+    };
+    assert_eq!(*session, a);
+    assert_eq!(keys, &[key]);
+    let read = engine
+        .send_due_read(*session, *protocol, keys.clone(), *permit, ())
+        .unwrap();
+    assert!(
+        matches!(
+            &engine.test_commands.borrow().last().unwrap().kind,
+            CommandKind::Read { keys } if keys == &vec![key]
+        ),
+        "strong demands must select UA FreshSource even with CacheAllowed"
+    );
+    let done = engine
+        .accept_at(
+            &Event {
+                owner: a.into(),
+                origin: Origin::Reply(read),
+                kind: EventKind::Values {
+                    values: vec![(
+                        key,
+                        DataValue {
+                            value: Value::I64(42),
+                            quality: Quality::from_ua(0, "good"),
+                            timestamp: None,
+                            times: Default::default(),
+                            reason: None,
+                        },
+                    )],
+                },
+            },
+            now,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(done.read_terminals.len(), 1);
+    let terminal = &done.read_terminals[0];
+    assert_eq!(terminal.key, key);
+    assert_eq!(terminal.needs.len(), 2);
+    assert!(terminal.needs.contains(&ReadNeed::ExplicitRefresh));
+    assert!(terminal.needs.contains(&ReadNeed::WriteReadback));
+    assert!(matches!(terminal.status, ReadTerminalStatus::Received(_)));
+    assert!(engine.due(now, Duration::from_secs(60), None).is_empty());
+    assert!(engine.send(a, Protocol::OpcUa, browse(), ()).is_ok());
+}
+
+#[test]
 fn writes_before_dispatch_coalesce_but_later_write_and_push_need_another_read() {
     use opclook_contract::model::{
         DataValue, Quality, ReadNeed, UpdateMode, Value, WriteOutcome, WriteRequest,

@@ -83,7 +83,7 @@ pub(super) fn palette_dialog(app: &mut App, ui: &mut egui::Ui) {
                 ui.push_id(spec.semantic_id, |ui| {
                     let response = ui.selectable_label(selected, format!("{title}  ·  {}  ·  {}  {shortcut}", spec.semantic_id, spec.code));
                     if response.ime_safe_clicked() { app.dialogs.palette.selected = Some(spec.id); }
-                    if response.double_clicked() && reason.is_none() && !crate::ui::ime_blocks_keys(&ctx) { execute = Some(spec.id); }
+                    if response.double_clicked() && reason.is_none() { execute = Some(spec.id); }
                     if let Some(reason) = reason { ui.label(tr(lang, reason)); }
                 });
             }
