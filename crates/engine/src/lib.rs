@@ -194,6 +194,8 @@ pub struct PendingRequest<C> {
     pub read_demands: Vec<ReadDemand>,
     /// Per-key terminal results produced by accepting this Read's reply.
     pub read_terminals: Vec<opclook_contract::model::ReadTerminal>,
+    // Original requested keys stay intact when Remove cancels terminal coverage.
+    read_keys: HashSet<ItemKey>,
     read_coverage: Vec<(ItemKey, Vec<opclook_contract::model::ReadNeed>)>,
     read_epoch: Option<RequestId>,
     write_readback_key: Option<ItemKey>,
@@ -206,6 +208,7 @@ impl<C> PendingRequest<C> {
             ctx,
             read_demands: Vec::new(),
             read_terminals: Vec::new(),
+            read_keys: HashSet::new(),
             read_coverage: Vec::new(),
             read_epoch: None,
             write_readback_key: None,
@@ -782,6 +785,7 @@ impl<C> Engine<C> {
                 sent: Instant::now(),
                 read_demands: Vec::new(),
                 read_terminals: Vec::new(),
+                read_keys: HashSet::new(),
                 read_coverage: Vec::new(),
                 read_epoch: None,
                 write_readback_key: None,
@@ -1574,6 +1578,7 @@ impl<C> Engine<C> {
                     sent: Instant::now(),
                     read_demands: covered_demands,
                     read_terminals: Vec::new(),
+                    read_keys: read_coverage.iter().map(|(key, _)| *key).collect(),
                     read_coverage,
                     read_epoch: session
                         .and_then(|id| self.sessions.get(&id))
@@ -2093,6 +2098,26 @@ impl<C> Engine<C> {
             );
             self.purge_read_requests(session);
             self.session_routes.remove(&session);
+        }
+        // A UA Read timeout poisons the worker before its eventual Disconnected
+        // event. Keep the original request keys even if Remove cancelled their
+        // terminal coverage, and block new reads during the close window.
+        if let Some(view) = self.sessions.get_mut(&session)
+            && view.endpoint.protocol == Protocol::OpcUa
+            && view.state == SessionState::Connected
+            && view.connection_id.is_some()
+            && let Some(p) = &pending
+            && p.operation == Operation::Read
+            && p.read_epoch == view.connection_id
+            && let EventKind::Values { values } = &event.kind
+            && values.iter().any(|(key, value)| {
+                p.read_keys.contains(key)
+                    && matches!(&value.reason,
+                        Some(BackendMsg::Context { cause, .. })
+                            if matches!(cause.as_ref(), BackendMsg::TimeoutRead))
+            })
+        {
+            view.ua_recovery_phase = UaRecoveryPhase::Stopped;
         }
         if let Some(pending) = &pending {
             self.notify_read_terminals(session, pending.read_epoch, &pending.read_terminals);
@@ -5280,6 +5305,7 @@ mod tests {
                 sent: Instant::now(),
                 read_demands: Vec::new(),
                 read_terminals: Vec::new(),
+                read_keys: HashSet::new(),
                 read_coverage: Vec::new(),
                 read_epoch: None,
                 write_readback_key: None,
@@ -5293,6 +5319,7 @@ mod tests {
                 sent: Instant::now(),
                 read_demands: Vec::new(),
                 read_terminals: Vec::new(),
+                read_keys: HashSet::new(),
                 read_coverage: Vec::new(),
                 read_epoch: None,
                 write_readback_key: None,
@@ -5329,6 +5356,7 @@ mod tests {
                 sent: Instant::now() - Duration::from_secs(100),
                 read_demands: Vec::new(),
                 read_terminals: Vec::new(),
+                read_keys: HashSet::new(),
                 read_coverage: Vec::new(),
                 read_epoch: None,
                 write_readback_key: None,
@@ -5559,6 +5587,7 @@ mod tests {
                 sent: Instant::now(),
                 read_demands: Vec::new(),
                 read_terminals: Vec::new(),
+                read_keys: HashSet::new(),
                 read_coverage: Vec::new(),
                 read_epoch: None,
                 write_readback_key: None,
@@ -5607,6 +5636,7 @@ mod tests {
                 sent: Instant::now(),
                 read_demands: Vec::new(),
                 read_terminals: Vec::new(),
+                read_keys: HashSet::new(),
                 read_coverage: Vec::new(),
                 read_epoch: None,
                 write_readback_key: None,
@@ -5666,6 +5696,7 @@ mod tests {
                 sent: Instant::now() - Duration::from_secs(100),
                 read_demands: Vec::new(),
                 read_terminals: Vec::new(),
+                read_keys: HashSet::new(),
                 read_coverage: Vec::new(),
                 read_epoch: None,
                 write_readback_key: None,
@@ -5715,6 +5746,7 @@ mod tests {
                 sent: Instant::now() - Duration::from_secs(100),
                 read_demands: Vec::new(),
                 read_terminals: Vec::new(),
+                read_keys: HashSet::new(),
                 read_coverage: Vec::new(),
                 read_epoch: None,
                 write_readback_key: None,
@@ -7003,6 +7035,7 @@ mod tests {
                 sent: Instant::now(),
                 read_demands: Vec::new(),
                 read_terminals: Vec::new(),
+                read_keys: HashSet::new(),
                 read_coverage: Vec::new(),
                 read_epoch: None,
                 write_readback_key: None,
@@ -7112,6 +7145,7 @@ mod tests {
                 sent: Instant::now(),
                 read_demands: Vec::new(),
                 read_terminals: Vec::new(),
+                read_keys: HashSet::new(),
                 read_coverage: Vec::new(),
                 read_epoch: None,
                 write_readback_key: None,
@@ -7292,6 +7326,7 @@ mod tests {
                     sent: now,
                     read_demands: Vec::new(),
                     read_terminals: Vec::new(),
+                    read_keys: HashSet::new(),
                     read_coverage: Vec::new(),
                     read_epoch: None,
                     write_readback_key: None,
@@ -7353,6 +7388,7 @@ mod tests {
                 sent: Instant::now(),
                 read_demands: Vec::new(),
                 read_terminals: Vec::new(),
+                read_keys: HashSet::new(),
                 read_coverage: Vec::new(),
                 read_epoch: None,
                 write_readback_key: None,
@@ -7402,6 +7438,7 @@ mod tests {
                 sent: Instant::now(),
                 read_demands: Vec::new(),
                 read_terminals: Vec::new(),
+                read_keys: HashSet::new(),
                 read_coverage: Vec::new(),
                 read_epoch: None,
                 write_readback_key: None,
@@ -7475,6 +7512,7 @@ mod tests {
                 sent: Instant::now(),
                 read_demands: Vec::new(),
                 read_terminals: Vec::new(),
+                read_keys: HashSet::new(),
                 read_coverage: Vec::new(),
                 read_epoch: None,
                 write_readback_key: None,

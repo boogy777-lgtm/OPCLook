@@ -2,6 +2,7 @@
 import importlib.util
 import hashlib
 import json
+import re
 import tarfile
 from pathlib import Path, PureWindowsPath
 import tempfile
@@ -37,7 +38,7 @@ checksum = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         self.home = self.root / "cargo"
         self.pkg = self.home / "registry/src/index-test/dependency-2.0"
         self.pkg.mkdir(parents=True)
-        (self.pkg / "Cargo.toml").write_text('[package]\nname="dependency"\nversion="2.0"\n')
+        (self.pkg / "Cargo.toml").write_text('[package]\nname="dependency"\nversion="2.0"\nlicense="MIT OR Apache-2.0"\n')
         self.rows = [
             {"id": "workspace-cli", "name": "opclook-cli", "version": "1.0", "source": None,
              "license": "MIT", "license_file": None, "manifest_path": str(cli / "Cargo.toml")},
@@ -235,6 +236,42 @@ checksum = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         self.assertFalse(result["packages"][1]["archive_verified"])
         self.assertIn("locked registry archive unavailable or exceeds limit", result["missing"][0]["reasons"])
 
+    def test_registry_metadata_cannot_silently_use_tampered_manifest(self):
+        manifest = self.pkg / "Cargo.toml"
+        manifest.write_text('[package]\nname="dependency"\nversion="2.0"\nlicense="MIT"\n')
+        (self.pkg / "LICENSE").write_text("authentic")
+        self.rows[1]["license"] = "MIT"
+        self.run_collect()
+        manifest.write_text('[package]\nname="dependency"\nversion="2.0"\nlicense="GPL-3.0-only"\n')
+        self.rows[1]["license"] = "GPL-3.0-only"
+        with self.assertRaisesRegex(ValueError, "differs from locked registry archive"):
+            collector.collect(self.metadata, self.rows, self.workspace, self.home,
+                              self.root / "tampered-manifest-output")
+
+    def test_registry_metadata_license_matches_installed_manifest(self):
+        (self.pkg / "Cargo.toml").write_text(
+            '[package]\nname="dependency"\nversion="2.0"\nlicense="MIT"\n')
+        (self.pkg / "LICENSE").write_text("authentic")
+        self.rows[1]["license"] = "MIT"
+        self.run_collect()
+        self.rows[1]["license"] = "GPL-3.0-only"
+        with self.assertRaisesRegex(ValueError, "license metadata differs"):
+            collector.collect(self.metadata, self.rows, self.workspace, self.home,
+                              self.root / "tampered-metadata-output")
+
+    def test_missing_archive_manifest_is_explicit(self):
+        (self.pkg / "LICENSE").write_text("authentic")
+        self.run_collect()
+        archive = self.home / "registry/cache/index-test/dependency-2.0.crate"
+        with tarfile.open(archive, "w:gz") as tar:
+            tar.add(self.pkg / "LICENSE", arcname="dependency-2.0/LICENSE")
+        lock = self.workspace / "Cargo.lock"
+        checksum = hashlib.sha256(archive.read_bytes()).hexdigest()
+        lock.write_text(re.sub(r'checksum = "[0-9a-f]{64}"', f'checksum = "{checksum}"', lock.read_text()))
+        result = collector.collect(self.metadata, self.rows, self.workspace, self.home,
+                                   self.root / "missing-manifest-output")
+        self.assertIn("manifest not found in locked registry archive", result["missing"][0]["reasons"])
+
     def test_archive_checksum_mismatch_and_duplicate_members_are_rejected(self):
         (self.pkg / "LICENSE").write_bytes(b"authentic")
         self.run_collect()
@@ -254,6 +291,7 @@ checksum = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
     def test_missing_license_expression_and_oversize_are_reported(self):
         self.rows[1]["license"] = None
+        (self.pkg / "Cargo.toml").write_text('[package]\nname="dependency"\nversion="2.0"\n')
         (self.pkg / "LICENSE").write_bytes(b"x" * (collector.MAX_FILE_BYTES + 1))
         reasons = self.run_collect()["missing"][0]["reasons"]
         self.assertIn("no declared license expression", reasons)

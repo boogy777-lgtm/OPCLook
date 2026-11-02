@@ -117,6 +117,8 @@ def collect(metadata, rows, workspace, cargo_home, output):
             installed = tomllib.loads(manifest_bytes.decode("utf-8"))["package"]
             if installed.get("name") != name or installed.get("version") != version:
                 raise ValueError(f"installed manifest identity mismatch: {name}")
+            if installed.get("license") != row.get("license"):
+                raise ValueError(f"license metadata differs from installed manifest: {name}")
             is_workspace = False
         else:
             entry["missing"].append("source is not an installed locked registry package or workspace member")
@@ -191,7 +193,9 @@ def collect(metadata, rows, workspace, cargo_home, output):
                        and row.get("license") == "MPL-2.0"
                        and installed.get("license") == "MPL-2.0"
                        and installed.get("repository") == UPSTREAM_REPOSITORY)
-            expected = dict(source_bytes)
+            # Cargo metadata is derived from the installed manifest. Anchor it
+            # to the same checksum-verified crate archive as the notice texts.
+            expected = {**source_bytes, "Cargo.toml": manifest_bytes}
             if curated:
                 vcs_path = (package_root / ".cargo_vcs_info.json").resolve(strict=False)
                 if not inside(vcs_path, package_root):
@@ -228,6 +232,8 @@ def collect(metadata, rows, workspace, cargo_home, output):
             entry["archive_verified"] = verified
             if not verified:
                 entry["missing"].append("locked registry archive unavailable or exceeds limit")
+            elif "Cargo.toml" not in members_found:
+                entry["missing"].append("manifest not found in locked registry archive")
             for relative in sorted(source_bytes.keys() - members_found):
                 if verified and relative != "<upstream>/LICENSE.md":
                     entry["missing"].append(f"notice not found in locked registry archive: {relative}")

@@ -627,6 +627,420 @@ fn pending_refresh_must_not_starve_under_continuous_browse_and_other_session_pro
 }
 
 #[test]
+fn ua_read_timeout_does_not_schedule_pending_write_readback_before_disconnect() {
+    use opclook_contract::model::{
+        DataValue, ReadCancelReason, ReadNeed, ReadTerminalStatus, UpdateMode, Value, WriteOutcome,
+        WriteRequest,
+    };
+    use std::sync::{Arc, Mutex};
+    let now = Instant::now();
+    let mut engine = Engine::<()>::default();
+    engine.test_skip_dispatch = true;
+    let mut profile = AcquisitionConfig::ua_default();
+    profile.update_mode = UpdateMode::Subscription;
+    profile.read_after_write = true;
+    let (session, key) = register(&mut engine, now, profile.clone(), true);
+    let initial = engine
+        .send(
+            session,
+            Protocol::OpcUa,
+            CommandKind::Read { keys: vec![key] },
+            (),
+        )
+        .unwrap();
+    finish_read(&mut engine, session, initial, now);
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let sink = observed.clone();
+    engine.set_read_terminal_sink(Some(Box::new(move |_, epoch, terminal| {
+        sink.lock().unwrap().push((epoch, terminal.clone()))
+    })));
+    let epoch = engine.connection_id(session).unwrap();
+    // UA actor can process W1 first, then hold R1; consume W1 reply only after R1 dispatch.
+    let write = engine
+        .send(
+            session,
+            Protocol::OpcUa,
+            CommandKind::Write {
+                request: WriteRequest {
+                    key,
+                    value: Value::I64(42),
+                    type_hint: None,
+                },
+            },
+            (),
+        )
+        .unwrap();
+    engine.request_refresh(session, key).unwrap();
+    let work = engine.due(now, Duration::from_secs(60), None);
+    let [Due::Read { keys, permit, .. }] = work.as_slice() else {
+        panic!("first read due")
+    };
+    let read = engine
+        .send_due_read(session, Protocol::OpcUa, keys.clone(), *permit, ())
+        .unwrap();
+    engine
+        .accept_at(
+            &Event {
+                owner: session.into(),
+                origin: Origin::Reply(write),
+                kind: EventKind::Wrote {
+                    key,
+                    result: Ok(WriteOutcome::from_ua(0, "good")),
+                },
+            },
+            now,
+        )
+        .unwrap();
+    let timeout_reply = Event {
+        owner: session.into(),
+        origin: Origin::Reply(read),
+        kind: EventKind::Values {
+            values: vec![(
+                key,
+                DataValue::bad(BackendMsg::context("read", BackendMsg::TimeoutRead)),
+            )],
+        },
+    };
+    let timed = engine.accept_at(&timeout_reply, now).unwrap().unwrap();
+    assert_eq!(timed.read_terminals.len(), 1);
+    assert!(
+        timed.read_terminals[0]
+            .needs
+            .contains(&ReadNeed::ExplicitRefresh)
+    );
+    assert!(
+        matches!(&timed.read_terminals[0].status, ReadTerminalStatus::Received(v) if matches!(&v.reason, Some(BackendMsg::Context { cause, .. }) if matches!(cause.as_ref(), BackendMsg::TimeoutRead)))
+    );
+    assert!(
+        engine.due(now, Duration::from_secs(60), None).is_empty(),
+        "pending write readback must not dispatch after a UA timeout while worker closes"
+    );
+    engine
+        .accept_at(
+            &Event {
+                owner: session.into(),
+                origin: Origin::Session(epoch),
+                kind: EventKind::SubscriptionState {
+                    state: SubscriptionState::Active,
+                },
+            },
+            now,
+        )
+        .unwrap();
+    assert!(engine.due(now, Duration::from_secs(60), None).is_empty());
+    assert!(matches!(
+        engine.send(
+            session,
+            Protocol::OpcUa,
+            CommandKind::Read { keys: vec![key] },
+            ()
+        ),
+        Err(DispatchError::ReadBusy)
+    ));
+    assert!(engine.request_refresh(session, key).is_err());
+    engine
+        .accept_at(
+            &Event {
+                owner: session.into(),
+                origin: Origin::Session(epoch),
+                kind: EventKind::Disconnected {
+                    reason: BackendMsg::SessionClosedAfterTimeout,
+                },
+            },
+            now,
+        )
+        .unwrap();
+    let seen = observed.lock().unwrap();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(
+        seen.iter()
+            .filter(|(e, t)| *e == Some(epoch)
+                && t.needs == vec![ReadNeed::WriteReadback]
+                && matches!(
+                    t.status,
+                    ReadTerminalStatus::Cancelled(ReadCancelReason::Disconnected)
+                ))
+            .count(),
+        1
+    );
+    drop(seen);
+    assert!(engine.accept_at(&timeout_reply, now).is_err());
+    let (same, same_key) = register_as(&mut engine, now, profile, true, session);
+    assert_eq!((same, same_key), (session, key));
+    assert_ne!(engine.connection_id(session), Some(epoch));
+    let due = engine.due(now + Duration::from_secs(10), Duration::from_secs(60), None);
+    let [Due::Read { keys, permit, .. }] = due.as_slice() else {
+        panic!("new registration needs initial snapshot")
+    };
+    let snapshot = engine
+        .send_due_read(session, Protocol::OpcUa, keys.clone(), *permit, ())
+        .unwrap();
+    let terminal = finish_read(&mut engine, session, snapshot, now);
+    assert!(
+        terminal.read_terminals[0]
+            .needs
+            .contains(&ReadNeed::Initial)
+    );
+}
+
+#[test]
+fn ua_read_timeout_gate_ignores_unrequested_key_and_other_failures() {
+    use opclook_contract::model::{DataValue, UpdateMode};
+    for (bad_key, reason) in [
+        (true, BackendMsg::TimeoutRead),
+        (false, BackendMsg::ServerReturnedNoValue),
+    ] {
+        let now = Instant::now();
+        let mut engine = Engine::<()>::default();
+        engine.test_skip_dispatch = true;
+        let mut profile = AcquisitionConfig::ua_default();
+        profile.update_mode = UpdateMode::Subscription;
+        let (session, key) = register(&mut engine, now, profile, true);
+        let initial = engine
+            .send(
+                session,
+                Protocol::OpcUa,
+                CommandKind::Read { keys: vec![key] },
+                (),
+            )
+            .unwrap();
+        finish_read(&mut engine, session, initial, now);
+        engine.request_refresh(session, key).unwrap();
+        let due = engine.due(now, Duration::from_secs(60), None);
+        let [Due::Read { keys, permit, .. }] = due.as_slice() else {
+            panic!("read due")
+        };
+        let read = engine
+            .send_due_read(session, Protocol::OpcUa, keys.clone(), *permit, ())
+            .unwrap();
+        engine.request_refresh(session, key).unwrap();
+        engine
+            .accept_at(
+                &Event {
+                    owner: session.into(),
+                    origin: Origin::Reply(read),
+                    kind: EventKind::Values {
+                        values: vec![(
+                            if bad_key {
+                                ItemKey::new(2).unwrap()
+                            } else {
+                                key
+                            },
+                            DataValue::bad(BackendMsg::context("read", reason)),
+                        )],
+                    },
+                },
+                now,
+            )
+            .unwrap();
+        assert!(matches!(
+            engine.session(session).unwrap().ua_recovery_phase,
+            UaRecoveryPhase::Normal
+        ));
+        assert!(matches!(
+            engine.due(now, Duration::from_secs(60), None).as_slice(),
+            [Due::Read { .. }]
+        ));
+    }
+}
+
+#[test]
+fn ua_read_timeout_gate_is_scoped_to_current_ua_read() {
+    use opclook_contract::model::{DataValue, UpdateMode};
+    for (da, wrong_epoch) in [(true, false), (false, true)] {
+        let now = Instant::now();
+        let mut engine = Engine::<()>::default();
+        engine.test_skip_dispatch = true;
+        let mut profile = AcquisitionConfig::ua_default();
+        profile.update_mode = UpdateMode::Subscription;
+        let (session, key) = register(&mut engine, now, profile, true);
+        let initial = engine
+            .send(
+                session,
+                Protocol::OpcUa,
+                CommandKind::Read { keys: vec![key] },
+                (),
+            )
+            .unwrap();
+        finish_read(&mut engine, session, initial, now);
+        engine.request_refresh(session, key).unwrap();
+        let due = engine.due(now, Duration::from_secs(60), None);
+        let [Due::Read { keys, permit, .. }] = due.as_slice() else {
+            panic!("read due")
+        };
+        let read = engine
+            .send_due_read(session, Protocol::OpcUa, keys.clone(), *permit, ())
+            .unwrap();
+        let reply = |id| Event {
+            owner: session.into(),
+            origin: Origin::Reply(id),
+            kind: EventKind::Values {
+                values: vec![(
+                    key,
+                    DataValue::bad(BackendMsg::context("read", BackendMsg::TimeoutRead)),
+                )],
+            },
+        };
+        assert!(
+            engine
+                .accept_at(&reply(RequestId::new(999_999).unwrap()), now)
+                .is_err()
+        );
+        assert_eq!(
+            engine.session(session).unwrap().ua_recovery_phase,
+            UaRecoveryPhase::Normal
+        );
+        if da {
+            engine.sessions.get_mut(&session).unwrap().endpoint.protocol = Protocol::OpcDa;
+        }
+        if wrong_epoch {
+            engine
+                .requests
+                .get_mut(&(session.into(), read))
+                .unwrap()
+                .read_epoch = None;
+        }
+        engine.accept_at(&reply(read), now).unwrap();
+        assert_eq!(
+            engine.session(session).unwrap().ua_recovery_phase,
+            UaRecoveryPhase::Normal
+        );
+    }
+}
+
+#[test]
+fn ua_timeout_for_removed_inflight_key_still_stops_other_pending_read() {
+    use opclook_contract::model::{
+        DataValue, ReadCancelReason, ReadNeed, ReadTerminalStatus, UpdateMode,
+    };
+    use std::sync::{Arc, Mutex};
+    let now = Instant::now();
+    let mut engine = Engine::<()>::default();
+    engine.test_skip_dispatch = true;
+    let mut profile = AcquisitionConfig::ua_default();
+    profile.update_mode = UpdateMode::Subscription;
+    let (session, removed) = register(&mut engine, now, profile, true);
+    let other = ItemKey::new(2).unwrap();
+    let add = engine
+        .send(
+            session,
+            Protocol::OpcUa,
+            CommandKind::AddItems {
+                items: vec![ItemSpec {
+                    key: other,
+                    item_id: "ns=2;s=other".into(),
+                }],
+            },
+            (),
+        )
+        .unwrap();
+    engine
+        .accept_at(
+            &Event {
+                owner: session.into(),
+                origin: Origin::Reply(add),
+                kind: EventKind::AddItems {
+                    results: vec![(
+                        other,
+                        Ok(ItemInfo {
+                            data_type: None,
+                            type_id: None,
+                            writable: true,
+                        }),
+                    )],
+                },
+            },
+            now,
+        )
+        .unwrap();
+    let initial = engine
+        .send(
+            session,
+            Protocol::OpcUa,
+            CommandKind::Read {
+                keys: vec![removed, other],
+            },
+            (),
+        )
+        .unwrap();
+    finish_read(&mut engine, session, initial, now);
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let sink = observed.clone();
+    engine.set_read_terminal_sink(Some(Box::new(move |_, _, terminal| {
+        sink.lock().unwrap().push(terminal.clone());
+    })));
+    let epoch = engine.connection_id(session).unwrap();
+    engine.request_refresh(session, removed).unwrap();
+    let due = engine.due(now, Duration::from_secs(60), None);
+    let [Due::Read { keys, permit, .. }] = due.as_slice() else {
+        panic!("read due")
+    };
+    let read = engine
+        .send_due_read(session, Protocol::OpcUa, keys.clone(), *permit, ())
+        .unwrap();
+    engine
+        .send(
+            session,
+            Protocol::OpcUa,
+            CommandKind::RemoveItems {
+                keys: vec![removed],
+            },
+            (),
+        )
+        .unwrap();
+    engine.request_refresh(session, other).unwrap();
+    let timed = engine
+        .accept_at(
+            &Event {
+                owner: session.into(),
+                origin: Origin::Reply(read),
+                kind: EventKind::Values {
+                    values: vec![(
+                        removed,
+                        DataValue::bad(BackendMsg::context("read", BackendMsg::TimeoutRead)),
+                    )],
+                },
+            },
+            now,
+        )
+        .unwrap()
+        .unwrap();
+    assert!(
+        timed.read_terminals.is_empty(),
+        "removed item was already cancelled"
+    );
+    assert!(
+        engine.due(now, Duration::from_secs(60), None).is_empty(),
+        "timeout for originally requested removed key must still stop reads"
+    );
+    engine
+        .accept_at(
+            &Event {
+                owner: session.into(),
+                origin: Origin::Session(epoch),
+                kind: EventKind::Disconnected {
+                    reason: BackendMsg::SessionClosedAfterTimeout,
+                },
+            },
+            now,
+        )
+        .unwrap();
+    let terminals = observed.lock().unwrap();
+    assert_eq!(terminals.len(), 2);
+    assert!(terminals.iter().any(|t| t.key == removed
+        && matches!(
+            t.status,
+            ReadTerminalStatus::Cancelled(ReadCancelReason::Removed)
+        )));
+    assert!(terminals.iter().any(|t| t.key == other
+        && t.needs == vec![ReadNeed::ExplicitRefresh]
+        && matches!(
+            t.status,
+            ReadTerminalStatus::Cancelled(ReadCancelReason::Disconnected)
+        )));
+}
+
+#[test]
 fn failed_browse_releases_waiting_refresh_without_accepting_late_reply() {
     use opclook_contract::model::{
         DataValue, NodeClassFilter, PollFreshness, Quality, ReadNeed, ReadTerminalStatus,
