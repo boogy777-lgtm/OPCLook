@@ -627,6 +627,117 @@ fn pending_refresh_must_not_starve_under_continuous_browse_and_other_session_pro
 }
 
 #[test]
+fn failed_browse_releases_waiting_refresh_without_accepting_late_reply() {
+    use opclook_contract::model::{
+        DataValue, NodeClassFilter, PollFreshness, Quality, ReadNeed, ReadTerminalStatus,
+        UpdateMode, Value,
+    };
+
+    let now = Instant::now();
+    let mut engine = Engine::<()>::default();
+    engine.test_skip_dispatch = true;
+    let mut profile = AcquisitionConfig::ua_default();
+    profile.update_mode = UpdateMode::Poll;
+    profile.interval_ms = 60_000;
+    profile.poll_freshness = PollFreshness::CacheAllowed;
+    let (session, key) = register(&mut engine, now, profile, true);
+    let initial = engine
+        .send(
+            session,
+            Protocol::OpcUa,
+            CommandKind::Read { keys: vec![key] },
+            (),
+        )
+        .unwrap();
+    finish_read(&mut engine, session, initial, now);
+    let browse = engine
+        .send(
+            session,
+            Protocol::OpcUa,
+            CommandKind::Browse {
+                node_id: String::new(),
+                filter: NodeClassFilter::All,
+                view_id: None,
+            },
+            (),
+        )
+        .unwrap();
+    engine.request_refresh(session, key).unwrap();
+    assert!(engine.due(now, Duration::from_secs(60), None).is_empty());
+
+    let error = Event {
+        owner: session.into(),
+        origin: Origin::Reply(browse),
+        kind: EventKind::Error {
+            operation: Operation::Browse,
+            message: BackendMsg::raw("browse rejected"),
+        },
+    };
+    assert_eq!(
+        engine.accept_at(&error, now).unwrap().unwrap().operation,
+        Operation::Browse
+    );
+    let late = Event {
+        owner: session.into(),
+        origin: Origin::Reply(browse),
+        kind: EventKind::Browse {
+            node_id: String::new(),
+            children: vec![],
+        },
+    };
+    assert!(engine.accept_at(&late, now).is_err());
+    let due = engine.due(now, Duration::from_secs(60), None);
+    let [
+        Due::Read {
+            session: target,
+            protocol,
+            keys,
+            permit,
+        },
+    ] = due.as_slice()
+    else {
+        panic!("failed Browse must release the waiting Refresh")
+    };
+    assert_eq!(*target, session);
+    assert_eq!(keys, &[key]);
+    let read = engine
+        .send_due_read(*target, *protocol, keys.clone(), *permit, ())
+        .unwrap();
+    assert!(matches!(
+        &engine.test_commands.borrow().last().unwrap().kind,
+        CommandKind::Read { keys } if keys == &vec![key]
+    ));
+    let done = engine
+        .accept_at(
+            &Event {
+                owner: session.into(),
+                origin: Origin::Reply(read),
+                kind: EventKind::Values {
+                    values: vec![(
+                        key,
+                        DataValue {
+                            value: Value::I64(42),
+                            quality: Quality::from_ua(0, "good"),
+                            timestamp: None,
+                            times: Default::default(),
+                            reason: None,
+                        },
+                    )],
+                },
+            },
+            now,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(done.read_terminals.len(), 1);
+    let terminal = &done.read_terminals[0];
+    assert_eq!(terminal.key, key);
+    assert_eq!(terminal.needs, vec![ReadNeed::ExplicitRefresh]);
+    assert!(matches!(terminal.status, ReadTerminalStatus::Received(_)));
+    assert!(engine.due(now, Duration::from_secs(60), None).is_empty());
+}
+
+#[test]
 fn held_browse_coalesces_strong_demands_without_blocking_another_session() {
     use opclook_contract::model::{
         DataValue, NodeClassFilter, PollFreshness, Quality, ReadNeed, ReadTerminalStatus,

@@ -5046,6 +5046,88 @@ fn csv_import_cancel_retains_partial_rows_and_close_then_complete() {
 }
 
 #[test]
+fn csv_import_controls_respect_ime_and_intentional_activation() {
+    use opclook::app::{CsvImportJob, CsvImportRow, CsvImportState};
+    for state in [
+        CsvImportState::Completed,
+        CsvImportState::Cancelled,
+        CsvImportState::Running,
+    ] {
+        let completed = state != CsvImportState::Running;
+        for (ime, pointer, activates) in [
+            (true, false, false),
+            (false, false, true),
+            (true, true, true),
+        ] {
+            let mut app = App::new_test(&egui::Context::default());
+            app.seed_session(sid(1), EndpointSpec::da("", "Srv.Test"));
+            app.csv_import = Some(CsvImportJob {
+                state,
+                total: 500_000,
+                processed: 0,
+                loaded: 0,
+                remaining: if completed {
+                    vec![]
+                } else {
+                    (0..500_000)
+                        .map(|i| CsvImportRow {
+                            line: i + 2,
+                            server: "Srv.Test".into(),
+                            item_id: "tag".into(),
+                            name: "tag".into(),
+                        })
+                        .collect()
+                },
+            });
+            let mut h = harness(app);
+            h.run_steps(3);
+            let label = if completed {
+                "Закрыть"
+            } else {
+                "Отмена"
+            };
+            h.get_by_label(label).focus();
+            h.run_steps(1);
+            let before = h.state().csv_import.as_ref().unwrap().processed;
+            if ime {
+                h.event(egui::Event::Ime(egui::ImeEvent::Preedit {
+                    text: "a".into(),
+                    active_range_chars: None,
+                }));
+                h.run_steps(1);
+            }
+            if pointer {
+                h.get_by_label(label).click();
+            } else {
+                h.key_press(Key::Space);
+            }
+            h.run_steps(2);
+            if completed {
+                assert_eq!(
+                    h.state().csv_import.is_none(),
+                    activates,
+                    "completed ime={ime} pointer={pointer}"
+                );
+            } else {
+                let job = h.state().csv_import.as_ref().unwrap();
+                assert_eq!(
+                    job.state,
+                    if activates {
+                        CsvImportState::Cancelled
+                    } else {
+                        CsvImportState::Running
+                    },
+                    "running ime={ime} pointer={pointer}"
+                );
+                if !activates {
+                    assert!(job.processed > before);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn da_results_with_same_progid_select_their_own_host() {
     use opclook::bff::model::ServerEntry;
     let ctx = egui::Context::default();
