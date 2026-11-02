@@ -2028,3 +2028,21 @@ teardown, detached=1, после release A teardown. Actual Router test 1/1
 OS deadline proof. Production defect не заявлен. Взаимное ревью и fmt
 прошли; SDK pins, default legacy DA, production Async Unsupported и N4
 не менялись. Остановленные SDK diagnostics не запускались.
+
+## 2026-11-02 — пара41: About IME и DA Router shutdown
+
+Code `47119cd216a164821957c8adfe178a3b72abe5b9`; CI exact head 9/9. About Close
+при IME preedit + Space закрывал окно; actual UI baseline fail, после
+ImeSafeClick pass с ordinary Space и pointer. UI 261 passed / 1 ignored,
+real-file stand 1/1, PNG просмотрен; это synthetic IME, не physical Windows.
+
+N3 Router test-only: synthetic retired panic и blocked Connect вместе дают
+panicked=true/detached=1; после release наблюдается teardown. Actual checkout
+1/1 и real-file stand 1/1; MockHost, не actual COM и не отдельный join/OS
+deadline. Production defect не заявлен. Взаимное ревью и fmt прошли.
+
+S03 wire no-repeat остаётся открытым: существующий proxy удерживает
+единственный TCP reader, поэтому счётчик в нём не доказывает отсутствие R2.
+Необходим independent observer с positive control и корректным framing.
+SDK pins/default legacy DA/Async Unsupported/N4 неизменны. Остановленный
+SDK mutation/drain diagnostic не повторялся.

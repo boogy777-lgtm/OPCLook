@@ -8,6 +8,8 @@
 Это входное задание для нового чата. Маршруты направляют к существующим механизмам; текущий частичный runtime срез
 ExplicitRefresh и CLI opt-in WriteReadback описан в status.md. Полный R2 не завершён.
 
+Пара41 code `47119cd216a164821957c8adfe178a3b72abe5b9`: About IME fix и DA Router mixed panic/blocked mock; CI exact head 9/9, S03 independent wire observer open.
+
 Пара40 code `5ade14eec04618d4a34b5ed814f7269da5a9bf23`: UA test listener handoff и DA Router mixed shutdown mock; exact-head CI 9/9. Подробности — status.
 
 Пара39 code `476fcec0338a8fd67b20e2c1b3fa74e449dd66b9`: S03 test proxy cleanup observation и N1 final SDK index guard; CI точного head прошёл 9/9. Wire counter и production cleanup отдельно.
@@ -58,7 +60,7 @@ drain Engine stand требует frozen9ba receipts, не текущий изм
 
 Полностью принятый runtime: `690a830` (8/8 jobs). На `cb3da7d` SDK4/COM2
 прошли; App build/shared/library прошли, две exact menu-label assertions
-исправлены отдельным `47e6558`, новый CI pending. Пара07 E02/front consumers
+исправлены отдельным `47e6558`, новый CI exact head 9/9. Пара07 E02/front consumers
 и preferred MIT/no-hook package reviewed privately. Пара08 раздельные времена
 и native Device adapter reviewed privately; пара09 выполняет Engine integration
 и actual package/CI proof. Не называть новые private code heads принятым runtime.

@@ -217,3 +217,11 @@ real fallback/OPC Connect and real-file tests passed. Other free_port uses and
 readiness heuristic remain. DA Router test with mock host shows healthy B
 teardown while blocked A is detached, then A teardown on release; no actual
 COM or OS deadline claim. CI 9/9; no production switch or pin change.
+
+## Pair41: scoped evidence
+
+Code `47119cd216a164821957c8adfe178a3b72abe5b9`: DA Router MockHost
+controlled panic + blocked worker reports panicked and detached=1; released
+worker teardown observed. Actual/real-file 1/1 each; no COM/join/OS deadline
+claim. S03 wire no-repeat remains open: held proxy blocks its sole TCP reader;
+a counter there is not independent evidence. CI exact head 9/9.
