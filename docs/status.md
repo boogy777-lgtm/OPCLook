@@ -1513,3 +1513,32 @@ package tests 8/8, Cargo notices 14/14, чистый pinned SDK inventory 271 en
 остаётся legacy, Async Unsupported, N4 и внешние gates открыты. SDK
 subscription-mutation/drain diagnostic, остановленный automatic check с причиной
 possible cybersecurity risk, не повторялся; его gate не закрыт.
+
+## 2026-11-02 — пара38: S03 UA timeout и Cargo license evidence
+
+Code head `2c52d547e29194119c81e125878ff5e76eb9845e`; CI точного head прошёл 9/9: [SDK4](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41451560037), [COM2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41451559860), [App2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41451560027), [package1](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41451559885). Live S03 Linux 1/1 38.13с, Windows i686 1/1 50.07с; Windows private preview package прошёл. S03: между correlated UA Read TimeoutRead и Disconnected Engine
+мог назначить старой сессии R2 для pending WriteReadback. Существующий
+UaRecoveryPhase::Stopped теперь закрывает этот интервал; PendingRequest хранит
+исходные read keys для корреляции timeout даже после Remove. Без нового
+scheduler/owner. Неподходящие key, request/epoch, DA, ordinary error и late
+reply покрыты отрицательными тестами; новый Connect восстанавливает работу.
+
+На одной live fixture actual Engine/Gateway + sample UA server + Read-hold
+proxy baseline `8777c9f` FAIL за 38.03с на назначении R2, после исправления
+PASS 1/1 за 43.71с. Проверены R1 terminal TimeoutRead, W1 readback terminal
+Cancelled(Disconnected), Initial Received после reconnect и Gateway Joined.
+Remove→timeout отдельно воспроизведён и исправлен. Engine lib 103/103,
+real-file stand 10/10. Loopback None-security, bind(0)/drop race, отсутствует
+независимый wire counter и отдельный deadline proxy join; внешние серверы и
+полная S03 matrix не доказаны. Остановленные SDK diagnostics не запускались.
+
+N1: collector проверяет соответствие license metadata установленному registry
+Cargo.toml, а сам manifest — checksum-verified архиву Cargo.lock. Два tamper
+сценария до исправления ошибочно принимались, после отклоняются; notices
+17/17, SDK inventory 5/5, package 8/8. На Linux проверены реальные metadata
+и архивы Windows i686 target: 183 packages / 94 notices / 0 missing. Затем CI проверил private Windows
+package; legal clearance остаётся открытым. Profile hash обновлён только
+для изменённого collect-cargo-notices.py; SDK pins не менялись.
+
+Взаимное ревью и fmt интегрированного дерева прошли. Production DA legacy,
+Async Unsupported, N4 и внешние/release gates открыты.

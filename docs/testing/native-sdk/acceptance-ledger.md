@@ -312,3 +312,12 @@ fixture counterfactuals fail against baseline and pass after fix; guard 5/5,
 package 8/8, notices 14/14 and pinned SDK inventory 271 entries pass locally.
 This strengthens source identity, not redistribution/legal clearance. No pin,
 production DA default or Async change; exact-head CI 9/9.
+
+## Pair38: Cargo registry manifest and license metadata integrity
+
+Code `2c52d547e29194119c81e125878ff5e76eb9845e`: registry package metadata
+license checked against installed Cargo.toml, which is checked against the
+checksum-verified locked crate archive. Both tamper fixtures fail baseline
+and pass fix; notices 17/17, SDK inventory 5/5, package 8/8. Linux-calculated
+i686 metadata/archive graph 183 packages / 94 notices / 0 missing; Windows private preview package subsequently passed; no legal clearance claim. Only collector profile hash updated;
+SDK pins and production defaults unchanged. Exact-head CI 9/9.

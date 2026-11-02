@@ -188,3 +188,14 @@ successful new Connect/Add/Read. Root 1/1 37.55s, real-file stand 1/1 38.18s.
 No independent wire counter, bounded proxy-thread join or complete Engine S03
 proof. SDK pins unchanged; stopped mutation/drain diagnostic not retried.
 Exact-head CI 9/9; live test passed Linux and Windows i686.
+
+## Pair38: Engine S03 timeout close window
+
+Code `2c52d547e29194119c81e125878ff5e76eb9845e`: baseline live
+Engine/Gateway/sample fixture failed by scheduling R2 after correlated
+TimeoutRead and before Disconnected; fixed test passed 1/1 43.71s. Terminal
+for R1, cancellation of pending readback, reconnect initial Received and
+Gateway Joined observed. Original Read keys survive Remove for correlation;
+unrelated keys/epochs/DA/late negatives tested. Engine 103/103, real-file
+stand 10/10. Loopback None-security, bind/drop port race, no independent wire
+no-repeat count or bounded proxy join; not full S03 matrix. Exact-head CI 9/9; live S03 passed Linux 38.13s and Windows i686 50.07s.
