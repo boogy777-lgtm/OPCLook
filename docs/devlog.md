@@ -1976,3 +1976,38 @@ package; legal clearance остаётся открытым. Profile hash обн�
 
 Взаимное ревью и fmt интегрированного дерева прошли. Production DA legacy,
 Async Unsupported, N4 и внешние/release gates открыты.
+
+## 2026-11-02 — пара39: наблюдение cleanup S03 и итоговая проверка SDK
+
+Code head `476fcec0338a8fd67b20e2c1b3fa74e449dd66b9`; CI точного head прошёл 9/9: [SDK4](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41461674483), [COM2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41461674478), [App2](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41461674619), [package1](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41461674582). Исправленный collision test и S03 fixture 2/2 прошли Linux и Windows i686. S03: тестовая HeldBrowseProxy фикстура теперь посылает stop и
+ожидает is_finished с бюджетом, проверяя join; timeout и panic не считаются
+успехом. Старый Drop заблокировался с удержанным потоком в отдельном child,
+остановленном внешним timeout 2с. Новые тесты проверяют timeout→повтор false
+→release→join, sticky panic, Drop при unwind и zero budget. Actual checkout
+2/2 37.67с (наблюдённый proxy join 5.110325мс), real-file stand 2/2 41.02с
+(join 5.103038мс). Это bounded polling и наблюдаемый join фикстуры, не жёсткий
+OS deadline или полное production cleanup; Drop после неудачи может ожидать
+ещё один бюджет. Независимый wire counter/remote и прочие S03 случаи открыты.
+
+N1: final patched SDK `package-preview.py::verify_sdk` использует тот же
+`verify_visible_index`, что clean source verifier, до git diff, сохраняя
+normal clean filters. На исходном packager Git fixture с обоими flags и
+clean/modified selected input дал 4 failing subtests; после исправления
+package 8/8, verifier 5/5, notices 17/17. Настоящий pinned SDK с двумя
+штатными patches прошёл verify_sdk; helper включён в package evidence. Обновлён
+только hash изменённого package-preview.py, SDK pins неизменны. Это source
+integrity gate, не legal clearance и не N4.
+
+Взаимное ревью и fmt интеграции прошли. Legacy DA по умолчанию, production
+Async Unsupported, N4 и внешние/release gates открыты. Остановленный SDK
+subscription-mutation/drain diagnostic не повторялся.
+
+Первый code `aee7847b` не принят: Linux backend 270 passed / 1 failed /
+1 ignored, test_server_moves_off_a_taken_port не смог захватить фиксированный
+порт 48710 (AddrInUse). На baseline с внешним holder проблема воспроизведена.
+Исправление `476fcec0` назначает и удерживает порт через bind(127.0.0.1, 0)
+в collision fixture и общем SilentServer (ранее 48612/48613/48617); прежние
+номера были заняты при after-проверке: collision 1/1 c OPC Connect, U1 8/8,
+real-file stand collision/silent 2/2. Внутренний TestServer fallback всё ещё
+использует free_port bind/drop и имеет отдельную потенциальную гонку.
+CI нового точного head прошёл 9/9; прошлый failure не переименован в pass.

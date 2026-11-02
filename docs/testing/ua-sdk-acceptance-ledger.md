@@ -199,3 +199,12 @@ Gateway Joined observed. Original Read keys survive Remove for correlation;
 unrelated keys/epochs/DA/late negatives tested. Engine 103/103, real-file
 stand 10/10. Loopback None-security, bind/drop port race, no independent wire
 no-repeat count or bounded proxy join; not full S03 matrix. Exact-head CI 9/9; live S03 passed Linux 38.13s and Windows i686 50.07s.
+
+## Pair39: S03 test proxy cleanup observation
+
+Code `476fcec0338a8fd67b20e2c1b3fa74e449dd66b9`: local live S03 and
+controlled timeout/panic/unwind fixture 2/2; observed proxy join 5.110325ms;
+real-file stand 2/2, 5.103038ms. Old Drop blocked held thread in a child
+terminated by 2s external timeout. Polling uses a deadline and timeout keeps
+the handle; zero budget rejects even completed thread. This is not an absolute
+OS deadline, production cleanup or wire no-repeat counter. CI exact head 9/9; tests passed Linux and Windows i686.

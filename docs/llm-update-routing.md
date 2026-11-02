@@ -8,6 +8,8 @@
 Это входное задание для нового чата. Маршруты направляют к существующим механизмам; текущий частичный runtime срез
 ExplicitRefresh и CLI opt-in WriteReadback описан в status.md. Полный R2 не завершён.
 
+Пара39 code `476fcec0338a8fd67b20e2c1b3fa74e449dd66b9`: S03 test proxy cleanup observation и N1 final SDK index guard; CI точного head прошёл 9/9. Wire counter и production cleanup отдельно.
+
 Пара38 code `2c52d547e29194119c81e125878ff5e76eb9845e`: S03 timeout gate с live Engine/Gateway и N1 Cargo manifest/metadata integrity; CI точного head прошёл 9/9. Подробности и границы — в status.
 
 Пара37 code `7512ede914548b3a1c57cb892ccf2ee4014bfc2d`: live UA worker Read timeout/reconnect и SDK inventory guard; CI точного head прошёл 9/9. Engine S03, wire counter и bounded proxy join остаются отдельно.

@@ -321,3 +321,13 @@ checksum-verified locked crate archive. Both tamper fixtures fail baseline
 and pass fix; notices 17/17, SDK inventory 5/5, package 8/8. Linux-calculated
 i686 metadata/archive graph 183 packages / 94 notices / 0 missing; Windows private preview package subsequently passed; no legal clearance claim. Only collector profile hash updated;
 SDK pins and production defaults unchanged. Exact-head CI 9/9.
+
+## Pair39: final patched SDK index visibility
+
+Code `476fcec0338a8fd67b20e2c1b3fa74e449dd66b9`: final preview packaging
+and clean SDK verifier share `verify_visible_index` for selected paths. Git
+fixture baseline fails four flag/clean-or-modified cases, corrected package
+8/8, verifier 5/5, notices 17/17; pinned SDK with two standard patches passes.
+The shared helper is included in package evidence; only package-preview profile
+hash changed, SDK pins unchanged. No legal clearance or production flip.
+CI exact head 9/9; tests passed Linux and Windows i686.
