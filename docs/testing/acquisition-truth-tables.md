@@ -481,3 +481,12 @@ A с terminal обоих needs. Poll/CacheAllowed и команда Read раз�
 семантику от обычного CacheAllowed. Synthetic reply/controlled time, не live
 Gateway и не network maxAge proof. Engine suite 98/98, real-file stand 1/1;
 CI точного head прошёл 9/9. Оставшиеся S/E и внешние gates не закрыты.
+
+### Пара36: S11 ошибка Browse и ожидающий Refresh
+
+Code `1c714b5ff5a21efcf839a57e3b4814d5d4369870`: controlled Engine unit
+с test_skip_dispatch проверил обычную correlated Browse Error, отказ позднего
+Browse reply и один Fresh Read с terminal Received для pending Refresh.
+Engine 99/99, real-file stand 1/1. Это не timeout, quarantine, live Gateway
+или wire maxAge. Прямой Engine pending Read после Browse не признан дефектом:
+матрица допускает admission, UA actor сериализует обработку. CI head прошёл 9/9; оба новых теста прошли на Windows i686.
