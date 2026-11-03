@@ -79,8 +79,37 @@ pub(super) fn keyboard_prepass(app: &mut App, ui: &mut egui::Ui) {
             .any(|binding| ctx.input_mut(|i| i.consume_key(binding.modifiers, binding.key)))
     };
 
-    let shortcut = action_shortcut(crate::app::actions::UiAction::OpenConnectDialog.id());
+    use super::keymap::KeyAction;
     let is_mac = ctx.os().is_mac();
+    let open_palette = !editing_footer
+        && super::keymap::bindings(KeyAction::OpenPalette).any(|binding| {
+            ctx.input_mut(|input| {
+                let mut hit = false;
+                input.events.retain(|event| match event {
+                    egui::Event::Key {
+                        key,
+                        pressed: true,
+                        repeat,
+                        modifiers,
+                        ..
+                    } if *key == binding.key
+                        && modifiers.matches_exact(binding.modifiers)
+                        && !(is_mac && modifiers.ctrl) =>
+                    {
+                        hit |= !repeat;
+                        false
+                    }
+                    _ => true,
+                });
+                hit
+            })
+        });
+    if open_palette {
+        app.open_command_palette();
+        return;
+    }
+
+    let shortcut = action_shortcut(crate::app::actions::UiAction::OpenConnectDialog.id());
     let hit = !editing_footer
         && shortcut.is_some_and(|shortcut| {
             ctx.input_mut(|input| {
@@ -108,7 +137,6 @@ pub(super) fn keyboard_prepass(app: &mut App, ui: &mut egui::Ui) {
         let _ = app.execute_ui_action(crate::app::actions::UiAction::OpenConnectDialog);
         return;
     }
-    use super::keymap::KeyAction;
     if !editing_footer && take(KeyAction::PreviousSession) {
         app.cycle_session(false);
         return;

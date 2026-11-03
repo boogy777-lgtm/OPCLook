@@ -47,6 +47,12 @@ COM bindings. Общий scheduler остаётся оправданным то�
 
 ### UA
 
+Обновление2026-10-31: [pinned 0.19 source checkpoint](testing/ua-sdk-0.19-recovery-audit.md)
+разделяет SDK reconnect/transfer/recreation/Publish ownership и ещё открытую
+adapter observability/registration/replay приёмку. Историческое moving-latest
+наблюдение ниже не использовать как API oracle. Installed-crate VCS guard
+добавлен и прошёлнаdf2bf1d; полныйWindowsjobпозжеупалвPKIisolationtest.
+
 `crates/backend/Cargo.toml` содержит async-opcua 0.19.
 `ua/session/connection.rs` запускает SDK event loop.
 Публичные страницы [Session](https://docs.rs/async-opcua-client/latest/opcua_client/struct.Session.html)
@@ -110,3 +116,23 @@ R2.3 описывает wiring/config выбранного native backend и у�
 OPC COM data-plane. Если кандидат не покрывает обязательную способность, кандидат
 меняется. Список мест изменения не разрешает писать свой аналог библиотеки.
 Разрешено расширение продуктовой политики Engine, когда это не функция SDK.
+
+### N1: дополнительный Softing SDK
+
+Public SODaC/SOClt/SOCmn остаются владельцем DA protocol lifecycle.
+Проверка исходников v4.47.1 выявила неправильное сопоставление HRESULT
+в SDK callback; детали, source-method reproducer и проект upstream patch —
+[здесь](testing/native-sdk/softing-4.47.1.md). Win32 direct core link, common/entry init/cleanup и offline callback до/после
+patch проверены в [run 41067236324](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41067236324)
+на head `d375f15f4b57837baeec75d1cf3a7c9b843cb96e`. N2 должен использовать
+этот direct core; DaSession/TBC имеет только header probe, OTB не подключён.
+Real COM advise, late teardown, live I/O, типы, isolation и полная лицензия
+closure ещё не доказаны; production owner не изменён.
+
+### N2.1 offline boundary
+
+SDK по-прежнему владеет callback/VARIANT; `native/softing-da` копирует только
+ограниченный последний callback. Rust адаптер отображает VT_I4 и сохраняет
+raw факты отдельно от DataValue. Это не очередь, runtime binding или второй
+backend; serialization вызывает хост. Identity session/registration и lifecycle
+требуют N3, production ownership не изменён.

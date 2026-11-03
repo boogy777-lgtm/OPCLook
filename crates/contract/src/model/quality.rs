@@ -13,6 +13,13 @@ pub struct Quality {
 }
 
 impl Quality {
+    /// Whether this protocol status explicitly says that initial data is pending.
+    pub fn waiting_for_initial_data(&self, protocol: super::Protocol) -> bool {
+        match protocol {
+            super::Protocol::OpcUa => self.code & 0xffff_0000 == 0x8032_0000,
+            super::Protocol::OpcDa => da_status(self.code as u16) == 0x0020,
+        }
+    }
     pub fn from_da(code: u16) -> Self {
         let code32 = u32::from(code);
         let kind = match code & 0xC0 {
@@ -42,8 +49,26 @@ impl Quality {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Protocol;
+
+    #[test]
+    fn waiting_for_initial_ignores_info_vendor_and_limit_bits() {
+        assert!(Quality::from_ua(0x8032_0480, "waiting").waiting_for_initial_data(Protocol::OpcUa));
+        assert!(!Quality::from_ua(0x8033_0480, "other").waiting_for_initial_data(Protocol::OpcUa));
+        assert!(Quality::from_da(0xab23).waiting_for_initial_data(Protocol::OpcDa));
+        assert_eq!(
+            Quality::from_da(0xab23).text,
+            "BAD - WAITING_FOR_INITIAL_DATA"
+        );
+        assert!(!Quality::from_da(0xab27).waiting_for_initial_data(Protocol::OpcDa));
+    }
+}
+
 fn da_quality_text(code: u16) -> &'static str {
-    match code & 0xFFFC {
+    match da_status(code) {
         0x0000 => "BAD",
         0x0004 => "BAD - CONFIG_ERROR",
         0x0008 => "BAD - NOT_CONNECTED",
@@ -64,4 +89,8 @@ fn da_quality_text(code: u16) -> &'static str {
         0x00D8 => "GOOD - LOCAL_OVERRIDE",
         _ => "UNKNOWN",
     }
+}
+
+fn da_status(code: u16) -> u16 {
+    code & 0x00fc
 }

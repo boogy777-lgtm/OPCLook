@@ -17,7 +17,7 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
         .keys
         .first()
         .and_then(|key| app.rows().iter().find(|r| r.key == *key));
-    let (protocol, name, current, canonical, data_type, writable) = match first {
+    let (protocol, name, current, canonical, data_type, writable, access_known) = match first {
         Some(row) => {
             let protocol = app
                 .sessions
@@ -32,6 +32,7 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
                 row.canonical_vt,
                 row.data_type.clone(),
                 row.writable,
+                row.ua_access_known,
             )
         }
         None => {
@@ -39,7 +40,7 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
             return;
         }
     };
-    let unavailable = first.and_then(|row| app.write_unavailable(row.session, protocol));
+    let unavailable = first.and_then(|row| app.write_dialog_unavailable(row.session, protocol));
     let choices = write_type_choices(protocol);
     let mut submit = false;
     let mut close = false;
@@ -70,7 +71,7 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
                 ui.label(fmt(lang, Tr::CurrentValue, &[&current]));
                 ui.label(fmt(lang, Tr::ServerTypeLabel, &[&protocol.to_string()]));
                 if !writable {
-                    ui.colored_label(red(), tr(lang, Tr::ReadOnly));
+                    ui.colored_label(red(), tr(lang, if access_known { Tr::ReadOnly } else { Tr::UaAccessUnknown }));
                 }
                 if let Some(vt) = canonical {
                     ui.label(fmt(
@@ -91,11 +92,7 @@ pub(super) fn write_dialog(app: &mut App, ui: &mut egui::Ui) {
                         .selected_text(selected)
                         .show_ui(ui, |ui| {
                             for (index, choice) in choices.iter().enumerate() {
-                                let previous = dialog.type_index;
-                                let response = ui.selectable_value(&mut dialog.type_index, index, choice.label);
-                                if crate::ui::ime_blocks_keys(ui.ctx()) && response.changed() && !response.ime_safe_clicked() {
-                                    dialog.type_index = previous;
-                                }
+                                super::super::components::selectable_value(ui, &mut dialog.type_index, index, choice.label);
                             }
                         });
                 });

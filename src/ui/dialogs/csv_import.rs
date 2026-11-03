@@ -2,6 +2,7 @@ use super::super::csv::{CsvServer, report_csv_server_problem, resolve_csv_sessio
 use super::dialog_spacing;
 use crate::app::{App, CsvImportState};
 use crate::i18n::{Tr, fmt, tr};
+use crate::ui::ImeSafeClick;
 
 /// Modal progress window for a running CSV import; advances the job a chunk per
 /// frame and allows cancel.
@@ -54,11 +55,12 @@ pub(super) fn csv_import_dialog(app: &mut App, ui: &mut egui::Ui) {
                         !job_done && !job_cancelled,
                         egui::Button::new(tr(lang, Tr::Cancel)),
                     )
-                    .clicked()
+                    .ime_safe_clicked()
                 {
                     cancel = true;
                 }
-                if (job_done || job_cancelled) && ui.button(tr(lang, Tr::Close)).clicked() {
+                if (job_done || job_cancelled) && ui.button(tr(lang, Tr::Close)).ime_safe_clicked()
+                {
                     cancel = true; // treated as close after completion
                 }
             });

@@ -8,6 +8,13 @@ use crate::columns::ColumnId;
 use crate::i18n::{Tr, fmt, tr};
 use crate::ui::ImeSafeClick;
 
+fn control_clicked_once(response: &egui::Response) -> bool {
+    response.clicked_by(egui::PointerButton::Primary)
+        || (response.ime_safe_clicked()
+            && !crate::ui::key_repeat(&response.ctx, egui::Key::Enter)
+            && !crate::ui::key_repeat(&response.ctx, egui::Key::Space))
+}
+
 pub(super) fn columns_dialog(app: &mut App, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     if !app.dialogs.columns.open {
@@ -29,10 +36,9 @@ pub(super) fn columns_dialog(app: &mut App, ui: &mut egui::Ui) {
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(&ctx, |ui| {
             dialog_spacing(ui);
-            let esc = !crate::ui::ime_blocks_keys(ui.ctx())
-                && ui.input(|i| i.key_pressed(egui::Key::Escape));
-            let enter = !crate::ui::ime_blocks_keys(ui.ctx())
-                && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let esc = crate::ui::key_pressed_once(ui.ctx(), egui::Key::Escape);
+            let enter = crate::ui::key_pressed_once(ui.ctx(), egui::Key::Enter)
+                && ui.input(|input| input.modifiers.is_none());
             ui.label(tr(lang, Tr::ColumnsHint));
             ui.label(egui::RichText::new(tr(lang, Tr::ColumnsReorderHint)).weak());
             const GAP: f32 = 14.0;
@@ -58,6 +64,9 @@ pub(super) fn columns_dialog(app: &mut App, ui: &mut egui::Ui) {
 
             // The last interacted/focused column (for the keyboard fallback).
             let mut focus_col = app.dialogs.columns.focused;
+            // Enter belongs to the focused control; it must not also apply
+            // and close this dialog after activating that control.
+            let mut control_has_focus = false;
 
             for idx in 0..=order.len() {
                 // Insertion gap before row `idx` (and one trailing gap at the end).
@@ -117,6 +126,7 @@ pub(super) fn columns_dialog(app: &mut App, ui: &mut egui::Ui) {
                     grip.dnd_set_drag_payload(column);
                     let mut visible = app.settings.view.columns.is_visible(column);
                     let cb = ui.checkbox(&mut visible, tr(lang, column.title_tr()));
+                    control_has_focus |= cb.has_focus();
                     if cb.changed() && cb.ime_safe_clicked() {
                         app.settings.view.columns.set_visible(column, visible);
                         changed = true;
@@ -124,13 +134,17 @@ pub(super) fn columns_dialog(app: &mut App, ui: &mut egui::Ui) {
                     if cb.has_focus() || cb.clicked() || grip.hovered() {
                         focus_col = Some(column);
                     }
-                    if ui.small_button("↑").ime_safe_clicked() && idx > 0 {
+                    let up = ui.small_button("↑");
+                    control_has_focus |= up.has_focus();
+                    if control_clicked_once(&up) && idx > 0 {
                         order.swap(idx, idx - 1);
                         changed = true;
                         moved = Some((column, idx - 1));
                         focus_col = Some(column);
                     }
-                    if ui.small_button("↓").ime_safe_clicked() && idx + 1 < order.len() {
+                    let down = ui.small_button("↓");
+                    control_has_focus |= down.has_focus();
+                    if control_clicked_once(&down) && idx + 1 < order.len() {
                         order.swap(idx, idx + 1);
                         changed = true;
                         moved = Some((column, idx + 1));
@@ -209,17 +223,21 @@ pub(super) fn columns_dialog(app: &mut App, ui: &mut egui::Ui) {
             }
             ui.separator();
             ui.horizontal(|ui| {
-                if ui.button(tr(lang, Tr::Reset)).ime_safe_clicked() {
+                let reset = ui.button(tr(lang, Tr::Reset));
+                control_has_focus |= reset.has_focus();
+                if control_clicked_once(&reset) {
                     order = ColumnId::ALL.to_vec();
                     app.settings.view.columns.reset();
                     app.settings.view.column_order = None;
                     changed = true;
                 }
-                if ui.button(tr(lang, Tr::Apply)).ime_safe_clicked() {
+                let apply = ui.button(tr(lang, Tr::Apply));
+                control_has_focus |= apply.has_focus();
+                if control_clicked_once(&apply) {
                     close = true;
                 }
             });
-            if enter {
+            if enter && !control_has_focus {
                 close = true;
             } else if esc {
                 close = true;

@@ -745,12 +745,23 @@ impl CommandQueue {
 /// (browse/refresh/reconnect latency). Reads are independent best-effort polls,
 /// so they are safe to defer; they are re-ordered, never dropped.
 pub(super) fn is_control_command(kind: &CommandKind) -> bool {
-    !matches!(kind, CommandKind::Read { .. } | CommandKind::Test)
+    !matches!(
+        kind,
+        CommandKind::Read { .. }
+            | CommandKind::ReadFresh { .. }
+            | CommandKind::ReadCached { .. }
+            | CommandKind::Test
+    )
 }
 
 enum InitialLoad<T> {
     Finished(T),
     Disconnect(Command),
+    Shutdown,
+}
+enum RecoveryFlow {
+    Continue,
+    Closed,
     Shutdown,
 }
 
@@ -794,6 +805,7 @@ impl Actor {
         .await;
         let mut shutdown = false;
         let mut already_closed = false;
+        let mut recovery_open = true;
         match initial {
             InitialLoad::Finished(Err(cause)) => {
                 self.send_event(
@@ -824,6 +836,17 @@ impl Actor {
             InitialLoad::Shutdown => shutdown = true,
         }
         'serve: while !already_closed && !shutdown {
+            if self.session.recovery.has_changed().unwrap_or(false) {
+                let (revision, notice) = *self.session.recovery.borrow_and_update();
+                match self.recovery_notice(notice, revision).await {
+                    RecoveryFlow::Continue => {}
+                    RecoveryFlow::Closed => break 'serve,
+                    RecoveryFlow::Shutdown => {
+                        shutdown = true;
+                        break 'serve;
+                    }
+                }
+            }
             // Take everything that is already waiting, so a control command
             // overtakes the reads queued before it.
             let mut inbox_closed = false;
@@ -843,7 +866,21 @@ impl Actor {
                     shutdown = true;
                     break 'serve;
                 }
-                None => match self.inbox.recv().await {
+                None => match tokio::select! {
+                    message = self.inbox.recv() => message,
+                    changed = self.session.recovery.changed(), if recovery_open => {
+                        if changed.is_ok() {
+                            let (revision, notice) = *self.session.recovery.borrow_and_update();
+                            match self.recovery_notice(notice, revision).await {
+                                RecoveryFlow::Continue => {},
+                                RecoveryFlow::Closed => break 'serve,
+                                RecoveryFlow::Shutdown => { shutdown = true; break 'serve; }
+                            }
+                        }
+                        else { recovery_open = false; }
+                        continue 'serve;
+                    }
+                } {
                     Some(message) => {
                         self.queue.push(message);
                         continue 'serve;
@@ -886,6 +923,140 @@ impl Actor {
         });
     }
 
+    async fn recovery_notice(
+        &mut self,
+        notice: super::session::RecoveryNotice,
+        notice_revision: u64,
+    ) -> RecoveryFlow {
+        self.session.types = None;
+        self.session.node_types.clear();
+        self.send_scoped(
+            notice_revision,
+            EventKind::UaRecovery {
+                state: crate::bff::model::UaRecoveryState::TypeMetadata {
+                    known: 0,
+                    total: self.session.items.len(),
+                },
+            },
+        );
+        match notice {
+            super::session::RecoveryNotice::Connected => {
+                let metadata_fresh = match wait_initial_load(
+                    self.session.load_struct_types(),
+                    &mut self.inbox,
+                    &mut self.queue,
+                )
+                .await
+                {
+                    InitialLoad::Finished(Ok(())) => true,
+                    InitialLoad::Finished(Err(cause)) => {
+                        self.send_event(
+                            None,
+                            EventKind::Log {
+                                message: BackendMsg::StructTypesUnavailable {
+                                    cause: Box::new(cause),
+                                },
+                            },
+                        );
+                        if self.session.timed_out {
+                            self.inbox.close();
+                            self.session.close().await;
+                            self.send_event(
+                                None,
+                                EventKind::Disconnected {
+                                    reason: BackendMsg::SessionClosedAfterTimeout,
+                                },
+                            );
+                            return RecoveryFlow::Closed;
+                        }
+                        false
+                    }
+                    InitialLoad::Disconnect(command) => {
+                        self.handle(command).await;
+                        return RecoveryFlow::Closed;
+                    }
+                    InitialLoad::Shutdown => return RecoveryFlow::Shutdown,
+                };
+                if self.session.recovery.has_changed().unwrap_or(true) {
+                    return RecoveryFlow::Continue;
+                }
+                let identity_missing = self.session.validate_namespace_identity(metadata_fresh);
+                self.session
+                    .reconcile_recovery(&self.event_tx, identity_missing);
+                if self.session.recovery.has_changed().unwrap_or(true) {
+                    return RecoveryFlow::Continue;
+                }
+                match wait_initial_load(
+                    self.session.refresh_node_types(),
+                    &mut self.inbox,
+                    &mut self.queue,
+                )
+                .await
+                {
+                    InitialLoad::Finished(Ok((known, total, revision, facts))) => {
+                        if let Some(connection) = self.session.connection_id {
+                            for chunk in facts.chunks(256) {
+                                send(
+                                    &self.event_tx,
+                                    Event {
+                                        origin: crate::bff::model::Origin::UaSession {
+                                            connection,
+                                            revision,
+                                        },
+                                        owner: self.id.into(),
+                                        kind: EventKind::UaItemMetadata {
+                                            facts: chunk.to_vec(),
+                                        },
+                                    },
+                                );
+                            }
+                        }
+                        self.send_scoped(
+                            revision,
+                            EventKind::UaRecovery {
+                                state: crate::bff::model::UaRecoveryState::TypeMetadata {
+                                    known,
+                                    total,
+                                },
+                            },
+                        );
+                    }
+                    InitialLoad::Finished(Err(cause)) => {
+                        self.send_event(
+                            None,
+                            EventKind::Log {
+                                message: BackendMsg::AttributesReadFailed {
+                                    cause: Box::new(cause),
+                                },
+                            },
+                        );
+                        if self.session.timed_out {
+                            self.inbox.close();
+                            self.session.close().await;
+                            self.send_event(
+                                None,
+                                EventKind::Disconnected {
+                                    reason: BackendMsg::SessionClosedAfterTimeout,
+                                },
+                            );
+                            return RecoveryFlow::Closed;
+                        }
+                    }
+                    InitialLoad::Disconnect(command) => {
+                        self.handle(command).await;
+                        return RecoveryFlow::Closed;
+                    }
+                    InitialLoad::Shutdown => return RecoveryFlow::Shutdown,
+                }
+            }
+            super::session::RecoveryNotice::Lost => self.session.recovery_lost(&self.event_tx),
+            super::session::RecoveryNotice::Stopped => {
+                self.session.recovery_stopped(&self.event_tx)
+            }
+        }
+        RecoveryFlow::Continue
+    }
+
     fn send_error(
         &self,
         request_id: Option<crate::bff::model::RequestId>,
@@ -893,6 +1064,22 @@ impl Actor {
         message: BackendMsg,
     ) {
         send_error(&self.event_tx, request_id, self.id, operation, message);
+    }
+
+    fn send_scoped(&self, revision: u64, kind: EventKind) {
+        if let Some(connection) = self.session.connection_id {
+            send(
+                &self.event_tx,
+                Event {
+                    origin: crate::bff::model::Origin::UaSession {
+                        connection,
+                        revision,
+                    },
+                    owner: self.id.into(),
+                    kind,
+                },
+            );
+        }
     }
 
     fn send_event(&self, request_id: Option<crate::bff::model::RequestId>, kind: EventKind) {
@@ -969,12 +1156,18 @@ impl Actor {
                 publishing_interval_ms,
                 deadband,
             } => {
+                let revision = self.session.identity_revision();
                 let problems = self
                     .session
                     .apply_subscription_settings(publishing_interval_ms, deadband)
                     .await;
                 for message in problems {
                     self.send_event(None, EventKind::Log { message });
+                }
+                if let Some(revision) = revision
+                    && self.session.identity_is_current(revision)
+                {
+                    self.session.report_negotiated_at(&tx, revision);
                 }
                 if self.session.timed_out {
                     return self
@@ -988,18 +1181,67 @@ impl Actor {
                 Flow::Continue
             }
             CommandKind::AddItems { items } => {
-                let (results, warning) = self.session.add_items(&items, &tx).await;
+                let revision = self.session.identity_revision();
+                let mut metadata = Vec::new();
+                let (results, warning) = self
+                    .session
+                    .add_items_with_metadata(&items, &tx, &mut metadata)
+                    .await;
+                if let Some(service) = self.session.identity_quarantined {
+                    // Never delete an old server handle on a replacement session.
+                    // The SDK owns session shutdown and subscription cleanup.
+                    self.inbox.close();
+                    self.session.close().await;
+                    self.send_event(request_id, EventKind::AddItems { results });
+                    self.send_event(
+                        None,
+                        EventKind::Disconnected {
+                            reason: BackendMsg::UaIdentityChanged { service },
+                        },
+                    );
+                    return Flow::Closed;
+                }
                 if let Some(message) = warning {
                     // A command may produce exactly one request-id-correlated
                     // reply; ancillary diagnostics are unsolicited (id 0) so
                     // they cannot consume the AddItems reply's pending entry.
                     self.send_event(None, EventKind::Log { message });
                 }
+                if let Some(revision) = revision
+                    && self.session.identity_is_current(revision)
+                {
+                    self.session.report_negotiated_at(&tx, revision);
+                }
+                let accepted: std::collections::HashSet<_> = results
+                    .iter()
+                    .filter_map(|(key, result)| result.is_ok().then_some(*key))
+                    .collect();
+                metadata.retain(|fact| accepted.contains(&fact.key));
                 self.send_event(request_id, EventKind::AddItems { results });
+                if let (Some(revision), Some(connection)) = (revision, self.session.connection_id)
+                    && self.session.identity_is_current(revision)
+                    && !metadata.is_empty()
+                {
+                    for chunk in metadata.chunks(256) {
+                        send(
+                            &self.event_tx,
+                            Event {
+                                owner: self.id.into(),
+                                origin: crate::bff::model::Origin::UaSession {
+                                    connection,
+                                    revision,
+                                },
+                                kind: EventKind::UaItemMetadata {
+                                    facts: chunk.to_vec(),
+                                },
+                            },
+                        );
+                    }
+                }
                 if self.session.timed_out {
                     return self
                         .close_timed_out(
-                            request_id,
+                            None, // AddItems above is the one correlated terminal.
                             Operation::Add,
                             BackendMsg::RequestTimedOutSessionClosed,
                         )
@@ -1008,8 +1250,14 @@ impl Actor {
                 Flow::Continue
             }
             CommandKind::RemoveItems { keys } => {
+                let revision = self.session.identity_revision();
                 for message in self.session.remove_items(&tx, &keys).await {
                     self.send_event(None, EventKind::Log { message });
+                }
+                if let Some(revision) = revision
+                    && self.session.identity_is_current(revision)
+                {
+                    self.session.report_negotiated_at(&tx, revision);
                 }
                 self.send_event(request_id, EventKind::Removed { keys });
                 if self.session.timed_out {
@@ -1023,26 +1271,22 @@ impl Actor {
                 }
                 Flow::Continue
             }
-            CommandKind::Read { keys } => {
-                let values = read(&mut self.session, &keys).await;
-                self.send_event(request_id, EventKind::Values { values });
-                if self.session.timed_out {
-                    return self
-                        .close_timed_out(
-                            request_id,
-                            Operation::Read,
-                            BackendMsg::RequestTimedOutSessionClosed,
-                        )
-                        .await;
-                }
-                Flow::Continue
+            CommandKind::Read { keys } | CommandKind::ReadFresh { keys } => {
+                self.read_command(request_id, keys, 0.0).await
+            }
+            CommandKind::ReadCached { keys, max_age_ms } => {
+                self.read_command(request_id, keys, f64::from(max_age_ms))
+                    .await
             }
             CommandKind::Write { request } => {
                 let key = request.key;
                 let result = write(&mut self.session, request).await;
                 if self.session.timed_out {
                     let message = match &result {
-                        Ok(()) => BackendMsg::RequestTimedOutSessionClosed,
+                        Ok(outcome) => outcome
+                            .reason
+                            .clone()
+                            .unwrap_or(BackendMsg::RequestTimedOutSessionClosed),
                         Err(message) => message.clone(),
                     };
                     self.send_event(request_id, EventKind::Wrote { key, result });
@@ -1075,6 +1319,27 @@ impl Actor {
                 Flow::Continue
             }
         }
+    }
+
+    /// Dispatch a read through the existing session and timeout path.
+    async fn read_command(
+        &mut self,
+        request_id: Option<crate::bff::model::RequestId>,
+        keys: Vec<crate::bff::model::ItemKey>,
+        max_age: f64,
+    ) -> Flow {
+        let values = read(&mut self.session, &keys, max_age).await;
+        self.send_event(request_id, EventKind::Values { values });
+        if self.session.timed_out {
+            return self
+                .close_timed_out(
+                    request_id,
+                    Operation::Read,
+                    BackendMsg::RequestTimedOutSessionClosed,
+                )
+                .await;
+        }
+        Flow::Continue
     }
 
     /// Dispatches a session-operation result. A timed-out operation poisons the
@@ -1155,28 +1420,78 @@ mod initial_load_regression {
 
     #[test]
     fn timeout_drains_same_future_and_discards_late_result() {
+        use std::cell::Cell;
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()
             .unwrap();
         runtime.block_on(async {
-            let completed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let flag = completed.clone();
-            let result = timeout_drain(
-                async move {
-                    tokio::time::sleep(Duration::from_millis(30)).await;
-                    flag.store(true, std::sync::atomic::Ordering::SeqCst);
-                    42
-                },
-                Duration::from_millis(5),
-            )
-            .await;
-            assert_eq!(result, Err(RequestTimeout));
-            assert!(completed.load(std::sync::atomic::Ordering::SeqCst));
+            let ready = Cell::new(false);
+            let completed = Cell::new(false);
+            let request = poll_fn(|_| {
+                if ready.get() {
+                    assert!(!completed.replace(true), "completed future polled twice");
+                    Poll::Ready(42)
+                } else {
+                    Poll::Pending
+                }
+            });
+            let mut operation = Box::pin(timeout_drain(request, Duration::from_millis(5)));
+            assert!(
+                poll_fn(|cx| Poll::Ready(operation.as_mut().poll(cx)))
+                    .await
+                    .is_pending()
+            );
+            // Let the deadline pass without polling the operation, then make
+            // the request ready: both the deadline and request are now ready.
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            ready.set(true);
+            assert_eq!(
+                poll_fn(|cx| Poll::Ready(operation.as_mut().poll(cx))).await,
+                Poll::Ready(Err(RequestTimeout))
+            );
+            assert!(completed.get());
+
+            let ready = Cell::new(false);
+            let completed = Cell::new(false);
+            let request = poll_fn(|_| {
+                if ready.get() {
+                    assert!(!completed.replace(true), "completed future polled twice");
+                    Poll::Ready(42)
+                } else {
+                    Poll::Pending
+                }
+            });
+            let mut operation = Box::pin(timeout_drain(request, Duration::from_millis(5)));
+            assert!(
+                poll_fn(|cx| Poll::Ready(operation.as_mut().poll(cx)))
+                    .await
+                    .is_pending()
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            // Observe the elapsed budget while the request is still pending.
+            assert!(
+                poll_fn(|cx| Poll::Ready(operation.as_mut().poll(cx)))
+                    .await
+                    .is_pending()
+            );
+            ready.set(true);
+            assert_eq!(
+                poll_fn(|cx| Poll::Ready(operation.as_mut().poll(cx))).await,
+                Poll::Ready(Err(RequestTimeout))
+            );
+            assert!(completed.get());
             assert_eq!(
                 timeout_drain(async { 7 }, Duration::from_secs(1)).await,
                 Ok(7)
             );
+            assert_eq!(
+                timeout_drain(async { 7 }, Duration::ZERO).await,
+                Err(RequestTimeout)
+            );
+            assert_eq!(timeout_drain(async { 7 }, Duration::MAX).await, Ok(7));
         });
     }
 

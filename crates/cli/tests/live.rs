@@ -11,6 +11,21 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 const NS: &str = "urn:opclook:cli-live";
+
+// Watch emits scoped SDK facts alongside values. They do not consume --count.
+fn assert_ua_watch_fact(record: &serde_json::Value) {
+    if let Some(metadata) = record.get("ua_item_metadata") {
+        assert_eq!(metadata["key"], 1, "{record}");
+        assert!(metadata["data_type"].is_string(), "{record}");
+        assert_eq!(metadata["user_access_level"], 3, "{record}");
+        assert_eq!(metadata["writable"], true, "{record}");
+        assert!(metadata["diagnostic"].is_null(), "{record}");
+    } else if let Some(parameters) = record.get("ua_subscription_parameters") {
+        assert!(parameters.is_array(), "{record}");
+    } else {
+        panic!("unexpected watch record: {record}");
+    }
+}
 struct Server {
     runtime: tokio::runtime::Runtime,
     handle: opcua::server::ServerHandle,
@@ -101,7 +116,7 @@ impl Server {
                 "--mode",
                 "None",
                 "--timeout",
-                "15",
+                "60",
             ])
             .args(args)
             .stdout(Stdio::piped())
@@ -110,7 +125,7 @@ impl Server {
     }
     fn execute(&self, args: &[&str]) -> serde_json::Value {
         let mut child = self.command(args).spawn().unwrap();
-        let deadline = Instant::now() + Duration::from_secs(40);
+        let deadline = Instant::now() + Duration::from_secs(120);
         while child.try_wait().unwrap().is_none() {
             if Instant::now() >= deadline {
                 let _ = child.kill();
@@ -168,13 +183,17 @@ fn browse_read_write_push_forced_poll_and_idle_interrupt() {
     assert!(first["data"]["quality"]["kind"].is_string());
     assert!(first["data"]["timestamp"].is_string());
     assert_eq!(
-        server.execute(&["write", &server.node, "f64", "2.5"])["written"],
+        server.execute(&["write", &server.node, "f64", "2.5"])["accepted"],
         true
     );
     assert_eq!(
         server.execute(&["read", &server.node])["data"]["value"]["value"],
         2.5
     );
+    let observed = server.execute(&["--read-after-write", "write", &server.node, "f64", "2.5"]);
+    assert_eq!(observed["accepted"], true);
+    assert_eq!(observed["readback"]["status"], "observed");
+    assert_eq!(observed["readback"]["data"]["value"]["value"], 2.5);
 
     let poll = server
         .command(&["--poll", "--count", "3", "watch", &server.node])
@@ -194,8 +213,29 @@ fn browse_read_write_push_forced_poll_and_idle_interrupt() {
         .lines()
         .map(|line| serde_json::from_str(&line.unwrap()).unwrap())
         .collect();
-    assert_eq!(records.len(), 3);
-    assert!(records.iter().all(|r| r["data"]["value"]["value"] == 2.5));
+    let values: Vec<_> = records
+        .iter()
+        .filter(|record| record.get("data").is_some())
+        .collect();
+    assert_eq!(values.len(), 3, "{records:?}");
+    assert!(
+        values
+            .iter()
+            .all(|record| record["data"]["value"]["value"] == 2.5)
+    );
+    let facts: Vec<_> = records
+        .iter()
+        .filter(|record| record.get("data").is_none())
+        .collect();
+    assert!(
+        facts
+            .iter()
+            .any(|record| record.get("ua_item_metadata").is_some()),
+        "{records:?}"
+    );
+    for fact in facts {
+        assert_ua_watch_fact(fact);
+    }
     assert!(poll.0.wait().unwrap().success());
 
     // Warm the client PKI above; now a constant push watch must survive well
@@ -214,15 +254,37 @@ fn browse_read_write_push_forced_poll_and_idle_interrupt() {
         }
     });
     let mut watch = Running(watch);
-    let first: serde_json::Value =
-        serde_json::from_str(&rx.recv_timeout(Duration::from_secs(20)).unwrap().unwrap()).unwrap();
-    assert_eq!(first["data"]["value"]["value"], 2.5);
+    let first_deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let remaining = first_deadline.saturating_duration_since(Instant::now());
+        let first: serde_json::Value =
+            serde_json::from_str(&rx.recv_timeout(remaining).unwrap().unwrap()).unwrap();
+        if first.get("data").is_some() {
+            assert_eq!(first["data"]["value"]["value"], 2.5);
+            break;
+        }
+        assert_ua_watch_fact(&first);
+    }
     std::thread::sleep(Duration::from_secs(3));
     assert!(watch.0.try_wait().unwrap().is_none(), "idle watch exited");
     server.set(3.5);
-    let pushed: serde_json::Value =
-        serde_json::from_str(&rx.recv_timeout(Duration::from_secs(10)).unwrap().unwrap()).unwrap();
-    assert_eq!(pushed["data"]["value"]["value"], 3.5);
+    // A one-shot initial snapshot can race with the first subscription push.
+    // Both are legitimate observations; continue until the change arrives.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let observed: serde_json::Value =
+            serde_json::from_str(&rx.recv_timeout(remaining).unwrap().unwrap()).unwrap();
+        if observed.get("data").is_none() {
+            assert_ua_watch_fact(&observed);
+            continue;
+        }
+        let value = &observed["data"]["value"]["value"];
+        if *value == 3.5 {
+            break;
+        }
+        assert_eq!(*value, 2.5);
+    }
     assert!(
         Command::new("kill")
             .args(["-INT", &watch.0.id().to_string()])

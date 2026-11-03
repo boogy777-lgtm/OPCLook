@@ -33,6 +33,192 @@ impl App {
     pub(super) fn poll_events(&mut self) {
         while let Some(event) = self.engine.try_recv() {
             self.on_event(event);
+            self.drain_read_observations();
+        }
+        self.drain_read_observations();
+    }
+
+    /// Project the latest observation per key on the UI thread. No sink
+    /// callback performs UI work or I/O; superseded and overflow counts are
+    /// made visible rather than silently hidden.
+    pub(super) fn drain_read_observations(&mut self) {
+        use crate::bff::model::{ReadCancelReason, ReadTerminalStatus};
+        let batch = self
+            .read_observations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .drain();
+        if batch.replaced != 0 || batch.overflow != 0 {
+            self.journal.warn_l(
+                Tr::ReadTerminalSummaryLoss,
+                &[&batch.replaced, &batch.overflow],
+            );
+        }
+        for observation in batch.latest {
+            let session = observation.session;
+            let terminal = &observation.terminal;
+            let lang = self.lang();
+            let (detail, failed) = match &terminal.status {
+                ReadTerminalStatus::Received(value) => {
+                    let reason = value
+                        .reason
+                        .as_ref()
+                        .map(|r| self.session_backend_text(session, r))
+                        .unwrap_or_default();
+                    let quality = self.session_backend_text(
+                        session,
+                        &crate::bff::model::BackendMsg::Raw(value.quality.text.to_string()),
+                    );
+                    (
+                        fmt(lang, Tr::ReadTerminalReceived, &[&quality, &reason]),
+                        value.quality.kind != QualityKind::Good || value.reason.is_some(),
+                    )
+                }
+                ReadTerminalStatus::ReceivedMetadata {
+                    quality, reason, ..
+                } => {
+                    let failed = quality.kind != QualityKind::Good || reason.is_some();
+                    let reason = reason
+                        .as_ref()
+                        .map(|r| self.session_backend_text(session, r))
+                        .unwrap_or_default();
+                    let text = self.session_backend_text(
+                        session,
+                        &crate::bff::model::BackendMsg::Raw(quality.text.to_string()),
+                    );
+                    (
+                        fmt(lang, Tr::ReadTerminalReceived, &[&text, &reason]),
+                        failed,
+                    )
+                }
+                ReadTerminalStatus::InitialPush {
+                    quality, reason, ..
+                } => {
+                    let has_reason = reason.is_some();
+                    let reason = reason
+                        .as_ref()
+                        .map(|r| self.session_backend_text(session, r))
+                        .unwrap_or_default();
+                    let text = self.session_backend_text(
+                        session,
+                        &crate::bff::model::BackendMsg::Raw(quality.text.to_string()),
+                    );
+                    (
+                        fmt(lang, Tr::ReadTerminalInitial, &[&text, &reason]),
+                        quality.kind != QualityKind::Good || has_reason,
+                    )
+                }
+                ReadTerminalStatus::MissingResult => {
+                    (tr(lang, Tr::ReadTerminalMissing).to_string(), true)
+                }
+                ReadTerminalStatus::ServiceError(reason) => (
+                    fmt(
+                        lang,
+                        Tr::ReadTerminalServiceError,
+                        &[&self.session_backend_text(session, reason)],
+                    ),
+                    true,
+                ),
+                ReadTerminalStatus::Timeout { seconds } => {
+                    (fmt(lang, Tr::ReadTerminalTimeout, &[seconds]), true)
+                }
+                ReadTerminalStatus::Cancelled(reason) => {
+                    let reason = tr(
+                        lang,
+                        match reason {
+                            ReadCancelReason::Removed => Tr::ReadCancelRemoved,
+                            ReadCancelReason::Disconnected => Tr::ReadCancelDisconnected,
+                            ReadCancelReason::EpochChanged => Tr::ReadCancelEpoch,
+                            ReadCancelReason::Cancelled => Tr::ReadCancelExplicit,
+                        },
+                    );
+                    (fmt(lang, Tr::ReadTerminalCancelled, &[&reason]), false)
+                }
+                ReadTerminalStatus::DispatchFailed(reason) => (
+                    fmt(
+                        lang,
+                        Tr::ReadTerminalDispatchFailed,
+                        &[&opclook_locale::send_error_text(lang, *reason)],
+                    ),
+                    true,
+                ),
+                ReadTerminalStatus::Unavailable => {
+                    (tr(lang, Tr::ReadTerminalUnavailable).to_string(), true)
+                }
+                ReadTerminalStatus::UnexpectedReply => {
+                    (tr(lang, Tr::ReadTerminalUnexpected).to_string(), true)
+                }
+            };
+            let request = terminal
+                .request_id
+                .map(|id| id.to_string())
+                .unwrap_or_default();
+            let epoch = observation
+                .epoch
+                .map(|id| id.to_string())
+                .unwrap_or_default();
+            let needs = terminal
+                .needs
+                .iter()
+                .map(|need| {
+                    tr(
+                        lang,
+                        match need {
+                            crate::bff::model::ReadNeed::Initial => Tr::ReadNeedInitial,
+                            crate::bff::model::ReadNeed::Poll => Tr::ReadNeedPoll,
+                            crate::bff::model::ReadNeed::ExplicitRefresh => Tr::ReadNeedRefresh,
+                            crate::bff::model::ReadNeed::WriteReadback => Tr::ReadNeedReadback,
+                            crate::bff::model::ReadNeed::RecoverySnapshot => Tr::ReadNeedRecovery,
+                            crate::bff::model::ReadNeed::Direct => Tr::ReadNeedDirect,
+                        },
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let routine_poll = !failed
+                && terminal
+                    .needs
+                    .iter()
+                    .all(|need| *need == crate::bff::model::ReadNeed::Poll);
+            if failed {
+                self.journal.warn_l(
+                    Tr::ReadTerminalLine,
+                    &[&session, &epoch, &terminal.key, &request, &needs, &detail],
+                );
+            } else if !routine_poll {
+                self.journal.info_l(
+                    Tr::ReadTerminalLine,
+                    &[&session, &epoch, &terminal.key, &request, &needs, &detail],
+                );
+            }
+            // A late/removed registration may be logged, but must not mutate a
+            // row belonging to another epoch or a replacement registration.
+            if self.engine.connection_id(session) == observation.epoch {
+                if let Some(row) = self
+                    .row_position(terminal.key)
+                    .and_then(|i| self.rows.get_mut(i))
+                    .filter(|row| row.session == session)
+                {
+                    row.last_read = Some(observation.clone());
+                    // Server quality is already projected from Values; do not
+                    // overwrite its native Bad/Uncertain code with a summary.
+                    if failed
+                        && !matches!(
+                            terminal.status,
+                            ReadTerminalStatus::Received(_)
+                                | ReadTerminalStatus::ReceivedMetadata { .. }
+                                | ReadTerminalStatus::InitialPush { .. }
+                        )
+                    {
+                        row.quality = RowQuality::Error(detail.clone());
+                        row.pending = false;
+                        row.invalidate_display();
+                    }
+                }
+                if failed {
+                    self.status = detail;
+                }
+            }
         }
     }
 
@@ -118,8 +304,10 @@ impl App {
         // unsolicited pushes and worker runtime errors have no request token.
         self.engine
             .set_auto_reconnect(self.settings.view.options.auto_reconnect);
+        let mut completed_read = false;
         let ctx = match self.engine.accept(&event) {
             Ok(Some(pending)) => {
+                completed_read = pending.operation == Operation::Read;
                 if self.settings.view.options.diagnostic_trace {
                     let latency = pending.sent.elapsed().as_millis();
                     self.journal.info_l(
@@ -127,7 +315,9 @@ impl App {
                         &[
                             &match event.origin {
                                 Origin::Reply(id) => id.to_string(),
-                                Origin::Unsolicited | Origin::Session(_) => String::new(),
+                                Origin::Unsolicited
+                                | Origin::Session(_)
+                                | Origin::UaSession { .. } => String::new(),
                             },
                             &operation_label(self.lang(), pending.operation),
                             &owner_label(self.lang(), owner),
@@ -145,7 +335,9 @@ impl App {
                         &[
                             &match event.origin {
                                 Origin::Reply(id) => id.to_string(),
-                                Origin::Unsolicited | Origin::Session(_) => String::new(),
+                                Origin::Unsolicited
+                                | Origin::Session(_)
+                                | Origin::UaSession { .. } => String::new(),
                             },
                             &owner_label(self.lang(), owner),
                         ],
@@ -154,9 +346,12 @@ impl App {
                 return;
             }
         };
+        if completed_read {
+            self.pump_add_children();
+        }
         let request_id = match event.origin {
             Origin::Reply(id) => Some(id),
-            Origin::Unsolicited | Origin::Session(_) => None,
+            Origin::Unsolicited | Origin::Session(_) | Origin::UaSession { .. } => None,
         };
         let kind = match (event.kind, &ctx) {
             (
@@ -167,7 +362,7 @@ impl App {
                 PendingCtx::WriteKey(key),
             ) => EventKind::Wrote {
                 key: *key,
-                result: Err(message),
+                result: crate::bff::model::WriteOutcome::from_dispatch_error(message),
             },
             (kind, _) => kind,
         };
@@ -179,6 +374,19 @@ impl App {
             }
         };
         self.project_session(session);
+        if matches!(
+            &kind,
+            EventKind::UaSubscriptionParameters { .. }
+                | EventKind::UaRecovery { .. }
+                | EventKind::Connected { .. }
+                | EventKind::Disconnected { .. }
+                | EventKind::Error {
+                    operation: Operation::Connect | Operation::Test,
+                    ..
+                }
+        ) {
+            self.project_ua_negotiated(session);
+        }
         match kind {
             EventKind::Error { operation, message } => {
                 self.on_operation_error(session, operation, message, ctx, request_id)
@@ -263,13 +471,176 @@ impl App {
     ) {
         let lang = self.lang();
         match kind {
+            EventKind::UaRecovery { state } => {
+                use crate::bff::model::{UaRecoveryMode, UaRecoveryState};
+                let text = match state {
+                    UaRecoveryState::ConnectionLost { status } => {
+                        self.cancel_add_children(session);
+                        if let Some(view) = self.session_mut(session) {
+                            view.context_generation =
+                                view.context_generation.and_then(|n| n.checked_add(1));
+                            view.clear_tree();
+                            view.root_loaded = false;
+                            view.root_loading = false;
+                        }
+                        self.selected_tree = self.selected_tree.filter(|(id, _)| *id != session);
+                        self.tree_focus = self.tree_focus.filter(|(id, _)| *id != session);
+                        if self.dialogs.add_signal.session == Some(session) {
+                            self.dialogs.add_signal.open = false;
+                            self.dialogs.add_signal.resolving = None;
+                        }
+                        fmt(lang, Tr::RecoveryLost, &[&format!("0x{status:08X}")])
+                    }
+                    UaRecoveryState::Reconnected { mode } => {
+                        if mode == UaRecoveryMode::NewSession {
+                            if let Some(view) = self.session_mut(session) {
+                                view.clear_tree();
+                                view.root_loaded = false;
+                                view.root_loading = false;
+                            }
+                            self.selected_tree =
+                                self.selected_tree.filter(|(id, _)| *id != session);
+                            self.tree_focus = self.tree_focus.filter(|(id, _)| *id != session);
+                            for row in self.rows.iter_mut().filter(|row| row.session == session) {
+                                row.data_type = None;
+                                row.canonical_vt = None;
+                                row.write_type = None;
+                                row.writable = false;
+                                row.ua_access_known = false;
+                                row.ua_type_id = None;
+                            }
+                        }
+                        tr(
+                            lang,
+                            match mode {
+                                UaRecoveryMode::ReactivatedSession => Tr::RecoveryReactivated,
+                                UaRecoveryMode::NewSession => Tr::RecoveryNewSession,
+                            },
+                        )
+                        .to_string()
+                    }
+                    UaRecoveryState::Reconciled { missing, ambiguous } => {
+                        let detail = tr(lang, Tr::RecoveryMissing).to_string();
+                        for key in &missing {
+                            self.journal.error(format!("{}: {}", detail, key.get()));
+                            if let Some(row) = self
+                                .row_position(*key)
+                                .and_then(|i| self.rows.get_mut(i))
+                                .filter(|r| r.session == session)
+                            {
+                                row.pending = false;
+                                row.pending_push = None;
+                                row.quality = RowQuality::Error(detail.clone());
+                            }
+                        }
+                        fmt(
+                            lang,
+                            Tr::RecoveryReconciled,
+                            &[
+                                &missing.len().to_string(),
+                                &tr(lang, if ambiguous { Tr::Yes } else { Tr::No }),
+                            ],
+                        )
+                    }
+                    UaRecoveryState::TypeMetadata { known, total } => fmt(
+                        lang,
+                        Tr::RecoveryMetadata,
+                        &[&known.to_string(), &total.to_string()],
+                    ),
+                    UaRecoveryState::Stopped { status } => {
+                        fmt(lang, Tr::RecoveryStopped, &[&format!("0x{status:08X}")])
+                    }
+                };
+                self.status = text.clone();
+                self.journal.warn(text);
+            }
+            EventKind::UaNotificationFacts { evidence, .. } => {
+                use crate::bff::model::UaNotificationEvidence;
+                let text = match evidence {
+                    UaNotificationEvidence::SequenceGap { previous, current } => {
+                        fmt(lang, Tr::UaHistoryGap, &[&previous, &current])
+                    }
+                    UaNotificationEvidence::SequenceUncertain { previous, current } => {
+                        fmt(lang, Tr::UaHistoryUncertain, &[&previous, &current])
+                    }
+                    UaNotificationEvidence::DataOverflow { key, status } => fmt(
+                        lang,
+                        Tr::UaHistoryOverflow,
+                        &[&key, &format!("0x{status:08X}")],
+                    ),
+                };
+                self.status = text.clone();
+                self.journal.warn(text);
+            }
+            EventKind::UaItemMetadata { facts } => {
+                for fact in facts {
+                    if !self.engine.session(session).is_some_and(|view| {
+                        view.items.contains_key(&fact.key)
+                            && !view.recovery_blocked.contains(&fact.key)
+                    }) {
+                        continue;
+                    }
+                    if let Some(row) = self
+                        .row_position(fact.key)
+                        .and_then(|i| self.rows.get_mut(i))
+                        .filter(|row| row.session == session && !row.pending)
+                    {
+                        row.data_type = fact.data_type;
+                        row.ua_type_id = fact.type_id;
+                        row.ua_access_known = fact.user_access_level.is_some();
+                        row.writable = fact
+                            .user_access_level
+                            .is_some_and(|value| value & 0x02 != 0);
+                    }
+                    if let Some(diagnostic) = fact.diagnostic {
+                        self.journal
+                            .warn(self.session_backend_text(session, &diagnostic));
+                    }
+                }
+            }
             EventKind::AddItems { results } => {
-                let mut confirmed: Vec<ItemKey> = Vec::with_capacity(results.len());
+                let mut seen = HashSet::new();
+                let mut duplicates = HashSet::new();
+                for (key, _) in &results {
+                    if !seen.insert(*key) {
+                        duplicates.insert(*key);
+                    }
+                }
+                for key in &duplicates {
+                    let message = tr(lang, Tr::AddDuplicateResult).to_string();
+                    if let Some(row) = self
+                        .row_position(*key)
+                        .and_then(|i| self.rows.get_mut(i))
+                        .filter(|row| row.session == session)
+                    {
+                        row.pending = false;
+                        row.pending_push = None;
+                        row.quality = RowQuality::Error(message.clone());
+                        self.journal.error(message);
+                    }
+                }
                 for (key, result) in results {
+                    if duplicates.contains(&key) {
+                        continue;
+                    }
                     match result {
                         Ok(info) => {
+                            let early = self
+                                .row_position(key)
+                                .and_then(|i| self.rows.get_mut(i))
+                                .filter(|row| row.session == session)
+                                .and_then(|row| row.pending_push.take());
                             self.apply_item_info(key, info);
-                            confirmed.push(key);
+                            if let Some(value) = early {
+                                self.on_data_event(
+                                    session,
+                                    EventKind::Values {
+                                        values: vec![(key, value)],
+                                    },
+                                    PendingCtx::None,
+                                    None,
+                                );
+                            }
                         }
                         Err(message) => {
                             let message = self.session_backend_text(session, &message);
@@ -277,6 +648,7 @@ impl App {
                                 self.row_position(key).and_then(|p| self.rows.get_mut(p))
                             {
                                 row.pending = false;
+                                row.pending_push = None;
                                 row.quality = RowQuality::Error(message.clone());
                                 let name = row.display_name.clone();
                                 self.journal.error_l(Tr::AddFailedName, &[&name, &message]);
@@ -284,28 +656,22 @@ impl App {
                         }
                     }
                 }
-                // OPC UA Part 4 requires the initial value in the first
-                // DataChange notification, but some stacks report only on
-                // change, and a slow first publish can delay the snapshot.
-                // While the push subscription is active the periodic Read is
-                // suppressed, so such a row would stay empty until its value
-                // changes. Read the confirmed keys once so the table is filled
-                // on change-only servers too.
-                if !confirmed.is_empty()
-                    && let Some(protocol) = self.session_protocol(session)
-                {
-                    self.send(session, protocol, CommandKind::Read { keys: confirmed });
-                }
             }
             EventKind::Removed { keys } => {
                 self.remove_rows(&keys.into_iter().collect());
             }
             EventKind::Browse { node_id, children } => {
+                if matches!(&ctx, PendingCtx::PaletteBrowse(expected) if expected != &node_id) {
+                    self.status = tr(self.lang(), Tr::PaletteBrowseMismatch).to_string();
+                    self.journal.error_l(Tr::PaletteBrowseMismatch, &[]);
+                    return;
+                }
                 // U7: the reply belongs to the tree ITEM that was expanded (the
                 // app remembered it per request id), not to the first node
                 // that happens to share the NodeId. Unsolicited replies
                 // (request id 0) fall back to the first matching node.
                 let mut target: Option<u64> = None;
+                let mut palette_id_exhausted = false;
                 if let Some(view) = self.session_mut(session) {
                     if node_id.is_empty() {
                         replace_roots(view, children);
@@ -314,6 +680,36 @@ impl App {
                     } else {
                         let item_id = match &ctx {
                             PendingCtx::TreeItem(id) => Some(*id),
+                            PendingCtx::PaletteBrowse(expected) if expected == &node_id => {
+                                if let Some(existing) =
+                                    view.tree.iter().find(|item| item.node.node_id == node_id)
+                                {
+                                    Some(existing.id)
+                                } else if let Some(next) = view.next_tree_id.checked_add(1) {
+                                    let id = view.next_tree_id;
+                                    view.next_tree_id = next;
+                                    view.tree.push(crate::app::TreeItem {
+                                        id,
+                                        parent: None,
+                                        node: BrowseNode {
+                                            node_id: node_id.clone(),
+                                            name: node_id.clone(),
+                                            kind: crate::bff::model::NodeKind::Branch,
+                                            has_children: true,
+                                        },
+                                        depth: 0,
+                                        expanded: true,
+                                        loaded: false,
+                                        loading: false,
+                                    });
+                                    view.invalidate_tree();
+                                    Some(id)
+                                } else {
+                                    palette_id_exhausted = true;
+                                    None
+                                }
+                            }
+                            PendingCtx::PaletteBrowse(_) => None,
                             _ => view
                                 .tree
                                 .iter()
@@ -331,6 +727,10 @@ impl App {
                             }
                         }
                     }
+                }
+                if palette_id_exhausted {
+                    self.status = tr(self.lang(), Tr::PaletteBrowseLimit).to_string();
+                    self.journal.error_l(Tr::PaletteBrowseLimit, &[]);
                 }
                 // Drive the recursive add-children job. The job is keyed by the
                 // request id it issued, so a manual browse or a stale reply is
@@ -400,7 +800,15 @@ impl App {
                 }
             }
             EventKind::Values { values } => {
+                let protocol = self.session_protocol(session);
                 for (key, value) in values {
+                    if self
+                        .engine
+                        .session(session)
+                        .is_some_and(|v| v.recovery_blocked.contains(&key))
+                    {
+                        continue;
+                    }
                     let reason_text = value
                         .reason
                         .as_ref()
@@ -409,6 +817,30 @@ impl App {
                         self.detail_revision = self.detail_revision.wrapping_add(1);
                     }
                     if let Some(row) = self.row_position(key).and_then(|p| self.rows.get_mut(p)) {
+                        if row.session != session {
+                            continue;
+                        }
+                        if row.pending {
+                            if request_id.is_none()
+                                && !value
+                                    .quality
+                                    .waiting_for_initial_data(protocol.unwrap_or(Protocol::OpcUa))
+                            {
+                                row.pending_push = Some(value);
+                            }
+                            continue;
+                        }
+                        if !row.time_selection.select(
+                            &row.times,
+                            &row.value,
+                            row.quality.kind() == QualityKind::Good,
+                            &value,
+                            Instant::now(),
+                        ) {
+                            // A terminal Read still completes in Engine; only
+                            // the displayed sample is retained here.
+                            continue;
+                        }
                         // UI4: remember when the value really changed. The
                         // first value of a row (still pending / waiting) is
                         // not a change.
@@ -425,6 +857,7 @@ impl App {
                         }
                         row.quality = RowQuality::Server(quality);
                         row.timestamp = value.timestamp;
+                        row.times = value.times;
                         row.pending = false;
                     }
                 }
@@ -441,7 +874,6 @@ impl App {
                     }
                 }
                 if let Some(view) = self.session_mut(session) {
-                    // Read them right away, not one interval later.
                     view.last_poll = Instant::now()
                         .checked_sub(Duration::from_secs(3600))
                         .unwrap_or_else(Instant::now);
@@ -455,18 +887,40 @@ impl App {
                     .find(|r| r.key == key)
                     .map(|r| r.display_name.clone())
                     .unwrap_or_else(|| key.to_string());
-                self.write_batch.completed(result.is_ok());
+                self.write_batch
+                    .completed(result.as_ref().is_ok_and(|outcome| outcome.accepted()));
                 match result {
-                    Ok(()) => {
-                        self.journal.info_l(Tr::WrittenValue, &[&name]);
+                    Ok(outcome) => {
+                        let detail = self.session_backend_text(
+                            session,
+                            &crate::bff::model::BackendMsg::raw(
+                                opclook_locale::write_outcome_text(lang, &outcome),
+                            ),
+                        );
+                        let text = fmt(lang, Tr::WriteOutcomeForItem, &[&name, &detail]);
+                        if outcome.accepted() {
+                            self.journal.info(text);
+                        } else if outcome.disposition
+                            == crate::bff::model::WriteDisposition::Rejected
+                        {
+                            self.journal.error_l(Tr::WriteFailed, &[&name, &detail]);
+                            self.dialogs.message = Some(MessageDialog {
+                                title: tr(lang, Tr::WriteError).to_string(),
+                                text,
+                                details: detail,
+                            });
+                        } else {
+                            self.journal.warn(text);
+                        }
                     }
                     Err(message) => {
                         let message = self.session_backend_text(session, &message);
-                        self.journal.error_l(Tr::WriteFailed, &[&name, &message]);
+                        let detail = format!("{}: {}", tr(lang, Tr::WriteNotSubmitted), message);
+                        self.journal.error_l(Tr::WriteFailed, &[&name, &detail]);
                         self.dialogs.message = Some(MessageDialog {
                             title: tr(lang, Tr::WriteError).to_string(),
-                            text: fmt(lang, Tr::WriteFailedName, &[&name]),
-                            details: message,
+                            text: fmt(lang, Tr::WriteNotSubmittedName, &[&name]),
+                            details: detail,
                         });
                     }
                 }
@@ -539,6 +993,7 @@ impl App {
                             self.row_position(*key).and_then(|p| self.rows.get_mut(p))
                         {
                             row.pending = false;
+                            row.pending_push = None;
                             row.quality = RowQuality::Error(message.clone());
                         }
                     }
@@ -830,7 +1285,10 @@ impl App {
                 .unwrap_or(false);
             if !is_ua {
                 row.canonical_vt = info.type_id.map(crate::bff::model::VarType);
+            } else {
+                row.ua_type_id = info.type_id;
             }
+            row.ua_access_known = !is_ua || info.writable;
             row.writable = info.writable;
             row.pending = false;
             if matches!(row.quality, RowQuality::NoData(_)) {

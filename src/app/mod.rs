@@ -32,6 +32,7 @@ mod sessions;
 mod state;
 mod table;
 mod tree;
+mod value_time;
 mod view;
 
 #[cfg(test)]
@@ -48,12 +49,15 @@ pub use state::{
     RowQuality, SessionState, SessionView, TreeItem, WriteKind, WriteTypeChoice,
     write_type_choices,
 };
+pub use value_time::{TimeOrder, TimeSelection};
 pub use view::{CHANGE_FLASH, MAX_FIELD_LINES, TableLine, is_numeric_value};
 
 use self::present::{is_loopback_host, operation_label};
 
 pub struct App {
     engine: Engine<PendingCtx>,
+    read_observations:
+        std::sync::Arc<std::sync::Mutex<opclook_contract::read_observer::ReadObservations>>,
     pub settings: Settings,
     /// Lazily populated adapter inventory + current network lease.
     pub network: NetworkState,
@@ -154,6 +158,8 @@ pub(super) enum PendingCtx {
     /// places of the tree, so the reply must land under the item that was
     /// expanded, not under the first node with that id).
     TreeItem(u64),
+    /// A user-entered browse target not yet present in the tree.
+    PaletteBrowse(String),
     /// `Discover` of one DA host: only that host's temporary route is released
     /// when the request fails.
     Host(String),
@@ -190,6 +196,12 @@ fn owner_label(lang: Lang, owner: Owner) -> String {
         Owner::Session(session) => session.to_string(),
         Owner::Discovery => operation_label(lang, Operation::Discover),
     }
+}
+
+enum SendOutcome {
+    Sent(RequestId),
+    Deferred,
+    Failed,
 }
 
 impl App {
@@ -306,8 +318,19 @@ impl App {
     fn new_inner(settings: Settings) -> Self {
         let script_text = settings.view.script.clone();
         let lang = settings.lang();
+        let read_observations = std::sync::Arc::new(std::sync::Mutex::new(
+            opclook_contract::read_observer::ReadObservations::default(),
+        ));
+        let sink = read_observations.clone();
+        let mut engine = Engine::default();
+        engine.set_read_terminal_sink(Some(Box::new(move |session, epoch, terminal| {
+            sink.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .record(session, epoch, terminal);
+        })));
         let mut app = Self {
-            engine: Engine::default(),
+            engine,
+            read_observations,
             settings,
             network: NetworkState::default(),
             sessions: Vec::new(),
@@ -367,6 +390,13 @@ impl App {
         notice: crate::settings::SettingsNotice,
     ) -> String {
         use crate::settings::SettingsNotice;
+        let warning = matches!(notice, SettingsNotice::AcquisitionMigrated { .. });
+        let migration = matches!(
+            notice,
+            SettingsNotice::AcquisitionMigrated { .. }
+                | SettingsNotice::AcquisitionMigrationFailed { .. }
+                | SettingsNotice::AcquisitionMigrationBlocked
+        );
         let (key, args): (Tr, Vec<String>) = match notice {
             SettingsNotice::ReadFailed { path, error } => {
                 (Tr::SettingsReadFailed, vec![path, error])
@@ -385,13 +415,36 @@ impl App {
                 (Tr::SettingsSaveFailed, vec![path, error])
             }
             SettingsNotice::SaveBlocked { path } => (Tr::SettingsSaveBlocked, vec![path]),
+            SettingsNotice::AcquisitionMigrationBlocked => {
+                (Tr::SettingsAcquisitionMigrationBlocked, vec![])
+            }
+            SettingsNotice::AcquisitionMigrated {
+                ua,
+                da,
+                interval_ms,
+            } => (
+                Tr::SettingsAcquisitionMigrated,
+                vec![ua.to_string(), da.to_string(), interval_ms.to_string()],
+            ),
+            SettingsNotice::AcquisitionMigrationFailed { seconds } => (
+                Tr::SettingsAcquisitionMigrationFailed,
+                vec![seconds.to_string()],
+            ),
         };
         let refs: Vec<&dyn std::fmt::Display> = args
             .iter()
             .map(|arg| arg as &dyn std::fmt::Display)
             .collect();
-        self.journal.error_l(key, &refs);
-        crate::i18n::fmt(self.lang(), key, &refs)
+        if warning {
+            self.journal.warn_l(key, &refs);
+        } else {
+            self.journal.error_l(key, &refs);
+        }
+        let message = crate::i18n::fmt(self.lang(), key, &refs);
+        if migration {
+            self.status.clone_from(&message);
+        }
+        message
     }
 
     /// Populate the network state from `settings.network.cached_adapters` without
@@ -667,6 +720,7 @@ impl App {
             .set_auto_reconnect(self.settings.view.options.auto_reconnect);
         self.poll_events();
         self.tick();
+        self.drain_read_observations();
         self.sync_table_view();
         crate::ui::draw(self, ui);
         ui.ctx().request_repaint_after(Duration::from_millis(200));
@@ -689,9 +743,43 @@ impl App {
         kind: CommandKind,
         ctx: PendingCtx,
     ) -> Option<RequestId> {
+        self.send_with_permit(owner, protocol, kind, ctx, None)
+    }
+
+    pub(super) fn send_with_permit(
+        &mut self,
+        owner: impl Into<Owner>,
+        protocol: Protocol,
+        kind: CommandKind,
+        ctx: PendingCtx,
+        permit: Option<opclook_engine::ReadPermit>,
+    ) -> Option<RequestId> {
+        match self.send_with_permit_inner(owner, protocol, kind, ctx, permit, false) {
+            SendOutcome::Sent(id) => Some(id),
+            SendOutcome::Deferred | SendOutcome::Failed => None,
+        }
+    }
+
+    fn send_with_permit_inner(
+        &mut self,
+        owner: impl Into<Owner>,
+        protocol: Protocol,
+        kind: CommandKind,
+        ctx: PendingCtx,
+        permit: Option<opclook_engine::ReadPermit>,
+        defer_browse: bool,
+    ) -> SendOutcome {
         let owner = owner.into();
         let operation = kind.operation();
         let dispatch = match (owner, kind) {
+            (Owner::Session(session), CommandKind::Read { keys }) if permit.is_some() => {
+                match permit {
+                    Some(permit) => self
+                        .engine
+                        .send_due_read(session, protocol, keys, permit, ctx),
+                    None => return SendOutcome::Failed,
+                }
+            }
             (
                 Owner::Session(session),
                 CommandKind::Browse {
@@ -723,16 +811,49 @@ impl App {
         };
         let (request_id, failure) = match dispatch {
             Ok(id) => (id, None),
+            Err(DispatchError::InvalidActionPayload(_)) => {
+                self.journal.error_l(Tr::ActionPayloadInvalid, &[]);
+                self.status = tr(self.lang(), Tr::ActionPayloadInvalid).to_string();
+                return SendOutcome::Failed;
+            }
+            Err(DispatchError::InvalidAcquisition(_)) => {
+                self.journal.error_l(Tr::AcquisitionInvalid, &[]);
+                self.status = tr(self.lang(), Tr::AcquisitionInvalid).to_string();
+                return SendOutcome::Failed;
+            }
             Err(DispatchError::Exhausted) => {
                 self.journal.error_l(Tr::RequestIdsExhausted, &[]);
                 self.status = tr(self.lang(), Tr::RequestIdsExhausted).to_string();
-                return None;
+                return SendOutcome::Failed;
             }
+            Err(DispatchError::ReadBusy) => {
+                self.journal.error_l(Tr::ReadBusy, &[]);
+                self.status = tr(self.lang(), Tr::ReadBusy).to_string();
+                return SendOutcome::Failed;
+            }
+            Err(DispatchError::ReadEmpty) => {
+                self.journal.error_l(Tr::ReadEmpty, &[]);
+                self.status = tr(self.lang(), Tr::ReadEmpty).to_string();
+                return SendOutcome::Failed;
+            }
+            Err(DispatchError::ItemKeyReused) => {
+                self.journal.error_l(Tr::ItemKeyReused, &[]);
+                self.status = tr(self.lang(), Tr::ItemKeyReused).to_string();
+                return SendOutcome::Failed;
+            }
+            Err(DispatchError::ItemKeyLimit) => {
+                self.journal.error_l(Tr::ItemKeyLimit, &[]);
+                self.status = tr(self.lang(), Tr::ItemKeyLimit).to_string();
+                return SendOutcome::Failed;
+            }
+            Err(DispatchError::ActionUnavailable(
+                opclook_engine::ActionUnavailable::ReadPending,
+            )) if defer_browse => return SendOutcome::Deferred,
             Err(DispatchError::ActionUnavailable(reason)) => {
                 let key = actions::action_unavailable_tr(reason);
                 self.journal.error_l(key, &[]);
                 self.status = tr(self.lang(), key).to_string();
-                return None;
+                return SendOutcome::Failed;
             }
             Err(DispatchError::SessionLimit) => {
                 self.journal.error_l(
@@ -744,7 +865,7 @@ impl App {
                     Tr::UaSessionLimitReached,
                     &[&crate::constants::MAX_UA_SESSIONS.to_string()],
                 );
-                return None;
+                return SendOutcome::Failed;
             }
             Err(DispatchError::Closed { request_id, cause }) => (
                 request_id,
@@ -783,9 +904,9 @@ impl App {
             }
         }
         if failure.is_some() {
-            None
+            SendOutcome::Failed
         } else {
-            Some(request_id)
+            SendOutcome::Sent(request_id)
         }
     }
 
@@ -818,6 +939,7 @@ impl App {
         let text = tr(self.lang(), Tr::StaleData).to_string();
         for row in self.rows.iter_mut().filter(|r| r.session == session) {
             row.quality = RowQuality::Error(text.clone());
+            row.pending_push = None;
         }
     }
 
@@ -846,6 +968,7 @@ impl App {
         // A11: writes whose reply can no longer arrive count as failed, or the
         // batch counters would never reach zero.
         if lost_writes > 0 {
+            self.journal.warn_l(Tr::WriteUnknownStatus, &[]);
             self.write_batch.lost(lost_writes);
             self.finish_write_batch_if_done();
         }
@@ -900,6 +1023,19 @@ impl App {
             view.last_test = runtime.last_test;
         }
     }
+    fn project_ua_negotiated(&mut self, id: SessionId) {
+        let Some(runtime) = self.engine.session(id) else {
+            return;
+        };
+        if let Some(ua) = self
+            .sessions
+            .iter_mut()
+            .find(|view| view.id == id)
+            .and_then(|view| view.ua_mut())
+        {
+            ua.negotiated = std::sync::Arc::new(runtime.ua_subscriptions.clone());
+        }
+    }
     #[cfg(feature = "test-support")]
     fn sync_fixture_sessions(&mut self) {
         for view in &self.sessions {
@@ -916,7 +1052,7 @@ impl App {
             runtime.items = self
                 .rows
                 .iter()
-                .filter(|row| row.session == view.id)
+                .filter(|row| row.session == view.id && view.state == SessionState::Connected)
                 .map(|row| (row.key, row.poll_only))
                 .collect();
             self.engine.seed_session_for_test(view.id, runtime);
@@ -992,6 +1128,8 @@ impl App {
             canonical_vt: None,
             write_type: None,
             writable: false,
+            ua_access_known: true,
+            ua_type_id: None,
             value,
             quality: RowQuality::Server(Quality {
                 code: 0xC0,
@@ -999,8 +1137,12 @@ impl App {
                 text: "GOOD".into(),
             }),
             timestamp: None,
+            times: Default::default(),
+            time_selection: Default::default(),
+            last_read: None,
             description: String::new(),
             pending: false,
+            pending_push: None,
             poll_only: false,
             changed_at: None,
             value_text_cache: Default::default(),
@@ -1119,6 +1261,8 @@ impl App {
         d.error = None;
         // Empty by design: no persistence restores host/port/URL into the
         // fields. The servers list is what the user picks from.
+        d.ua_acquisition = Some(crate::bff::model::AcquisitionConfig::ua_default());
+        d.da_acquisition = Some(opclook_engine::recommended_acquisition(Protocol::OpcDa));
         d.da_host.clear();
         d.da_manual.clear();
         // Keep previously discovered DA results and their source hosts
@@ -1199,7 +1343,11 @@ impl App {
         let ua_session_ids: Vec<(SessionId, Protocol)> = self
             .sessions
             .iter()
-            .filter(|s| s.protocol() == Protocol::OpcUa && s.state == SessionState::Connected)
+            .filter(|s| {
+                s.protocol() == Protocol::OpcUa
+                    && s.state == SessionState::Connected
+                    && s.endpoint().acquisition.is_none()
+            })
             .map(|s| (s.id, s.protocol()))
             .collect();
         for (session, protocol) in ua_session_ids {
@@ -1254,6 +1402,7 @@ impl eframe::App for App {
             let _ = self.engine.disconnect_untracked(session, protocol);
         }
         let outcome = self.engine.shutdown();
+        self.drain_read_observations();
         let errors = exit_messages(save_error, self.lang(), outcome);
         if !errors.is_empty() {
             rfd::MessageDialog::new()

@@ -19,6 +19,10 @@ export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/home/claude/target-linux}"
 echo "==> cargo fmt --all -- --check"
 cargo fmt --all -- --check
 
+echo "==> verify installed locked UA SDK source"
+python3 docs/testing/test-ua-sdk-source.py
+python3 docs/testing/ua-sdk-source.py
+
 echo "==> cargo check --all-targets ($TARGET)"
 cargo check --all-targets --target "$TARGET" -p opclook -p opclook-cli -p opclook-engine -p opclook-backend -p opclook-contract -p opclook-locale
 

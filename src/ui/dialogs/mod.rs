@@ -1,4 +1,5 @@
 mod about;
+mod acquisition;
 mod add_signal;
 mod columns;
 mod confirm;
@@ -35,6 +36,7 @@ enum DialogRegion {
     Options,
     Columns,
     About,
+    Acquisition,
     Connect,
 }
 
@@ -55,6 +57,8 @@ fn active_dialog(app: &App) -> Option<DialogRegion> {
         Some(DialogRegion::Columns)
     } else if app.dialogs.about.open {
         Some(DialogRegion::About)
+    } else if app.dialogs.acquisition.open {
+        Some(DialogRegion::Acquisition)
     } else if app.dialogs.connect.open {
         Some(DialogRegion::Connect)
     } else {
@@ -108,6 +112,8 @@ pub(super) fn dialogs(app: &mut App, ui: &mut egui::Ui) {
         columns_dialog(app, ui);
     } else if app.dialogs.about.open {
         about_dialog(app, ui);
+    } else if app.dialogs.acquisition.open {
+        acquisition::acquisition_dialog(app, ui);
     } else if app.dialogs.connect.open {
         connect_dialog(app, ui);
     }

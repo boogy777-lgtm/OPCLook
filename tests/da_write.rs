@@ -239,7 +239,10 @@ fn da_write_roundtrip() {
         );
         match write_ok.map(|e| e.kind) {
             Some(EventKind::Wrote { result, .. }) => {
-                assert!(result.is_ok(), "DA write failed: {result:?}");
+                assert!(
+                    result.as_ref().is_ok_and(|outcome| outcome.accepted()),
+                    "DA write failed: {result:?}"
+                );
             }
             other => panic!("DA write returned unexpected: {other:?}"),
         }

@@ -5,12 +5,17 @@ edition = "2024"
 rust-version = "1.99"
 license = "MIT"
 
+[features]
+native-da-preview = []
+native-da-test-hooks = ["native-da-preview"]
+
 [dependencies]
 opclook-contract = { path = "../contract" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 chrono = "0.4"
+futures-util = "0.3"
 async-opcua = { version = "0.19", features = ["client"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "net", "io-util"] }
 tokio-util = { version = "0.7", features = ["codec"] }

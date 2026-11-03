@@ -99,6 +99,36 @@ translation_keys! {
     GatewayClosed,
     WorkerClosed,
     RequestIdsExhausted,
+    // P2 bounded action payload integration.
+    ActionPayloadInvalid,
+    ReadBusy,
+    AcquisitionTitle,
+    AcquisitionExplicit,
+    AcquisitionMode,
+    AcquisitionSubscription,
+    AcquisitionPoll,
+    AcquisitionInterval,
+    AcquisitionRequestedInterval,
+    AcquisitionReadback,
+    AcquisitionFreshness,
+    AcquisitionCache,
+    AcquisitionSource,
+    AcquisitionUnsupported,
+    AcquisitionInvalid,
+    AcquisitionLegacy,
+    AcquisitionCacheGap,
+    AcquisitionEdit,
+    AcquisitionApplyNext,
+    AcquisitionApplyReconnect,
+    AcquisitionPending,
+    AcquisitionEpochChanged,
+    AcquisitionCollision,
+    AcquisitionActive,
+    AcquisitionDraft,
+
+    ReadEmpty,
+    ItemKeyReused,
+    ItemKeyLimit,
     ScanIdsExhausted,
     SessionIdsExhausted,
     ItemIdsExhausted,
@@ -113,11 +143,57 @@ translation_keys! {
     CjkFontMissing,
     CjkFontLoaded,
     ResolvingName,
+    AddDuplicateResult,
+    TimeSource,
+    TimeServer,
+    TimeDa,
+    TimeReceived,
+    TimeOrigin,
+    TimeOriginRead,
+    TimeOriginSubscription,
+    TimeOriginUnknown,
+    TimeOrderUnknown,
+    TimeOrderComparable,
+    TimeOrderOlderHeld,
+    TimeOrderEqualConflict,
+    TimeOrderDiscontinuity,
+    TimeOrderDiagnostic,
+    ReadNeedInitial,
+    ReadNeedPoll,
+    ReadNeedRefresh,
+    ReadNeedReadback,
+    ReadNeedDirect,
+    ReadNeedRecovery,
+    RecoveryLost,
+    RecoveryReactivated,
+    RecoveryNewSession,
+    RecoveryReconciled,
+    RecoveryMissing,
+    RecoveryMetadata,
+    RecoveryStopped,
+    ReadTerminalLine,
+    ReadTerminalReceived,
+    ReadTerminalInitial,
+    ReadTerminalMissing,
+    ReadTerminalServiceError,
+    ReadTerminalTimeout,
+    ReadTerminalCancelled,
+    ReadCancelRemoved,
+    ReadCancelDisconnected,
+    ReadCancelEpoch,
+    ReadCancelExplicit,
+    ReadTerminalDispatchFailed,
+    ReadTerminalUnavailable,
+    ReadTerminalUnexpected,
+    ReadTerminalSummaryLoss,
     SettingsReadFailed,
     SettingsParseFailed,
     SettingsParseNoBackup,
     SettingsSaveFailed,
     SettingsSaveBlocked,
+    SettingsAcquisitionMigrated,
+    SettingsAcquisitionMigrationFailed,
+    SettingsAcquisitionMigrationBlocked,
     NetworkCacheWarning,
     NetworkCacheLoaded,
     NetworkCacheSkipped,
@@ -149,10 +225,19 @@ translation_keys! {
     PaletteSearch,
     PaletteNoResults,
     PaletteNeedsContext,
+    PaletteBrowseNode,
+    PaletteBrowseUnknown,
+    PaletteBrowseMismatch,
+    PaletteBrowseLimit,
+    PaletteTarget,
+    PaletteSelectOne,
+    PaletteConnectionChanged,
+    PaletteWriteStale,
     PaletteBrowse,
     PaletteWrite,
     ActionModalOpen,
     ActionSessionMissing,
+    ActionReadPending,
     ActionSessionNotConnected,
     ActionProtocolMismatch,
     ActionImportInProgress,
@@ -437,6 +522,15 @@ translation_keys! {
     CurrentValue,
     ServerTypeLabel,
     ReadOnly,
+    UaAccessUnknown,
+    UaHistoryGap,
+    UaHistoryUncertain,
+    UaHistoryOverflow,
+    UaNegotiatedHeading,
+    UaSamplingDefaultHint,
+    UaNegotiatedUnknown,
+    UaPublishingFacts,
+    UaSamplingFacts,
     CanonicalDaType,
     ServerDataType,
     WriteTypeLabel,
@@ -498,6 +592,9 @@ translation_keys! {
     // ---- App-provided dialog content ----
     WriteError,
     WriteFailedName,
+    WriteUnknownName,
+    WriteNotSubmitted,
+    WriteNotSubmittedName,
     AddSignalTitle,
     AddSignalBadNode,
     ChangeValueTitle,
@@ -542,6 +639,12 @@ translation_keys! {
     AddFailedName,
     NoChildSignals,
     WrittenValue,
+    WriteAcceptedStatus,
+    WriteAsyncStatus,
+    WriteUncertainStatus,
+    WriteRejectedStatus,
+    WriteUnknownStatus,
+    WriteOutcomeForItem,
     WriteFailed,
     WriteDoneSummary,
     StaleData,
@@ -828,6 +931,36 @@ fn ru(key: Tr) -> &'static str {
         GatewayClosed => "Шлюз остановлен",
         WorkerClosed => "Канал рабочего потока закрыт",
         RequestIdsExhausted => "Исчерпаны идентификаторы запросов",
+        ActionPayloadInvalid => {
+            "Параметры действия превышают ограничения размера, глубины или числа элементов. Уменьшите объём данных"
+        }
+        ReadBusy => "Чтение этой сессии уже выполняется",
+        AcquisitionTitle => "Получение данных",
+        AcquisitionEdit => "Настроить профиль соединения",
+        AcquisitionApplyNext => "Сохранить для следующего ручного подключения",
+        AcquisitionApplyReconnect => "Сохранить и переподключить",
+        AcquisitionPending => "Сохранён профиль для следующего ручного подключения",
+        AcquisitionEpochChanged => "Соединение изменилось или закрыто; откройте настройки снова",
+        AcquisitionCollision => "Соединение с таким профилем уже существует",
+        AcquisitionActive => "Активный профиль",
+        AcquisitionDraft => "Черновик",
+        AcquisitionExplicit => "Использовать профиль соединения",
+        AcquisitionLegacy => "Прежние общие настройки и резервный опрос",
+        AcquisitionCacheGap => "Режим кэша UA ещё не реализован в OPCLook",
+        AcquisitionMode => "Режим обновления",
+        AcquisitionSubscription => "Подписка",
+        AcquisitionPoll => "Опрос",
+        AcquisitionInterval => "Интервал, мс",
+        AcquisitionRequestedInterval => "Запрошенный интервал, мс",
+        AcquisitionReadback => "Читать после записи",
+        AcquisitionFreshness => "Источник чтения",
+        AcquisitionCache => "Допускается кэш",
+        AcquisitionSource => "Запросить источник",
+        AcquisitionUnsupported => "Недоступно в текущем адаптере",
+        AcquisitionInvalid => "Неверные или неподдерживаемые настройки получения данных",
+        ReadEmpty => "Нет элементов для чтения",
+        ItemKeyReused => "Идентификатор элемента уже использован в этом соединении",
+        ItemKeyLimit => "Достигнут предел идентификаторов элементов для соединения",
         ScanIdsExhausted => "Исчерпаны идентификаторы сканирования",
         SessionIdsExhausted => "Исчерпаны идентификаторы сессий",
         ItemIdsExhausted => "Исчерпаны идентификаторы сигналов",
@@ -846,6 +979,55 @@ fn ru(key: Tr) -> &'static str {
         }
         CjkFontLoaded => "Шрифт для китайского текста: {0}",
         ResolvingName => "Поиск узла…",
+        AddDuplicateResult => "Сервер вернул несколько результатов регистрации для одного сигнала",
+        TimeSource => "Время источника",
+        TimeServer => "Время сервера",
+        TimeDa => "Время DA",
+        TimeReceived => "Получено локально",
+        TimeOrigin => "Происхождение",
+        TimeOriginRead => "Чтение",
+        TimeOriginSubscription => "Подписка",
+        TimeOriginUnknown => "Неизвестно",
+        TimeOrderUnknown => "Порядок по времени источника не подтверждён",
+        TimeOrderComparable => "Сравнимое время источника",
+        TimeOrderOlderHeld => "Более старый образец временно удержан",
+        TimeOrderEqualConflict => "Одинаковое время, разные значения: порядок неоднозначен",
+        TimeOrderDiscontinuity => "Возможный скачок часов: порядок неоднозначен",
+        TimeOrderDiagnostic => "Диагностический результат",
+        ReadNeedInitial => "начальное значение",
+        ReadNeedPoll => "опрос",
+        ReadNeedRefresh => "обновление",
+        ReadNeedReadback => "чтение после записи",
+        ReadNeedDirect => "прямое чтение",
+        ReadNeedRecovery => "снимок после восстановления",
+        RecoveryLost => {
+            "Связь UA потеряна ({0}); значения могут устареть; история и возможный пропуск первого уведомления неизвестны"
+        }
+        RecoveryReactivated => "Сеанс UA восстановлен; выполняется сверка",
+        RecoveryNewSession => "Создан новый сеанс UA; выполняется сверка",
+        RecoveryReconciled => {
+            "Сверка UA: недоступно {0}, неоднозначность: {1}. Последующее чтение не восстанавливает историю"
+        }
+        RecoveryMissing => "Элемент недоступен после восстановления UA",
+        RecoveryMetadata => "Метаданные типов UA: {0} из {1}",
+        RecoveryStopped => "Восстановление UA остановлено ({0}); данные могут устареть",
+        ReadTerminalLine => {
+            "Чтение: соединение {0}, эпоха {1}, сигнал {2}, запрос {3}, цель {4}: {5}"
+        }
+        ReadTerminalReceived => "Получен результат: качество {0}; причина: {1}",
+        ReadTerminalInitial => "Начальное уведомление: качество {0}; причина: {1}",
+        ReadTerminalMissing => "Сервер не вернул результат для сигнала",
+        ReadTerminalServiceError => "Ошибка чтения: {0}",
+        ReadTerminalTimeout => "Тайм-аут чтения, с: {0}",
+        ReadTerminalCancelled => "Чтение отменено: {0}",
+        ReadCancelRemoved => "сигнал удалён",
+        ReadCancelDisconnected => "соединение закрыто",
+        ReadCancelEpoch => "соединение изменилось",
+        ReadCancelExplicit => "операция отменена",
+        ReadTerminalDispatchFailed => "Не удалось отправить чтение: {0}",
+        ReadTerminalUnavailable => "Чтение недоступно: исчерпаны идентификаторы",
+        ReadTerminalUnexpected => "Некорректный ответ чтения",
+        ReadTerminalSummaryLoss => "Результаты чтения объединены: {0}; не помещены в буфер: {1}",
         SettingsReadFailed => {
             "Не удалось прочитать файл настроек {0}: {1}. Файл не будет перезаписан"
         }
@@ -856,6 +1038,15 @@ fn ru(key: Tr) -> &'static str {
             "Файл настроек {0} повреждён ({1}), копию сделать не удалось ({2}). Файл не будет перезаписан, используются значения по умолчанию"
         }
         SettingsSaveFailed => "Не удалось сохранить настройки {0}: {1}",
+        SettingsAcquisitionMigrated => {
+            "Перенесены профили: UA {0}, DA {1}; интервал {2} мс. UA: подписка, разовые чтения из источника, без чтения после записи; прежний резервный опрос poll_only отключён. DA: опрос Sync, кэш, без чтения после записи."
+        }
+        SettingsAcquisitionMigrationFailed => {
+            "Не удалось перенести профили: старый интервал {0} с вне допустимого диапазона или переполнен. Исходный файл защищён от записи; исправьте интервал и перезапустите приложение."
+        }
+        SettingsAcquisitionMigrationBlocked => {
+            "Старый профиль недоступен: исправьте интервал в файле настроек и перезапустите приложение."
+        }
         SettingsSaveBlocked => {
             "Не удалось сохранить настройки {0}: существующий файл повреждён или недоступен, а его резервная копия не создана. Файл не будет перезаписан"
         }
@@ -892,10 +1083,19 @@ fn ru(key: Tr) -> &'static str {
         PaletteSearch => "Поиск команды",
         PaletteNoResults => "Команды не найдены",
         PaletteNeedsContext => "Требуются параметры и контекст",
+        PaletteBrowseNode => "NodeId ветки (пусто — корень)",
+        PaletteBrowseUnknown => "Недопустимый или слишком длинный идентификатор",
+        PaletteBrowseMismatch => "Сервер вернул ответ для другой ветки",
+        PaletteBrowseLimit => "Исчерпаны идентификаторы дерева",
+        PaletteTarget => "Подключение: {0}",
+        PaletteSelectOne => "Выберите один сигнал текущего подключения",
+        PaletteConnectionChanged => "Подключение изменилось; откройте палитру снова",
+        PaletteWriteStale => "Подключение изменилось; откройте запись снова",
         PaletteBrowse => "Обзор ветки",
         PaletteWrite => "Запись значения",
         ActionModalOpen => "Сначала закройте открытый диалог",
         ActionSessionMissing => "Сессия не найдена",
+        ActionReadPending => "Ожидается чтение этой сессии",
         ActionSessionNotConnected => "Сессия не подключена",
         ActionProtocolMismatch => "Протокол не соответствует сессии",
         ActionImportInProgress => "Дождитесь завершения импорта",
@@ -945,7 +1145,7 @@ fn ru(key: Tr) -> &'static str {
         NoActiveServer => "нет активного сервера",
         SignalsCount => "Сигналов: {0} | Выбрано: {1}",
         Writing => "Запись...",
-        WrittenSummary => "Записано: {0} из {1}",
+        WrittenSummary => "Принято сервером: {0} из {1}",
         UpdatedAt => "Обновлено {0}",
         RowsHint => {
             "Таблица: ↑↓ Shift+PgUp/PgDn Home/End {0} {1} {3} {4} {5} · {6} — дерево · {2} — сервер"
@@ -1155,6 +1355,19 @@ fn ru(key: Tr) -> &'static str {
         WriteTargetCount => "Количество выбранных сигналов: {0}",
         CurrentValue => "Текущее значение: {0}",
         ServerTypeLabel => "Тип сервера: {0}",
+        UaAccessUnknown => "Права записи неизвестны",
+        UaHistoryGap => "Обнаружен разрыв последовательности UA: {0} → {1}; история неполна",
+        UaHistoryUncertain => {
+            "Неопределённая последовательность UA: {0} → {1}; полнота истории неизвестна"
+        }
+        UaHistoryOverflow => "Переполнение очереди UA для ключа {0} ({1}); история неполна",
+        UaNegotiatedHeading => "Согласованные параметры SDK (мс)",
+        UaSamplingDefaultHint => "−1 запрашивает интервал публикации подписки",
+        UaNegotiatedUnknown => "Нет сведений SDK",
+        UaPublishingFacts => "Публикация: запрос {0}, пересмотрено {1}",
+        UaSamplingFacts => {
+            "Ключ {0}: выборка запрос {1}, пересмотрено {2}; очередь запрос {3}, пересмотрено {4}"
+        }
         ReadOnly => "Сигнал только для чтения (запись недоступна)",
         CanonicalDaType => "Канонический тип DA: {0}",
         ServerDataType => "Тип данных сервера: {0}",
@@ -1228,6 +1441,9 @@ fn ru(key: Tr) -> &'static str {
         // ---- App dialog content ----
         WriteError => "Ошибка записи",
         WriteFailedName => "Не удалось записать значение в сигнал \"{0}\".",
+        WriteUnknownName => "Результат записи в сигнал \"{0}\" неизвестен.",
+        WriteNotSubmitted => "Запись не отправлена",
+        WriteNotSubmittedName => "Запись в сигнал \"{0}\" не отправлена.",
         AddSignalTitle => "Добавление сигнала",
         AddSignalBadNode => {
             "Выбран узел-ветка. Выберите сигнал или используйте \"Добавить дочерние\"."
@@ -1280,8 +1496,14 @@ fn ru(key: Tr) -> &'static str {
         AddFailedName => "Не удалось добавить сигнал \"{0}\": {1}",
         NoChildSignals => "В выбранной ветке нет дочерних сигналов",
         WrittenValue => "Записано значение в \"{0}\"",
+        WriteAcceptedStatus => "Запись принята сервером; физическое действие не подтверждено",
+        WriteAsyncStatus => "Запись принята для асинхронного завершения; источник не проверен",
+        WriteUncertainStatus => "Результат записи неопределён",
+        WriteRejectedStatus => "Запись отклонена сервером",
+        WriteUnknownStatus => "Результат записи неизвестен; запись могла выполниться",
+        WriteOutcomeForItem => "\"{0}\": {1}",
         WriteFailed => "Не удалось записать \"{0}\": {1}",
-        WriteDoneSummary => "Запись завершена: {0} из {1} успешно",
+        WriteDoneSummary => "Сервер принял записи: {0} из {1}",
         StaleData => "устаревшие данные",
         NoData => "нет данных",
         WaitingValue => "ожидание значения",
@@ -1471,6 +1693,36 @@ fn en(key: Tr) -> &'static str {
         GatewayClosed => "Gateway is shut down",
         WorkerClosed => "Worker command channel is closed",
         RequestIdsExhausted => "Request identifiers exhausted",
+        ActionPayloadInvalid => {
+            "Action parameters exceed the size, depth or item limits. Reduce the amount of data"
+        }
+        ReadBusy => "A read is already in progress for this session",
+        AcquisitionTitle => "Data acquisition",
+        AcquisitionEdit => "Edit connection profile",
+        AcquisitionApplyNext => "Save for next manual connection",
+        AcquisitionApplyReconnect => "Save and reconnect",
+        AcquisitionPending => "Profile saved for the next manual connection",
+        AcquisitionEpochChanged => "Connection changed or closed; reopen the editor",
+        AcquisitionCollision => "A connection with this profile already exists",
+        AcquisitionActive => "Active profile",
+        AcquisitionDraft => "Draft",
+        AcquisitionExplicit => "Use this connection profile",
+        AcquisitionLegacy => "Legacy global settings and polling fallback",
+        AcquisitionCacheGap => "UA cache mode is not yet implemented in OPCLook",
+        AcquisitionMode => "Update mode",
+        AcquisitionSubscription => "Subscription",
+        AcquisitionPoll => "Poll",
+        AcquisitionInterval => "Interval, ms",
+        AcquisitionRequestedInterval => "Requested interval, ms",
+        AcquisitionReadback => "Read after write",
+        AcquisitionFreshness => "Read freshness",
+        AcquisitionCache => "Cache allowed",
+        AcquisitionSource => "Request source",
+        AcquisitionUnsupported => "Unavailable in the current adapter",
+        AcquisitionInvalid => "Invalid or unsupported acquisition settings",
+        ReadEmpty => "There are no items to read",
+        ItemKeyReused => "Item identifier was already used in this connection",
+        ItemKeyLimit => "The item identifier limit for this connection was reached",
         ScanIdsExhausted => "Scan identifiers exhausted",
         SessionIdsExhausted => "Session identifiers exhausted",
         ItemIdsExhausted => "Item identifiers exhausted",
@@ -1489,6 +1741,53 @@ fn en(key: Tr) -> &'static str {
         }
         CjkFontLoaded => "Font for CJK text: {0}",
         ResolvingName => "Resolving node…",
+        AddDuplicateResult => "The server returned duplicate registration results for an item",
+        TimeSource => "Source time",
+        TimeServer => "Server time",
+        TimeDa => "DA time",
+        TimeReceived => "Received locally",
+        TimeOrigin => "Origin",
+        TimeOriginRead => "Read",
+        TimeOriginSubscription => "Subscription",
+        TimeOriginUnknown => "Unknown",
+        TimeOrderUnknown => "Source time ordering is not established",
+        TimeOrderComparable => "Comparable source time",
+        TimeOrderOlderHeld => "Older sample temporarily held",
+        TimeOrderEqualConflict => "Equal time, different values: ordering is ambiguous",
+        TimeOrderDiscontinuity => "Possible clock discontinuity: ordering is ambiguous",
+        TimeOrderDiagnostic => "Diagnostic result",
+        ReadNeedInitial => "initial",
+        ReadNeedPoll => "poll",
+        ReadNeedRefresh => "refresh",
+        ReadNeedReadback => "read after write",
+        ReadNeedDirect => "direct read",
+        ReadNeedRecovery => "recovery snapshot",
+        RecoveryLost => {
+            "UA connection lost ({0}); values may be stale; history and a possible first-notification gap are unknown"
+        }
+        RecoveryReactivated => "UA session reactivated; reconciling items",
+        RecoveryNewSession => "New UA session; reconciling items",
+        RecoveryReconciled => {
+            "UA reconciliation: {0} missing, ambiguity: {1}. A later read does not restore history"
+        }
+        RecoveryMissing => "Item unavailable after UA recovery",
+        RecoveryMetadata => "UA type metadata: {0} of {1}",
+        RecoveryStopped => "UA recovery stopped ({0}); values may be stale",
+        ReadTerminalLine => "Read: session {0}, epoch {1}, item {2}, request {3}, need {4}: {5}",
+        ReadTerminalReceived => "Result received: quality {0}; reason: {1}",
+        ReadTerminalInitial => "Initial notification: quality {0}; reason: {1}",
+        ReadTerminalMissing => "The server returned no result for this item",
+        ReadTerminalServiceError => "Read failed: {0}",
+        ReadTerminalTimeout => "Read timed out, seconds: {0}",
+        ReadTerminalCancelled => "Read cancelled: {0}",
+        ReadCancelRemoved => "item removed",
+        ReadCancelDisconnected => "connection closed",
+        ReadCancelEpoch => "connection changed",
+        ReadCancelExplicit => "operation cancelled",
+        ReadTerminalDispatchFailed => "Could not send read: {0}",
+        ReadTerminalUnavailable => "Read unavailable: identifiers exhausted",
+        ReadTerminalUnexpected => "Invalid read response",
+        ReadTerminalSummaryLoss => "Read results coalesced: {0}; buffer overflow: {1}",
         SettingsReadFailed => "Could not read settings file {0}: {1}. It will not be overwritten",
         SettingsParseFailed => {
             "Settings file {0} is damaged ({1}). A copy was saved to {2}. Defaults are used"
@@ -1497,6 +1796,15 @@ fn en(key: Tr) -> &'static str {
             "Settings file {0} is damaged ({1}) and could not be backed up ({2}). It will not be overwritten; defaults are used"
         }
         SettingsSaveFailed => "Could not save settings {0}: {1}",
+        SettingsAcquisitionMigrated => {
+            "Migrated profiles: UA {0}, DA {1}; interval {2} ms. UA: subscription, one-shot reads from source, no read after write; legacy poll_only fallback is disabled. DA: Sync poll, cache allowed, no read after write."
+        }
+        SettingsAcquisitionMigrationFailed => {
+            "Could not migrate profiles: legacy interval {0} s is out of range or overflows. The original file is protected; correct the interval and restart the application."
+        }
+        SettingsAcquisitionMigrationBlocked => {
+            "Legacy profile unavailable: correct the interval in the settings file and restart the application."
+        }
         SettingsSaveBlocked => {
             "Could not save settings {0}: the existing file is damaged or unreadable and could not be backed up. It will not be overwritten"
         }
@@ -1533,10 +1841,19 @@ fn en(key: Tr) -> &'static str {
         PaletteSearch => "Search commands",
         PaletteNoResults => "No commands found",
         PaletteNeedsContext => "Parameters and context are required",
+        PaletteBrowseNode => "Branch NodeId (empty for root)",
+        PaletteBrowseUnknown => "Invalid or overly long identifier",
+        PaletteBrowseMismatch => "The server replied for a different branch",
+        PaletteBrowseLimit => "Tree identifiers exhausted",
+        PaletteTarget => "Connection: {0}",
+        PaletteSelectOne => "Select one signal from the current connection",
+        PaletteConnectionChanged => "Connection changed; reopen the palette",
+        PaletteWriteStale => "Connection changed; reopen the write dialog",
         PaletteBrowse => "Browse branch",
         PaletteWrite => "Write value",
         ActionModalOpen => "Close the open dialog first",
         ActionSessionMissing => "Session not found",
+        ActionReadPending => "A read is pending for this session",
         ActionSessionNotConnected => "Session is not connected",
         ActionProtocolMismatch => "Protocol does not match the session",
         ActionImportInProgress => "Wait for the import to finish",
@@ -1586,7 +1903,7 @@ fn en(key: Tr) -> &'static str {
         NoActiveServer => "no active server",
         SignalsCount => "Signals: {0} | Selected: {1}",
         Writing => "Writing...",
-        WrittenSummary => "Written: {0} of {1}",
+        WrittenSummary => "Accepted by server: {0} of {1}",
         UpdatedAt => "Updated {0}",
         RowsHint => {
             "Table: ↑↓ Shift+PgUp/PgDn Home/End {0} {1} {3} {4} {5} · {6} — tree · {2} — server"
@@ -1796,6 +2113,17 @@ fn en(key: Tr) -> &'static str {
         WriteTargetCount => "Number of selected signals: {0}",
         CurrentValue => "Current value: {0}",
         ServerTypeLabel => "Server type: {0}",
+        UaAccessUnknown => "Write permission is unknown",
+        UaHistoryGap => "UA sequence gap: {0} → {1}; history is incomplete",
+        UaHistoryUncertain => "UA sequence uncertain: {0} → {1}; history completeness is unknown",
+        UaHistoryOverflow => "UA queue overflow for key {0} ({1}); history is incomplete",
+        UaNegotiatedHeading => "SDK negotiated parameters (ms)",
+        UaSamplingDefaultHint => "−1 requests the subscription publishing interval",
+        UaNegotiatedUnknown => "No SDK facts available",
+        UaPublishingFacts => "Publishing: requested {0}, revised {1}",
+        UaSamplingFacts => {
+            "Key {0}: sampling requested {1}, revised {2}; queue requested {3}, revised {4}"
+        }
         ReadOnly => "Signal is read-only (writing is unavailable)",
         CanonicalDaType => "Canonical DA type: {0}",
         ServerDataType => "Server data type: {0}",
@@ -1863,6 +2191,9 @@ fn en(key: Tr) -> &'static str {
         // ---- App dialog content ----
         WriteError => "Write error",
         WriteFailedName => "Failed to write a value to signal \"{0}\".",
+        WriteUnknownName => "The write outcome for signal \"{0}\" is unknown.",
+        WriteNotSubmitted => "Write not submitted",
+        WriteNotSubmittedName => "The write to signal \"{0}\" was not submitted.",
         AddSignalTitle => "Add signal",
         AddSignalBadNode => "A branch node is selected. Select a signal or use \"Add children\".",
         ChangeValueTitle => "Change value",
@@ -1911,8 +2242,14 @@ fn en(key: Tr) -> &'static str {
         AddFailedName => "Failed to add signal \"{0}\": {1}",
         NoChildSignals => "The selected branch has no child signals",
         WrittenValue => "Value written to \"{0}\"",
+        WriteAcceptedStatus => "Write accepted by the server; physical action is not confirmed",
+        WriteAsyncStatus => "Write accepted for asynchronous completion; source not verified",
+        WriteUncertainStatus => "Write result is uncertain",
+        WriteRejectedStatus => "Write rejected by the server",
+        WriteUnknownStatus => "Write outcome is unknown; the write may have occurred",
+        WriteOutcomeForItem => "\"{0}\": {1}",
         WriteFailed => "Failed to write \"{0}\": {1}",
-        WriteDoneSummary => "Write done: {0} of {1} successful",
+        WriteDoneSummary => "Server accepted writes: {0} of {1}",
         StaleData => "stale data",
         NoData => "no data",
         WaitingValue => "waiting for value",
@@ -2102,6 +2439,34 @@ fn zh(key: Tr) -> &'static str {
         GatewayClosed => "网关已关闭",
         WorkerClosed => "工作线程命令通道已关闭",
         RequestIdsExhausted => "请求标识符已耗尽",
+        ActionPayloadInvalid => "操作参数超出大小、深度或元素数量限制。请减少数据量",
+        ReadBusy => "此会话已有读取正在进行",
+        AcquisitionTitle => "数据采集",
+        AcquisitionEdit => "编辑连接配置",
+        AcquisitionApplyNext => "保存供下次手动连接使用",
+        AcquisitionApplyReconnect => "保存并重新连接",
+        AcquisitionPending => "配置已保存，将在下次手动连接时使用",
+        AcquisitionEpochChanged => "连接已更改或关闭；请重新打开编辑器",
+        AcquisitionCollision => "具有此配置的连接已存在",
+        AcquisitionActive => "当前配置",
+        AcquisitionDraft => "草稿",
+        AcquisitionExplicit => "使用此连接配置",
+        AcquisitionLegacy => "旧版全局设置和轮询回退",
+        AcquisitionCacheGap => "OPCLook 尚未实现 UA 缓存模式",
+        AcquisitionMode => "更新模式",
+        AcquisitionSubscription => "订阅",
+        AcquisitionPoll => "轮询",
+        AcquisitionInterval => "间隔，毫秒",
+        AcquisitionRequestedInterval => "请求的间隔，毫秒",
+        AcquisitionReadback => "写入后读取",
+        AcquisitionFreshness => "读取新鲜度",
+        AcquisitionCache => "允许缓存",
+        AcquisitionSource => "请求源",
+        AcquisitionUnsupported => "当前适配器不支持",
+        AcquisitionInvalid => "采集设置无效或不受支持",
+        ReadEmpty => "没有要读取的项目",
+        ItemKeyReused => "此连接中已使用该项目标识符",
+        ItemKeyLimit => "已达到此连接的项目标识符数量上限",
         ScanIdsExhausted => "扫描标识符已耗尽",
         SessionIdsExhausted => "会话标识符已耗尽",
         ItemIdsExhausted => "信号标识符已耗尽",
@@ -2116,12 +2481,62 @@ fn zh(key: Tr) -> &'static str {
         CjkFontMissing => "未找到可显示中文的字体（msyh.ttc、simsun.ttc）：界面文字可能显示为方块",
         CjkFontLoaded => "中文字体：{0}",
         ResolvingName => "正在解析节点…",
+        AddDuplicateResult => "服务器为同一信号返回了多个注册结果",
+        TimeSource => "源时间",
+        TimeServer => "服务器时间",
+        TimeDa => "DA 时间",
+        TimeReceived => "本地接收时间",
+        TimeOrigin => "来源",
+        TimeOriginRead => "读取",
+        TimeOriginSubscription => "订阅",
+        TimeOriginUnknown => "未知",
+        TimeOrderUnknown => "源时间顺序未确定",
+        TimeOrderComparable => "源时间可比较",
+        TimeOrderOlderHeld => "暂时保留较旧样本",
+        TimeOrderEqualConflict => "时间相同但值不同：顺序不确定",
+        TimeOrderDiscontinuity => "时钟可能跳变：顺序不确定",
+        TimeOrderDiagnostic => "诊断结果",
+        ReadNeedInitial => "初始值",
+        ReadNeedPoll => "轮询",
+        ReadNeedRefresh => "刷新",
+        ReadNeedReadback => "写入后读取",
+        ReadNeedDirect => "直接读取",
+        ReadNeedRecovery => "恢复后快照",
+        RecoveryLost => "UA 连接已断开（{0}）；值可能过时；通知历史及首次通知可能缺失的情况未知",
+        RecoveryReactivated => "UA 会话已恢复；正在核对项目",
+        RecoveryNewSession => "已创建新 UA 会话；正在核对项目",
+        RecoveryReconciled => "UA 核对：缺失 {0}，存在歧义：{1}。后续读取不能恢复历史",
+        RecoveryMissing => "UA 恢复后项目不可用",
+        RecoveryMetadata => "UA 类型元数据：{0} / {1}",
+        RecoveryStopped => "UA 恢复已停止（{0}）；值可能过时",
+        ReadTerminalLine => "读取：会话 {0}，周期 {1}，信号 {2}，请求 {3}，用途 {4}：{5}",
+        ReadTerminalReceived => "已收到结果：质量 {0}；原因：{1}",
+        ReadTerminalInitial => "初始通知：质量 {0}；原因：{1}",
+        ReadTerminalMissing => "服务器未返回该信号的结果",
+        ReadTerminalServiceError => "读取失败：{0}",
+        ReadTerminalTimeout => "读取超时，秒：{0}",
+        ReadTerminalCancelled => "读取已取消：{0}",
+        ReadCancelRemoved => "信号已删除",
+        ReadCancelDisconnected => "连接已关闭",
+        ReadCancelEpoch => "连接已更改",
+        ReadCancelExplicit => "操作已取消",
+        ReadTerminalDispatchFailed => "无法发送读取：{0}",
+        ReadTerminalUnavailable => "无法读取：标识符已耗尽",
+        ReadTerminalUnexpected => "读取响应无效",
+        ReadTerminalSummaryLoss => "已合并读取结果：{0}；缓冲区溢出：{1}",
         SettingsReadFailed => "无法读取设置文件 {0}：{1}。不会覆盖该文件",
         SettingsParseFailed => "设置文件 {0} 已损坏（{1}）。副本已保存到 {2}。使用默认值",
         SettingsParseNoBackup => {
             "设置文件 {0} 已损坏（{1}），且无法备份（{2}）。不会覆盖该文件，使用默认值"
         }
         SettingsSaveFailed => "无法保存设置 {0}：{1}",
+        SettingsAcquisitionMigrated => {
+            "已迁移配置：UA {0}，DA {1}；间隔 {2} 毫秒。UA：订阅、单次读取源、不在写入后读取；旧的 poll_only 备用轮询已停用。DA：同步轮询、允许缓存、不在写入后读取。"
+        }
+        SettingsAcquisitionMigrationFailed => {
+            "无法迁移配置：旧间隔 {0} 秒超出范围或溢出。原文件已保护；请修正间隔并重启应用。"
+        }
+        SettingsAcquisitionMigrationBlocked => "旧配置不可用：请修正设置文件中的间隔并重启应用。",
         SettingsSaveBlocked => {
             "无法保存设置 {0}：现有文件已损坏或无法读取，且无法备份。不会覆盖该文件"
         }
@@ -2156,10 +2571,19 @@ fn zh(key: Tr) -> &'static str {
         PaletteSearch => "搜索命令",
         PaletteNoResults => "未找到命令",
         PaletteNeedsContext => "需要参数和上下文",
+        PaletteBrowseNode => "分支 NodeId（留空表示根）",
+        PaletteBrowseUnknown => "标识符无效或过长",
+        PaletteBrowseMismatch => "服务器返回了其他分支的响应",
+        PaletteBrowseLimit => "树节点标识符已耗尽",
+        PaletteTarget => "连接：{0}",
+        PaletteSelectOne => "请选择当前连接中的一个信号",
+        PaletteConnectionChanged => "连接已更改，请重新打开命令面板",
+        PaletteWriteStale => "连接已更改，请重新打开写入对话框",
         PaletteBrowse => "浏览分支",
         PaletteWrite => "写入值",
         ActionModalOpen => "请先关闭打开的对话框",
         ActionSessionMissing => "找不到会话",
+        ActionReadPending => "此会话待读取完成",
         ActionSessionNotConnected => "会话未连接",
         ActionProtocolMismatch => "协议与会话不匹配",
         ActionImportInProgress => "请等待导入完成",
@@ -2209,7 +2633,7 @@ fn zh(key: Tr) -> &'static str {
         NoActiveServer => "无活动服务器",
         SignalsCount => "信号: {0} | 已选: {1}",
         Writing => "写入中...",
-        WrittenSummary => "已写入: {0} / {1}",
+        WrittenSummary => "服务器已接受：{0} / {1}",
         UpdatedAt => "更新于 {0}",
         RowsHint => {
             "表格: ↑↓ Shift+PgUp/PgDn Home/End {0} {1} {3} {4} {5} · {6} — 树 · {2} — 服务器"
@@ -2411,6 +2835,15 @@ fn zh(key: Tr) -> &'static str {
         WriteTargetCount => "所选信号数: {0}",
         CurrentValue => "当前值: {0}",
         ServerTypeLabel => "服务器类型: {0}",
+        UaAccessUnknown => "写入权限未知",
+        UaHistoryGap => "UA 序列中断：{0} → {1}；历史不完整",
+        UaHistoryUncertain => "UA 序列不确定：{0} → {1}；历史完整性未知",
+        UaHistoryOverflow => "UA 键 {0} 队列溢出（{1}）；历史不完整",
+        UaNegotiatedHeading => "SDK 协商参数（毫秒）",
+        UaSamplingDefaultHint => "−1 请求使用订阅发布间隔",
+        UaNegotiatedUnknown => "没有 SDK 数据",
+        UaPublishingFacts => "发布：请求 {0}，修订 {1}",
+        UaSamplingFacts => "键 {0}：采样请求 {1}，修订 {2}；队列请求 {3}，修订 {4}",
         ReadOnly => "信号为只读 (无法写入)",
         CanonicalDaType => "规范 DA 类型: {0}",
         ServerDataType => "服务器数据类型: {0}",
@@ -2476,6 +2909,9 @@ fn zh(key: Tr) -> &'static str {
         // ---- App dialog content ----
         WriteError => "写入错误",
         WriteFailedName => "无法将值写入信号 \"{0}\"。",
+        WriteUnknownName => "信号 \"{0}\" 的写入结果未知。",
+        WriteNotSubmitted => "写入未提交",
+        WriteNotSubmittedName => "信号 \"{0}\" 的写入未提交。",
         AddSignalTitle => "添加信号",
         AddSignalBadNode => "已选择分支节点。请选择信号或使用 \"添加子项\"。",
         ChangeValueTitle => "更改值",
@@ -2520,8 +2956,14 @@ fn zh(key: Tr) -> &'static str {
         AddFailedName => "无法添加信号 \"{0}\": {1}",
         NoChildSignals => "所选分支没有子信号",
         WrittenValue => "值已写入 \"{0}\"",
+        WriteAcceptedStatus => "服务器已接受写入；物理动作未确认",
+        WriteAsyncStatus => "写入已接受并将异步完成；尚未验证源设备",
+        WriteUncertainStatus => "写入结果不确定",
+        WriteRejectedStatus => "服务器拒绝了写入",
+        WriteUnknownStatus => "写入结果未知；写入可能已经发生",
+        WriteOutcomeForItem => "\"{0}\": {1}",
         WriteFailed => "无法写入 \"{0}\": {1}",
-        WriteDoneSummary => "写入完成: {0} / {1} 成功",
+        WriteDoneSummary => "服务器接受的写入：{0} / {1}",
         StaleData => "过期数据",
         NoData => "无数据",
         WaitingValue => "等待值",
@@ -2762,6 +3204,36 @@ pub fn send_error_text(lang: Lang, error: opclook_contract::model::SendError) ->
 }
 
 /// Render every backend message in the interface language.
+pub fn write_outcome_text(lang: Lang, outcome: &opclook_contract::model::WriteOutcome) -> String {
+    use opclook_contract::model::{NativeWriteStatus, WriteDisposition};
+    let key = match outcome.disposition {
+        WriteDisposition::Accepted => Tr::WriteAcceptedStatus,
+        WriteDisposition::AcceptedAsynchronously => Tr::WriteAsyncStatus,
+        WriteDisposition::Uncertain => Tr::WriteUncertainStatus,
+        WriteDisposition::Rejected => Tr::WriteRejectedStatus,
+        WriteDisposition::Unknown => Tr::WriteUnknownStatus,
+    };
+    let mut result = tr(lang, key).to_string();
+    if let Some(raw) = outcome.raw {
+        let (protocol, code) = match raw {
+            NativeWriteStatus::Ua(code) => ("UA", code),
+            NativeWriteStatus::Da(code) => ("DA", code as u32),
+            NativeWriteStatus::UaService(code) => ("UA service", code),
+            NativeWriteStatus::DaService(code) => ("DA service", code as u32),
+        };
+        result.push_str(&format!(" ({protocol} 0x{code:08X})"));
+    }
+    if let Some(reason) = &outcome.reason {
+        result.push_str(": ");
+        result.push_str(&backend_text(lang, reason));
+    }
+    if !outcome.detail.is_empty() {
+        result.push_str(": ");
+        result.push_str(&outcome.detail);
+    }
+    result
+}
+
 pub fn backend_text(lang: Lang, msg: &BackendMsg) -> String {
     use BackendMsg as M;
     match msg {
@@ -2769,6 +3241,18 @@ pub fn backend_text(lang: Lang, msg: &BackendMsg) -> String {
         M::InvalidItemHandle => tr(lang, Tr::InvalidItemHandle).to_string(),
         M::Raw(text) => text.clone(),
         M::SendFailed(error) => send_error_text(lang, *error).to_string(),
+        M::UaIdentityChanged { service } => backend_text(
+            lang,
+            &M::UaServiceError {
+                service: *service,
+                detail: l!(
+                    lang,
+                    "контекст UA-сессии изменился или восстановление ещё не завершено; результат запроса отклонён",
+                    "the UA session context changed or recovery is unfinished; the operation result was rejected",
+                    "UA 会话上下文已更改或恢复尚未完成；操作结果已拒绝"
+                ),
+            },
+        ),
         M::UaServiceError { service, detail } => {
             use opclook_contract::model::UaService;
             let label = match service {
@@ -2782,6 +3266,15 @@ pub fn backend_text(lang: Lang, msg: &BackendMsg) -> String {
                 }
                 UaService::Read => l!(lang, "чтение", "read", "读取"),
                 UaService::Write => l!(lang, "запись", "write", "写入"),
+                UaService::CreateSubscription => {
+                    l!(lang, "создание подписки", "create subscription", "创建订阅")
+                }
+                UaService::CreateMonitoredItems => l!(
+                    lang,
+                    "регистрация тегов",
+                    "register monitored items",
+                    "注册监视项"
+                ),
             };
             format!("{label}: {detail}")
         }
@@ -3137,6 +3630,51 @@ pub fn backend_text(lang: Lang, msg: &BackendMsg) -> String {
             text
         }
         // ---- DA value conversion ----
+        M::DaReadFailure {
+            adapter,
+            service,
+            item,
+            quality,
+            filetime,
+            vartype,
+            cause,
+        } => {
+            let unknown = l!(lang, "неизвестно", "unknown", "未知");
+            let hr = |v: &Option<i32>| {
+                v.map(|v| format!("0x{:08X}", v as u32))
+                    .unwrap_or_else(|| unknown.clone())
+            };
+            let q = quality
+                .map(|v| format!("0x{v:04X}"))
+                .unwrap_or_else(|| unknown.clone());
+            let time = filetime
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| unknown.clone());
+            let vt = vartype
+                .map(|v| format!("0x{v:04X}"))
+                .unwrap_or_else(|| unknown.clone());
+            let mut detail = format!(
+                "{}: adapter={}, service={}, item={}, quality={}, FILETIME={}, VT={}",
+                l!(lang, "Ошибка чтения DA", "DA read failed", "DA 读取失败"),
+                hr(adapter),
+                hr(service),
+                hr(item),
+                q,
+                time,
+                vt
+            );
+            if let Some(cause) = cause {
+                detail.push_str(": ");
+                detail.push_str(&backend_text(lang, cause));
+            }
+            detail
+        }
+        M::DaReadPayloadInvalid => l!(
+            lang,
+            "Некорректная длина данных чтения DA",
+            "Invalid DA read payload length",
+            "DA 读取数据长度无效"
+        ),
         M::DaDateRequired => l!(
             lang,
             "для типа DATE требуется дата/время",
@@ -3492,6 +4030,12 @@ pub fn backend_text(lang: Lang, msg: &BackendMsg) -> String {
             "{count} тегов сверх лимитов подписки сервера — они обновляются опросом",
             "{count} tags exceed the server's subscription limits; they are updated by polling",
             "{count} 个标签超出服务器订阅限制，将通过轮询更新"
+        ),
+        M::SubscriptionItemsUnavailable { count } => l!(
+            lang,
+            "{count} тегов не удалось подписать; опрос не включён",
+            "{count} tags could not be monitored; polling is not enabled",
+            "无法订阅 {count} 个标签；未启用轮询"
         ),
         M::StructTypesUnavailable { cause } => {
             let cause = backend_text(lang, cause);
@@ -3879,6 +4423,12 @@ mod tests {
                 },
                 vec!["§v§"],
             ),
+            (
+                BackendMsg::UaIdentityChanged {
+                    service: opclook_contract::model::UaService::Browse,
+                },
+                vec![],
+            ),
             (BackendMsg::RequestTimeout { seconds: 17 }, vec!["17"]),
             (
                 BackendMsg::DaRoute(opclook_contract::da_route::DaRouteError::NoAdapter),
@@ -4066,6 +4616,19 @@ mod tests {
                 vec!["4242", "4242", "7001", "7002", "7003", "7004", "§vendor§"],
             ),
             (BackendMsg::DaDateRequired, vec![]),
+            (
+                BackendMsg::DaReadFailure {
+                    adapter: Some(-1),
+                    service: None,
+                    item: None,
+                    quality: None,
+                    filetime: None,
+                    vartype: None,
+                    cause: None,
+                },
+                vec!["0xFFFFFFFF"],
+            ),
+            (BackendMsg::DaReadPayloadInvalid, vec![]),
             (BackendMsg::DaBadDate, vec![]),
             (BackendMsg::DaVtUnsupported { vt: 4242 }, vec!["4242"]),
             (BackendMsg::DaArrayCreateFailed { vt: 4242 }, vec!["4242"]),
@@ -4275,6 +4838,10 @@ mod tests {
             ),
             (BackendMsg::TimeoutStructTypes, vec![]),
             (BackendMsg::PollOnlyItems { count: 4343 }, vec!["4343"]),
+            (
+                BackendMsg::SubscriptionItemsUnavailable { count: 4343 },
+                vec!["4343"],
+            ),
             (
                 BackendMsg::CreateSubscriptionFailed {
                     detail: "§detail§".to_string(),
@@ -4602,6 +5169,8 @@ mod tests {
             UaService::TranslatePath,
             UaService::Read,
             UaService::Write,
+            UaService::CreateSubscription,
+            UaService::CreateMonitoredItems,
         ] {
             let message = BackendMsg::UaServiceError {
                 service,

@@ -1,0 +1,29 @@
+--- a/src/session/services/subscriptions/state.rs
++++ b/src/session/services/subscriptions/state.rs
+@@ -309,0 +310,26 @@
++
++#[cfg(test)]
++mod recovery_regression {
++    use super::*;
++    use std::sync::{Arc, Mutex};
++    use crate::session::services::subscriptions::{Subscription, MonitoredItemMap, callbacks::OnSubscriptionNotificationCore, PublishLimits};
++    use opcua_types::ExtensionObject;
++    struct Recorder(Arc<Mutex<Vec<u32>>>);
++    impl OnSubscriptionNotificationCore for Recorder {
++        fn on_subscription_notification(&mut self, message: NotificationMessage, _: MonitoredItemMap<'_>) {
++            self.0.lock().unwrap().push(message.sequence_number);
++        }
++    }
++    #[test]
++    fn out_of_order_callback_is_not_replayed_and_cursor_closes_gap() {
++        let (tx, _) = tokio::sync::watch::channel(PublishLimits::new());
++        let mut state = SubscriptionState::new(Duration::from_millis(1), tx);
++        let seen = Arc::new(Mutex::new(Vec::new()));
++        state.add_subscription(Subscription::new(7, Duration::from_millis(100), 10, 5, 10, 0, true, Box::new(Recorder(seen.clone()))));
++        for seq in [1, 3, 2, 3] {
++            state.handle_notification(7, NotificationMessage { sequence_number: seq, notification_data: Some(vec![ExtensionObject::null()]), ..Default::default() });
++        }
++        assert_eq!(*seen.lock().unwrap(), [1,3,2]);
++        assert_eq!(state.recovery_cursors(), [(7,3)]);
++    }
++}

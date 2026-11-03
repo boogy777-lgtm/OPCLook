@@ -1,0 +1,405 @@
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -131 +131 @@
+-    SessionPollResult, RepublishRecoveryOutcome, RecoveryReadiness, RecoveryReadyPhase, Subscription, SubscriptionActivity, SubscriptionCallbacks, UARequest,
++    SessionPollResult, RepublishRecoveryOutcome, RecoveryDrainOutcome, RecoveryReadiness, RecoveryReadyPhase, Subscription, SubscriptionActivity, SubscriptionCallbacks, UARequest,
+--- a/src/session/mod.rs
++++ b/src/session/mod.rs
+@@ -51 +51 @@
+-pub use event_loop::{SessionActivity, SessionEventLoop, SessionPollResult};
++pub use event_loop::{SessionActivity, SessionEventLoop, SessionPollResult, RecoveryDrainOutcome};
+--- a/src/session/event_loop.rs
++++ b/src/session/event_loop.rs
+@@ -43,0 +44,2 @@
++    /// Result of a bounded single-subscription SDK drain.
++    RecoveryDrain { generation: u64, outcome: RecoveryDrainOutcome },
+@@ -53,0 +56,4 @@
++/// A drain does not imply complete history.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub enum RecoveryDrainOutcome { Complete, UnsupportedSubscriptions, Deadline, Exhausted, Failed(StatusCode) }
++
+@@ -62,11 +67,0 @@
+-fn guarded_replay<F>(future: F, outcome: tokio::sync::watch::Sender<Option<RepublishRecoveryOutcome>>) -> BoxFuture<'static, RepublishRecoveryOutcome>
+-where F: std::future::Future<Output=RepublishRecoveryOutcome> + Send + 'static {
+-    let guard = ReplayCancellationGuard { outcome, armed: true };
+-    async move {
+-        let mut guard = guard;
+-        let result = future.await;
+-        guard.armed = false;
+-        result
+-    }.boxed()
+-}
+-
+@@ -78 +73,3 @@
+-    Replaying(BoxFuture<'static, RepublishRecoveryOutcome>),
++    Replaying(u64, BoxFuture<'static, RepublishRecoveryOutcome>),
++    Draining(u64, BoxFuture<'static, RecoveryDrainOutcome>),
++    DrainAnnounce(u64, RecoveryDrainOutcome, u8),
+@@ -101,5 +98,2 @@
+-fn cancel_recovery_phase(phase: &RecoveryPhase, outcome: &tokio::sync::watch::Sender<Option<RepublishRecoveryOutcome>>) {
+-    if matches!(phase, RecoveryPhase::Announce(..) | RecoveryPhase::Waiting(..)) {
+-        outcome.send_replace(Some(RepublishRecoveryOutcome::Cancelled));
+-    }
+-    // Replaying owns a drop guard and publishes cancellation once on drop.
++fn drain_permitted(outcome: &RepublishRecoveryOutcome) -> bool {
++    matches!(outcome, RepublishRecoveryOutcome::MessageNotAvailable | RepublishRecoveryOutcome::NoCursor)
+@@ -114,2 +108 @@
+-        let outcome_tx=session.republish_outcome_tx.clone();
+-        *phase=RecoveryPhase::Replaying(guarded_replay(async move {
++        *phase=RecoveryPhase::Replaying(generation, async move {
+@@ -120 +113 @@
+-        },outcome_tx));
++        }.boxed());
+@@ -122 +115 @@
+-        *phase=RecoveryPhase::Normal;
++        *phase=RecoveryPhase::Failed;
+@@ -127,0 +121,32 @@
++fn start_drain(generation:u64, session:Arc<Session>) -> RecoveryPhase {
++    RecoveryPhase::Draining(generation, async move {
++                                let single = session.subscription_state.lock().subscription_ids().map(|ids| ids.len() == 1).unwrap_or(false);
++                                if !single { return RecoveryDrainOutcome::UnsupportedSubscriptions; }
++                                match tokio::time::timeout(Duration::from_secs(5), async {
++                                    for _ in 0..64 {
++                                        match session.publish().await {
++                                            Ok(false) => return RecoveryDrainOutcome::Complete,
++                                            Ok(true) => (),
++                                            Err(error) => return RecoveryDrainOutcome::Failed(error.status()),
++                                        }
++                                    }
++                                    RecoveryDrainOutcome::Exhausted
++                                }).await { Ok(outcome) => outcome, Err(_) => RecoveryDrainOutcome::Deadline }
++    }.boxed())
++}
++enum RecoveryResult { Replay(u64, RepublishRecoveryOutcome), Drain(u64, RecoveryDrainOutcome) }
++
++// A single guard covers every nonterminal recovery phase. A terminal SDK
++// stream event disarms it; dropping the stream in any other phase cancels once.
++struct RecoveryControl {
++    phase: RecoveryPhase,
++    guard: Option<ReplayCancellationGuard>,
++}
++impl RecoveryControl {
++    fn new(phase:RecoveryPhase, outcome:tokio::sync::watch::Sender<Option<RepublishRecoveryOutcome>>) -> Self {
++        let guard = if matches!(phase,RecoveryPhase::Normal) { None } else { Some(ReplayCancellationGuard { outcome,armed:true }) };
++        Self { phase,guard }
++    }
++    fn terminal(&mut self) { if let Some(mut guard)=self.guard.take() { guard.armed=false; } }
++}
++
+@@ -129 +154 @@
+-    recovery: RecoveryPhase,
++    recovery: RecoveryControl,
+@@ -168 +192,0 @@
+-            self.inner.republish_outcome_tx.send_replace(Some(RepublishRecoveryOutcome::Cancelled));
+@@ -241 +265 @@
+-            |(mut slf, state)| async move {
++            |(mut slf, mut state)| async move {
+@@ -247 +270,0 @@
+-                        slf.inner.republish_outcome_tx.send_replace(Some(RepublishRecoveryOutcome::Cancelled));
+@@ -254,0 +278,3 @@
++                        if let SessionEventLoopState::Connected(ref mut connected) = state {
++                            if matches!(connected.recovery.phase, RecoveryPhase::Failed) { connected.recovery.terminal(); }
++                        }
+@@ -260 +286 @@
+-                        if let RecoveryPhase::Announce(generation, same_session) = state.recovery {
++                        if let RecoveryPhase::Announce(generation, same_session) = state.recovery.phase {
+@@ -264 +290 @@
+-                            state.recovery = RecoveryPhase::Waiting(generation, same_session, deadline);
++                            state.recovery.phase = RecoveryPhase::Waiting(generation, same_session, deadline);
+@@ -267,4 +293,6 @@
+-                        let waiting = matches!(state.recovery, RecoveryPhase::Waiting(..));
+-                        let replaying = matches!(state.recovery, RecoveryPhase::Replaying(_));
+-                        let normal = matches!(state.recovery, RecoveryPhase::Normal);
+-                        let deadline = match state.recovery { RecoveryPhase::Waiting(_, _, deadline) => deadline, _ => Instant::now() };
++                        let waiting = matches!(state.recovery.phase, RecoveryPhase::Waiting(..));
++                        let replaying = matches!(state.recovery.phase, RecoveryPhase::Replaying(..));
++                        let draining = matches!(state.recovery.phase, RecoveryPhase::Draining(..));
++                        let normal = matches!(state.recovery.phase, RecoveryPhase::Normal);
++                        let announcing = matches!(state.recovery.phase, RecoveryPhase::DrainAnnounce(..));
++                        let deadline = match state.recovery.phase { RecoveryPhase::Waiting(_, _, deadline) => deadline, _ => Instant::now() };
+@@ -272 +300 @@
+-                        if let RecoveryPhase::Waiting(generation, _, _) = state.recovery {
++                        if let RecoveryPhase::Waiting(generation, _, _) = state.recovery.phase {
+@@ -274 +302 @@
+-                                state.recovery = RecoveryPhase::Failed;
++                                state.recovery.phase = RecoveryPhase::Failed;
+@@ -283 +311 @@
+-                                    if !matches!(state.recovery, RecoveryPhase::Normal | RecoveryPhase::Failed) {
++                                    if !matches!(state.recovery.phase, RecoveryPhase::Normal | RecoveryPhase::Failed) {
+@@ -286 +313,0 @@
+-                                        cancel_recovery_phase(&state.recovery, &slf.inner.republish_outcome_tx);
+@@ -305,4 +332,4 @@
+-                                    advance_confirmed(&mut state.recovery, ready, slf.inner.clone());
+-                                    let replay_outcome = match &mut state.recovery {
+-                                        RecoveryPhase::Replaying(future) => match futures::poll!(future.as_mut()) {
+-                                            std::task::Poll::Ready(result) => Some(result),
++                                    advance_confirmed(&mut state.recovery.phase, ready, slf.inner.clone());
++                                    let replay_outcome = match &mut state.recovery.phase {
++                                        RecoveryPhase::Replaying(generation, future) => match futures::poll!(future.as_mut()) {
++                                            std::task::Poll::Ready(result) => Some((*generation,result)),
+@@ -313,2 +340,2 @@
+-                                    if let Some(outcome) = replay_outcome {
+-                                        state.recovery = RecoveryPhase::Normal;
++                                    if let Some((generation,outcome)) = replay_outcome {
++                                        state.recovery.phase = if drain_permitted(&outcome) { start_drain(generation, slf.inner.clone()) } else { RecoveryPhase::Failed };
+@@ -315,0 +343,17 @@
++                                    }
++                                    let drain_outcome = match &mut state.recovery.phase {
++                                        RecoveryPhase::Draining(generation,future) => match futures::poll!(future.as_mut()) {
++                                            std::task::Poll::Ready(result) => Some((*generation,result)),
++                                            std::task::Poll::Pending => None,
++                                        },
++                                        _ => None,
++                                    };
++                                    if let Some((generation,outcome)) = drain_outcome { state.recovery.phase=RecoveryPhase::DrainAnnounce(generation,outcome,0); }
++                                    if let RecoveryPhase::DrainAnnounce(generation,_,count) = &mut state.recovery.phase {
++                                        *count = count.saturating_add(1);
++                                        if *count == 64 {
++                                            let generation=*generation;
++                                            state.recovery.terminal();
++                                            state.recovery.phase=RecoveryPhase::Failed;
++                                            return Ok(Some((SessionPollResult::RecoveryDrain { generation, outcome: RecoveryDrainOutcome::Deadline }, (slf, SessionEventLoopState::Connected(state)))));
++                                        }
+@@ -322,0 +367,7 @@
++                            _ = futures::future::ready(()), if announcing => {
++                                if let RecoveryPhase::DrainAnnounce(generation, outcome, _) = std::mem::replace(&mut state.recovery.phase, RecoveryPhase::Failed) {
++                                    state.recovery.terminal();
++                                    state.recovery.phase=if outcome==RecoveryDrainOutcome::Complete { RecoveryPhase::Normal } else { RecoveryPhase::Failed };
++                                    Ok((SessionPollResult::RecoveryDrain { generation,outcome },SessionEventLoopState::Connected(state)))
++                                } else { unreachable!() }
++                            }
+@@ -326 +377 @@
+-                                    advance_confirmed(&mut state.recovery, ready, slf.inner.clone());
++                                    advance_confirmed(&mut state.recovery.phase, ready, slf.inner.clone());
+@@ -331 +382 @@
+-                                if let RecoveryPhase::Waiting(generation, _, _) = state.recovery {
++                                if let RecoveryPhase::Waiting(generation, _, _) = state.recovery.phase {
+@@ -333 +384 @@
+-                                        state.recovery = RecoveryPhase::Failed;
++                                        state.recovery.phase = RecoveryPhase::Failed;
+@@ -337 +388 @@
+-                                        advance_confirmed(&mut state.recovery, ready, slf.inner.clone());
++                                        advance_confirmed(&mut state.recovery.phase, ready, slf.inner.clone());
+@@ -342,3 +393,12 @@
+-                            outcome = async { match &mut state.recovery { RecoveryPhase::Replaying(future) => future.await, _ => futures::future::pending().await } }, if replaying => {
+-                                state.recovery = RecoveryPhase::Normal;
+-                                slf.inner.republish_outcome_tx.send_replace(Some(outcome));
++                            result = async { match &mut state.recovery.phase {
++                                RecoveryPhase::Replaying(generation,future) => RecoveryResult::Replay(*generation,future.await),
++                                RecoveryPhase::Draining(generation,future) => RecoveryResult::Drain(*generation,future.await),
++                                _ => futures::future::pending().await,
++                            } }, if replaying || draining => {
++                                match result {
++                                    RecoveryResult::Replay(generation,outcome) => {
++                                        state.recovery.phase = if drain_permitted(&outcome) { start_drain(generation, slf.inner.clone()) } else { RecoveryPhase::Failed };
++                                        slf.inner.republish_outcome_tx.send_replace(Some(outcome));
++                                    }
++                                    RecoveryResult::Drain(generation,outcome) => state.recovery.phase = RecoveryPhase::DrainAnnounce(generation,outcome,0),
++                                }
+@@ -455 +515 @@
+-                                        recovery,
++                                        recovery: RecoveryControl::new(recovery, slf.inner.republish_outcome_tx.clone()),
+@@ -608,5 +668,60 @@
+-    fn drop_unpolled_replay_reports_cancelled() {
+-        let (tx, rx) = tokio::sync::watch::channel(None);
+-        let future=guarded_replay(futures::future::pending(),tx);
+-        drop(future);
+-        assert_eq!(*rx.borrow(),Some(RepublishRecoveryOutcome::Cancelled));
++    fn every_nonterminal_phase_drop_cancels_exactly_once() {
++        let phases=[
++            RecoveryPhase::Announce(1,true),
++            RecoveryPhase::Waiting(1,true,Instant::now()),
++            RecoveryPhase::Replaying(1,futures::future::pending().boxed()),
++            RecoveryPhase::Draining(1,futures::future::pending().boxed()),
++            RecoveryPhase::DrainAnnounce(1,RecoveryDrainOutcome::Complete,0),
++        ];
++        for phase in phases {
++            let (tx,mut rx)=tokio::sync::watch::channel(None);
++            let control=RecoveryControl::new(phase,tx.clone());
++            drop(control);
++            assert!(rx.has_changed().unwrap());
++            assert_eq!(*rx.borrow_and_update(),Some(RepublishRecoveryOutcome::Cancelled));
++            assert!(!rx.has_changed().unwrap());
++        }
++    }
++    #[test]
++    fn generation_exhaustion_pending_terminal_is_guarded() {
++        let (tx,mut rx)=tokio::sync::watch::channel(None);
++        let control=RecoveryControl::new(RecoveryPhase::Failed,tx.clone());
++        drop(control);
++        assert!(rx.has_changed().unwrap());
++        assert_eq!(*rx.borrow_and_update(),Some(RepublishRecoveryOutcome::Cancelled));
++        assert!(!rx.has_changed().unwrap());
++    }
++    #[test]
++    fn guard_survives_all_phase_transitions_until_terminal() {
++        fn phase_name(phase:&RecoveryPhase) -> &'static str {
++            match phase {
++                RecoveryPhase::Normal => "normal",
++                RecoveryPhase::Failed => "failure-awaiting-terminal",
++                RecoveryPhase::Announce(..) => "announce",
++                RecoveryPhase::Waiting(..) => "waiting",
++                RecoveryPhase::Replaying(..) => "replaying",
++                RecoveryPhase::Draining(..) => "draining",
++                RecoveryPhase::DrainAnnounce(..) => "drain-announcement",
++            }
++        }
++        let (tx,mut rx)=tokio::sync::watch::channel(None);
++        let mut control=RecoveryControl::new(RecoveryPhase::Announce(1,true),tx.clone());
++        let original=control.guard.as_ref().unwrap() as *const _;
++        let phases=[RecoveryPhase::Waiting(1,true,Instant::now()),RecoveryPhase::Replaying(1,futures::future::pending().boxed()),RecoveryPhase::Draining(1,futures::future::pending().boxed()),RecoveryPhase::DrainAnnounce(1,RecoveryDrainOutcome::Complete,0),RecoveryPhase::Failed];
++        for phase in phases {
++            let name=phase_name(&phase);
++            control.phase=phase;
++            assert_eq!(original,control.guard.as_ref().unwrap() as *const _,"{name}");
++            assert!(!rx.has_changed().unwrap(),"{name}");
++        }
++        drop(control);
++        assert!(rx.has_changed().unwrap());
++        assert_eq!(*rx.borrow_and_update(),Some(RepublishRecoveryOutcome::Cancelled));
++        assert!(!rx.has_changed().unwrap());
++    }
++    #[test]
++    fn delivered_terminal_disarms_guard() {
++        let (tx,mut rx)=tokio::sync::watch::channel(None);
++        let mut control=RecoveryControl::new(RecoveryPhase::DrainAnnounce(1,RecoveryDrainOutcome::Complete,0),tx.clone());
++        control.terminal();drop(control);
++        assert!(!rx.has_changed().unwrap());
+@@ -633,11 +747,0 @@
+-    fn replay_cancellation_publishes_once() {
+-        let (tx,mut rx)=tokio::sync::watch::channel(None);
+-        let phase=RecoveryPhase::Replaying(guarded_replay(futures::future::pending(),tx.clone()));
+-        cancel_recovery_phase(&phase,&tx);
+-        assert!(!rx.has_changed().unwrap(), "replay guard owns cancellation");
+-        drop(phase);
+-        assert!(rx.has_changed().unwrap());
+-        assert_eq!(*rx.borrow_and_update(),Some(RepublishRecoveryOutcome::Cancelled));
+-        assert!(!rx.has_changed().unwrap(), "one cancellation transition");
+-    }
+-    #[test]
+--- a/src/session/services/subscriptions/service.rs
++++ b/src/session/services/subscriptions/service.rs
+@@ -35,0 +36,23 @@
++
++// The SDK owns acknowledgements taken by an in-flight Publish. If its future
++// is cancelled before a response, return them to the SDK queue for a later
++// Publish; this also covers drop before the future is polled again.
++struct PendingPublishAcks<'a> {
++    state: &'a Mutex<SubscriptionState>,
++    acks: Option<Vec<(SubscriptionAcknowledgement, std::sync::Arc<()>)>>,
++}
++impl<'a> PendingPublishAcks<'a> {
++    fn take(state: &'a Mutex<SubscriptionState>) -> Self {
++        let acks = trace_lock!(state).take_scoped_acknowledgements();
++        Self { state, acks: Some(acks) }
++    }
++    fn items(&self) -> Vec<SubscriptionAcknowledgement> { self.acks.as_deref().unwrap_or_default().iter().map(|(ack,_)| ack.clone()).collect() }
++    fn commit(&mut self) { self.acks = None; }
++}
++impl Drop for PendingPublishAcks<'_> {
++    fn drop(&mut self) {
++        if let Some(acks) = self.acks.take() {
++            if !acks.is_empty() { trace_lock!(self.state).re_queue_scoped_acknowledgements(acks); }
++        }
++    }
++}
+@@ -2311,9 +2334 @@
+-        let acks = {
+-            let mut subscription_state = trace_lock!(self.subscription_state);
+-            let acks = subscription_state.take_acknowledgements();
+-            if !acks.is_empty() {
+-                Some(acks)
+-            } else {
+-                None
+-            }
+-        };
++        let mut pending = PendingPublishAcks::take(&self.subscription_state);
+@@ -2322 +2337 @@
+-            .acks(acks.clone().unwrap_or_default())
++            .acks(pending.items())
+@@ -2327 +2342,2 @@
+-                if let (Some(sent), Some(results)) = (acks.as_ref(), r.results.as_ref()) {
++                if let Some(results) = r.results.as_ref() {
++                    let sent = pending.items();
+@@ -2337,0 +2354 @@
++                pending.commit();
+@@ -2342,7 +2359 @@
+-            Err(e) => {
+-                if let Some(acks) = acks {
+-                    let mut subscription_state = trace_lock!(self.subscription_state);
+-                    subscription_state.re_queue_acknowledgements(acks);
+-                }
+-                Err(e)
+-            }
++            Err(e) => Err(e),
+@@ -2533,0 +2545,49 @@
++
++#[cfg(test)]
++mod publish_cancel_regression {
++    use super::*;
++    use crate::session::services::subscriptions::PublishLimits;
++    use std::task::{Context, Poll};
++    use std::future::Future;
++    #[test]
++    fn pending_publish_guard_requeues_on_drop_once() {
++        let (tx, _rx)=tokio::sync::watch::channel(PublishLimits::new());
++        let state=Mutex::new(SubscriptionState::new(Duration::from_millis(1),tx));
++        use crate::session::services::subscriptions::{Subscription, MonitoredItemMap, callbacks::OnSubscriptionNotificationCore};
++        struct Sink;
++        impl OnSubscriptionNotificationCore for Sink { fn on_subscription_notification(&mut self, _:NotificationMessage, _:MonitoredItemMap<'_>) {} }
++        trace_lock!(state).add_subscription(Subscription::new(7,Duration::from_millis(100),10,5,10,0,true,Box::new(Sink)));
++        trace_lock!(state).add_acknowledgement(7,42);
++        let future=async {
++            let _pending=PendingPublishAcks::take(&state);
++            futures::future::pending::<()>().await;
++        };
++        let mut future=Box::pin(future);
++        let waker=futures::task::noop_waker();
++        let mut cx=Context::from_waker(&waker);
++        assert!(matches!(future.as_mut().poll(&mut cx),Poll::Pending));
++        assert!(trace_lock!(state).take_acknowledgements().is_empty());
++        drop(future);
++        let acks=trace_lock!(state).take_acknowledgements();
++        assert_eq!(acks.len(),1);
++        assert_eq!((acks[0].subscription_id,acks[0].sequence_number),(7,42));
++        assert!(trace_lock!(state).take_acknowledgements().is_empty());
++    }
++    #[test]
++    fn dropped_publish_does_not_ack_reused_subscription_id() {
++        use crate::session::services::subscriptions::{Subscription, MonitoredItemMap, callbacks::OnSubscriptionNotificationCore};
++        struct Sink;
++        impl OnSubscriptionNotificationCore for Sink { fn on_subscription_notification(&mut self, _:NotificationMessage, _:MonitoredItemMap<'_>) {} }
++        let (tx,_)=tokio::sync::watch::channel(PublishLimits::new());
++        let state=Mutex::new(SubscriptionState::new(Duration::from_millis(1),tx));
++        let make=|| Subscription::new(7,Duration::from_millis(100),10,5,10,0,true,Box::new(Sink));
++        trace_lock!(state).add_subscription(make());
++        trace_lock!(state).add_acknowledgement(7,42);
++        let pending=PendingPublishAcks::take(&state);
++        trace_lock!(state).delete_subscription(7);
++        trace_lock!(state).add_subscription(make());
++        drop(pending);
++        assert!(trace_lock!(state).take_acknowledgements().is_empty());
++    }
++
++}
+--- a/src/session/services/subscriptions/state.rs
++++ b/src/session/services/subscriptions/state.rs
+@@ -2,0 +3 @@
++    sync::Arc,
+@@ -43,0 +45 @@
++    ack_incarnations: HashMap<u32, Arc<()>>,
+@@ -65,0 +68 @@
++            ack_incarnations: HashMap::new(),
+@@ -100,0 +104,7 @@
++    pub(crate) fn take_scoped_acknowledgements(&mut self) -> Vec<(SubscriptionAcknowledgement, Arc<()>)> {
++        self.take_acknowledgements().into_iter().filter_map(|ack| self.ack_incarnations.get(&ack.subscription_id).cloned().map(|token| (ack,token))).collect()
++    }
++    pub(crate) fn re_queue_scoped_acknowledgements(&mut self, acks: Vec<(SubscriptionAcknowledgement, Arc<()>)>) {
++        self.acknowledgements.extend(acks.into_iter().filter_map(|(ack,token)| self.ack_incarnations.get(&ack.subscription_id).filter(|current| Arc::ptr_eq(current,&token)).map(|_| ack)));
++    }
++
+@@ -148,0 +159 @@
++        self.ack_incarnations.insert(subscription.subscription_id(), Arc::new(()));
+@@ -175,0 +187,2 @@
++        self.ack_incarnations.remove(&subscription_id);
++        self.acknowledgements.retain(|ack| ack.subscription_id != subscription_id);

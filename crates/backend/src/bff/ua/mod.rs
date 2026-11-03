@@ -27,3 +27,6 @@ pub use session::{client_cert_subject, pki_dir_public, use_private_pki_dir};
 pub(crate) fn spawn(event_tx: Sender<Event>) -> super::WorkerHandle {
     worker::spawn(event_tx)
 }
+
+#[cfg(test)]
+mod metadata_facts_tests;

@@ -184,6 +184,7 @@ fn push_value(app: &mut App, key: ItemKey, value: Value, kind: QualityKind) {
                     quality: quality(kind),
                     timestamp: None,
                     reason: None,
+                    times: Default::default(),
                 },
             )],
         },
@@ -370,11 +371,44 @@ fn ui4_first_value_after_adding_a_row_is_not_highlighted() {
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
-    let key = app.seed_row(sid(1), "ns=2;s=A", "Level", Value::Empty);
-    // Still pending: the first value arrives.
-    app.rows_mut_for_test()[0].pending = true;
+    app.record_dispatches_for_test();
+    assert!(app.add_items(sid(1), vec![("ns=2;s=A".into(), "Level".into())]));
+    let key = app.rows()[0].key;
+    let add = app
+        .dispatched_for_test()
+        .into_iter()
+        .find(|command| {
+            matches!(
+                command.kind,
+                opclook::bff::model::CommandKind::AddItems { .. }
+            )
+        })
+        .and_then(|command| command.request_id)
+        .expect("Add request");
+    // Early push is held until the real registration acknowledgement.
     push_value(&mut app, key, Value::F64(5.0), QualityKind::Good);
+    assert!(app.rows()[0].pending);
     assert!(changed_at(&app, key).is_none(), "pending → value: no flash");
+    app.on_event_for_test_with_request(
+        sid(1),
+        add,
+        EventKind::AddItems {
+            results: vec![(
+                key,
+                Ok(opclook::bff::model::ItemInfo {
+                    data_type: None,
+                    type_id: None,
+                    writable: false,
+                }),
+            )],
+        },
+    );
+    assert!(!app.rows()[0].pending);
+    assert!(matches!(app.rows()[0].value, Value::F64(5.0)));
+    assert!(
+        changed_at(&app, key).is_none(),
+        "first registered value: no flash"
+    );
     // Registered but waiting for the first value (placeholder quality).
     app.rows_mut_for_test()[0].value = Value::Empty;
     app.rows_mut_for_test()[0].quality = opclook::app::RowQuality::Waiting("waiting".into());
@@ -591,6 +625,7 @@ fn server_quality_codes_do_not_collide_with_row_placeholders() {
                         quality: Quality::from_ua(code, "vendor status"),
                         timestamp: None,
                         reason: None,
+                        times: Default::default(),
                     },
                 )],
             },
@@ -664,6 +699,7 @@ fn expanded_fields_and_display_refresh_after_value_update() {
                     quality: quality(QualityKind::Good),
                     timestamp: None,
                     reason: None,
+                    times: Default::default(),
                 },
             )],
         },
@@ -687,4 +723,57 @@ fn write_type_reflects_metadata_updates_after_render() {
     assert_eq!(app.rows()[0].write_type_text(), "Int64");
     app.rows_mut_for_test()[0].data_type = Some("Boolean".into());
     assert_eq!(app.rows()[0].write_type_text(), "Boolean");
+}
+
+#[test]
+fn time_tooltip_exposes_distinct_ua_facts_and_origin() {
+    use opclook::bff::model::{ValueOrigin, ValueTimes};
+    let mut app = App::new_test(&egui::Context::default());
+    app.seed_session(sid(1), EndpointSpec::ua("opc.tcp://127.0.0.1:4840"));
+    app.seed_row(sid(1), "ns=2;s=Clock", "Clock", Value::I64(1));
+    for column in opclook::columns::ColumnId::ALL {
+        app.settings.view.columns.set_visible(
+            column,
+            matches!(
+                column,
+                opclook::columns::ColumnId::FullName
+                    | opclook::columns::ColumnId::Value
+                    | opclook::columns::ColumnId::Quality
+                    | opclook::columns::ColumnId::Time
+            ),
+        );
+    }
+    let now = chrono::DateTime::parse_from_rfc3339("2026-10-31T12:34:56Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let server = now + chrono::Duration::milliseconds(5);
+    let received = now + chrono::Duration::milliseconds(12);
+    let row = &mut app.rows_mut_for_test()[0];
+    row.times = ValueTimes::ua(Some(now), Some(server), received, ValueOrigin::Read);
+    row.timestamp = row.times.primary();
+    let text = row.timestamp_text();
+    let mut h = harness(app);
+    h.run_steps(3);
+    h.get_by_label(&text).hover();
+    h.run_steps(40);
+    assert!(
+        h.query_all_by_label_contains("Время источника")
+            .next()
+            .is_some()
+    );
+    assert!(
+        h.query_all_by_label_contains("Время сервера")
+            .next()
+            .is_some()
+    );
+    assert!(
+        h.query_all_by_label_contains(&server.to_rfc3339())
+            .next()
+            .is_some()
+    );
+    assert!(
+        h.query_all_by_label_contains(&received.to_rfc3339())
+            .next()
+            .is_some()
+    );
 }

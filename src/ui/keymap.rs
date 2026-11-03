@@ -14,6 +14,7 @@ pub(super) enum Scope {
 pub(super) enum KeyAction {
     #[cfg(test)]
     CatalogAction,
+    OpenPalette,
     PreviousSession,
     NextSession,
     SwitchPane,
@@ -53,6 +54,12 @@ const fn b(action: KeyAction, scope: Scope, key: Key, modifiers: Modifiers) -> B
     }
 }
 pub(super) const DEFAULTS: &[Binding] = &[
+    b(
+        KeyAction::OpenPalette,
+        Scope::Global,
+        Key::P,
+        Modifiers::COMMAND,
+    ),
     b(
         KeyAction::PreviousSession,
         Scope::Global,

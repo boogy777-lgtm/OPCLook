@@ -16,7 +16,8 @@ pub(super) fn ua_security_controls(
             .width(160.0)
             .show_ui(ui, |ui| {
                 for p in UaSecurityPolicy::ALL {
-                    ui.selectable_value(
+                    crate::ui::components::selectable_value(
+                        ui,
                         &mut dialog.ua_security_policy,
                         p,
                         security_policy_label(lang, p),
@@ -35,7 +36,8 @@ pub(super) fn ua_security_controls(
             .width(160.0)
             .show_ui(ui, |ui| {
                 for m in UaSecurityMode::ALL {
-                    ui.selectable_value(
+                    crate::ui::components::selectable_value(
+                        ui,
                         &mut dialog.ua_security_mode,
                         m,
                         security_mode_label(lang, m),
@@ -46,7 +48,8 @@ pub(super) fn ua_security_controls(
             *security_changed = true;
         }
     });
-    ui.checkbox(
+    crate::ui::components::checkbox(
+        ui,
         &mut dialog.ua_trust_server_cert,
         tr(lang, Tr::TrustServerCertCheck),
     )
@@ -66,17 +69,20 @@ pub(super) fn ua_security_controls(
             })
             .width(160.0)
             .show_ui(ui, |ui| {
-                ui.selectable_value(
+                crate::ui::components::selectable_value(
+                    ui,
                     &mut identity,
                     UaIdentity::Anonymous,
                     tr(lang, Tr::IdentityAnonymous),
                 );
-                ui.selectable_value(
+                crate::ui::components::selectable_value(
+                    ui,
                     &mut identity,
                     UaIdentity::UserName,
                     tr(lang, Tr::IdentityUserName),
                 );
-                ui.selectable_value(
+                crate::ui::components::selectable_value(
+                    ui,
                     &mut identity,
                     UaIdentity::Certificate,
                     tr(lang, Tr::IdentityCertificate),
@@ -89,10 +95,13 @@ pub(super) fn ua_security_controls(
     }
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tr(lang, Tr::SessionTimeoutLabel)).weak());
-        ui.add(
-            egui::DragValue::new(&mut dialog.ua_session_timeout)
-                .range(SESSION_TIMEOUT_MIN_MS..=SESSION_TIMEOUT_MAX_MS),
-        );
+        crate::ui::components::numeric(ui, &mut dialog.ua_session_timeout, |ui, value| {
+            ui.add(
+                egui::DragValue::new(value)
+                    .speed(1.0)
+                    .range(SESSION_TIMEOUT_MIN_MS..=SESSION_TIMEOUT_MAX_MS),
+            )
+        });
     });
     ui.label(egui::RichText::new(tr(lang, Tr::SessionTimeoutInfo)).weak());
 }

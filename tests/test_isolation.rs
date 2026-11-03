@@ -7,7 +7,7 @@
 //! This binary contains one test on purpose: it sets `APPDATA` to a sentinel
 //! directory before any other thread exists.
 
-use opclook::app::App;
+use opclook::app::{App, UaSearch};
 use opclook::i18n::Lang;
 use opclook::settings::{Settings, settings_path};
 use std::path::PathBuf;
@@ -36,14 +36,24 @@ fn headless_tests_use_private_settings_and_pki() {
         .unwrap_or_default();
     let cwd_pki_existed = cwd_pki.exists();
 
-    // Part 1: a test that saves settings and starts a UA search without any
-    // isolation of its own leaves the real locations alone.
+    // Part 1: saving settings and constructing the discovery SDK client use
+    // private locations. Dispatch one loopback search explicitly: automatic
+    // mDNS/LDS/adapter discovery is a separate environment-dependent behavior.
     let ctx = egui::Context::default();
     let mut app = App::new_test(&ctx);
     app.settings.set_lang(Lang::En);
     app.settings.save().unwrap();
-    app.open_connect_dialog();
-    app.search_ua_all();
+    let loopback = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("loopback port");
+    let port = loopback.local_addr().expect("loopback address").port();
+    drop(loopback);
+    app.dialogs.connect.ua_search_host = "127.0.0.1".into();
+    app.dialogs.connect.ua_search_port = port.to_string();
+    app.search_ua_servers();
+    assert!(
+        matches!(app.dialogs.connect.ua_search, UaSearch::SingleHost { .. }),
+        "loopback discovery command dispatched: {:?}",
+        app.dialogs.connect.error
+    );
     let pki = opclook::bff::ua::pki_dir_public();
     assert!(pki.starts_with(std::env::temp_dir()), "{pki:?}");
     assert!(!pki.starts_with(&sentinel), "{pki:?}");

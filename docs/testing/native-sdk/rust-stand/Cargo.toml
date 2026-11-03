@@ -1,0 +1,20 @@
+[package]
+name = "softing-fact-stand"
+version = "0.1.0"
+edition = "2024"
+default-run = "softing-fact-stand"
+[features]
+native-live = []
+native-da-test-hooks = ["native-live"]
+[[bin]]
+name = "sdk-live"
+path = "src/sdk_live.rs"
+required-features = ["native-live"]
+[[bin]]
+name = "sdk-lease-live"
+path = "src/sdk_lease_live.rs"
+required-features = ["native-da-test-hooks"]
+[workspace]
+[dependencies]
+opclook-contract = { path = "../../../../crates/contract" }
+chrono = "0.4"

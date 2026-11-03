@@ -1,0 +1,44 @@
+diff --git a/development/core/src/SOClt/SOCltEntry.cpp b/development/core/src/SOClt/SOCltEntry.cpp
+index 9e5304d..b3fe47a 100644
+--- a/development/core/src/SOClt/SOCltEntry.cpp
++++ b/development/core/src/SOClt/SOCltEntry.cpp
+@@ -95,6 +95,7 @@ SOCltEntry::SOCltEntry(IN DWORD objType)
+ 	m_terminateLock = TRUE;
+ #ifdef SOFEATURE_DCOM
+ 	m_coInit = 0;
++	m_coInitCount = 0;
+ #endif
+ 	m_pWorkThread = NULL;
+ 	m_createWorkThread = TRUE;
+@@ -146,6 +147,7 @@ BOOL SOCltEntry::initialize(
+ 	if (SUCCEEDED(res))
+ 	{
+ 		m_coInit = coInit;
++		++m_coInitCount;
+ 	}
+ 
+ #endif // SOFEATURE_DCOM
+@@ -225,9 +227,10 @@ BOOL SOCltEntry::terminate(void)
+ 	removeAllBranches(TRUE);
+ #ifdef SOFEATURE_DCOM
+ 
+-	if (m_coInit != 0)
++	while (m_coInitCount != 0)
+ 	{
+ 		::CoUninitialize();
++		--m_coInitCount;
+ 	}
+ 
+ #endif //SOFEATURE_DCOM
+diff --git a/development/core/src/include/SOCltEntry.h b/development/core/src/include/SOCltEntry.h
+index c2470da..6751ca4 100644
+--- a/development/core/src/include/SOCltEntry.h
++++ b/development/core/src/include/SOCltEntry.h
+@@ -84,6 +84,7 @@ protected:
+ 	BOOL m_terminateLock;           // termination lock
+ #ifdef SOFEATURE_DCOM
+ 	DWORD m_coInit;                 // COM init mode
++	DWORD m_coInitCount;            // successful CoInitializeEx calls to balance
+ #endif
+ 
+ // Overrides

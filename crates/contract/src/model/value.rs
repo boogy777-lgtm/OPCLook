@@ -181,11 +181,86 @@ impl Value {
     }
 }
 
+/// Provenance of the sample, not a guarantee about source freshness.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ValueOrigin {
+    #[default]
+    Unknown,
+    Read,
+    Subscription,
+}
+
+/// Explicitly attested clock domain. No identity is inferred from a UA session,
+/// server URL, connection epoch or timestamp value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SourceClockId(pub u64);
+
+/// Comparable measurement kind; server and local receive times are not source measurements.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MeasurementTimeKind {
+    UaSource,
+    DaTimestamp,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ValueTimes {
+    pub ua_source: Option<chrono::DateTime<chrono::Utc>>,
+    pub ua_server: Option<chrono::DateTime<chrono::Utc>>,
+    pub da_timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    pub received_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub origin: ValueOrigin,
+    pub source_clock: Option<SourceClockId>,
+}
+impl ValueTimes {
+    pub fn comparable_measurement(
+        &self,
+    ) -> Option<(MeasurementTimeKind, chrono::DateTime<chrono::Utc>)> {
+        self.ua_source
+            .map(|time| (MeasurementTimeKind::UaSource, time))
+            .or_else(|| {
+                self.da_timestamp
+                    .map(|time| (MeasurementTimeKind::DaTimestamp, time))
+            })
+    }
+    pub fn ua(
+        source: Option<chrono::DateTime<chrono::Utc>>,
+        server: Option<chrono::DateTime<chrono::Utc>>,
+        received_at: chrono::DateTime<chrono::Utc>,
+        origin: ValueOrigin,
+    ) -> Self {
+        Self {
+            ua_source: source,
+            ua_server: server,
+            received_at: Some(received_at),
+            origin,
+            ..Self::default()
+        }
+    }
+    pub fn da(
+        timestamp: Option<chrono::DateTime<chrono::Utc>>,
+        received_at: chrono::DateTime<chrono::Utc>,
+        origin: ValueOrigin,
+    ) -> Self {
+        Self {
+            da_timestamp: timestamp,
+            received_at: Some(received_at),
+            origin,
+            ..Self::default()
+        }
+    }
+    /// Primary legacy display only: never substitute local received time.
+    pub fn primary(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.ua_source.or(self.ua_server).or(self.da_timestamp)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct DataValue {
     pub value: Value,
     pub quality: Quality,
     pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    /// Separate clock facts; `timestamp` remains the legacy display projection.
+    pub times: ValueTimes,
     /// Why the backend produced no value (set by [`DataValue::bad`]); `None`
     /// for a value the server delivered.
     pub reason: Option<BackendMsg>,
@@ -206,6 +281,7 @@ impl DataValue {
                 },
             },
             timestamp: None,
+            times: ValueTimes::default(),
             reason: Some(reason),
         }
     }

@@ -63,6 +63,21 @@ ABI-инструменты, а не завершённая OPC DA клиентс
 является разрешением писать vendor-specific обходы и должен иметь ясный
 upstream/replacement путь. Новая зависимость не считается доказательством качества.
 
+## 4.1. N1 Softing public-source probe
+
+Предпочтительный N2 кандидат — direct SODaC/SOClt/SOCmn core Softing
+v4.47.1, закреплённый commit `5130e763998189c822882434c43e6be2eb0174cf`.
+[Run 41067236324](https://github.com/boogy777-lgtm/OPCLook/actions/runs/41067236324)
+на head `d375f15f4b57837baeec75d1cf3a7c9b843cb96e` собрал и слинковал
+Win32 core, проверил SDK common/entry lifecycle и offline callback до/после
+library patch. Оригинал воспроизводит оба дефекта status alignment; patch
+исправляет их при сохранении input. Детали в [N1 audit](testing/native-sdk/softing-4.47.1.md).
+Это не live I/O или COM advise/late teardown. Следующий тонкий адаптер должен
+использовать direct core; DaSession/TBC проверен только по заголовкам, OTB не
+подключён. Реальный сервер, remote, типы, session isolation, teardown и полный
+license closure ещё требуют проверки. Production DA не заменён; SDK patch
+остаётся отдельным предложением, не App/Engine workaround.
+
 ## 5. Кандидаты и текущая позиция
 
 | Протокол/кандидат | Позиция | Недостающие доказательства |
@@ -114,3 +129,10 @@ Production paths UA и DA используют native SDK. В OPCLook не ос�
 Общие политики и контракт не разветвлены по именам библиотек.
 Проверки O30–O35 и остальные затронутые строки пройдены на реальных entry points;
 физические Windows/DA ограничения перечислены честно.
+
+### N2.1 частичный offline срез
+
+Добавлена граница SDK callback → ограниченный C ABI snapshot → Rust contract
+mapping VT_I4. Empty callback сохраняет envelope; сырой per-item HRESULT ещё
+не связан с terminal Event. Последний callback не является очередью. Реальное
+FFI wiring, session identity и live interop не доказаны; N2/N3/N4 открыты.

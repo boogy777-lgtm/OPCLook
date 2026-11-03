@@ -34,8 +34,12 @@ pub(super) fn server_results(
         } else {
             "ua_server_list"
         })
-        // The UA tree has three levels; give it more room.
-        .max_height(if is_da { 150.0 } else { 240.0 })
+        // Adapt the nested results pane; the outer dialog scrolls on short screens.
+        .max_height(if is_da {
+            150.0
+        } else {
+            (ui.ctx().content_rect().height() * 0.15).clamp(80.0, 240.0)
+        })
         .auto_shrink([false, false])
         .show(ui, |ui| {
             if is_da {
@@ -68,6 +72,7 @@ pub(super) fn server_results(
                     if response.double_clicked() {
                         let mut ep =
                             crate::bff::model::EndpointSpec::da(host.clone(), server.id.clone());
+                        ep.acquisition = dialog.da_acquisition.clone();
                         ep = ep.with_advertised_name(da_advertised_name(server));
                         *quick_connect = Some(ep);
                     } else if response.clicked() {

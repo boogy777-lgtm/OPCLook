@@ -1,0 +1,10 @@
+--- a/async-opcua-server/src/subscriptions/session_subscriptions.rs
++++ b/async-opcua-server/src/subscriptions/session_subscriptions.rs
+@@ -590,6 +590,7 @@
+         tick_reason: TickReason,
+     ) -> Vec<MonitoredItemRef> {
+         let mut to_delete = Vec::new();
++        self.publish_request_queue.retain(|request| !request.response.is_closed());
+         if self.subscriptions.is_empty() {
+             for pb in self.publish_request_queue.drain(..) {
+                 let _ = pb.response.send(

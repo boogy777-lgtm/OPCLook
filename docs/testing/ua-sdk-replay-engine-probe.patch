@@ -1,0 +1,213 @@
+diff --git a/crates/backend/Cargo.toml b/crates/backend/Cargo.toml
+index 466a16a..17ead60 100644
+--- a/crates/backend/Cargo.toml
++++ b/crates/backend/Cargo.toml
+@@ -39,0 +40,2 @@ log = "0.4"
++
++opclook-engine = { path = "../engine" }
+diff --git a/crates/backend/src/bff/ua/live_tests.rs b/crates/backend/src/bff/ua/live_tests.rs
+index ca034b4..26081a5 100644
+--- a/crates/backend/src/bff/ua/live_tests.rs
++++ b/crates/backend/src/bff/ua/live_tests.rs
+@@ -3584,0 +3585,189 @@ fn sdk_callback_reports_synthetic_publish_sequence_gap_and_still_delivers_value(
++
++/// SDK-only wire probe: drop exactly one complete PublishResponse and cut the
++/// connection; server has already retained its notification for Republish.
++struct DropPublishProxy {
++    url: String,
++    armed: Arc<std::sync::atomic::AtomicBool>,
++    lost: Receiver<(u32, u32)>,
++    publish_after_cut: Receiver<()>,
++    republish_count: Arc<std::sync::atomic::AtomicUsize>,
++    cut_seen: Arc<std::sync::atomic::AtomicBool>,
++    pause_reconnect: Arc<std::sync::atomic::AtomicBool>,
++    resume_reconnect: Arc<tokio::sync::Notify>,
++    fault_mode: Arc<std::sync::atomic::AtomicU8>,
++    fault_seen: Receiver<()>,
++    release: Arc<tokio::sync::Notify>,
++    stop: Option<tokio::sync::oneshot::Sender<()>>,
++    thread: Option<std::thread::JoinHandle<()>>,
++}
++impl DropPublishProxy {
++    fn start(server: &TestServer) -> Self {
++        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
++        listener.set_nonblocking(true).unwrap();
++        let port = listener.local_addr().unwrap().port();
++        let server_port = server.port;
++        let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
++        let proxy_armed = armed.clone();
++        let cut_seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
++        let proxy_cut = cut_seen.clone();
++        let republish_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
++        let proxy_rep = republish_count.clone();
++        let pause_reconnect = Arc::new(std::sync::atomic::AtomicBool::new(false));
++        let pause_ref = pause_reconnect.clone();
++        let resume_reconnect = Arc::new(tokio::sync::Notify::new());
++        let resume_ref = resume_reconnect.clone();
++        let fault_mode = Arc::new(std::sync::atomic::AtomicU8::new(0));
++        let fault_ref = fault_mode.clone();
++        let release = Arc::new(tokio::sync::Notify::new());
++        let release_ref = release.clone();
++        let (fault_tx, fault_seen) = channel();
++        let (lost_tx, lost) = channel();
++        let (publish_tx, publish_after_cut) = channel();
++        let (stop, stopped) = tokio::sync::oneshot::channel();
++        let thread = std::thread::spawn(move || {
++            use tokio::io::{AsyncReadExt, AsyncWriteExt};
++            let rt = tokio::runtime::Builder::new_multi_thread()
++                .worker_threads(2)
++                .enable_all()
++                .build()
++                .unwrap();
++            rt.block_on(async move {
++                let listener=tokio::net::TcpListener::from_std(listener).unwrap(); let mut tasks=tokio::task::JoinSet::new(); tokio::pin!(stopped);
++                loop { tokio::select! {
++                    _=&mut stopped=>break,
++                    accepted=listener.accept()=>{
++                        let Ok((client,_))=accepted else {break}; let armed=proxy_armed.clone(); let cut=proxy_cut.clone(); let rep=proxy_rep.clone(); let lost_tx=lost_tx.clone(); let publish_tx=publish_tx.clone(); let fault=fault_ref.clone(); let fault_down=fault_ref.clone(); let signal=fault_tx.clone(); let signal_down=fault_tx.clone(); let release=release_ref.clone(); let pause=pause_ref.clone(); let resume=resume_ref.clone();
++                        tasks.spawn(async move {
++                            if cut.load(std::sync::atomic::Ordering::SeqCst) && pause.load(std::sync::atomic::Ordering::SeqCst) { resume.notified().await; }
++                            let Ok(server)=tokio::net::TcpStream::connect(("127.0.0.1",server_port)).await else {return};
++                            let (mut cr,mut cw)=client.into_split();let (mut sr,mut sw)=server.into_split(); let cut_up=cut.clone();
++                            let upstream=async move { loop {
++                                let mut h=[0u8;8]; if cr.read_exact(&mut h).await.is_err(){break} let n=u32::from_le_bytes([h[4],h[5],h[6],h[7]]) as usize;
++                                if !(8..=1_048_576).contains(&n){break} let mut f=vec![0;n];f[..8].copy_from_slice(&h);if cr.read_exact(&mut f[8..]).await.is_err(){break}
++                                if &h[..4]==b"MSGF" && n>24 { use opcua::types::{BinaryDecodable,ContextOwned}; let ctx=ContextOwned::default();let mut c=std::io::Cursor::new(&f[24..]);
++                                    if let Ok(id)=NodeId::decode(&mut c,&ctx.context()) {
++                                        if id==NodeId::from(ObjectId::RepublishRequest_Encoding_DefaultBinary){rep.fetch_add(1,std::sync::atomic::Ordering::SeqCst); if fault.compare_exchange(2,0,std::sync::atomic::Ordering::SeqCst,std::sync::atomic::Ordering::SeqCst).is_ok(){let _=signal.send(());break;}}
++                                        if id==NodeId::from(ObjectId::PublishRequest_Encoding_DefaultBinary)&&cut_up.load(std::sync::atomic::Ordering::SeqCst){let _=publish_tx.send(());}
++                                    }
++                                } if sw.write_all(&f).await.is_err(){break}
++                            }};
++                            let downstream=async move {loop {
++                                let mut held_reply = false;
++                                let mut h=[0u8;8];if sr.read_exact(&mut h).await.is_err(){break}let n=u32::from_le_bytes([h[4],h[5],h[6],h[7]]) as usize;
++                                if !(8..=1_048_576).contains(&n){break}let mut f=vec![0;n];f[..8].copy_from_slice(&h);if sr.read_exact(&mut f[8..]).await.is_err(){break}
++                                if &h[..4]==b"MSGF" && n>24 && fault_down.load(std::sync::atomic::Ordering::SeqCst)==1 { use opcua::types::{BinaryDecodable,ContextOwned};let ctx=ContextOwned::default();let mut c=std::io::Cursor::new(&f[24..]); if NodeId::decode(&mut c,&ctx.context()).is_ok_and(|id| id==NodeId::from(ObjectId::RepublishResponse_Encoding_DefaultBinary)) && fault_down.compare_exchange(1,0,std::sync::atomic::Ordering::SeqCst,std::sync::atomic::Ordering::SeqCst).is_ok(){let _=signal_down.send(());release.notified().await;held_reply=true;} }
++                                if &h[..4]==b"MSGF"&&n>24&&armed.load(std::sync::atomic::Ordering::SeqCst){use opcua::types::{BinaryDecodable,ContextOwned,PublishResponse};let ctx=ContextOwned::default();let mut c=std::io::Cursor::new(&f[24..]);
++                                    if NodeId::decode(&mut c,&ctx.context()).is_ok_and(|id|id==NodeId::from(ObjectId::PublishResponse_Encoding_DefaultBinary)){
++                                        if let Ok(r)=PublishResponse::decode(&mut c,&ctx.context()) {if r.notification_message.notification_data.as_ref().is_some_and(|v|!v.is_empty())&&armed.swap(false,std::sync::atomic::Ordering::SeqCst){
++                                            cut.store(true,std::sync::atomic::Ordering::SeqCst);let _=lost_tx.send((r.subscription_id,r.notification_message.sequence_number));break;
++                                        }}
++                                    }
++                                }if cw.write_all(&f).await.is_err(){break} if held_reply { let _=signal_down.send(()); }
++                            }};
++                            tokio::select!{_ = upstream=>{},_ = downstream=>{}}
++                        });
++                    }
++                }}tasks.abort_all();while tasks.join_next().await.is_some(){}
++            });
++        });
++        Self {
++            url: format!("opc.tcp://127.0.0.1:{port}/"),
++            armed,
++            lost,
++            publish_after_cut,
++            republish_count,
++            cut_seen,
++            pause_reconnect,
++            resume_reconnect,
++            fault_mode,
++            fault_seen,
++            release,
++            stop: Some(stop),
++            thread: Some(thread),
++        }
++    }
++}
++impl Drop for DropPublishProxy {
++    fn drop(&mut self) {
++        if let Some(stop) = self.stop.take() {
++            let _ = stop.send(());
++        }
++        if let Some(thread) = self.thread.take() {
++            let _ = thread.join();
++        }
++    }
++}
++
++
++#[test]
++fn sdk_replay_engine_snapshot_boundary() {
++    use opclook_engine::{Due, Engine};
++    use crate::bff::model::{AcquisitionConfig, Origin, UaRecoveryState, ReadNeed, ReadTerminalStatus};
++    use std::sync::atomic::Ordering;
++    let marker = std::path::PathBuf::from(std::env::var_os("OPCLOOK_TEST_REPLAY_BOUNDARY").expect("test marker path"));
++    let _ = std::fs::remove_file(&marker);
++    let server = TestServer::start(free_port());
++    let proxy = DropPublishProxy::start(&server);
++    let session = SessionId::FIRST;
++    let key = ItemKey::FIRST;
++    let mut endpoint = Harness::endpoint(&proxy.url);
++    endpoint.acquisition = Some(AcquisitionConfig::ua_default());
++    let mut engine = Engine::<()>::default();
++    let mut observed = Vec::new();
++    fn wait(engine: &mut Engine<()>, observed: &mut Vec<f64>, deadline: Duration, predicate: impl Fn(&Event) -> bool) -> (Event, Option<opclook_engine::PendingRequest<()>>) {
++        let until = Instant::now() + deadline;
++        loop {
++            if let Some(event) = engine.try_recv() {
++                if let Ok(pending) = engine.accept(&event) {
++                    if let EventKind::Values { values } = &event.kind {
++                        for (_, value) in values {
++                            if let Value::F64(v) = value.value { observed.push(v); }
++                        }
++                    }
++                    if predicate(&event) { return (event, pending); }
++                }
++            } else { std::thread::sleep(Duration::from_millis(5)); }
++            assert!(Instant::now() < until, "timeout; observed values {observed:?}, phase {:?}", engine.session(SessionId::FIRST).map(|s| (s.ua_recovery_phase,s.ua_revision,s.ua_history_uncertain)));
++        }
++    }
++    let connect = engine.send(session, Protocol::OpcUa, CommandKind::Connect { endpoint }, ()).unwrap();
++    wait(&mut engine, &mut observed, Duration::from_secs(40), |e| e.origin == Origin::Reply(connect) && matches!(e.kind, EventKind::Connected { .. }));
++    let add = engine.send(session, Protocol::OpcUa, CommandKind::AddItems { items: vec![ItemSpec { key, item_id: server.node("Level") }] }, ()).unwrap();
++    let (added, _) = wait(&mut engine, &mut observed, Duration::from_secs(30), |e| e.origin == Origin::Reply(add));
++    assert!(matches!(added.kind, EventKind::AddItems { results } if results.len()==1 && results[0].1.is_ok()));
++    wait(&mut engine, &mut observed, Duration::from_secs(20), |e| matches!(&e.kind, EventKind::Values { values } if values.iter().any(|(k,v)| *k==key && v.value == Value::F64(1.0))));
++    proxy.pause_reconnect.store(true, Ordering::SeqCst);
++    proxy.armed.store(true, Ordering::SeqCst);
++    server.set("Level", Variant::Double(52.5));
++    proxy.lost.recv_timeout(Duration::from_secs(15)).expect("lost actual Publish response");
++    let (lost,_) = wait(&mut engine, &mut observed, Duration::from_secs(20), |e| matches!(e.kind, EventKind::UaRecovery { state: UaRecoveryState::ConnectionLost { .. } }));
++    let lost_revision = match lost.origin { Origin::UaSession { connection, revision } if connection == connect => revision, _ => panic!("wrong Lost scope") };
++    assert!(engine.session(session).unwrap().ua_history_uncertain);
++    server.set("Level", Variant::Double(53.5));
++    proxy.pause_reconnect.store(false, Ordering::SeqCst);
++    proxy.resume_reconnect.notify_one();
++    let (ready, _) = wait(&mut engine, &mut observed, Duration::from_secs(40), |e| matches!(e.kind, EventKind::UaRecovery { state: UaRecoveryState::Reconciled { .. } }));
++    assert!(matches!(ready.origin, Origin::UaSession { connection, revision } if connection == connect && revision > lost_revision));
++    assert_eq!(std::fs::read(&marker).ok().as_deref(), Some(b"sdk callback 52.5 under closed gate".as_slice()), "SDK replay 52.5 never hit closed gate");
++    assert!(!observed.contains(&52.5), "stale replay reached Engine");
++    assert!(proxy.republish_count.load(Ordering::SeqCst) > 0, "SDK did not send Republish");
++    assert_eq!(engine.session(session).unwrap().items.len(), 1);
++    assert!(engine.session(session).unwrap().items.contains_key(&key));
++    let due = engine.due(Instant::now() + Duration::from_secs(2), Duration::from_secs(60), None);
++    let [Due::Read { session: due_session, protocol, keys, permit }] = due.as_slice() else { panic!("expected one recovery read; count={}", due.len()); };
++    assert_eq!(keys, &vec![key]);
++    let read = engine.send_due_read(*due_session, *protocol, keys.clone(), *permit, ()).unwrap();
++    let (snapshot, pending) = wait(&mut engine, &mut observed, Duration::from_secs(30), |e| e.origin == Origin::Reply(read));
++    assert!(matches!(&snapshot.kind, EventKind::Values { values } if values.iter().any(|(k,v)| *k==key && v.value == Value::F64(53.5))));
++    assert!(pending.unwrap().read_terminals.iter().any(|r| r.key == key && r.needs.contains(&ReadNeed::RecoverySnapshot) && matches!(r.status, ReadTerminalStatus::Received(_))));
++    assert!(engine.session(session).unwrap().ua_history_uncertain);
++    assert!(engine.due(Instant::now() + Duration::from_secs(2), Duration::from_secs(60), None).is_empty());
++    server.set("Level", Variant::Double(54.5));
++    wait(&mut engine, &mut observed, Duration::from_secs(30), |e| matches!(&e.kind, EventKind::Values { values } if values.iter().any(|(k,v)| *k==key && v.value == Value::F64(54.5))));
++    assert!(!observed.contains(&52.5));
++    assert_eq!(observed.last(), Some(&54.5));
++    assert_eq!(engine.session(session).unwrap().items.len(), 1);
++    assert!(engine.session(session).unwrap().ua_history_uncertain);
++    eprintln!("OBSERVED sdk_52_gate_drop=true engine_snapshot=53.5 push=54.5 history_unknown=true");
++    let _ = engine.shutdown();
++}
+diff --git a/crates/backend/src/bff/ua/session/subscription.rs b/crates/backend/src/bff/ua/session/subscription.rs
+index 5abdf4c..2bdcf37 100644
+--- a/crates/backend/src/bff/ua/session/subscription.rs
++++ b/crates/backend/src/bff/ua/session/subscription.rs
+@@ -281,0 +282,7 @@ impl UaSession {
++                // Disposable stand-only marker; not a production change.
++                if let Some(path) = std::env::var_os("OPCLOOK_TEST_REPLAY_BOUNDARY")
++                    && data_value.value == Some(opcua::types::Variant::Double(52.5))
++                    && !identity_gate.load(std::sync::atomic::Ordering::SeqCst)
++                {
++                    let _ = std::fs::write(path, b"sdk callback 52.5 under closed gate");
++                }

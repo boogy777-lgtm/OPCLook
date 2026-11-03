@@ -224,7 +224,10 @@ fn write_value(gateway: &Gateway, session: u64, key: ItemKey, value: Value) {
     .expect("write timeout");
     match event.kind {
         EventKind::Wrote { result, .. } => {
-            assert!(result.is_ok(), "write failed: {result:?}");
+            assert!(
+                result.as_ref().is_ok_and(|outcome| outcome.accepted()),
+                "write failed: {result:?}"
+            );
         }
         other => panic!("write returned unexpected event: {other:?}"),
     }
@@ -324,7 +327,7 @@ fn find_writable(
             |kind| matches!(kind, EventKind::Wrote { .. }),
         );
         let accepted = match wrote.map(|e| e.kind) {
-            Some(EventKind::Wrote { result, .. }) => result.is_ok(),
+            Some(EventKind::Wrote { result, .. }) => result.is_ok_and(|outcome| outcome.accepted()),
             _ => false,
         };
         if !accepted {

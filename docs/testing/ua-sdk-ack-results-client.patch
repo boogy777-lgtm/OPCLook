@@ -1,0 +1,373 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 71a9007..3939f22 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -131 +131,2 @@ pub use session::{
+-    SessionPollResult, RepublishRecoveryOutcome, RecoveryDrainOutcome, RecoveryReadiness, RecoveryReadyPhase, Subscription, SubscriptionActivity, SubscriptionCallbacks, UARequest,
++    SessionPollResult, RepublishRecoveryOutcome, RecoveryDrainOutcome, RecoveryReadiness, RecoveryReadyPhase,
++    PublishAckIssue, PublishAckObservations, PublishAckSummary, Subscription, SubscriptionActivity, SubscriptionCallbacks, UARequest,
+diff --git a/src/session/mod.rs b/src/session/mod.rs
+index 3ec8ac8..430c180 100644
+--- a/src/session/mod.rs
++++ b/src/session/mod.rs
+@@ -67 +67,2 @@ pub use services::subscriptions::{
+-    PreInsertMonitoredItems, Publish, PublishLimits, Republish, SetMonitoringMode,
++    PreInsertMonitoredItems, Publish, PublishAckIssue, PublishAckObservations, PublishAckSummary,
++    PublishLimits, Republish, SetMonitoringMode,
+@@ -245,0 +247,13 @@ impl Session {
++    /// Bounded Publish ACK observations, scoped to this Session object.
++    /// A summary does not imply notification or history completeness. This ACK
++    /// flag is separate from `republish_history_uncertain`. Query outside SDK
++    /// notification callbacks (which hold the subscription mutex) and outside
++    /// backend identity locks to avoid lock re-entry and lock-order deadlocks.
++    pub fn publish_ack_observations(&self) -> PublishAckObservations {
++        let state = self.subscription_state.lock();
++        PublishAckObservations {
++            latest: state.ack_result_latest.clone(),
++            uncertain: state.ack_result_uncertain,
++        }
++    }
++
+diff --git a/src/session/services/subscriptions/mod.rs b/src/session/services/subscriptions/mod.rs
+index 704ed97..8338878 100644
+--- a/src/session/services/subscriptions/mod.rs
++++ b/src/session/services/subscriptions/mod.rs
+@@ -26 +26,2 @@ pub use service::{
+-    ModifyMonitoredItems, ModifySubscription, Publish, Republish, SetMonitoringMode,
++    ModifyMonitoredItems, ModifySubscription, Publish, PublishAckIssue, PublishAckObservations,
++    PublishAckSummary, Republish, SetMonitoringMode,
+diff --git a/src/session/services/subscriptions/service.rs b/src/session/services/subscriptions/service.rs
+index a6b3b4a..2da68ec 100644
+--- a/src/session/services/subscriptions/service.rs
++++ b/src/session/services/subscriptions/service.rs
+@@ -36,0 +37,88 @@ use super::state::SubscriptionState;
++/// First ACK in a response for which exact acceptance was not observed.
++#[derive(Debug, Clone, PartialEq)]
++pub struct PublishAckIssue {
++    /// Server subscription ID at the time of the request.
++    pub subscription_id: u32,
++    /// Sequence number at the time of the request.
++    pub sequence_number: u32,
++    /// Raw status, or None if this position was missing.
++    pub status: Option<StatusCode>,
++}
++
++/// Bounded description of one Publish response, not retained event history.
++#[derive(Debug, Clone, PartialEq)]
++pub struct PublishAckSummary {
++    /// Number of ACKs sent.
++    pub sent: usize,
++    /// Number of matching exact Good statuses.
++    pub exact_good: usize,
++    /// Matching statuses other than exact Good, including Good subcodes.
++    pub non_exact: usize,
++    /// Sent ACKs without a matching status.
++    pub missing: usize,
++    /// Results without a matching sent ACK.
++    pub excess: usize,
++    /// First non-exact or missing ACK, if any.
++    pub first_issue: Option<PublishAckIssue>,
++}
++
++/// Latest summary and lifetime-sticky uncertainty for this SDK Session object.
++#[derive(Debug, Clone, PartialEq)]
++pub struct PublishAckObservations {
++    /// Most recently processed response, possibly superseding an earlier one.
++    pub latest: Option<PublishAckSummary>,
++    /// At least one non-exact or malformed result has been observed.
++    pub uncertain: bool,
++}
++
++fn process_publish_response(
++    pending: &mut PendingPublishAcks<'_>,
++    response: PublishResponse,
++) -> bool {
++    let sent = pending.items();
++    let results = response.results.as_deref().unwrap_or_default();
++    let mut summary = PublishAckSummary {
++        sent: sent.len(),
++        exact_good: 0,
++        non_exact: 0,
++        missing: sent.len().saturating_sub(results.len()),
++        excess: results.len().saturating_sub(sent.len()),
++        first_issue: None,
++    };
++    for (index, ack) in sent.iter().enumerate() {
++        let status = results.get(index).copied();
++        if status == Some(StatusCode::Good) {
++            summary.exact_good += 1;
++        } else {
++            if status.is_some() {
++                summary.non_exact += 1;
++            }
++            if summary.first_issue.is_none() {
++                summary.first_issue = Some(PublishAckIssue {
++                    subscription_id: ack.subscription_id,
++                    sequence_number: ack.sequence_number,
++                    status,
++                });
++            }
++            if let Some(status) = status {
++                if !status.is_good() && status != StatusCode::BadSequenceNumberUnknown {
++                    tracing::warn!(
++                        "Server rejected ack for subscription {} seq {}: {status}",
++                        ack.subscription_id,
++                        ack.sequence_number
++                    );
++                }
++            }
++        }
++    }
++    // A response may have been processed by the server even for a non-exact
++    // result. Do not automatically retry; preserve the existing callback path.
++    pending.commit();
++    let mut state = trace_lock!(pending.state);
++    state.ack_result_uncertain |=
++        summary.non_exact != 0 || summary.missing != 0 || summary.excess != 0;
++    state.ack_result_latest = Some(summary);
++    state.handle_notification(response.subscription_id, response.notification_message);
++    response.more_notifications
++}
++
+@@ -2341,18 +2429 @@ impl Session {
+-            Ok(r) => {
+-                if let Some(results) = r.results.as_ref() {
+-                    let sent = pending.items();
+-                    for (ack, status) in sent.iter().zip(results.iter()) {
+-                        if !status.is_good() && *status != StatusCode::BadSequenceNumberUnknown {
+-                            tracing::warn!(
+-                                "Server rejected ack for subscription {} seq {}: {status}",
+-                                ack.subscription_id,
+-                                ack.sequence_number,
+-                            );
+-                        }
+-                    }
+-                }
+-                pending.commit();
+-                let mut subscription_state = trace_lock!(self.subscription_state);
+-                subscription_state.handle_notification(r.subscription_id, r.notification_message);
+-                Ok(r.more_notifications)
+-            }
++            Ok(r) => Ok(process_publish_response(&mut pending, r)),
+@@ -2593,0 +2665,211 @@ mod publish_cancel_regression {
++
++#[cfg(test)]
++mod ack_results_regression {
++    use super::*;
++    use crate::session::services::subscriptions::{MonitoredItemMap, PublishLimits, Subscription};
++    use std::sync::{
++        atomic::{AtomicUsize, Ordering},
++        Arc,
++    };
++    struct Sink(Arc<AtomicUsize>);
++    impl OnSubscriptionNotificationCore for Sink {
++        fn on_subscription_notification(
++            &mut self,
++            notification: NotificationMessage,
++            _: MonitoredItemMap<'_>,
++        ) {
++            assert_eq!(notification.sequence_number, 44);
++            assert_eq!(
++                notification.notification_data,
++                Some(vec![ExtensionObject::null()])
++            );
++            self.0.fetch_add(1, Ordering::SeqCst);
++        }
++    }
++    fn run(
++        results: Option<Vec<StatusCode>>,
++        sent: usize,
++    ) -> (Option<PublishAckSummary>, bool, usize, bool) {
++        let (tx, _rx) = tokio::sync::watch::channel(PublishLimits::new());
++        let state = Mutex::new(SubscriptionState::new(Duration::from_millis(1), tx));
++        let callbacks = Arc::new(AtomicUsize::new(0));
++        {
++            let mut state = trace_lock!(state);
++            state.add_subscription(Subscription::new(
++                7,
++                Duration::from_millis(100),
++                10,
++                5,
++                10,
++                0,
++                true,
++                Box::new(Sink(callbacks.clone())),
++            ));
++            for n in 0..sent {
++                state.add_acknowledgement(7, n as u32 + 10);
++            }
++        }
++        let mut pending = PendingPublishAcks::take(&state);
++        let response = PublishResponse {
++            results,
++            subscription_id: 7,
++            more_notifications: true,
++            notification_message: NotificationMessage {
++                sequence_number: 44,
++                notification_data: Some(vec![ExtensionObject::null()]),
++                ..Default::default()
++            },
++            ..Default::default()
++        };
++        let more = process_publish_response(&mut pending, response);
++        drop(pending);
++        let mut state = trace_lock!(state);
++        let new_acks = state.take_acknowledgements();
++        assert_eq!(
++            new_acks.len(),
++            1,
++            "only the new notification is acknowledged"
++        );
++        assert_eq!(
++            (new_acks[0].subscription_id, new_acks[0].sequence_number),
++            (7, 44)
++        );
++        (
++            state.ack_result_latest.clone(),
++            state.ack_result_uncertain,
++            callbacks.load(Ordering::SeqCst),
++            more,
++        )
++    }
++    #[test]
++    fn response_results_do_not_hide_uncertainty_or_drop_callback() {
++        let (summary, uncertain, callbacks, more) = run(
++            Some(vec![StatusCode::Good, StatusCode::BadSequenceNumberUnknown]),
++            2,
++        );
++        let summary = summary.expect("response summary");
++        assert_eq!(
++            (
++                summary.sent,
++                summary.exact_good,
++                summary.non_exact,
++                summary.missing,
++                summary.excess
++            ),
++            (2, 1, 1, 0, 0)
++        );
++        assert_eq!(
++            summary.first_issue,
++            Some(PublishAckIssue {
++                subscription_id: 7,
++                sequence_number: 11,
++                status: Some(StatusCode::BadSequenceNumberUnknown)
++            })
++        );
++        assert!(uncertain);
++        assert_eq!(callbacks, 1);
++        assert!(more);
++    }
++    #[test]
++    fn result_shapes_and_special_good_remain_distinct() {
++        let cases = [
++            (None, 0, (0, 0, 0, 0), false, None),
++            (Some(vec![StatusCode::Good]), 1, (1, 0, 0, 0), false, None),
++            (
++                Some(vec![StatusCode::GoodRetransmissionQueueNotSupported]),
++                1,
++                (0, 1, 0, 0),
++                true,
++                Some(Some(StatusCode::GoodRetransmissionQueueNotSupported)),
++            ),
++            (None, 2, (0, 0, 2, 0), true, Some(None)),
++            (
++                Some(vec![StatusCode::Good]),
++                2,
++                (1, 0, 1, 0),
++                true,
++                Some(None),
++            ),
++            (
++                Some(vec![StatusCode::Good, StatusCode::Good]),
++                1,
++                (1, 0, 0, 1),
++                true,
++                None,
++            ),
++            (
++                Some(vec![StatusCode::BadSubscriptionIdInvalid]),
++                1,
++                (0, 1, 0, 0),
++                true,
++                Some(Some(StatusCode::BadSubscriptionIdInvalid)),
++            ),
++            (
++                Some(vec![StatusCode::Uncertain]),
++                1,
++                (0, 1, 0, 0),
++                true,
++                Some(Some(StatusCode::Uncertain)),
++            ),
++        ];
++        for (results, sent, expected, uncertain, first_status) in cases {
++            let (summary, actual_uncertain, callbacks, more) = run(results, sent);
++            let summary = summary.expect("response summary");
++            assert_eq!(
++                (
++                    summary.exact_good,
++                    summary.non_exact,
++                    summary.missing,
++                    summary.excess
++                ),
++                expected
++            );
++            assert_eq!(
++                summary.first_issue.as_ref().map(|issue| issue.status),
++                first_status
++            );
++            assert_eq!(actual_uncertain, uncertain);
++            assert_eq!(callbacks, 1);
++            assert!(more);
++        }
++    }
++    #[test]
++    fn later_good_summary_does_not_erase_uncertainty() {
++        let (tx, _rx) = tokio::sync::watch::channel(PublishLimits::new());
++        let state = Mutex::new(SubscriptionState::new(Duration::from_millis(1), tx));
++        let callbacks = Arc::new(AtomicUsize::new(0));
++        trace_lock!(state).add_subscription(Subscription::new(
++            7,
++            Duration::from_millis(100),
++            10,
++            5,
++            10,
++            0,
++            true,
++            Box::new(Sink(callbacks.clone())),
++        ));
++        for status in [StatusCode::BadSequenceNumberUnknown, StatusCode::Good] {
++            trace_lock!(state).add_acknowledgement(7, 10);
++            let mut pending = PendingPublishAcks::take(&state);
++            let response = PublishResponse {
++                results: Some(vec![status]),
++                subscription_id: 7,
++                notification_message: NotificationMessage {
++                    sequence_number: 44,
++                    notification_data: Some(vec![ExtensionObject::null()]),
++                    ..Default::default()
++                },
++                ..Default::default()
++            };
++            process_publish_response(&mut pending, response);
++            drop(pending);
++            trace_lock!(state).take_acknowledgements();
++        }
++        let state = trace_lock!(state);
++        assert!(state.ack_result_uncertain);
++        assert_eq!(
++            state.ack_result_latest.as_ref().map(|s| s.exact_good),
++            Some(1)
++        );
++    }
++}
+diff --git a/src/session/services/subscriptions/state.rs b/src/session/services/subscriptions/state.rs
+index 33bb855..8d59e35 100644
+--- a/src/session/services/subscriptions/state.rs
++++ b/src/session/services/subscriptions/state.rs
+@@ -43,0 +44,2 @@ pub struct SubscriptionState {
++    pub(crate) ack_result_latest: Option<super::service::PublishAckSummary>,
++    pub(crate) ack_result_uncertain: bool,
+@@ -66,0 +69,2 @@ impl SubscriptionState {
++            ack_result_latest: None,
++            ack_result_uncertain: false,

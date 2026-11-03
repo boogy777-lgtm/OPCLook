@@ -25,12 +25,173 @@ pub struct Event {
     pub kind: EventKind,
 }
 
+/// Current SDK attribute facts for an existing registration. Missing access
+/// means unknown, not read-only; the raw UA UserAccessLevel byte is retained.
+#[derive(Clone, Debug)]
+pub struct UaItemMetadata {
+    pub key: ItemKey,
+    pub data_type: Option<String>,
+    pub type_id: Option<u16>,
+    pub user_access_level: Option<u8>,
+    pub diagnostic: Option<BackendMsg>,
+}
+
+/// Evidence from an SDK notification stream; sequence uncertainty does not
+/// claim a number of lost values and is not repaired by a later snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UaNotificationEvidence {
+    SequenceGap { previous: u32, current: u32 },
+    SequenceUncertain { previous: u32, current: u32 },
+    DataOverflow { key: ItemKey, status: u32 },
+}
+
+/// Requested and server-revised parameters for one monitored UA item.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UaMonitoredParameters {
+    pub key: ItemKey,
+    pub requested_sampling_ms: f64,
+    pub requested_queue_size: u32,
+    /// Server result retained verbatim by the SDK; -1 is a default sentinel.
+    pub revised_sampling_ms: f64,
+    pub revised_queue_size: usize,
+}
+
+/// Snapshot of the SDK's negotiated subscription state. Missing revised state
+/// means that the SDK no longer has this subscription; it is never guessed.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UaSubscriptionParameters {
+    pub subscription_id: u32,
+    pub requested_publishing_ms: u64,
+    pub requested_lifetime: u32,
+    pub requested_keepalive: u32,
+    pub revised: Option<UaRevisedSubscription>,
+    pub items: Vec<UaMonitoredParameters>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UaRevisedSubscription {
+    pub publishing_ms: u64,
+    pub lifetime: u32,
+    pub keepalive: u32,
+    /// False when the SDK value is outside OPCLook's bounded scheduling
+    /// range or the lifetime ratio is invalid; this is not a protocol limit.
+    pub valid: bool,
+}
+
+impl UaRevisedSubscription {
+    /// Validate the SDK-normalized values without overflowing the UA ratio.
+    pub fn from_sdk(publishing_ms: u64, lifetime: u32, keepalive: u32) -> Self {
+        let valid = (1..=super::ACQUISITION_INTERVAL_MAX_MS).contains(&publishing_ms)
+            && keepalive > 0
+            && keepalive
+                .checked_mul(3)
+                .is_some_and(|minimum| lifetime >= minimum);
+        Self {
+            publishing_ms,
+            lifetime,
+            keepalive,
+            valid,
+        }
+    }
+}
+
+/// A logical need coalesced into one read attempt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ReadNeed {
+    Initial,
+    Poll,
+    ExplicitRefresh,
+    WriteReadback,
+    RecoverySnapshot,
+    Direct,
+}
+
+/// Why a pending or in-flight read need was cancelled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReadCancelReason {
+    Removed,
+    Disconnected,
+    EpochChanged,
+    Cancelled,
+}
+
+/// Terminal status for one requested key; received values keep their complete
+/// quality, timestamp and backend reason, including Bad/Uncertain results.
+#[derive(Clone, Debug)]
+pub enum ReadTerminalStatus {
+    /// A delivered value, whose quality and reason still determine usability.
+    Received(DataValue),
+    /// Metadata-only consumer projection; the full value is in the original
+    /// event. Engine never constructs this variant as a native result.
+    ReceivedMetadata {
+        quality: super::Quality,
+        timestamp: Option<chrono::DateTime<chrono::Utc>>,
+        times: super::ValueTimes,
+        reason: Option<BackendMsg>,
+    },
+    /// A subscription update completed the initial need before a Read was sent.
+    /// The value itself is delivered by the original push event; retain only
+    /// status metadata while AddItems is awaiting its correlated result.
+    InitialPush {
+        quality: super::Quality,
+        timestamp: Option<chrono::DateTime<chrono::Utc>>,
+        times: super::ValueTimes,
+        reason: Option<BackendMsg>,
+    },
+    MissingResult,
+    ServiceError(BackendMsg),
+    Timeout {
+        seconds: u64,
+    },
+    Cancelled(ReadCancelReason),
+    DispatchFailed(super::SendError),
+    Unavailable,
+    UnexpectedReply,
+}
+
+#[derive(Clone, Debug)]
+pub struct ReadTerminal {
+    pub request_id: Option<super::RequestId>,
+    pub key: ItemKey,
+    pub needs: Vec<ReadNeed>,
+    pub status: ReadTerminalStatus,
+}
+
 /// Terminal outcome of a subnet scan. Partial discoveries are reported separately.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScanEnd {
     Completed,
     Cancelled,
     Failed(BackendMsg),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UaRecoveryMode {
+    ReactivatedSession,
+    NewSession,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UaRecoveryState {
+    ConnectionLost {
+        status: u32,
+    },
+    Reconnected {
+        mode: UaRecoveryMode,
+    },
+    /// SDK-state reconciliation only; this does not establish history completeness.
+    Reconciled {
+        missing: Vec<ItemKey>,
+        ambiguous: bool,
+    },
+    /// Current-session item types read from the server; no history claim.
+    TypeMetadata {
+        known: usize,
+        total: usize,
+    },
+    Stopped {
+        status: u32,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -103,9 +264,27 @@ pub enum EventKind {
     SubscriptionState {
         state: SubscriptionState,
     },
+    /// Complete SDK snapshot for this connection epoch.
+    UaSubscriptionParameters {
+        subscriptions: Vec<UaSubscriptionParameters>,
+    },
+    /// Metadata in the Origin's UA SDK revision; not an AddItems acknowledgement.
+    UaItemMetadata {
+        facts: Vec<UaItemMetadata>,
+    },
+    /// Notification evidence scoped by the Origin and callback generation.
+    UaNotificationFacts {
+        subscription_generation: u64,
+        evidence: UaNotificationEvidence,
+    },
+    /// SDK recovery activity in the existing local Connect epoch.
+    UaRecovery {
+        state: UaRecoveryState,
+    },
     Wrote {
         key: ItemKey,
-        result: Result<(), BackendMsg>,
+        /// `Err` means validation or routing failed before the native Write was submitted.
+        result: Result<super::WriteOutcome, BackendMsg>,
     },
     Disconnected {
         reason: BackendMsg,

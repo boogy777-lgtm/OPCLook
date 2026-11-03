@@ -1,0 +1,230 @@
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -131 +131 @@
+-    SessionPollResult, Subscription, SubscriptionActivity, SubscriptionCallbacks, UARequest,
++    SessionPollResult, RepublishRecoveryOutcome, Subscription, SubscriptionActivity, SubscriptionCallbacks, UARequest,
+--- a/src/session/mod.rs
++++ b/src/session/mod.rs
+@@ -47 +47 @@
+-pub use connect::SessionConnectMode;
++pub use connect::{SessionConnectMode, RepublishRecoveryOutcome};
+@@ -186,0 +187 @@
++    pub(super) republish_outcome_tx: tokio::sync::watch::Sender<Option<RepublishRecoveryOutcome>>,
+@@ -210,0 +212,4 @@
++    /// Observe the latest bounded replay result; this is not history completeness.
++    pub fn subscribe_republish_recovery(&self) -> tokio::sync::watch::Receiver<Option<RepublishRecoveryOutcome>> {
++        self.republish_outcome_tx.subscribe()
++    }
+@@ -226,0 +232 @@
++        let (republish_outcome_tx, _) = tokio::sync::watch::channel(None);
+@@ -230,0 +237 @@
++            republish_outcome_tx,
+--- a/src/session/connect.rs
++++ b/src/session/connect.rs
+@@ -9,0 +10,26 @@
++/// Result of a bounded replay attempt. Never implies history completeness.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub enum RepublishRecoveryOutcome {
++    /// Server has no message for the next requested sequence.
++    MessageNotAvailable,
++    /// The bounded request budget was exhausted.
++    Exhausted,
++    /// The whole replay deadline elapsed.
++    Deadline,
++    /// The replay future was dropped before completion.
++    Cancelled,
++    /// A service or transport error interrupted replay.
++    Failed(opcua_types::StatusCode),
++    /// The returned sequence differed from the request.
++    SequenceMismatch,
++    /// Sequence ordering exceeded the supported window.
++    SequenceUncertain,
++    /// No prior delivered cursor was available.
++    NoCursor,
++}
++struct RecoveryGuard(tokio::sync::watch::Sender<Option<RepublishRecoveryOutcome>>, bool);
++impl RecoveryGuard {
++    fn finish(mut self, outcome: RepublishRecoveryOutcome) { self.0.send_replace(Some(outcome)); self.1 = false; }
++}
++impl Drop for RecoveryGuard { fn drop(&mut self) { if self.1 { self.0.send_replace(Some(RepublishRecoveryOutcome::Cancelled)); } } }
++
+@@ -121,0 +148,8 @@
++        if matches!(reconnect, SessionConnectMode::ReactivatedSession(_)) {
++            let guard = RecoveryGuard(self.inner.republish_outcome_tx.clone(), true);
++            let outcome = match tokio::time::timeout(std::time::Duration::from_secs(5), self.inner.recovery_republish_prototype()).await {
++                Ok(outcome) => outcome,
++                Err(_) => RepublishRecoveryOutcome::Deadline,
++            };
++            guard.finish(outcome);
++        }
+@@ -124,0 +159,13 @@
++
++#[cfg(test)]
++mod recovery_outcome_tests {
++    use super::*;
++    #[test]
++    fn guard_reports_completion_and_cancellation() {
++        let (tx, mut rx) = tokio::sync::watch::channel(None);
++        RecoveryGuard(tx.clone(), true).finish(RepublishRecoveryOutcome::Deadline);
++        assert_eq!(*rx.borrow_and_update(), Some(RepublishRecoveryOutcome::Deadline));
++        drop(RecoveryGuard(tx, true));
++        assert_eq!(*rx.borrow_and_update(), Some(RepublishRecoveryOutcome::Cancelled));
++    }
++}
+--- a/src/session/event_loop.rs
++++ b/src/session/event_loop.rs
+@@ -21 +21 @@
+-    Session, SessionState,
++    Session, SessionState, RepublishRecoveryOutcome,
+@@ -37,0 +38,2 @@
++    /// Result of the bounded SDK replay attempt; not proof of complete history.
++    RepublishRecovery(RepublishRecoveryOutcome),
+@@ -69,0 +72 @@
++    republish_outcome_rx: tokio::sync::watch::Receiver<Option<RepublishRecoveryOutcome>>,
+@@ -87,0 +91 @@
++        let republish_outcome_rx = inner.republish_outcome_tx.subscribe();
+@@ -89,0 +94 @@
++            republish_outcome_rx,
+@@ -145,0 +151,6 @@
++                if slf.republish_outcome_rx.has_changed().unwrap_or(false) {
++                    let outcome = slf.republish_outcome_rx.borrow_and_update().clone();
++                    if let Some(outcome) = outcome {
++                        return Ok(Some((SessionPollResult::RepublishRecovery(outcome), (slf, state))));
++                    }
++                }
+--- a/src/session/services/subscriptions/service.rs
++++ b/src/session/services/subscriptions/service.rs
+@@ -2382,0 +2383,30 @@
++    // Experimental owner-only bounded replay; see OPCLook diagnostic, not production ready.
++    pub(crate) async fn recovery_republish_prototype(&self) -> crate::session::RepublishRecoveryOutcome {
++        use crate::session::RepublishRecoveryOutcome as O;
++        const MAX_MESSAGES: usize = 256;
++        let cursors = {
++            let state = trace_lock!(self.subscription_state);
++            if state.recovery_uncertain() { return O::SequenceUncertain; }
++            state.recovery_cursors()
++        };
++        if cursors.is_empty() { return O::NoCursor; }
++        let mut remaining = MAX_MESSAGES;
++        for (id, last) in cursors {
++            let mut seq = if last == u32::MAX { 1 } else { last + 1 };
++            loop {
++                if remaining == 0 { return O::Exhausted; }
++                remaining -= 1;
++                match Republish::new(id, seq, self).send(&self.channel).await {
++                    Ok(response) if response.notification_message.sequence_number == seq => {
++                        trace_lock!(self.subscription_state).handle_notification(id, response.notification_message);
++                        seq = if seq == u32::MAX { 1 } else { seq + 1 };
++                    }
++                    Ok(_) => return O::SequenceMismatch,
++                    Err(error) if error.status() == StatusCode::BadMessageNotAvailable => break,
++                    Err(error) => return O::Failed(error.status()),
++                }
++            }
++        }
++        O::MessageNotAvailable
++    }
++
+--- a/src/session/services/subscriptions/state.rs
++++ b/src/session/services/subscriptions/state.rs
+@@ -2 +2 @@
+-    collections::HashMap,
++    collections::{HashMap, HashSet},
+@@ -13,0 +14,28 @@
++const REORDER_WINDOW: usize = 64;
++#[derive(Default)]
++struct SequenceCursor {
++    contiguous: Option<u32>,
++    ahead: HashSet<u32>,
++    uncertain: bool,
++}
++impl SequenceCursor {
++    fn next(n: u32) -> u32 { if n == u32::MAX { 1 } else { n + 1 } }
++    fn observe(&mut self, seq: u32) -> bool {
++        if seq == 0 { self.uncertain = true; return true; }
++        let Some(last) = self.contiguous else { self.contiguous = Some(seq); return true; };
++        let distance = if seq >= last { u64::from(seq - last) } else { u64::from(u32::MAX - last) + u64::from(seq) };
++        if distance == 0 || distance > u64::from(u32::MAX) / 2 { return false; }
++        if distance == 1 {
++            let mut n = seq;
++            while self.ahead.remove(&Self::next(n)) { n = Self::next(n); }
++            self.contiguous = Some(n);
++            return true;
++        }
++        if distance <= REORDER_WINDOW as u64 {
++            return self.ahead.insert(seq);
++        }
++        self.uncertain = true;
++        true
++    }
++}
++
+@@ -15,0 +44 @@
++    delivered_sequences: HashMap<u32, SequenceCursor>,
+@@ -36,0 +66 @@
++            delivered_sequences: HashMap::new(),
+@@ -144,0 +175 @@
++        self.delivered_sequences.remove(&subscription_id);
+@@ -218,0 +250,6 @@
++    pub(crate) fn recovery_uncertain(&self) -> bool { self.delivered_sequences.values().any(|cursor| cursor.uncertain) }
++
++    pub(crate) fn recovery_cursors(&self) -> Vec<(u32, u32)> {
++        self.delivered_sequences.iter().filter_map(|(&id, cursor)| cursor.contiguous.map(|seq| (id, seq))).collect()
++    }
++
+@@ -228,0 +266,5 @@
++            if self.subscriptions.contains_key(&subscription_id) &&
++                !self.delivered_sequences.entry(subscription_id).or_default().observe(notification.sequence_number) {
++                self.add_acknowledgement(subscription_id, notification.sequence_number);
++                return;
++            }
+@@ -294,0 +337,49 @@
++
++#[cfg(test)]
++mod recovery_regression {
++    use super::*;
++    use std::sync::{Arc, Mutex};
++    use crate::session::services::subscriptions::{Subscription, MonitoredItemMap, callbacks::OnSubscriptionNotificationCore, PublishLimits};
++    use opcua_types::ExtensionObject;
++    struct Recorder(Arc<Mutex<Vec<u32>>>);
++    impl OnSubscriptionNotificationCore for Recorder {
++        fn on_subscription_notification(&mut self, message: NotificationMessage, _: MonitoredItemMap<'_>) {
++            self.0.lock().unwrap().push(message.sequence_number);
++        }
++    }
++    #[test]
++    fn out_of_order_callback_is_not_replayed_and_cursor_closes_gap() {
++        let (tx, _) = tokio::sync::watch::channel(PublishLimits::new());
++        let mut state = SubscriptionState::new(Duration::from_millis(1), tx);
++        let seen = Arc::new(Mutex::new(Vec::new()));
++        state.add_subscription(Subscription::new(7, Duration::from_millis(100), 10, 5, 10, 0, true, Box::new(Recorder(seen.clone()))));
++        for seq in [1, 3, 2, 3] {
++            state.handle_notification(7, NotificationMessage { sequence_number: seq, notification_data: Some(vec![ExtensionObject::null()]), ..Default::default() });
++        }
++        assert_eq!(*seen.lock().unwrap(), [1,3,2]);
++        assert_eq!(state.recovery_cursors(), [(7,3)]);
++    }
++    #[test]
++    fn cursor_wrap_duplicates_and_bound() {
++        let mut c = SequenceCursor::default();
++        for n in [u32::MAX - 1, 1, u32::MAX] { assert!(c.observe(n)); }
++        assert_eq!(c.contiguous, Some(1));
++        assert!(!c.observe(u32::MAX));
++        assert!(!c.observe(1));
++        assert!(c.observe(70));
++        assert!(c.uncertain);
++        assert!(c.ahead.len() <= REORDER_WINDOW);
++    }
++    #[test]
++    fn deletion_clears_recovery_cursor() {
++        let (tx, _) = tokio::sync::watch::channel(PublishLimits::new());
++        let mut state = SubscriptionState::new(Duration::from_millis(1), tx);
++        let seen = Arc::new(Mutex::new(Vec::new()));
++        state.add_subscription(Subscription::new(7, Duration::from_millis(100), 10, 5, 10, 0, true, Box::new(Recorder(seen))));
++        state.handle_notification(7, NotificationMessage { sequence_number: 1, notification_data: Some(vec![ExtensionObject::null()]), ..Default::default() });
++        assert_eq!(state.recovery_cursors(), [(7,1)]);
++        state.delete_subscription(7);
++        assert!(state.recovery_cursors().is_empty());
++    }
++
++}

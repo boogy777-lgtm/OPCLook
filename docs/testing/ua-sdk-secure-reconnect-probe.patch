@@ -1,0 +1,92 @@
+diff --git a/crates/backend/src/bff/ua/live_tests.rs b/crates/backend/src/bff/ua/live_tests.rs
+index ca034b4..8965c93 100644
+--- a/crates/backend/src/bff/ua/live_tests.rs
++++ b/crates/backend/src/bff/ua/live_tests.rs
+@@ -3584,0 +3585,87 @@ fn sdk_callback_reports_synthetic_publish_sequence_gap_and_still_delivers_value(
++
++#[test]
++fn sdk_secure_channel_reactivation_preserves_unknown_history() {
++    use crate::bff::model::{Origin, RequestId, UaProtection, UaRecoveryMode, UaRecoveryState};
++    use opcua::client::{DataChangeCallback, RepublishRecoveryOutcome};
++    use opcua::types::{AttributeId, MonitoredItemCreateRequest, MonitoringMode, MonitoringParameters, ReadValueId, TimestampsToReturn};
++    let server = TestServer::start(free_port());
++    let proxy = RecoveryProxy::start(&server);
++    // Trust this fixture's exact self-signed certificate in the test PKI;
++    // leave SDK verification enabled, unlike the session-trust bypass option.
++    let trusted = trusted_copy_of_server_cert(&server);
++    assert!(!trusted.exists(), "fixture certificate unexpectedly trusted before test");
++    let mut untrusted_endpoint = Harness::endpoint(&proxy.url);
++    untrusted_endpoint.ua_security_policy = UaSecurityPolicy::Basic256Sha256;
++    untrusted_endpoint.ua_security_mode = UaSecurityMode::SignAndEncrypt;
++    untrusted_endpoint.ua_trust_server_cert = false;
++    let mut negative = Harness::new();
++    assert!(negative.connect(SessionId::new(55).unwrap(), untrusted_endpoint).is_err(), "untrusted self-signed fixture must be rejected");
++    drop(negative);
++    assert!(!trusted.exists(), "failed connection must not silently trust fixture");
++    let rejected = TEST_PKI_DIR.get().unwrap().join("rejected").join(trusted.file_name().unwrap());
++    assert!(rejected.exists(), "SDK must record rejected fixture certificate");
++    std::fs::remove_file(rejected).unwrap();
++    eprintln!("OBSERVED untrusted_self_signed_rejected=true");
++    std::fs::create_dir_all(trusted.parent().unwrap()).unwrap();
++    std::fs::copy(server.dir.join("own/cert.der"), &trusted).unwrap();
++    struct RemoveCert(PathBuf);
++    impl Drop for RemoveCert { fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); } }
++    let _trust = RemoveCert(trusted);
++    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
++    rt.block_on(async {
++        let (events, event_rx) = channel();
++        let cancel = tokio_util::sync::CancellationToken::new();
++        let mut endpoint = Harness::endpoint(&proxy.url);
++        endpoint.ua_security_policy = UaSecurityPolicy::Basic256Sha256;
++        endpoint.ua_security_mode = UaSecurityMode::SignAndEncrypt;
++        endpoint.ua_trust_server_cert = false;
++        let epoch = RequestId::FIRST;
++        let mut adapter = super::session::connect(SessionId::FIRST, Some(epoch), endpoint, &cancel, &events).await.expect("verified secure session");
++        assert!(matches!(&adapter.info, BackendMsg::UaConnected { policy, mode, protection: UaProtection::SignAndEncrypt, .. } if policy == "Basic256Sha256" && mode == "SignAndEncrypt"), "actual session security: {:?}", adapter.info);
++        let node = ReadValueId { node_id: NodeId::new(server.ns, "Level"), attribute_id: AttributeId::Value as u32, ..Default::default() };
++        let before = adapter.session.read(&[node.clone()], TimestampsToReturn::Both, 0.0).await.expect("secured initial Read");
++        assert_eq!(before[0].value, Some(Variant::Double(1.0)));
++        assert!(!adapter.session.republish_history_uncertain());
++        let mut status = adapter.session.subscribe_republish_recovery();
++        let (tx, rx) = channel();
++        let callback = DataChangeCallback::new(move |value: DataValue, _| { let _ = tx.send(value); });
++        let sub = adapter.session.create_subscription(Duration::from_millis(100),100,20,1000,0,true,callback).await.unwrap();
++        let added = adapter.session.create_monitored_items(sub,TimestampsToReturn::Both,vec![MonitoredItemCreateRequest { item_to_monitor: node.clone(), monitoring_mode: MonitoringMode::Reporting, requested_parameters: MonitoringParameters { client_handle: 1, sampling_interval: 0.0, queue_size: 10, discard_oldest: true, ..Default::default() } }]).await.unwrap();
++        assert!(added[0].result.status_code.is_good());
++        rx.recv_timeout(Duration::from_secs(20)).expect("secured initial subscription callback");
++        proxy.cut.send_modify(|n| *n += 1);
++        let until = Instant::now() + Duration::from_secs(30);
++        let mut lost = None;
++        let mut reconnected = None;
++        let mut diagnostics = Vec::new();
++        while Instant::now() < until && reconnected.is_none() {
++            let Ok(event) = event_rx.recv_timeout(until.saturating_duration_since(Instant::now())) else { break };
++            diagnostics.push(format!("{:?} {:?}", event.origin, event.kind));
++            if let Origin::UaSession { connection, revision } = event.origin && connection == epoch {
++                match event.kind {
++                    EventKind::UaRecovery { state: UaRecoveryState::ConnectionLost { .. } } => lost = Some(revision),
++                    EventKind::UaRecovery { state: UaRecoveryState::Reconnected { mode } } if lost.is_some() => reconnected = Some((revision, mode)),
++                    _ => {}
++                }
++            }
++        }
++        assert!(matches!((lost,reconnected),(Some(a),Some((b,_))) if b>a), "actual secured Lost then Reconnected required: {diagnostics:?}");
++        let (_, mode) = reconnected.unwrap();
++        let outcome = if mode == UaRecoveryMode::ReactivatedSession {
++            tokio::time::timeout(Duration::from_secs(10),status.changed()).await.expect("typed SDK recovery outcome").unwrap();
++            let result = status.borrow_and_update().clone();
++            assert_eq!(result,Some(RepublishRecoveryOutcome::MessageNotAvailable));
++            result
++        } else {
++            assert!(!status.has_changed().unwrap(), "unexpected replay outcome for new Session");
++            None
++        };
++        assert!(adapter.session.republish_history_uncertain());
++        server.set("Level",Variant::Double(53.5));
++        let after = adapter.session.read(&[node],TimestampsToReturn::Both,0.0).await.expect("secured fresh Read after reactivation");
++        assert_eq!(after[0].value,Some(Variant::Double(53.5)));
++        assert!(adapter.session.republish_history_uncertain());
++        eprintln!("OBSERVED policy=Basic256Sha256 mode=SignAndEncrypt verify=true initial=1.0 recovery={mode:?} outcome={outcome:?} fresh=53.5 unknown=true");
++        adapter.close().await;
++    });
++}

@@ -1,7 +1,7 @@
 #![deny(clippy::undocumented_unsafe_blocks)]
 
 use crate::bff::model::{BackendMsg, Value};
-use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use windows::Win32::Foundation::FILETIME;
 use windows::Win32::Foundation::VARIANT_BOOL;
 use windows::Win32::System::Ole::{
@@ -25,23 +25,11 @@ pub fn filetime_to_utc(ft: FILETIME) -> Option<DateTime<Utc>> {
 }
 
 fn ole_date_to_utc(days: f64) -> Option<DateTime<Utc>> {
-    if !days.is_finite() {
-        return None;
-    }
-    let base = NaiveDate::from_ymd_opt(1899, 12, 30)?.and_hms_opt(0, 0, 0)?;
-    let whole = days.trunc() as i64;
-    let frac = days.fract();
-    let secs = (frac * 86_400.0).round() as i64;
-    let dt = base.checked_add_signed(chrono::Duration::try_days(whole)?)?;
-    let dt = dt.checked_add_signed(chrono::Duration::seconds(secs))?;
-    Some(Utc.from_utc_datetime(&dt))
+    super::ole_time::from_ole_date(days)
 }
 
 fn utc_to_ole_date(dt: DateTime<Utc>) -> Option<f64> {
-    let base = NaiveDate::from_ymd_opt(1899, 12, 30)?.and_hms_opt(0, 0, 0)?;
-    let base = Utc.from_utc_datetime(&base);
-    let delta = dt.signed_duration_since(base);
-    Some(delta.num_seconds() as f64 / 86_400.0)
+    super::ole_time::to_ole_date(&dt)
 }
 
 /// Converts a COM VARIANT into the protocol-neutral BFF value.
@@ -663,61 +651,7 @@ pub fn default_vt(value: &Value) -> u16 {
     }
 }
 
-fn da_range(value: &Value, ty: &str) -> BackendMsg {
-    BackendMsg::WriteOutOfRange {
-        value: value.to_string(),
-        ty: ty.to_string(),
-    }
-}
-
-fn convert_int(value: &Value) -> Result<i64, BackendMsg> {
-    match value {
-        Value::Bool(b) => Ok(i64::from(*b)),
-        Value::I64(v) => Ok(*v),
-        Value::U64(v) => i64::try_from(*v).map_err(|_| da_range(value, "I8")),
-        Value::F64(v)
-            if v.is_finite()
-                && v.fract() == 0.0
-                && *v >= -9_223_372_036_854_775_808.0
-                && *v < 9_223_372_036_854_775_808.0 =>
-        {
-            Ok(*v as i64)
-        }
-        Value::Str(s) => s
-            .trim()
-            .parse::<i64>()
-            .map_err(|_| BackendMsg::DaNotInteger { value: s.clone() }),
-        Value::DateTime(dt) => Ok(dt.timestamp()),
-        _ => Err(BackendMsg::DaNotIntegerAny),
-    }
-}
-
-fn convert_uint(value: &Value) -> Result<u64, BackendMsg> {
-    match value {
-        Value::Bool(b) => Ok(u64::from(*b)),
-        Value::I64(v) => u64::try_from(*v).map_err(|_| BackendMsg::DaNegativeValue {
-            value: v.to_string(),
-        }),
-        Value::U64(v) => Ok(*v),
-        Value::F64(v)
-            if v.is_finite()
-                && v.fract() == 0.0
-                && *v >= 0.0
-                && *v < 18_446_744_073_709_551_616.0 =>
-        {
-            Ok(*v as u64)
-        }
-        Value::Str(s) => s
-            .trim()
-            .parse::<u64>()
-            .map_err(|_| BackendMsg::DaNotUnsigned { value: s.clone() }),
-        _ => Err(BackendMsg::DaNotUnsignedAny),
-    }
-}
-
-fn convert_float(value: &Value) -> Result<f64, BackendMsg> {
-    value.as_f64().ok_or(BackendMsg::DaNotNumberAny)
-}
+use super::da_convert::{convert_float, convert_int, convert_uint, da_range};
 
 pub fn clear_variant(variant: &mut VARIANT) {
     // SAFETY: the caller supplies a valid initialized VARIANT to clear in place.
@@ -1117,10 +1051,22 @@ mod tests {
 
     #[test]
     fn roundtrip_vt_date() {
-        let dt = Utc.with_ymd_and_hms(2026, 1, 31, 12, 30, 45).unwrap();
-        roundtrip(7, &Value::DateTime(dt));
-        let dt0 = Utc.timestamp_opt(0, 0).unwrap();
-        roundtrip(7, &Value::DateTime(dt0));
+        for dt in [
+            Utc.with_ymd_and_hms(2026, 1, 31, 12, 30, 45).unwrap(),
+            Utc.timestamp_opt(0, 0).unwrap(),
+        ] {
+            let mut variant = variant_from_value(&Value::DateTime(dt), Some(7)).unwrap();
+            // SAFETY: the test just built this initialized VARIANT.
+            let decoded = unsafe { variant_to_value(&variant) };
+            clear_variant(&mut variant);
+            let Value::DateTime(decoded) = decoded else {
+                panic!("VT_DATE did not decode as a DateTime");
+            };
+            // The binary64 DATE fraction cannot represent every whole second
+            // exactly; at these dates its resolution is below one microsecond.
+            let error = decoded.signed_duration_since(dt).num_nanoseconds().unwrap();
+            assert!(error.abs() <= 1_000, "VT_DATE error: {error} ns");
+        }
     }
 
     #[test]
