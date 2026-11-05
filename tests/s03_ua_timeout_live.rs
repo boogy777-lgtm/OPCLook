@@ -120,6 +120,9 @@ struct HeldBrowseProxy {
     armed: Arc<std::sync::atomic::AtomicBool>,
     hold_read: Arc<std::sync::atomic::AtomicBool>,
     read_target: Arc<std::sync::Mutex<Option<NodeId>>>,
+    // Wire-side counter, independent from Engine read scheduling and terminals.
+    wire_reads: Arc<std::sync::atomic::AtomicUsize>,
+    wire_drained: tokio::sync::mpsc::UnboundedReceiver<()>,
     held: tokio::sync::mpsc::UnboundedReceiver<()>,
     release: Arc<tokio::sync::Notify>,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
@@ -135,12 +138,15 @@ impl HeldBrowseProxy {
         let armed = Arc::new(AtomicBool::new(false));
         let hold_read = Arc::new(AtomicBool::new(false));
         let read_target = Arc::new(std::sync::Mutex::new(None::<NodeId>));
+        let wire_reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (wire_drained_tx, wire_drained) = tokio::sync::mpsc::unbounded_channel();
         let release = Arc::new(tokio::sync::Notify::new());
         let (held_tx, held) = tokio::sync::mpsc::unbounded_channel();
         let (stop, stopped) = tokio::sync::oneshot::channel();
         let proxy_armed = armed.clone();
         let proxy_hold_read = hold_read.clone();
         let proxy_read_target = read_target.clone();
+        let proxy_wire_reads = wire_reads.clone();
         let proxy_release = release.clone();
         let thread = std::thread::spawn(move || {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -161,6 +167,8 @@ impl HeldBrowseProxy {
                             let armed = proxy_armed.clone();
                             let hold_read = proxy_hold_read.clone();
                             let read_target = proxy_read_target.clone();
+                            let wire_reads = proxy_wire_reads.clone();
+                            let wire_drained_tx = wire_drained_tx.clone();
                             let release = proxy_release.clone();
                             let held_tx = held_tx.clone();
                             tasks.spawn(async move {
@@ -168,9 +176,17 @@ impl HeldBrowseProxy {
                                 let (mut cr, mut cw) = client.into_split();
                                 let (mut sr, mut sw) = server.into_split();
                                 let upstream = async move {
+                                    let mut held_here = false;
+                                    let mut complete_frames_to_eof = false;
                                     loop {
                                         let mut header = [0u8; 8];
-                                        if cr.read_exact(&mut header).await.is_err() { break; }
+                                        // Distinguish EOF at a frame boundary from a truncated header.
+                                        match cr.read(&mut header[..1]).await {
+                                            Ok(0) => { complete_frames_to_eof = true; break; }
+                                            Ok(1) => {}
+                                            _ => break,
+                                        }
+                                        if cr.read_exact(&mut header[1..]).await.is_err() { break; }
                                         let len = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize;
                                         if !(8..=1_048_576).contains(&len) { break; }
                                         let mut frame = vec![0; len]; frame[..8].copy_from_slice(&header);
@@ -184,16 +200,28 @@ impl HeldBrowseProxy {
                                             let target = read_target.lock().unwrap().clone();
                                             let matching = id.is_ok_and(|id| id == NodeId::from(if is_read { ObjectId::ReadRequest_Encoding_DefaultBinary } else { ObjectId::BrowseRequest_Encoding_DefaultBinary }))
                                                 && (!is_read || target.is_none() || ReadRequest::decode(&mut body, &context.context()).is_ok_and(|request| request.nodes_to_read.as_ref().is_some_and(|nodes| nodes.iter().any(|n| Some(&n.node_id) == target.as_ref()))));
+                                            if is_read && matching {
+                                                wire_reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                            }
                                             if matching && armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                                                held_here = true;
                                                 let _ = held_tx.send(());
                                                 release.notified().await;
                                             }
                                         }
                                         if sw.write_all(&frame).await.is_err() { break; }
                                     }
+                                    // A terminal event is not proof of socket consumption. Only
+                                    // report this held connection after parsing every full frame
+                                    // through EOF; abort/partial-frame paths fail the test closed.
+                                    if held_here && complete_frames_to_eof {
+                                        let _ = wire_drained_tx.send(());
+                                    }
                                 };
                                 let downstream = async move { let _ = tokio::io::copy(&mut sr, &mut cw).await; };
-                                tokio::select! { _ = upstream => {}, _ = downstream => {} }
+                                // Keep reading client frames even when the server side closes.
+                                // The parent JoinSet owns both futures and aborts both on stop.
+                                tokio::join!(upstream, downstream);
                             });
                         }
                     }
@@ -206,6 +234,8 @@ impl HeldBrowseProxy {
             armed,
             hold_read,
             read_target,
+            wire_reads,
+            wire_drained,
             held,
             release,
             stop: Some(stop),
@@ -254,11 +284,14 @@ fn proxy_shutdown_is_bounded_and_reports_thread_failure() {
         thread: std::thread::JoinHandle<()>,
     ) -> HeldBrowseProxy {
         let (_, held) = tokio::sync::mpsc::unbounded_channel();
+        let (_, wire_drained) = tokio::sync::mpsc::unbounded_channel();
         HeldBrowseProxy {
             url: String::new(),
             armed: Arc::new(AtomicBool::new(false)),
             hold_read: Arc::new(AtomicBool::new(false)),
             read_target: Arc::new(Mutex::new(None)),
+            wire_reads: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            wire_drained,
             held,
             release: Arc::new(tokio::sync::Notify::new()),
             stop: Some(stop),
@@ -398,6 +431,10 @@ fn engine_gateway_timeout_quarantines_pending_readback_and_reconnects() {
     assert!(
         matches!(wait_event(&mut engine, Duration::from_secs(45), |e| e.origin == Origin::Reply(add)).kind, EventKind::AddItems { results } if results.len() == 1 && results[0].1.is_ok())
     );
+    // Positive wire control: the ordinary prime Read must be decoded and
+    // counted before arming the timeout. Its count is the no-repeat baseline.
+    proxy.hold_read.store(true, Ordering::SeqCst);
+    *proxy.read_target.lock().unwrap() = Some(NodeId::new(server.ns, "A"));
     // Prime OperationLimits and clear Initial before arming the held Read.
     let prime = engine
         .send(
@@ -410,9 +447,12 @@ fn engine_gateway_timeout_quarantines_pending_readback_and_reconnects() {
     assert!(
         matches!(wait_event(&mut engine, Duration::from_secs(45), |e| e.origin == Origin::Reply(prime)).kind, EventKind::Values { values } if values.len() == 1 && values[0].1.reason.is_none())
     );
+    let baseline_wire_reads = proxy.wire_reads.load(Ordering::SeqCst);
+    assert!(
+        baseline_wire_reads > 0,
+        "positive control: proxy did not decode the real prime UA Read"
+    );
     terminals.lock().unwrap().clear();
-    proxy.hold_read.store(true, Ordering::SeqCst);
-    *proxy.read_target.lock().unwrap() = Some(NodeId::new(server.ns, "A"));
     proxy.armed.store(true, Ordering::SeqCst);
     // Worker executes this Write before Read, while Engine consumes its reply only once Read is held.
     let write = engine
@@ -501,6 +541,17 @@ fn engine_gateway_timeout_quarantines_pending_readback_and_reconnects() {
     );
     drop(seen);
     proxy.release.notify_one();
+    rt.block_on(async {
+        tokio::time::timeout(Duration::from_secs(15), proxy.wire_drained.recv())
+            .await
+            .expect("held UA connection reader did not reach a frame-boundary EOF")
+            .expect("held UA connection reader stopped without a drain receipt");
+    });
+    assert_eq!(
+        proxy.wire_reads.load(Ordering::SeqCst),
+        baseline_wire_reads + 1,
+        "R2 or another duplicate targeted Read crossed the UA wire after R1 timeout"
+    );
     endpoint.address = server.url.clone();
     let connect = engine
         .send(sid, Protocol::OpcUa, CommandKind::Connect { endpoint }, ())
