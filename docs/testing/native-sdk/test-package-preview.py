@@ -135,6 +135,46 @@ class PreviewPackagingTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "untracked"):
                     preview.verify_sdk(sdk)
 
+    def test_package_source_commit_rejects_hidden_index_and_dirty_tree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory) / "opclook"
+            repo.mkdir()
+            def git(*args):
+                return subprocess.run(["git", "-C", str(repo), *args],
+                                      check=True, capture_output=True).stdout.decode().strip()
+            git("init", "-q")
+            git("config", "user.name", "fixture")
+            git("config", "user.email", "fixture@example.invalid")
+            tracked = repo / "src" / "lib.rs"
+            tracked.parent.mkdir()
+            tracked.write_text("fn main() {}\\n")
+            git("add", ".")
+            git("commit", "-qm", "baseline")
+            commit = git("rev-parse", "HEAD")
+            self.assertEqual(preview.verify_repository_tree(repo), commit)
+            for flag, reset in (("--assume-unchanged", "--no-assume-unchanged"),
+                                ("--skip-worktree", "--no-skip-worktree")):
+                for changed in (False, True):
+                    with self.subTest(flag=flag, changed=changed):
+                        git("update-index", flag, "src/lib.rs")
+                        try:
+                            if changed:
+                                tracked.write_text("fn changed() {}\\n")
+                            with self.assertRaisesRegex(ValueError, "OPCLook index hides or alters tracked input"):
+                                preview.verify_repository_tree(repo)
+                        finally:
+                            git("update-index", reset, "src/lib.rs")
+                            git("checkout", "--", "src/lib.rs")
+                        self.assertEqual(preview.verify_repository_tree(repo), commit)
+            tracked.write_text("fn changed() {}\\n")
+            with self.assertRaises(subprocess.CalledProcessError):
+                preview.verify_repository_tree(repo)
+            git("add", "src/lib.rs")
+            with self.assertRaises(subprocess.CalledProcessError):
+                preview.verify_repository_tree(repo)
+            git("reset", "--hard", "HEAD")
+            self.assertEqual(preview.verify_repository_tree(repo), commit)
+
     def test_cargo_log_checks_active_flags_not_declared_features(self):
         good = r'''rustc --cfg "feature=\"native-da-preview\"" --check-cfg "cfg(feature, values(\"native-da-preview\", \"native-da-test-hooks\"))"
 [backend] cargo:rustc-link-search=native=C:\build\bridge\Release'''
