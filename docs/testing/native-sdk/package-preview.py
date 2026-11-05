@@ -77,6 +77,18 @@ def verify_sdk(sdk):
                 raise ValueError(f"SDK patched source differs from reviewed patch: {name}")
 
 
+def verify_repository_tree(root):
+    # A clean Git diff alone trusts index flags that can hide edits. Apply the
+    # reviewed SDK visibility mechanism to *all tracked OPCLook inputs* before
+    # recording the package's source commit.
+    try:
+        _index_guard.verify_visible_index(root, [])
+    except ValueError as error:
+        raise ValueError("OPCLook index hides or alters tracked input") from error
+    run("git", "-C", root, "diff", "--no-ext-diff", "--quiet", "HEAD", "--")
+    return run("git", "-C", root, "rev-parse", "HEAD").decode().strip()
+
+
 def normal_build_licenses(metadata):
     packages = {p["id"]: p for p in metadata["packages"]}
     nodes = {n["id"]: n for n in metadata["resolve"]["nodes"]}
@@ -221,8 +233,7 @@ def assemble(args):
     verify_include_trace(bridge_log, args.sdk, args.generated)
     verify_cargo_log(cargo_log, (args.bridge / "Release").resolve())
     verify_toolchain(toolchain_log)
-    run("git", "-C", ROOT, "diff", "--quiet", "HEAD", "--")
-    revision = run("git", "-C", ROOT, "rev-parse", "HEAD").decode().strip()
+    revision = verify_repository_tree(ROOT)
     args.output.mkdir(parents=True, exist_ok=False)
     copies = {
         "bin/opclook-cli.exe": args.cli,
