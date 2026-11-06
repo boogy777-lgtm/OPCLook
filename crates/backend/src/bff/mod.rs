@@ -1,28 +1,19 @@
-// OPC DA is COM-only: the real worker and the VARIANT layer exist on Windows;
-// other hosts (Linux check stand) get a worker that answers every command
-// with an "unsupported on this platform" error.
+// The native SDK owns Windows DA; other platforms report unsupported.
 #[cfg(windows)]
-mod com;
-#[cfg(all(windows, not(feature = "native-da-preview")))]
-pub mod da;
-#[cfg(feature = "native-da-preview")]
 #[path = "softing_da.rs"]
 pub mod da;
-#[cfg(all(not(windows), not(feature = "native-da-preview")))]
+#[cfg(not(windows))]
 #[path = "da_unsupported.rs"]
 pub mod da;
 pub mod da_convert;
-#[cfg(windows)]
-pub mod da_variant;
 mod filetime;
 pub mod ole_time;
 pub mod softing_facts;
-#[cfg(feature = "native-da-preview")]
+#[cfg(windows)]
 mod softing_runtime;
-#[cfg(feature = "native-da-preview")]
+#[cfg(windows)]
 mod softing_scalar;
-/// Non-Windows: only the platform-neutral part of the VARIANT layer.
-#[cfg(not(windows))]
+/// Platform-neutral VARIANT type names.
 pub mod da_variant {
     pub use super::vt::vt_name;
 }
@@ -37,7 +28,7 @@ pub mod vt;
 
 pub use model::*;
 
-#[cfg(feature = "native-da-preview")]
+#[cfg(windows)]
 pub use da::finish_native_sdk;
 
 use std::sync::mpsc::{Receiver, RecvTimeoutError};

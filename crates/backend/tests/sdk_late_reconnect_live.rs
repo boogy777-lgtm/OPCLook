@@ -48,20 +48,34 @@ fn assert_no_callback_loss(event: &Event) {
 }
 struct Inbox {
     queued: VecDeque<Event>,
+    watch: Option<(SessionId, RequestId, ItemKey)>,
 }
 impl Inbox {
     fn new() -> Self {
         Self {
             queued: VecDeque::new(),
+            watch: None,
         }
     }
     fn next(&mut self, g: &Gateway, deadline: Instant) -> Event {
         loop {
+            assert!(Instant::now() < deadline, "SDK event deadline");
             if let Some(event) = self.queued.pop_front().or_else(|| g.try_recv()) {
                 assert_no_callback_loss(&event);
+                if let Some((session, epoch, key)) = self.watch
+                    && event.owner == Owner::Session(session)
+                    && event.origin == Origin::Session(epoch)
+                    && let EventKind::Values { values } = &event.kind
+                {
+                    assert!(
+                        !values
+                            .iter()
+                            .any(|(item, value)| *item == key && value.value == Value::I64(88)),
+                        "stale callback in new epoch: {values:?}"
+                    );
+                }
                 return event;
             }
-            assert!(Instant::now() < deadline, "SDK event deadline");
             std::thread::sleep(Duration::from_millis(5));
         }
     }
@@ -127,7 +141,9 @@ impl Inbox {
         }
     }
     fn no_stale(&mut self, g: &Gateway, session: SessionId, epoch: RequestId, key: ItemKey) {
+        let deadline = Instant::now() + Duration::from_secs(10);
         while let Some(event) = self.queued.pop_front().or_else(|| g.try_recv()) {
+            assert!(Instant::now() < deadline, "SDK event drain deadline");
             assert_no_callback_loss(&event);
             assert!(
                 !matches!(event.origin, Origin::Reply(_)),
@@ -174,6 +190,22 @@ fn sdk_old_callback_is_not_attributed_to_reconnected_epoch() {
     let a = SessionId::FIRST;
     let b = SessionId::new(2).unwrap();
     let key = ItemKey::FIRST;
+    // A permanently nonempty inbox must not bypass an expired event deadline.
+    let mut expired = Inbox::new();
+    expired.queued.push_back(Event {
+        owner: Owner::Session(a),
+        origin: Origin::Session(RequestId::new(1).unwrap()),
+        kind: EventKind::SubscriptionState {
+            state: SubscriptionState::Active,
+        },
+    });
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            expired.next(&gateway, Instant::now())
+        }))
+        .is_err(),
+        "queued events must not bypass the deadline"
+    );
     let mut endpoint = EndpointSpec::da("localhost", "OPCLook.NativeDaFixture.1");
     endpoint.acquisition = Some(AcquisitionConfig {
         update_mode: UpdateMode::Subscription,
@@ -233,6 +265,8 @@ fn sdk_old_callback_is_not_attributed_to_reconnected_epoch() {
     test_late_entered(10000).expect("real SDK callback entered");
     test_late_held().expect("callback held");
     write(&gateway, &mut inbox, b, 6, key, 99);
+    // Check new-epoch values even while waiting for unrelated correlated replies.
+    inbox.watch = Some((a, RequestId::new(8).unwrap(), key));
     // Dispatch in order without waiting for old teardown. The new connection and
     // registration must finish while the SDK callback is still in its barrier.
     send(&gateway, a, 7, CommandKind::Disconnect);

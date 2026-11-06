@@ -2,7 +2,6 @@
 pub mod bff;
 pub mod constants;
 pub mod net;
-pub mod opc;
 #[cfg(test)]
 pub use opclook_locale as i18n;
 
@@ -32,12 +31,12 @@ pub fn acquisition_capabilities(
             fresh_source: true,
             read_after_write: true,
         },
-        // Preview exposes SDK advise; the default legacy adapter remains Cache-only.
+        // The Windows native SDK exposes advise and explicit device reads.
         Protocol::OpcDa => AcquisitionCapabilities {
-            subscription: cfg!(all(windows, feature = "native-da-preview")),
+            subscription: cfg!(windows),
             cache_allowed: true,
-            fresh_source: cfg!(all(windows, feature = "native-da-preview")),
-            read_after_write: cfg!(all(windows, feature = "native-da-preview")),
+            fresh_source: cfg!(windows),
+            read_after_write: cfg!(windows),
         },
     }
 }
@@ -174,7 +173,7 @@ mod acquisition_tests {
         da.acquisition = Some(config.clone());
         assert_eq!(
             validate_acquisition(&da),
-            if cfg!(all(windows, feature = "native-da-preview")) {
+            if cfg!(windows) {
                 Ok(())
             } else {
                 Err(AcquisitionError::StreamUnsupported)
@@ -185,7 +184,7 @@ mod acquisition_tests {
         da.acquisition = Some(config);
         assert_eq!(
             validate_acquisition(&da),
-            if cfg!(all(windows, feature = "native-da-preview")) {
+            if cfg!(windows) {
                 Ok(())
             } else {
                 Err(AcquisitionError::ReadbackUnsupported)

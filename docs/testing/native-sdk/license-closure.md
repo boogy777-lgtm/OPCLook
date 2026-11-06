@@ -1,9 +1,12 @@
-# N1.LICENSE: pinned DA source/build inventory — OPEN
+# N1.LICENSE: pinned DA source/build inventory — CLOSED BY OWNER DECISION (2026-11-05)
 
+Closure is the owner's decision, not a legal analysis or determination of the
+unresolved grant. Release notices and distribution review remain outstanding.
 This is an engineering inventory, not a legal opinion or permission to use or
-distribute any component. It covers the current local Win32 x86 native-DA
-preview and test fixture, not the rest of OPCLook or an N4 release. The
-candidate remains opt-in; production DA is still legacy.
+distribute any component. This inventory covers the Win32 x86 native-DA
+build and test fixture, not the rest of OPCLook or a release. The N4 production
+switch is closed; historical preview references below describe earlier builds.
+Owner closure does not resolve the grant or release-notice work.
 
 ## Evidence and unresolved rights
 
@@ -21,7 +24,7 @@ candidate remains opt-in; production DA is still legacy.
   | `opcSec.idl` | [`Source/Security/ProxyStub/opcSec.idl`](https://github.com/OPCF-Members/OPC-Classic-CoreComponents/blob/efe0d1d1ea86a8a727bf26a501a261765e836766/Source/Security/ProxyStub/opcSec.idl) `5d63c06127d857fb9b7910d4e560afe1e0299c5c` |
   | `opc_ae.idl` | [`Source/AlarmsAndEvents/ProxyStub/opc_ae.idl`](https://github.com/OPCF-Members/OPC-Classic-CoreComponents/blob/efe0d1d1ea86a8a727bf26a501a261765e836766/Source/AlarmsAndEvents/ProxyStub/opc_ae.idl) `3b81175435fe200da5862be8cc2340afbabf83ef` |
 
-* **Open N4 gate:** applicable grant for the exact SDK copies and their generated sources has not been established. Obtain the historical grants referenced by those headers or authoritative confirmation of applicability of the current MIT-labelled versions, review the source/generated/object/distribution scope for each actual artifact, and determine required notices. Do not infer incompatibility or a permission requirement from the headers alone. No terms are accepted here.
+* **Unresolved fact despite owner closure:** applicable grant for the exact SDK copies and their generated sources has not been established. Obtain the historical grants referenced by those headers or authoritative confirmation of applicability of the current MIT-labelled versions, review the source/generated/object/distribution scope for each actual artifact, and determine required notices. Do not infer incompatibility or a permission requirement from the headers alone. No terms are accepted here.
 * The SDK's `SOCmn/expat/xmlparse.c` identifies Expat and refers to COPYING. Existing notices reproduce the [upstream Expat 2.0.0 MIT text](https://github.com/libexpat/libexpat/blob/1a6d93c530e1aa1ca3a567b05bad894e19027d18/expat/COPYING); the pinned SDK's Expat inputs are listed with blob IDs in `softing-expat.gitsha`. The tree manifest binds the SDK copy; it does not independently establish that every byte matches the upstream release.
 
 ## Build and distribution boundaries
@@ -77,8 +80,8 @@ rules, environment, external SDKs or workflows can add dependencies without
 changing a guarded profile file. A full Windows configured dependency/include
 trace, linker inputs/map and released-artifact inventory remain pending. Local
 checker tests use temporary Git repositories, not a real Windows SDK build.
-Do not mark N1.LICENSE or N4 closed until these facts and the OPC grant are
-resolved and the intended release's notices are verified.
+The owner has closed N1.LICENSE by decision, not by resolving these facts. The
+intended release's notices still require verification.
 
 ## Official MIT-labelled input build
 

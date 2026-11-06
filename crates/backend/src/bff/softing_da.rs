@@ -604,7 +604,7 @@ impl DaHost for NativeHost {
             return;
         };
         match self.sdk.discover(host) {
-            Ok((records, fallback)) => {
+            Ok((records, flags)) => {
                 let mut servers = Vec::with_capacity(records.len());
                 let mut missing_description = false;
                 {
@@ -630,7 +630,7 @@ impl DaHost for NativeHost {
                         servers,
                     },
                 );
-                if fallback {
+                if flags & 1 != 0 {
                     send(
                         events,
                         command.owner,
@@ -638,6 +638,18 @@ impl DaHost for NativeHost {
                         EventKind::Log {
                             message: message(
                                 "DA discovery used the SDK's local DA 1 registry fallback; newer-only servers may be absent",
+                            ),
+                        },
+                    );
+                }
+                if flags & 2 != 0 {
+                    send(
+                        events,
+                        command.owner,
+                        None,
+                        EventKind::Log {
+                            message: message(
+                                "DA discovery skipped one or more registry entries whose ProgID could not be resolved",
                             ),
                         },
                     );
@@ -1687,31 +1699,19 @@ mod tests {
             keys: vec![ItemKey::FIRST],
         });
         let fresh = recv();
-        if cfg!(feature = "native-da-preview") {
-            assert!(
-                matches!(fresh, EventKind::Values { values } if values[0].1.value == Value::I64(43)),
-                "fresh uses maxAge=0"
-            );
-        } else {
-            assert!(
-                matches!(fresh, EventKind::Error { operation: Operation::Read, message: BackendMsg::Raw(ref message) } if message == "Explicit cache/device read is not supported by the legacy DA adapter")
-            );
-        }
+        assert!(
+            matches!(fresh, EventKind::Values { values } if values[0].1.value == Value::I64(43)),
+            "fresh uses maxAge=0"
+        );
         send(CommandKind::ReadCached {
             keys: vec![ItemKey::FIRST],
             max_age_ms: 1234,
         });
         let cached = recv();
-        if cfg!(feature = "native-da-preview") {
-            assert!(
-                matches!(cached, EventKind::Values { values } if values[0].1.value == Value::I64(42)),
-                "DA cache uses maxAge=MAX"
-            );
-        } else {
-            assert!(
-                matches!(cached, EventKind::Error { operation: Operation::Read, message: BackendMsg::Raw(ref message) } if message == "Explicit cache/device read is not supported by the legacy DA adapter")
-            );
-        }
+        assert!(
+            matches!(cached, EventKind::Values { values } if values[0].1.value == Value::I64(42)),
+            "DA cache uses maxAge=MAX"
+        );
         send(CommandKind::Write {
             request: WriteRequest {
                 key: ItemKey::FIRST,

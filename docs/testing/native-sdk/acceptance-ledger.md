@@ -1,5 +1,43 @@
 # Native DA acceptance ledger: N2/N3/N4
 
+## N4 production switch 2026-11-05 — CLOSED
+
+[Inventory and switch plan](n4-switch-readiness.md): Windows DA is native-only;
+legacy OPC COM data-plane removed. N1.LICENSE is closed by owner decision, not
+legal analysis. The vendored no-hook x86 bridge uses official OPCF inputs and
+the pinned SDK with reviewed patches; a normal build works without
+`SOFTING_RUNTIME_LIB_DIR`. Local production-library gateway test passed 1/1 in
+2.16 s with strict cleanup; the discovery regression skipped a stale
+`opcdaclientopcda.OPC.1` entry and returned healthy servers. Production Async
+and remote/vendor/physical DA remain external residuals, not claims of remote
+acceptance.
+
+## Local SDK lifetime runs on b4bc724 working tree (2026-11-05)
+
+With ATL installed, pinned SDK 5130e763 and both reviewed patches, the Win32
+SDK-input fixture and hook bridge were built. Elevated unmodified launcher ran
+four separate real COM processes: reconnect 1/1 0.38s, remove/readd 1/1 0.27s,
+session isolation 1/1 0.87s, pending shutdown 1/1 5.88s. Each reported server
+exit 0 and `Local DA COM fixture and cleanup: PASS`. Reconnect covers held88,
+same-ID Disconnect/new Connect/registration before release, 77→99/FreshRead99,
+and no 88 in new epoch. Old Disconnect completion is awaited after release.
+The test-only expired deadline negative check intentionally catches a panic;
+no measured before-run is claimed. Pending shutdown observed DA TimedOut/UA
+Joined in 5.0005272s and Busy until release followed by SDK finish. These
+local cases close **N3.LIFETIME in the local fixture scope**; they do not close
+other failures/timeouts, never-return or remote servers.
+Logs: `D:/opclook-native/{reconnect,late-callback,isolation,pending-shutdown}.log`.
+The earlier registration failure below is historical.
+
+## Local re-run 2026-11-05 — history: COM setup blocked
+
+The pinned Win32 SDK fixture and hook-enabled bridge now build with installed
+ATL. On the current medium-integrity host, the standard launcher failed before
+starting the server or test: SysWOW64 regsvr32 registration returned 5 and
+the attempted unregister also returned 5. Strict cleanup is not established;
+no new live lifetime result is claimed. The earlier d401 CI receipt remains
+historical. Retry the unmodified launcher elevated and verify cleanup.
+
 Evidence updated 2026-10-31. This is an engineering map, not a
 production-readiness declaration. Public exact head
 `6c5349c87334860c52a8317f8fdc5e34a9568dd1` passed nine jobs across
@@ -28,8 +66,8 @@ Linux source/mock and extracted C++ stub tests are not Windows COM results.
 
 | Route | Actual code and evidence | Scope and remaining condition |
 | --- | --- | --- |
-| Production/default DA | `crates/backend/src/bff/mod.rs` selects legacy DA on Windows when `native-da-preview` is absent; backend has no default feature enabling preview. | N4 switch/removal of the legacy OPC data plane has **not** happened. Keep legacy until its replacement gates are accepted. |
-| Native DA preview | `native-da-preview` selects `softing_da`; `acquisition_capabilities` exposes subscription, FreshSource and readback only on Windows with that feature. `CommandKind::ReadFresh` uses SDK max-age 0; `Read`/`ReadCached` use `u32::MAX` (`softing_da.rs`). | These are adapter abilities, not per-server negotiated guarantees. DA CacheAllowed is permission to use cache, not a promise of the same freshness on every SDK/server/version. |
+| Production/default DA | `crates/backend/src/bff/mod.rs` selects `softing_da` on Windows unconditionally; legacy `da.rs`, `com.rs`, `da_variant.rs` and `opc/` are removed. `build.rs` links the vendored no-hook bridge unless `SOFTING_RUNTIME_LIB_DIR` is set. | N4 production switch is closed. Remote/vendor DA and production Async remain external residuals. |
+| Native DA test feature | `native-da-preview` now gates fixture-only live tests; production selection does not depend on it. `acquisition_capabilities` exposes subscription, FreshSource and readback on Windows. `CommandKind::ReadFresh` uses SDK max-age 0; `Read`/`ReadCached` use `u32::MAX` (`softing_da.rs`). | These are adapter abilities, not per-server negotiated guarantees. DA CacheAllowed is permission to use cache, not a promise of the same freshness on every SDK/server/version. |
 | Native Async | `validate_acquisition` rejects `DaReadMethod::Async`; router fails closed. SDK I4 async read, `TestAsyncSessionLease` and barrier hooks exist only in the test bridge (`OPCL_DA_TESTING`/`native-da-test-hooks`). | No production Async, no Async Write claim. The test lease may quarantine a session/host indefinitely if a callback never arrives. Queue admission does not establish an absolute OS scheduling deadline. |
 | Package profile | `core-probe/CMakeLists.txt` requires pinned official OPCF inputs by default; legacy SDK OPC inputs are an explicit probe-only control. `package-preview.py` requires official inputs, `OPCL_BUILD_PROBES=OFF`, and rejects `opcl_da_test_` exports. | This is a private preview artifact, not a release or production flip. The SDK fixture and hook-enabled bridge are test-only. |
 
@@ -40,7 +78,7 @@ Linux source/mock and extracted C++ stub tests are not Windows COM results.
 | A04, A05 | `sdk_device_read_live`: SDK fixture distinguishes cached and device reads with a server-side device counter; readback follows a correlated accepted write. `sdk_device_profile_live` covers the Engine profile path. | Verify server/version negotiation and actual Cache/Device outcomes beyond the selected local SDK fixture. Do not claim a strict cache hit for all CacheAllowed servers. |
 | A06, A10 | `validate_acquisition` and router reject Async. Test-only `softing_core_probe --live-async`, `sdk_async_lease_live` and `sdk_async_isolation_live` passed in both 81f COM jobs; their I4 callback, SDK worker and host lifetime evidence is scoped to the fixture. | Production RequestId/epoch correlation, supported shapes, accepted-vs-terminal errors, callback negotiation, cancellation, timeouts and bounded teardown remain open. DA1 needs its own transaction design. |
 | A07, O23 | `sdk_gateway_live` exercises subscriptions; `sdk_subscription_one_shot_live` passed the active subscription + one-shot Fresh + no hidden Sync poll gate in both 81f COM jobs. | The no-poll observation is bounded and local, not a guarantee for all negotiated servers and errors. |
-| A08 | `sdk_late_callback_live` passed held real callback 88 / remove-readd / new 99 and cleanup in both 81f COM jobs; sync blocked-write isolation and shutdown are separate gates. | Held callback across Unadvise/disconnect, other epochs, timeout/failure and remote teardown remain open. |
+| A08 | `sdk_late_callback_live` passed held real callback 88 / remove-readd / new 99 and cleanup in both 81f COM jobs. The separate same-ID held Disconnect/new Connect gate passed both COM inputs on d401; see pair33 below. | Other servers, timeout/failure and remote teardown remain open; old Disconnect completion before release was not asserted. |
 | A09 | `sdk_partial_read_live` passed actual SDK group mixed `S_FALSE` and separate per-key Gateway outcomes in both 81f COM jobs. `sdk_read_failure_facts_live` separately covers codec failure after an attested SDK sample. | Other versions and remote servers remain untested; unavailable quality/time must stay absent and operation failure must not become Good. |
 | O24, O25 | `--live-da1-inactive` passed forced and selected SDK DA1 against the local fixture in both 81f COM jobs, with separately counted SDK request kinds. | A physically DA1-only server and remote interoperability remain open. Do not generalize this inactive-quality observation to other methods or versions. |
 | O26 | `onReadAdvise` classifies data change vs read completion; test-only I4 matches transaction/handle, ignores stale tokens and preserves the empty failed-master envelope. | This is not integrated production Async/stream coexistence. DA1, error and queue-overflow paths, generation changes and remote servers require separate evidence. |
@@ -348,3 +386,14 @@ controlled panic + blocked worker reports panicked and detached=1; released
 worker teardown observed. Actual/real-file 1/1 each; no COM/join/OS deadline
 claim. S03 wire no-repeat remains open: held proxy blocks its sole TCP reader;
 a counter there is not independent evidence. CI exact head 9/9.
+# 2026-11-05 N4 update
+
+On the switched tree, the vendored no-hook production bridge passed
+`sdk_gateway_live` 1/1 in 2.16 s with the fixture discovered and strict cleanup
+PASS. The discovery skip fix handles the local stale `opcdaclientopcda.OPC.1`
+entry that previously produced `REGDB_E_CLASSNOTREG`. Hook-enabled fixture runs:
+reconnect 1/1, remove/readd 1/1, isolation 1/1, pending shutdown 1/1; all
+cleanup PASS. N1.LICENSE is closed by owner decision, not legal analysis;
+unresolved grant and release notices remain documented. N4 production switch is
+closed. Remote OPCEnum/DCOM/auth is wired but not accepted; vendor interop and
+production Async remain external residuals.

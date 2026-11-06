@@ -266,6 +266,16 @@ cargo test --target i686-pc-windows-msvc
 cargo test --target i686-pc-windows-msvc --test ua_smoke -- --ignored --nocapture
 ```
 
+Для набора N6: `cargo fmt --all -- --check`, `cargo test -j 2`, отдельно
+`cargo test -j 2 -p opclook-backend`, и при готовом CODESYS
+`cargo test --test ua_smoke --test ua_search --test ua_write -- --ignored --test-threads=1`.
+Набор `ua_search` намеренно содержит также отдельный тест разрешения `localhost`;
+он не ограничивается только числовым адресом. Write использует тестовый тег и
+восстанавливает значение; запускайте лишь на разрешённом тестовом сервере.
+Ignored тесты не исполняются обычным `cargo test`; известные #12 не закрываются
+этим набором. [Матрица](docs/testing/acquisition-evidence-matrix.md),
+[точный CI](docs/testing/n6-exact-head-ci.md).
+
 Linux-команды требуют установленную цель `x86_64-unknown-linux-gnu`: в конфигурации проекта по умолчанию выбран Windows i686. Результаты последнего принятого стека и границы проверок — в [текущем статусе](docs/status.md); [test matrix](docs/test-matrix.md) содержит исторические сценарии.
 
 ### Живая проверка OPC UA
@@ -278,11 +288,26 @@ Linux-команды требуют установленную цель `x86_64-
 
 ### Живая проверка OPC DA
 
-32-битное перечисление находит `Kepware.KEPServerEX.V6` /
-«KEPServerEX 6.2» (служба `OpcEnum`). Живое подключение/чтение/запись DA
-не проверены: служба `KEPServerEXV6` остановлена и не запускается
+Обычная production-сборка использует vendored no-hook bridge из
+`native/softing-da/lib/i686-pc-windows-msvc` и не требует
+`SOFTING_RUNTIME_LIB_DIR`. Переменная нужна только для hook/fixture live-тестов
+и указывает на каталог bridge Release (например
+`D:\opclook-native\softing-build\Release`).
+
+Для локального native SDK fixture необходимы Win32 MSVC/Windows SDK и ATL,
+собранный pinned Softing SDK/bridge и `SOFTING_RUNTIME_LIB_DIR`, указывающий
+на каталог bridge Release (например `D:\opclook-native\softing-build\Release`).
+Для COM registration/unregistration штатный launcher может потребовать elevated
+процесс; проверяйте strict cleanup. Команды и обе конфигурации OPC inputs — в
+[N4 readiness](docs/testing/native-sdk/n4-switch-readiness.md) и workflow
+`softing-da-interop.yml`. Локальный fixture не подтверждает remote/vendor DA.
+
+Исторически 32-битное перечисление находило `Kepware.KEPServerEX.V6` /
+«KEPServerEX 6.2» (служба `OpcEnum`). Подключение/чтение/запись именно этого
+vendor-сервера не проверены: служба `KEPServerEXV6` была остановлена и не запускалась
 (System error 1068 — зависимость не удовлетворена; `CoCreateInstance`
-завершается с `0x8007042C`).
+завершался с `0x8007042C`). Отдельные локальные SDK/COM fixture тесты прошли
+в ограниченном scope: [ledger](docs/testing/native-sdk/acceptance-ledger.md).
 
 ## Ограничения
 
@@ -337,4 +362,3 @@ Copyright (c) 2026 OPCLook contributors.
 - **serde / serde_json** — сериализация настроек.
 - **chrono** — даты/время.
 - **rfd** — системные диалоги выбора файлов.
-

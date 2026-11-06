@@ -62,16 +62,6 @@ pub fn route_of(kind: &CommandKind) -> Route {
             Route::Unsupported(kind.operation(), BackendMsg::DaNoUaNetworkSearch)
         }
         CommandKind::BrowseViews => Route::Unsupported(kind.operation(), BackendMsg::DaNoViews),
-        CommandKind::ReadFresh { .. } | CommandKind::ReadCached { .. }
-            if !cfg!(feature = "native-da-preview") =>
-        {
-            Route::Unsupported(
-                kind.operation(),
-                BackendMsg::raw(
-                    "Explicit cache/device read is not supported by the legacy DA adapter",
-                ),
-            )
-        }
         CommandKind::ResolveBrowsePath { .. } => {
             Route::Unsupported(kind.operation(), BackendMsg::DaNoBrowsePath)
         }
@@ -498,7 +488,7 @@ mod tests {
     use std::sync::mpsc::{Receiver, channel};
 
     #[test]
-    fn explicit_reads_only_route_to_native_preview() {
+    fn explicit_reads_route_to_session() {
         let fresh = CommandKind::ReadFresh {
             keys: vec![ItemKey::FIRST],
         };
@@ -507,14 +497,7 @@ mod tests {
             max_age_ms: 1,
         };
         for kind in [fresh, cached] {
-            if cfg!(feature = "native-da-preview") {
-                assert_eq!(route_of(&kind), Route::Session);
-            } else {
-                assert!(matches!(
-                    route_of(&kind),
-                    Route::Unsupported(Operation::Read, _)
-                ));
-            }
+            assert_eq!(route_of(&kind), Route::Session);
         }
         assert_eq!(
             route_of(&CommandKind::Read { keys: vec![] }),
@@ -718,43 +701,6 @@ mod tests {
     }
     fn is_kind(event: &Event, request_id: u64) -> bool {
         event_id(event) == request_id
-    }
-
-    #[cfg(not(feature = "native-da-preview"))]
-    #[test]
-    fn legacy_rejects_explicit_reads_before_session_dispatch() {
-        let (host, _r, _d) = MockHost::new();
-        let (mut router, rx) = router_with(host.clone());
-        router.dispatch(connect(1, sid(1), "ok"));
-        assert!(matches!(next(&rx).kind, EventKind::Connected { .. }));
-        for (id, kind) in [
-            (
-                2,
-                CommandKind::ReadFresh {
-                    keys: vec![ItemKey::FIRST],
-                },
-            ),
-            (
-                3,
-                CommandKind::ReadCached {
-                    keys: vec![ItemKey::FIRST],
-                    max_age_ms: 1,
-                },
-            ),
-        ] {
-            router.dispatch(command(id, sid(1).into(), kind));
-            let event = next(&rx);
-            assert!(is_kind(&event, id));
-            assert!(
-                matches!(event.kind, EventKind::Error { operation: Operation::Read, message: BackendMsg::Raw(ref text) } if text == "Explicit cache/device read is not supported by the legacy DA adapter")
-            );
-        }
-        assert_eq!(
-            host.explicit_reads
-                .load(std::sync::atomic::Ordering::SeqCst),
-            0
-        );
-        assert!(!router.shutdown(WAIT).panicked);
     }
 
     #[test]

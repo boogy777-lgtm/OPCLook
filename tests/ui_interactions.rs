@@ -5174,7 +5174,10 @@ fn acquisition_editor_keeps_protocol_drafts_and_cancel_does_not_persist() {
         let mut h = harness(app);
         h.get_by_label("Получение данных").click();
         h.run_steps(3);
-        assert!(h.get_by_label("Подписка").accesskit_node().is_disabled());
+        assert_eq!(
+            h.get_by_label("Подписка").accesskit_node().is_disabled(),
+            !cfg!(windows)
+        );
         h.get_by_label("OPC UA").click();
         h.run_steps(3);
         h.get_by_label("Опрос").click();
@@ -5201,14 +5204,15 @@ fn acquisition_editor_keeps_protocol_drafts_and_cancel_does_not_persist() {
                 .unwrap()
                 .read_after_write
         );
-        assert!(
-            !h.state()
+        assert_eq!(
+            h.state()
                 .dialogs
                 .connect
                 .da_acquisition
                 .as_ref()
                 .unwrap()
-                .read_after_write
+                .read_after_write,
+            cfg!(windows)
         );
         assert_eq!(
             h.state()
@@ -5258,27 +5262,31 @@ fn acquisition_recent_profile_restores_without_changing_other_draft() {
         assert_eq!(h.state().dialogs.connect.ua_acquisition, Some(profile));
         assert_eq!(
             h.state().dialogs.connect.da_acquisition,
-            Some(AcquisitionConfig::da_available())
+            Some(opclook_backend::recommended_acquisition(
+                opclook::bff::model::Protocol::OpcDa
+            ))
         );
     });
 }
 
 #[test]
-fn acquisition_disabled_subscription_explains_capability() {
+fn acquisition_subscription_reflects_capability() {
     let mut app = App::new_test(&egui::Context::default());
     app.open_connect_dialog();
     let mut h = harness(app);
     h.get_by_label("Получение данных").click();
     h.run_steps(3);
     let subscription = h.get_by_label("Подписка");
-    assert!(subscription.accesskit_node().is_disabled());
-    subscription.hover();
-    h.run_steps(40);
-    assert!(
-        h.query_all_by_label_contains("Недоступно в текущем адаптере")
-            .next()
-            .is_some()
-    );
+    assert_eq!(subscription.accesskit_node().is_disabled(), !cfg!(windows));
+    if !cfg!(windows) {
+        subscription.hover();
+        h.run_steps(40);
+        assert!(
+            h.query_all_by_label_contains("Недоступно в текущем адаптере")
+                .next()
+                .is_some()
+        );
+    }
 }
 
 #[test]

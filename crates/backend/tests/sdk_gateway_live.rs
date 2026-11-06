@@ -68,10 +68,10 @@ fn sdk_gateway_live() {
             },
         })
         .unwrap();
-    assert!(
-        matches!(reply(&gateway, discovery_id).kind, EventKind::Servers { servers, .. }
-        if servers.iter().any(|server| server.id.eq_ignore_ascii_case("OPCLook.NativeDaFixture.1")))
-    );
+    let discovery = reply(&gateway, discovery_id);
+    eprintln!("gateway fixture: discovery reply: {:?}", discovery.kind);
+    assert!(matches!(discovery.kind, EventKind::Servers { servers, .. }
+        if servers.iter().any(|server| server.id.eq_ignore_ascii_case("OPCLook.NativeDaFixture.1"))));
     eprintln!("gateway fixture: discovery reply verified");
     let endpoint = EndpointSpec::da("localhost", "OPCLook.NativeDaFixture.1");
     assert!(matches!(

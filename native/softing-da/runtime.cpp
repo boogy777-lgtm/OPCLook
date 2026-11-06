@@ -1780,14 +1780,16 @@ public:
         }
         std::vector<OpclDaServerRecord> pending;
         pending.reserve(count);
+        bool skipped = false;
         SOCmnListPosition pos = classes.getStartPosition();
         while (pos) {
             CLSID* id = classes.getNext(pos);
             if (!id) { setResult(E_FAIL); return; }
             SOCmnString progid, description;
             if (!browser->getServerProgId(*id, progid)) {
-                HRESULT hr = browser->getLastError(nullptr);
-                setResult(FAILED(hr) ? hr : E_FAIL); return;
+                // A stale registry entry must not hide every healthy server.
+                skipped = true;
+                continue;
             }
             OpclDaServerRecord record{};
             copy_guid(*id, &record.clsid);
@@ -1801,6 +1803,7 @@ public:
         }
         if (!pending.empty()) std::memcpy(out_, pending.data(), pending.size() * sizeof(OpclDaServerRecord));
         *count_ = static_cast<uint32_t>(pending.size());
+        if (skipped) *fallback_ |= 2;
         setResult(S_OK);
     } catch (...) { setResult(E_UNEXPECTED); }
     bool ran() const { return ran_; }

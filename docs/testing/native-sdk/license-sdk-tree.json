@@ -292,7 +292,7 @@
     "docs/testing/native-sdk/core-probe/normalize-sdk-path.cmake": "d67afe1b276dcb1873ba8b9322c38235c340c01b03332c96e011f35889dda895",
     "docs/testing/native-sdk/server-fixture/CMakeLists.txt": "28dedd7325cc02bf8891e9b955a143d30573895d4e1a1ec2923f32f269ff2de1",
     "docs/testing/native-sdk/server-fixture/stdafx.h": "6439bdc29380bb1d07aec9dddcbeaa9572f3abb1663d9bcfd548ff7ab7f4aa81",
-    "crates/backend/build.rs": "a14e0753fb7f13b4a0ee10608c3c3b0ca9d61aa6c0778c38a937f8bf2eedaeb0",
+    "crates/backend/build.rs": "bbe16a35dfe5f781519713238ee1976dca105e9018724429d3e4c1a5854c45e7",
     "docs/testing/native-sdk/softing_patch.py": "dfb850ed3307f5afed681e9831988ec018f542ac53d56e28c01b0ef76002e4e9",
     "docs/testing/native-sdk/softing-status-alignment.patch": "9f5812e9b61a02b425034f5242f890fcad9aeb7e44feeee09aa3a0900ed621b6",
     "docs/testing/native-sdk/softing-com-balance.patch": "b569157a9a43098a0958ad316c5f9f19f8b68c3d8e74954475a0949b747d9b60",

@@ -77,6 +77,14 @@ pub struct DiscoveredServer {
 }
 #[repr(C)]
 #[derive(Default, Debug)]
+// Kept ABI: hook AsyncLease, unit tests and the source-included native-live stand.
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "native fixture compatibility ABI; production uses ReadScalar"
+    )
+)]
 pub struct ReadI4 {
     pub service_result: i32,
     pub item_result: i32,
@@ -216,6 +224,13 @@ unsafe extern "C" {
         count: *mut u32,
         overflow: *mut u32,
     ) -> i32;
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "native fixture I4 entry point, also used by standalone native-live stand"
+        )
+    )]
     fn opcl_da_read_i4(session: *mut c_void, item: *mut c_void, age: u32, out: *mut ReadI4) -> i32;
     fn opcl_da_read_scalar_facts(
         session: *mut c_void,
@@ -318,6 +333,13 @@ unsafe extern "C" {
     fn opcl_da_test_arm_write_exception() -> i32;
     #[cfg(feature = "native-da-test-hooks")]
     fn opcl_da_test_write_exception_state() -> i32;
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "native fixture I4 entry point, also used by standalone native-live stand"
+        )
+    )]
     fn opcl_da_write_i4(
         session: *mut c_void,
         item: *mut c_void,
@@ -446,7 +468,7 @@ impl SharedHost {
         })?;
         Ok(out)
     }
-    pub fn discover(&self, node: &str) -> Result<(Vec<DiscoveredServer>, bool), Error> {
+    pub fn discover(&self, node: &str) -> Result<(Vec<DiscoveredServer>, u32), Error> {
         let node = string(node)?;
         let mut records = vec![ServerRecord::default(); 256];
         let mut count = 0;
@@ -463,7 +485,8 @@ impl SharedHost {
             )
         })?;
         let count = usize::try_from(count).map_err(|_| Error::InvalidString)?;
-        if count > records.len() || fallback > 1 {
+        // Bit 0: local DA1 registry fallback; bit 1: unresolvable registry entries skipped.
+        if count > records.len() || fallback > 3 {
             return Err(Error::InvalidString);
         }
         let mut found = Vec::with_capacity(count);
@@ -484,8 +507,15 @@ impl SharedHost {
                 description_missing: record.flags & 1 != 0,
             });
         }
-        Ok((found, fallback != 0))
+        Ok((found, fallback))
     }
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "fixture convenience API used by native-live stand and hook fixture"
+        )
+    )]
     pub fn open(&self, name: &str, node: &str, clsid: &Guid) -> Result<Session, Error> {
         self.open_config(name, node, clsid, false, 1000)
             .map(|(session, _)| session)
@@ -931,6 +961,13 @@ impl Session {
         // SAFETY: item belonged to this live session and was removed from the map first.
         check(unsafe { opcl_da_item_remove(self.ptr.as_ptr(), item.as_ptr()) })
     }
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "I4 fixture/counter probe API, not an unused production path"
+        )
+    )]
     pub fn read_i4(&mut self, key: u64, max_age: u32) -> Result<ReadI4, Error> {
         let item = self.items.get(&key).ok_or(Error::InvalidHandle)?;
         let mut out = ReadI4::default();
@@ -1017,6 +1054,13 @@ impl Session {
         })?;
         Ok(result)
     }
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "I4 fixture API used by source-included native-live stand and unit tests"
+        )
+    )]
     pub fn write_i4(&mut self, key: u64, value: i32) -> Result<i32, Error> {
         let item = self.items.get(&key).ok_or(Error::InvalidHandle)?;
         let mut result = 0;
