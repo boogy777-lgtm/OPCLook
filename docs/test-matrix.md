@@ -1,5 +1,16 @@
 # Матрица покрытия «функция → тест»
 
+## N6 актуальный acquisition-срез (2026-11-05)
+
+[Построчный индекс G/D/E/S/T/C/U/M/A/O](testing/acquisition-evidence-matrix.md)
+имеет приоритет над историческими строками ниже. Знак ✅ в старой таблице
+обозначает наличие/исторический результат названного теста, не новый запуск
+live или полный coverage. Явный Subscription не переключается скрыто на Poll
+при Failed; строка про fallback ниже относится к legacy `None`, не ко всем
+профилям. Native DA fixture — opt-in, не production default и не vendor/remote.
+Результаты и известные #12 — [status](status.md); exact-head CI —
+[чеклист](testing/n6-exact-head-ci.md). 128+128 строк CSV — не число тестов.
+
 Таблица ведётся постоянно: при добавлении фичи или теста обновите статус.
 Обозначения:
 
@@ -163,7 +174,7 @@
 | Автопереподписка всех строк + переобзор корня + немедленное чтение после переподключения | ✅ | `reconnect_connected_resubscribes_rows_requests_browse_and_read` — `tests/ui_interactions.rs` |
 | Подавление фонового опроса во время обзора (read-tick suppressed при root_loading) | ✅ | `read_tick_is_suppressed_while_root_loading` — `tests/ui_interactions.rs` |
 | UA push-подписка: после AddItems создаётся одна подписка на сессию, DataChange-колбэк шлёт `EventKind::Values` без периодического Read | ✅ (live `--ignored`) | `ua_subscription_pushes_values_without_reads_and_writes` — `tests/ua_subscription.rs` (pure push CurrentTime + write-push) |
-| UA push-подписка: `Active` отключает периодический Read; `Inactive`/`Failed` возвращаются к опросу (DA продолжает поллить) | ✅ | `ua_subscription_active_stops_periodic_read`, `ua_failed_subscription_falls_back_to_polling`, `da_keeps_polling_unaffected_by_subscription_flag` — `tests/ui_interactions.rs` |
+| UA push: legacy-профиль допускает polling fallback; явный Subscription не включает скрытый Poll при Failed | partial | Legacy: `ua_failed_subscription_falls_back_to_polling`; explicit: `explicit_failed_subscription_has_no_hidden_periodic_poll`. Это отдельные режимы, не полная U-матрица. |
 | Переподключение UA: Connected → re-add items → подписка/мониторинг пересоздаются, push возобновляется | ✅ | юнит `ua_reconnect_resubscribes_rows_and_resets_subscription_flag` — `tests/ui_interactions.rs`; live `ua_subscription_resumes_after_reconnect` — `tests/ua_subscription.rs` (`--ignored`) |
 | RemoveItems: удаление контролируемых элементов; Disconnect — удаление подписки (`SubscriptionState::Inactive`) | ✅ | логика в `src/bff/ua.rs` (`remove_items`/`teardown_subscription`); событие `SubscriptionState` обрабатывается в `src/app.rs` |
 | Состояние подписки в информационном popup сервера (`Подписка: активна/неактивна/ошибка`) | ✅ | `server_info_popup_shows_subscription_state` — `tests/ui_interactions.rs` |

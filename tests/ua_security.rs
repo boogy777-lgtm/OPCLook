@@ -83,14 +83,11 @@ fn disconnect(gateway: &Gateway, session: u64) {
 #[ignore = "requires OPC UA server at OPCUA_TEST_URL"]
 fn server_search_enumerates_endpoints() {
     let gateway = Gateway::new();
-    let session = next_id();
     let events = wait_for(
         &gateway,
         Command {
             request_id: opclook::bff::model::RequestId::new(next_id()),
-            owner: opclook::bff::model::Owner::Session(
-                opclook::bff::model::SessionId::new(session).unwrap(),
-            ),
+            owner: opclook::bff::model::Owner::Discovery,
             protocol: Protocol::OpcUa,
             kind: CommandKind::SearchUaServers {
                 host: "127.0.0.1".to_string(),
@@ -168,33 +165,49 @@ fn server_connect_auto_resolves_security() {
     disconnect(&gateway, session);
 }
 
-/// mDNS/LDS network search finds the server (or at least reaches the discovery
-/// endpoint without a hard error) via `FindServersOnNetwork`.
+/// Explicit local LDS only: never broadcast mDNS to unapproved interfaces.
+/// A normal UA runtime is not an LDS. Missing prerequisites fail distinctly,
+/// rather than counting an empty search or a swallowed error as live evidence.
 #[test]
-#[ignore = "requires OPC UA server at OPCUA_TEST_URL"]
+#[ignore = "requires local LDS at 127.0.0.1:4841 (OPCUA_TEST_LDS_PORT), not just CODESYS"]
 fn server_network_search_reaches_server() {
+    let port = std::env::var("OPCUA_TEST_LDS_PORT")
+        .map(|value| value.parse::<u16>().expect("invalid OPCUA_TEST_LDS_PORT"))
+        .unwrap_or(4841);
+    let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    std::net::TcpStream::connect_timeout(&address, Duration::from_secs(3))
+        .unwrap_or_else(|error| panic!("MISSING_TEST_STAND: local LDS {address} unavailable: {error}; CODESYS at 4840 alone does not satisfy this test"));
     let gateway = Gateway::new();
-    let session = next_id();
     let events = wait_for(
         &gateway,
         Command {
             request_id: opclook::bff::model::RequestId::new(next_id()),
-            owner: opclook::bff::model::Owner::Session(
-                opclook::bff::model::SessionId::new(session).unwrap(),
-            ),
+            owner: opclook::bff::model::Owner::Discovery,
             protocol: Protocol::OpcUa,
             kind: CommandKind::SearchUaNetwork {
                 bind: None,
-                lds: None,
+                lds: Some(opclook::bff::model::LdsTarget {
+                    host: "127.0.0.1".to_string(),
+                    port,
+                    bind: opclook::bff::net::NetworkBinding::loopback(),
+                }),
             },
         },
         Duration::from_secs(60),
-        |kind| matches!(kind, EventKind::UaNetworkFound { .. }),
+        |kind| {
+            matches!(
+                kind,
+                EventKind::UaNetworkFound { .. } | EventKind::Error { .. }
+            )
+        },
     )
     .expect("network search timeout");
     match events.kind {
         EventKind::UaNetworkFound { servers } => {
-            let _ = servers;
+            assert!(
+                !servers.is_empty(),
+                "LDS reached but no servers reported; registration fixture missing or discovery failed"
+            );
         }
         other => panic!("unexpected event: {other:?}"),
     }

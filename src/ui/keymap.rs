@@ -41,14 +41,17 @@ pub(super) enum KeyAction {
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Binding {
     pub action: KeyAction,
+    // Scope is metadata for the collision oracle, not the legacy focus router.
+    #[cfg(test)]
     pub scope: Scope,
     pub key: Key,
     pub modifiers: Modifiers,
 }
-const fn b(action: KeyAction, scope: Scope, key: Key, modifiers: Modifiers) -> Binding {
+const fn b(action: KeyAction, _scope: Scope, key: Key, modifiers: Modifiers) -> Binding {
     Binding {
         action,
-        scope,
+        #[cfg(test)]
+        scope: _scope,
         key,
         modifiers,
     }

@@ -1,5 +1,65 @@
 # OPCLook — оставшаяся работа и выполнение парами
 
+**Full permitted UA:** CODESYS22 passed/1 failed (нет LDS fixture4841), один
+hostname-localhost case excluded by restriction; S03 sample2/2 separately.
+CMD restored0/Good, state0/Good read-only; no inferred transition semantics.
+[Exact evidence](testing/ua-full-live-2026-11-05.md). Post-cleanup C: ENOSPC
+обойдён отдельным owned D: target: build/root/backend292/0/1 PASS; hook19exe
+реально слинкованы (--no-run), standalone native-live/lease build PASS, stand5/5;
+guard regression5/5, fmt/diff-check PASS. #12 CLOSED completed с external
+LDS/mDNS residual, не full unfiltered green/COM/remote acceptance.
+LDS/mDNS, remote DA/no stand, production Async и exact-head CI остаются открыты.
+C: near-full остаётся инфраструктурным ограничением; successful builds on owned
+D: target/temp, не очистка чужих caches и не исправление диска C:.
+
+**Current console runtime:** CMD/state Good baselines 0/0; минимальный
+0→1→0/restore тест 1/1, exact write-push с CMD `OPCUA_TEST_WRITE_NODE` 1/1;
+Good push1 и восстановление CMD0 подтверждены независимыми CLI Read после
+каждого теста. State наблюдался0/Good, semantics не выводились.
+[#12 proof/#21 local resolution](testing/codesys-cmd-write-proof.md).
+LDS, remote DA без стенда, production Async и exact-head CI остаются открыты.
+
+**Newest CMD blocker:** discovery 1/1, но Session не установлена; fresh
+CurrentTime push 0/1 с `Stopped(0x80550000 BadSecurityPolicyRejected)`, четыре
+baseline Read CMD/state timeout. Baselines unknown, 0 Writes/restore не нужен.
+Сначала подтвердить рабочую UA Session без обхода security; [#21 evidence](testing/codesys-policy-blocker.md).
+Remote DA OPEN без стенда; предыдущий TCP-refusal диагноз стал историческим.
+
+**Latest CMD follow-up:** CMD-разрешение получено; кандидатная пара
+`GVL_Emulator_Additions.Cmd_ChokePanelActive` / `ChokePanelActiveSwitch`.
+Но текущий `127.0.0.1:4840` возвращает ConnectionRefused 10061 на оба baseline
+Read. 0 Writes/targeted runs; повторить только после восстановления доступности
+стенда и получения Good baseline/проверяемого restore. Remote DA OPEN без стенда.
+
+**Write follow-up:** read-only найден `MAIN_PRG.reserve_int` = 1/Good, но его
+роль в active PLC не подтверждена (IDE bridge unavailable; source says cmd/state
+bench placeholder). Не писать по одному имени reserve: требуется disposable
+независимая переменная/подтверждение пользователя. 0 новых Writes/targeted runs.
+Remote DA остаётся OPEN внешним blocker без стенда; никаких acceptance claims.
+
+**2026-11-05, #12 continuation:** discovery owner и Variables oracle исправлены
+и проверены на CODESYS; безопасный write-push harness требует явно разрешённого
+disposable `OPCUA_TEST_WRITE_NODE`, которого нет, поэтому PLC Writes не выполнялись.
+LDS `127.0.0.1:4841` отсутствует; эти два prerequisite-прогона остаются красными,
+не засчитаны как PASS. Read-only live 19 distinct passed, включая новые CODESYS
+requested/revised facts 1/1; [подробности и issue update](testing/issue-12-update.md).
+`ua_write` не запускать с его default arbitrary writable probing; перед live
+записью нужен approved test-tag и panic-safe restore. Existing #12 обновлён одним
+комментарием, остаётся OPEN. Offline root/CLI и backend 292/0/1 PASS; CI pending.
+
+**N6 PARTIAL:** [индекс stable IDs](testing/acquisition-evidence-matrix.md),
+[exact-head CI checklist](testing/n6-exact-head-ci.md); полная приёмка и CI
+ожидаются.
+
+**N1.LICENSE — CLOSED BY OWNER DECISION:** не юридический анализ; grant и
+release notices остаются неразрешёнными.
+
+**N4 — CLOSED, production switch:** Windows DA всегда native, legacy OPC COM
+data-plane удалён; vendored no-hook bridge позволяет сборку без env; локальные
+gateway/reconnect/remove-readd/isolation/pending-shutdown gates 1/1 со strict
+cleanup. Remote DCOM/OPCEnum/auth, vendor/physical DA и production Async
+остаются внешними residuals. [Readiness/inventory](testing/native-sdk/n4-switch-readiness.md).
+
 Дата: 2026-11-01. Поручение владельца: продолжать все оставшиеся задачи плана
 парами исполнителей GPT-6.1 Terra High. Это рабочая очередь существующих
 планов, не новый функциональный scope и не утверждение о завершении миграции.
@@ -168,18 +228,18 @@ OnlyVars defect подтверждён и исправлен; M09 live gate пр
 
 | ID / план | Оставшаяся способность или проверка | Условие закрытия |
 | --- | --- | --- |
-| N3.LIFETIME | Late callback, remove/re-add/epoch, failure/timeout teardown и независимость сессий | Реальные entry points, содержательные negative cases, bounded cleanup; локальный proof не назван remote |
+| N3.LIFETIME | Late callback, remove/re-add/epoch, failure/timeout teardown и независимость сессий | **CLOSED (local fixture)**: реальные entry points и negative cases пройдены (reconnect 1/1, remove/re-add 1/1, isolation 1/1, pending shutdown 1/1, strict cleanup PASS); локальный proof не назван remote. Remote/vendor/other-server и произвольные crash interleavings — внешние гейты N3-interop/N4 |
 | N1.LICENSE | Полный состав зависимостей собираемого native SDK и notices | Проверенный source/build closure, версии/лицензии/распространяемые notices; новых прав использования не предполагать |
-| R2.3 / N5 | UA CacheAllowed/maxAge и negotiated requested/revised параметры | Ready SDK API/config, общий capability и наблюдаемые фактические параметры |
+| R2.3 / N5 | UA CacheAllowed/maxAge и negotiated requested/revised параметры | **CLOSED (audit scope)**: [O/OF карта](testing/ua-n5-partial-audit.md) и consumer-фикс; SDK maxAge/CacheAllowed используется, requested/revised lifetime/keepalive наблюдаемы в CLI/UI, sample-server maxAge/negotiated 2/2. Остаточные O02–O09/O11–O12/O17/O22 и CODESYS-specific/wire gaps остаются видимыми и отнесены к R2.6/recovery |
 | R2.3 / M03–M04 | Миграция старых профилей и прежнего fallback | Существующее поведение не меняется молча, профиль и уведомление сохраняются и тестируются |
 | R2.1–R2.2 / R2.4 | Per-key terminal outcomes, coalescing и fairness с Browse | Каждая действительная потребность имеет исход; занятый слот не теряет новые цели, другая работа не голодает |
 | R2.5 | Source/server/received времена и происхождение результата | Метки раздельны от mapping до UI; старый Read/Push не выдаётся за новое состояние, операция завершается отдельно от отображения |
-| R00 / R04–R12 / N5 | Оставшиеся Foundation cases: SDK recovery, queues/filter, limits, aliases и initial result | Сверены locked SDK и O-таблицы; библиотечные способности не реализованы повторно, gaps видны |
+| R00 / R04–R12 / N5 | Оставшиеся Foundation cases: SDK recovery, queues/filter, limits, aliases и initial result | **CLOSED (crosswalk)**: сверены locked SDK и O/OF-таблицы; второго Publish/recovery/alias owner нет; библиотечные способности не реализованы повторно; gaps явно перечислены в [карте](testing/ua-n5-partial-audit.md) |
 | P2 | Общие пределы размера/глубины payload и ранняя форма действия | Один типизированный механизм для GUI/CLI, сохранён порядок ошибок и подтверждений |
 | P3 | Оставшиеся контекстные клавиши, фокус, встроенные виджеты и IME | Headless регрессии и честно отделённые ручные платформенные проверки |
 | P4 | Ввод параметров Browse/Write в палитре и клавиатурное открытие | Тот же каталог/Engine/подтверждение, что у остальных способов вызова |
 | P5 | Обследование и выделение повторяющихся компонентов UI | Небольшие show(model, style) компоненты с тестами; без собственного backend/state owner |
-| N4 | Production native DA и удаление прежнего OPC COM data-plane | Native SDK capability, interop/lifetime/license gates закрыты; системный WinAPI/helper не удалён как OPC code |
+| N4 | Production native DA и удаление прежнего OPC COM data-plane | **CLOSED, production switch**: Windows DA всегда native; legacy COM удалён; vendored no-hook bridge, сборка без env; gateway/reconnect/remove-readd/isolation/pending shutdown 1/1 со strict cleanup. N1 закрыт владельцем (не legal analysis); remote/vendor DA и production Async остаются внешними residuals. [План](testing/native-sdk/n4-switch-readiness.md) |
 | R2.6 / N6 | Полная матрица G/D/E/S/T/C/U/M/A/O, упаковка и согласование планов | Доказательства по стабильным ID, точный code head, итоговые настройки/документы и CI; число строк CSV не число пройденных тестов |
 
 Пара28 приняла test-only DA Async Gateway RequestId/epoch/registration
@@ -205,3 +265,11 @@ Remote/другой DA server, реальные UAC/маршруты и ручн
 - [R2](value-refresh-plan.md), [native миграция](native-backend-migration.md).
 - [P1–P5](next-ui-command-plan.md), [матрица рефакторинга](refactoring-status.md).
 - [Таблицы приёмки](testing/acquisition-truth-tables.md).
+### N4 update 2026-11-05
+
+N1.LICENSE is CLOSED BY OWNER DECISION, not legal analysis; unresolved grant
+and release notices remain documented. N4 production switch is CLOSED: Windows
+DA is native-only, legacy COM is removed, and the vendored no-hook bridge builds
+without `SOFTING_RUNTIME_LIB_DIR`. Local gateway/reconnect/remove-readd/
+isolation/pending-shutdown gates passed 1/1 with strict cleanup. Remote/vendor
+DA and production Async remain external residuals.

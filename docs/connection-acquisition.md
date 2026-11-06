@@ -1,5 +1,16 @@
 # R2.3 — настройки получения данных соединения: UA и DA
 
+**Актуализация N6:** документ ниже нормативный и содержит исторические срезы.
+Для фактической приёмки смотреть [индекс ID](testing/acquisition-evidence-matrix.md)
+и [N5](testing/ua-n5-partial-audit.md). Production DA по умолчанию legacy;
+native DA — build-time opt-in, его Subscription/FreshSource/read-back доступны
+при соответствующей capability, но production Async не поддерживается.
+Ранее написанное ниже об отсутствии DA Subscription относится к legacy, не ко
+всем native preview сборкам. CLI совместимости по умолчанию использует
+`read_after_write=false`, новый GUI UA профиль — `true`. Requested не заменяется
+revised; отсутствие revised — unknown, invalid показывается отдельно. Полный
+consumer/recovery audit и фактическая свежесть источника остаются открытыми.
+
 Дата: 2026-10-30. База: `main@62ad187c2294cff5df55fe40e82b05f5dda25617`.
 Статус: частично реализовано в draft PR; фактические ограничения и проверки — в status.md.
 Основание: [план R2](value-refresh-plan.md).

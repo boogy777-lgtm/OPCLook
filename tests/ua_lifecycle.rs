@@ -215,14 +215,12 @@ fn run_cycle(gateway: &Gateway, session: u64, cycle: u32) {
 
 /// One-shot discovery search (`FindServers` + `GetEndpoints`): returns and its
 /// own per-call channel is closed gracefully by the library. Must complete.
-fn run_search(gateway: &Gateway, session: u64, index: u32) {
+fn run_search(gateway: &Gateway, index: u32) {
     let found = wait_for(
         gateway,
         Command {
             request_id: opclook::bff::model::RequestId::new(next_id()),
-            owner: opclook::bff::model::Owner::Session(
-                opclook::bff::model::SessionId::new(session).unwrap(),
-            ),
+            owner: opclook::bff::model::Owner::Discovery,
             protocol: Protocol::OpcUa,
             kind: CommandKind::SearchUaServers {
                 host: "127.0.0.1".to_string(),
@@ -266,8 +264,7 @@ fn ua_lifecycle_two_dozen_connections_close_cleanly() {
     }
 
     for index in 1..=SEARCHES {
-        run_search(&gateway, session, index);
-        session = next_id();
+        run_search(&gateway, index);
     }
 
     // Drain any trailing push/subscription events so nothing is left queued.

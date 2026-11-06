@@ -1,479 +1,480 @@
-//! Live OPC UA subscription (DataChange push) test against a CODESYS server.
-//!
-//! Verifies that after AddItems the worker establishes a push subscription and
-//! rows update via `Values` events WITHOUT any periodic Read being triggered, and
-//! that a Write to a monitored node produces a pushed change.
-//!
-//! Run: `cargo test --test ua_subscription -- --ignored --nocapture`
-use opclook::bff::model::ItemKey;
+//! CODESYS live subscription evidence; no periodic/manual Read in push checks.
+//! Write check requires an operator-designated disposable scalar test tag via
+//! OPCUA_TEST_WRITE_NODE. Never probe arbitrary writable production PLC tags.
 use opclook::bff::model::{
-    BrowseNode, Command, CommandKind, EndpointSpec, EventKind, ItemSpec, NodeKind, Protocol, Value,
+    Command, CommandKind, DataValue, EndpointSpec, Event, EventKind, ItemKey, ItemSpec, Origin,
+    Owner, Protocol, QualityKind, RequestId, SessionId, Value, WriteRequest,
 };
 use opclook_backend::bff::Gateway;
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-const DEFAULT_URL: &str = "opc.tcp://127.0.0.1:4840";
-/// Server CurrentTime (changes every ~100 ms).
 const CURRENT_TIME: &str = "i=2258";
-const MAX_BROWSE: usize = 500;
-const MAX_DEPTH: usize = 6;
-
 static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-
-fn next_id() -> u64 {
-    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+fn next_id() -> RequestId {
+    RequestId::new(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)).unwrap()
 }
 
-fn test_url() -> String {
-    std::env::var("OPCUA_TEST_URL").unwrap_or_else(|_| DEFAULT_URL.to_string())
+struct LiveSession {
+    gateway: Gateway,
+    owner: Owner,
+    connection: RequestId,
+    pending: VecDeque<Event>,
 }
 
-/// Drain events for a session until `predicate` matches or the timeout expires.
-/// Push events carry their connection origin; this helper filters on the EventKind.
-fn wait_for(
-    gateway: &Gateway,
-    session: u64,
-    timeout: Duration,
-    mut predicate: impl FnMut(&EventKind) -> bool,
-) -> Option<EventKind> {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        while let Some(event) = gateway.try_recv() {
-            if event.owner
-                != opclook::bff::model::Owner::Session(
-                    opclook::bff::model::SessionId::new(session).unwrap(),
-                )
-            {
-                continue;
+impl LiveSession {
+    fn new() -> Self {
+        let mut session = Self {
+            gateway: Gateway::new(),
+            owner: Owner::Session(SessionId::FIRST),
+            connection: RequestId::FIRST,
+            pending: VecDeque::new(),
+        };
+        session.connect();
+        session
+    }
+
+    fn send(&self, kind: CommandKind) -> RequestId {
+        let request_id = next_id();
+        self.gateway
+            .send(Command {
+                request_id: Some(request_id),
+                owner: self.owner,
+                protocol: Protocol::OpcUa,
+                kind,
+            })
+            .expect("gateway send");
+        request_id
+    }
+
+    fn wait(&mut self, description: &str, mut predicate: impl FnMut(&Event) -> bool) -> Event {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            assert!(
+                Instant::now() < deadline,
+                "{description}: timeout; queued events (including errors, subscription state, negotiated parameters and unmatched pushes): {:?}",
+                self.pending
+            );
+            if let Some(index) = self.pending.iter().position(&mut predicate) {
+                return self.pending.remove(index).unwrap();
             }
-            if predicate(&event.kind) {
-                return Some(event.kind);
+            if let Some(event) = self.gateway.try_recv() {
+                if event.owner == self.owner {
+                    assert!(
+                        self.pending.len() < 4096,
+                        "test event backlog exceeded: {:?}",
+                        self.pending
+                    );
+                    self.pending.push_back(event);
+                }
+            } else {
+                std::thread::sleep(Duration::from_millis(10));
             }
         }
-        std::thread::sleep(Duration::from_millis(25));
     }
-    None
-}
 
-fn connect(gateway: &Gateway, session: u64) {
-    gateway
-        .send(Command {
-            request_id: opclook::bff::model::RequestId::new(next_id()),
-            owner: opclook::bff::model::Owner::Session(
-                opclook::bff::model::SessionId::new(session).unwrap(),
-            ),
-            protocol: Protocol::OpcUa,
-            kind: CommandKind::Connect {
-                endpoint: EndpointSpec::ua(test_url()),
-            },
+    fn reply(&mut self, request: RequestId) -> EventKind {
+        self.wait("correlated reply", |event| {
+            event.origin == Origin::Reply(request)
         })
-        .expect("gateway send");
-    let event = wait_for(gateway, session, Duration::from_secs(40), |kind| {
-        matches!(kind, EventKind::Connected { .. } | EventKind::Error { .. })
-    })
-    .expect("connect timeout");
-    assert!(
-        matches!(event, EventKind::Connected { .. }),
-        "connection failed: {event:?}"
-    );
-}
+        .kind
+    }
 
-fn send(gateway: &Gateway, session: u64, kind: CommandKind) {
-    gateway
-        .send(Command {
-            request_id: opclook::bff::model::RequestId::new(next_id()),
-            owner: opclook::bff::model::Owner::Session(
-                opclook::bff::model::SessionId::new(session).unwrap(),
-            ),
-            protocol: Protocol::OpcUa,
-            kind,
-        })
-        .expect("gateway send");
-}
-
-/// Send the per-session push-subscription config the app sends on connect; the
-/// worker uses publishing_interval_ms as the subscription publish rate.
-fn configure_subscription(gateway: &Gateway, session: u64) {
-    send(
-        gateway,
-        session,
-        CommandKind::ConfigureUaSubscription {
+    fn connect(&mut self) {
+        let url = std::env::var("OPCUA_TEST_URL")
+            .unwrap_or_else(|_| "opc.tcp://127.0.0.1:4840".to_string());
+        assert!(
+            url == "opc.tcp://127.0.0.1:4840",
+            "only the approved numeric loopback endpoint is allowed"
+        );
+        self.connection = self.send(CommandKind::Connect {
+            endpoint: EndpointSpec::ua(url),
+        });
+        let reply = self.reply(self.connection);
+        assert!(
+            matches!(reply, EventKind::Connected { .. }),
+            "connect failed: {reply:?}"
+        );
+        self.send(CommandKind::ConfigureUaSubscription {
             publishing_interval_ms: 1000,
             deadband: 0.0,
-        },
-    );
-}
-
-/// Add a batch of nodes as items, returning the results indexed by the keys used.
-fn add_batch(
-    gateway: &Gateway,
-    session: u64,
-    ids: &[String],
-    first_key: u32,
-) -> Vec<(
-    ItemKey,
-    Result<opclook::bff::model::ItemInfo, opclook::bff::model::BackendMsg>,
-)> {
-    let specs: Vec<ItemSpec> = ids
-        .iter()
-        .enumerate()
-        .map(|(i, id)| ItemSpec {
-            key: ItemKey::new(first_key + i as u32).unwrap(),
-            item_id: id.clone(),
-        })
-        .collect();
-    send(gateway, session, CommandKind::AddItems { items: specs });
-    let kind = wait_for(gateway, session, Duration::from_secs(20), |kind| {
-        matches!(kind, EventKind::AddItems { .. })
-    })
-    .expect("add batch timeout");
-    match kind {
-        EventKind::AddItems { results } => results,
-        other => panic!("unexpected add: {other:?}"),
+        });
     }
-}
 
-fn browse_children(gateway: &Gateway, session: u64, node_id: &str) -> Vec<BrowseNode> {
-    send(
-        gateway,
-        session,
-        CommandKind::Browse {
-            node_id: node_id.to_string(),
-            filter: opclook::bff::model::NodeClassFilter::All,
-            view_id: None,
-        },
-    );
-    let kind = wait_for(gateway, session, Duration::from_secs(20), |kind| {
-        matches!(kind, EventKind::Browse { .. } | EventKind::Error { .. })
-    })
-    .expect("browse timeout");
-    match kind {
-        EventKind::Browse { children, .. } => children,
-        other => panic!("browse {node_id} failed: {other:?}"),
-    }
-}
-
-/// Depth-limited browse collecting leaf Item (Variable) node ids.
-fn collect_variables(gateway: &Gateway, session: u64) -> Vec<String> {
-    let mut items = Vec::new();
-    let mut stack: Vec<(String, usize)> = vec![("i=85".to_string(), 0)];
-    let mut seen = std::collections::HashSet::new();
-    while let Some((node, depth)) = stack.pop() {
-        if items.len() >= MAX_BROWSE {
-            break;
-        }
-        if depth > MAX_DEPTH || !seen.insert(node.clone()) {
-            continue;
-        }
-        for child in browse_children(gateway, session, &node) {
-            if child.kind == NodeKind::Item {
-                items.push(child.node_id.clone());
-            } else if child.has_children {
-                stack.push((child.node_id.clone(), depth + 1));
+    fn add(&mut self, key: ItemKey, node: &str, require_writable: bool) {
+        let request = self.send(CommandKind::AddItems {
+            items: vec![ItemSpec {
+                key,
+                item_id: node.to_string(),
+            }],
+        });
+        match self.reply(request) {
+            EventKind::AddItems { results } => {
+                assert_eq!(results.len(), 1);
+                let (actual, info) = results.into_iter().next().unwrap();
+                assert_eq!(actual, key);
+                let info = info.expect("AddItems failed");
+                assert!(
+                    !require_writable || info.writable,
+                    "designated test node is not writable: {node}"
+                );
             }
+            other => panic!("AddItems failed: {other:?}"),
         }
     }
-    items
-}
 
-/// Find a Variable that is writable and actually holds a write (read-back equals
-/// the written value), so a Write reliably produces a subscription push the PLC
-/// does not instantly revert. Returns (key, node_id). Restores the original value.
-fn find_sticky_writable(gateway: &Gateway, session: u64) -> Option<(ItemKey, String)> {
-    let vars = collect_variables(gateway, session);
-    if vars.is_empty() {
-        return None;
-    }
-    const FIRST_KEY: u32 = 100;
-    let candidates: Vec<String> = vars.into_iter().take(60).collect();
-    let results = add_batch(gateway, session, &candidates, FIRST_KEY);
-    let mut by_key: std::collections::HashMap<ItemKey, String> = std::collections::HashMap::new();
-    for (i, id) in candidates.iter().enumerate() {
-        by_key.insert(ItemKey::new(FIRST_KEY + i as u32).unwrap(), id.clone());
-    }
-
-    for (key, result) in results {
-        let Ok(info) = result else {
-            continue;
-        };
-        if !info.writable {
-            continue;
-        }
-        let Some(_dt) = info
-            .data_type
-            .as_ref()
-            .filter(|d| d.as_str() != "Other" && d.as_str() != "Unknown")
-        else {
-            continue;
-        };
-        let Some(node) = by_key.get(&key).cloned() else {
-            continue;
-        };
-        let original = read_value(gateway, session, key);
-        if matches!(original, Value::Empty | Value::Other(_) | Value::Array(_)) {
-            continue;
-        }
-        let trial = differing_value(&original);
-        if trial == original {
-            continue;
-        }
-        write(gateway, session, key, trial.clone());
-        // Let at least one publish interval elapse so a PLC cycle that reverts
-        // the value has a chance to undo it; only a genuinely persistent node is
-        // accepted (otherwise a reverted value produces no subscription change).
-        std::thread::sleep(Duration::from_millis(1500));
-        let read_back = read_value(gateway, session, key);
-        if read_back != trial {
-            // Not sticky -> the PLC reverted it; restore and keep looking.
-            gateway
-                .send(Command {
-                    request_id: opclook::bff::model::RequestId::new(next_id()),
-                    owner: opclook::bff::model::Owner::Session(
-                        opclook::bff::model::SessionId::new(session).unwrap(),
-                    ),
-                    protocol: Protocol::OpcUa,
-                    kind: CommandKind::Write {
-                        request: opclook::bff::model::WriteRequest {
-                            key,
-                            value: original.clone(),
-                            type_hint: None,
-                        },
-                    },
-                })
-                .expect("gateway send");
-            continue;
-        }
-        write(gateway, session, key, original.clone());
-        return Some((key, node));
-    }
-    None
-}
-
-fn push_value(
-    gateway: &Gateway,
-    session: u64,
-    key: ItemKey,
-    timeout: Duration,
-) -> opclook::bff::model::DataValue {
-    let kind = wait_for(gateway, session, timeout, |kind| match kind {
-        EventKind::Values { values } => values.iter().any(|(k, _)| *k == key),
-        _ => false,
-    })
-    .expect("pushed Values event timeout");
-    match kind {
-        EventKind::Values { values } => values
-            .into_iter()
-            .find(|(k, _)| *k == key)
-            .map(|(_, dv)| dv)
-            .unwrap(),
-        other => panic!("expected pushed Values, got {other:?}"),
-    }
-}
-
-/// Consume any already-buffered pushed Values (e.g. the one-shot snapshot sent
-/// when a subscription is created) so a subsequent change produces an
-/// unambiguous new-value push.
-fn drain_stale_pushes(gateway: &Gateway, session: u64) {
-    while let Some(event) = gateway.try_recv() {
-        if event.owner
-            != opclook::bff::model::Owner::Session(
-                opclook::bff::model::SessionId::new(session).unwrap(),
-            )
-        {
-            continue;
+    fn push(&mut self, key: ItemKey, target: Option<&Value>) -> DataValue {
+        let connection = self.connection;
+        let event = self.wait("matching push (no Read issued)", |event| {
+            let current = match event.origin {
+                Origin::UaSession {
+                    connection: actual, ..
+                }
+                | Origin::Session(actual) => actual == connection,
+                _ => false,
+            };
+            current
+                && match &event.kind {
+                    EventKind::Values { values } => values.iter().any(|(actual, value)| {
+                        *actual == key && target.is_none_or(|target| value.value == *target)
+                    }),
+                    _ => false,
+                }
+        });
+        match event.kind {
+            EventKind::Values { values } => {
+                values
+                    .into_iter()
+                    .find(|(actual, _)| *actual == key)
+                    .unwrap()
+                    .1
+            }
+            _ => unreachable!(),
         }
     }
-}
 
-/// Issue an explicit Read (the worker handles it independently of the push
-/// subscription) so we can observe the writable node's current value before
-/// mutating it in the test.
-fn read_value(gateway: &Gateway, session: u64, key: ItemKey) -> Value {
-    send(gateway, session, CommandKind::Read { keys: vec![key] });
-    let kind = wait_for(
-        gateway,
-        session,
-        Duration::from_secs(20),
-        |kind| match kind {
-            EventKind::Values { values } => values.iter().any(|(k, _)| *k == key),
-            _ => false,
-        },
-    )
-    .expect("read timeout");
-    match kind {
-        EventKind::Values { values } => values
-            .into_iter()
-            .find(|(k, _)| *k == key)
-            .map(|(_, dv)| dv.value)
-            .expect("missing key in read response"),
-        other => panic!("read returned unexpected event: {other:?}"),
-    }
-}
-
-fn differing_value(v: &Value) -> Value {
-    match v {
-        Value::Bool(b) => Value::Bool(!*b),
-        Value::I64(n) => Value::I64(n.saturating_add(1)),
-        Value::U64(n) => Value::U64(n.saturating_add(1)),
-        Value::F64(n) => Value::F64(*n + 1.0),
-        Value::Str(s) => Value::Str(format!("{s}x")),
-        Value::Bytes(b) => {
-            let mut c = b.clone();
-            c.push(0x00);
-            Value::Bytes(c)
+    fn read(&mut self, key: ItemKey) -> Value {
+        let request = self.send(CommandKind::Read { keys: vec![key] });
+        match self.reply(request) {
+            EventKind::Values { values } => {
+                let value = values
+                    .into_iter()
+                    .find(|(actual, _)| *actual == key)
+                    .expect("Read missing key")
+                    .1;
+                assert_eq!(
+                    value.quality.kind,
+                    QualityKind::Good,
+                    "baseline/restore Read is not Good: {value:?}"
+                );
+                value.value
+            }
+            other => panic!("Read failed: {other:?}"),
         }
-        Value::DateTime(dt) => Value::DateTime(*dt + chrono::Duration::seconds(1)),
-        Value::Empty
-        | Value::Other(_)
-        | Value::Array(_)
-        | Value::NodeId(_)
-        | Value::QualifiedName { .. }
-        | Value::LocalizedText { .. }
-        | Value::Struct { .. } => v.clone(),
     }
-}
 
-fn write(gateway: &Gateway, session: u64, key: ItemKey, value: Value) {
-    send(
-        gateway,
-        session,
-        CommandKind::Write {
-            request: opclook::bff::model::WriteRequest {
+    fn write(&mut self, key: ItemKey, value: Value) {
+        let request = self.send(CommandKind::Write {
+            request: WriteRequest {
                 key,
                 value,
                 type_hint: None,
             },
+        });
+        match self.reply(request) {
+            EventKind::Wrote {
+                key: actual,
+                result,
+            } => {
+                assert_eq!(actual, key);
+                assert!(
+                    result.as_ref().is_ok_and(|outcome| outcome.accepted()),
+                    "Write failed: {result:?}"
+                );
+            }
+            other => panic!("Write failed: {other:?}"),
+        }
+    }
+}
+
+impl Drop for LiveSession {
+    fn drop(&mut self) {
+        // No second panic on cleanup. Restoration below happens before this.
+        let _ = self.gateway.send(Command {
+            request_id: Some(next_id()),
+            owner: self.owner,
+            protocol: Protocol::OpcUa,
+            kind: CommandKind::Disconnect,
+        });
+    }
+}
+
+/// Always run synchronous, acknowledged restore + readback, including when the
+/// body panics. A lost runtime cannot guarantee physical restoration: report both
+/// failures prominently and never claim cleanup success in that case.
+fn with_restore<T>(state: &mut T, body: impl FnOnce(&mut T), restore: impl FnOnce(&mut T)) {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(state)));
+    let cleanup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| restore(state)));
+    if let Err(payload) = cleanup {
+        eprintln!(
+            "RESTORE FAILED: operator must verify designated test tag; original test failed={}",
+            result.is_err()
+        );
+        std::panic::resume_unwind(payload);
+    }
+    if let Err(payload) = result {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+fn differing_value(value: &Value) -> Value {
+    match value {
+        Value::Bool(value) => Value::Bool(!value),
+        Value::I64(value) => Value::I64(if *value == 0 { 1 } else { 0 }),
+        Value::U64(value) => Value::U64(if *value == 0 { 1 } else { 0 }),
+        Value::F64(value) if value.is_finite() => Value::F64(if *value == 0.0 { 1.0 } else { 0.0 }),
+        _ => panic!("designated tag must be a disposable numeric/boolean scalar, got {value:?}"),
+    }
+}
+
+#[test]
+fn restore_runs_before_propagating_assertion_failure() {
+    let mut value = 7;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        with_restore(
+            &mut value,
+            |value| {
+                *value = 9;
+                panic!("injected write-push failure");
+            },
+            |value| *value = 7,
+        );
+    }));
+    assert!(result.is_err());
+    assert_eq!(value, 7);
+}
+
+#[test]
+fn failed_restore_is_not_success() {
+    let result = std::panic::catch_unwind(|| {
+        with_restore(&mut (), |_| {}, |_| panic!("injected restore failure"))
+    });
+    assert!(result.is_err());
+}
+
+#[test]
+fn scalar_targets_are_distinct_and_bounded() {
+    for value in [
+        Value::Bool(false),
+        Value::Bool(true),
+        Value::I64(i64::MAX),
+        Value::I64(i64::MIN),
+        Value::I64(0),
+        Value::U64(u64::MAX),
+        Value::U64(0),
+        Value::F64(0.0),
+        Value::F64(f64::MAX),
+    ] {
+        assert_ne!(differing_value(&value), value);
+    }
+}
+
+#[test]
+#[ignore = "requires CODESYS at 127.0.0.1:4840; read-only push check"]
+fn ua_subscription_pushes_current_time_without_reads() {
+    let mut session = LiveSession::new();
+    session.add(ItemKey::FIRST, CURRENT_TIME, false);
+    let value = session.push(ItemKey::FIRST, None);
+    assert!(matches!(value.value, Value::DateTime(_)));
+    assert!(value.timestamp.is_some());
+    assert_eq!(value.quality.kind, QualityKind::Good);
+}
+
+/// N5/O01: real CODESYS requested/revised facts, not inferred from a push rate.
+/// This does not establish differing revised counters, overflow or recovery.
+#[test]
+#[ignore = "requires CODESYS at 127.0.0.1:4840; read-only negotiated facts"]
+fn ua_subscription_reports_codesys_negotiated_parameters() {
+    let mut session = LiveSession::new();
+    session.add(ItemKey::FIRST, CURRENT_TIME, false);
+    let connection = session.connection;
+    let event = session.wait("negotiated subscription/item facts", |event| {
+        matches!(event.origin, Origin::UaSession { connection: actual, .. } if actual == connection)
+            && matches!(&event.kind, EventKind::UaSubscriptionParameters { subscriptions }
+                if subscriptions.iter().any(|subscription| subscription.items.iter().any(|item| item.key == ItemKey::FIRST)))
+    });
+    let EventKind::UaSubscriptionParameters { subscriptions } = event.kind else {
+        unreachable!();
+    };
+    let subscription = subscriptions
+        .iter()
+        .find(|subscription| {
+            subscription
+                .items
+                .iter()
+                .any(|item| item.key == ItemKey::FIRST)
+        })
+        .unwrap();
+    println!("CODESYS_NEGOTIATED {subscription:?}");
+    assert_ne!(subscription.subscription_id, 0);
+    assert_eq!(subscription.requested_publishing_ms, 1000);
+    assert!(subscription.requested_keepalive > 0);
+    assert!(
+        subscription.requested_lifetime >= subscription.requested_keepalive.checked_mul(3).unwrap()
+    );
+    let revised = subscription
+        .revised
+        .as_ref()
+        .expect("SDK revised subscription state missing");
+    assert!(revised.valid, "invalid SDK revised facts: {revised:?}");
+    let item = subscription
+        .items
+        .iter()
+        .find(|item| item.key == ItemKey::FIRST)
+        .unwrap();
+    assert!(item.requested_sampling_ms.is_finite());
+    assert!(item.requested_queue_size > 0);
+    assert!(item.revised_sampling_ms.is_finite() && item.revised_sampling_ms >= 0.0);
+    assert!(item.revised_queue_size > 0);
+    assert!(matches!(
+        session.push(ItemKey::FIRST, None).value,
+        Value::DateTime(_)
+    ));
+}
+
+/// Explicitly authorized CMD only; state is observed, never written. This short
+/// pulse proves restore/readback, not guaranteed sampling of a transient value.
+#[test]
+#[ignore = "requires explicit OPCUA_TEST_WRITE_NODE authorization for Cmd_ChokePanelActive"]
+fn ua_cmd_pair_minimal_write_restore_and_observe() {
+    const CMD: &str = "ns=4;s=|var|CODESYS Control Win V3 x64.Application.GVL_Emulator_Additions.Cmd_ChokePanelActive";
+    const STATE: &str = "ns=4;s=|var|CODESYS Control Win V3 x64.Application.GVL_Emulator_Additions.ChokePanelActiveSwitch";
+    assert_eq!(
+        std::env::var("OPCUA_TEST_WRITE_NODE").as_deref(),
+        Ok(CMD),
+        "explicit authorization for this CMD is required"
+    );
+    let mut session = LiveSession::new();
+    let cmd_key = ItemKey::FIRST;
+    let state_key = ItemKey::new(2).unwrap();
+    session.add(cmd_key, CMD, true);
+    session.add(state_key, STATE, false);
+    let baseline = session.read(cmd_key);
+    let state_before = session.read(state_key);
+    let target = differing_value(&baseline);
+    println!(
+        "CMD_PAIR_BASELINE cmd={CMD} value={baseline:?} quality=Good state={STATE} value={state_before:?} quality=Good target={target:?}"
+    );
+    let started = Instant::now();
+    with_restore(
+        &mut session,
+        |session| {
+            session.write(cmd_key, target.clone());
+            println!(
+                "CMD_PAIR_WRITE_ACCEPTED target={target:?} elapsed={:?}",
+                started.elapsed()
+            );
+            // No intervening Read, sleep or push wait before the restore Write.
+        },
+        |session| {
+            session.write(cmd_key, baseline.clone());
+            println!(
+                "CMD_PAIR_RESTORE_ACCEPTED baseline={baseline:?} elapsed={:?}",
+                started.elapsed()
+            );
+            assert_eq!(
+                session.read(cmd_key),
+                baseline,
+                "CMD_PAIR_RESTORE readback mismatch"
+            );
+            println!("CMD_PAIR_RESTORE_READBACK_OK value={baseline:?} quality=Good");
         },
     );
-    let kind = wait_for(gateway, session, Duration::from_secs(20), |kind| {
-        matches!(kind, EventKind::Wrote { .. })
-    })
-    .expect("write timeout");
-    match kind {
-        EventKind::Wrote { key: k, result } if k == key => {
-            assert!(
-                result.as_ref().is_ok_and(|outcome| outcome.accepted()),
-                "write failed: {result:?}"
-            );
+    // Record state notifications, including possibly the initial snapshot;
+    // no claim that CMD causes a particular transition or is sampled atomically.
+    let deadline = Instant::now() + Duration::from_millis(1100);
+    while Instant::now() < deadline {
+        if let Some(event) = session.gateway.try_recv() {
+            if event.owner == session.owner {
+                assert!(session.pending.len() < 4096, "test event backlog exceeded");
+                session.pending.push_back(event);
+            }
+        } else {
+            std::thread::sleep(Duration::from_millis(10));
         }
-        other => panic!("write returned unexpected event: {other:?}"),
     }
+    for event in &session.pending {
+        if let EventKind::Values { values } = &event.kind {
+            for (key, value) in values {
+                if *key == state_key {
+                    println!(
+                        "CMD_PAIR_STATE_QUEUED origin={:?} data={value:?}; may include initial snapshot",
+                        event.origin
+                    );
+                }
+            }
+        }
+    }
+    println!(
+        "CMD_PAIR_STATE_AFTER value={:?} quality=Good",
+        session.read(state_key)
+    );
 }
 
 #[test]
-#[ignore = "requires OPC UA server at OPCUA_TEST_URL"]
+#[ignore = "requires CODESYS and operator-designated disposable OPCUA_TEST_WRITE_NODE"]
 fn ua_subscription_pushes_values_without_reads_and_writes() {
-    let gateway = Gateway::new();
-    let session = next_id();
-
-    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        connect(&gateway, session);
-        println!("CONNECTED session={session}");
-        configure_subscription(&gateway, session);
-
-        // Subscribe CurrentTime (changes ~every 100 ms) as key 1.
-        let r = add_batch(&gateway, session, &[CURRENT_TIME.to_string()], 1);
-        for (key, result) in r {
-            println!("ADD key={key} result={result:?}");
-            assert!(result.is_ok(), "add failed for key {key}: {result:?}");
-        }
-
-        // Find a writable-and-sticky PLC node (survives a write/read-back cycle)
-        // so a Write reliably produces a push the PLC does not instantly revert.
-        let write_key = find_sticky_writable(&gateway, session);
-        match &write_key {
-            Some((key, node)) => println!("STICKY_WRITABLE key={key} node={node}"),
-            None => println!("no sticky writable node found; verifying push delivery only"),
-        }
-
-        // 1. Pure push: CurrentTime must arrive WITHOUT any manual Read.
-        let v1 = push_value(&gateway, session, ItemKey::FIRST, Duration::from_secs(5));
-        println!("PUSH time key=1 value={:?}", v1.value);
-        assert!(
-            matches!(v1.value, Value::DateTime(_)),
-            "CurrentTime push should be a DateTime, got {:?}",
-            v1.value
-        );
-        assert!(
-            v1.timestamp.is_some(),
-            "push should carry a server timestamp"
-        );
-        assert_eq!(v1.quality.kind, opclook::bff::model::QualityKind::Good);
-
-        let Some((write_key, _)) = write_key else {
-            println!("PUSH_OK pure push confirmed (CurrentTime); no write check run");
-            return;
-        };
-
-        // 2. Baseline the writable node, drain stale snapshots, then write a
-        //    distinct value and assert the pushed change carries it.
-        let baseline = read_value(&gateway, session, write_key);
-        println!("BASELINE node key={write_key} value={baseline:?}");
-        drain_stale_pushes(&gateway, session);
-        let target = differing_value(&baseline);
-        write(&gateway, session, write_key, target.clone());
-        let pushed = push_value(&gateway, session, write_key, Duration::from_secs(5));
-        println!("PUSH write key={write_key} value={:?}", pushed.value);
-        assert_eq!(
-            pushed.value, target,
-            "pushed value should reflect the Write (got {:?}, expected {target:?})",
-            pushed.value
-        );
-        write(&gateway, session, write_key, baseline.clone());
-        println!("PUSH_OK pure push of CurrentTime AND write-push verified");
-    }));
-
-    // Tear down the session.
-    send(&gateway, session, CommandKind::Disconnect);
-    if let Err(payload) = run {
-        std::panic::resume_unwind(payload);
-    }
+    let node = std::env::var("OPCUA_TEST_WRITE_NODE").ok().filter(|node| !node.trim().is_empty())
+        .expect("MISSING_TEST_STAND: OPCUA_TEST_WRITE_NODE must name an operator-approved disposable writable scalar; arbitrary PLC tag probing is forbidden");
+    let mut session = LiveSession::new();
+    let key = ItemKey::FIRST;
+    session.add(key, &node, true);
+    let baseline = session.read(key);
+    let target = differing_value(&baseline);
+    // Wait until the baseline is actually delivered to the subscription before
+    // mutating. No qualification trial Write, hence no repeat/coalescing race.
+    session.push(key, Some(&baseline));
+    println!("WRITE_PUSH node={node} baseline={baseline:?} target={target:?}");
+    with_restore(
+        &mut session,
+        |session| {
+            session.write(key, target.clone());
+            let pushed = session.push(key, Some(&target));
+            assert_eq!(pushed.quality.kind, QualityKind::Good);
+            assert!(pushed.timestamp.is_some());
+            println!("WRITE_PUSH_OK {pushed:?}");
+        },
+        |session| {
+            session.write(key, baseline.clone());
+            assert_eq!(
+                session.read(key),
+                baseline,
+                "RESTORE readback mismatch for {node}"
+            );
+            println!("RESTORE_OK node={node} baseline={baseline:?}");
+        },
+    );
 }
 
-/// A disconnect + reconnect must re-create the subscription and re-monitor the
-/// items so pushed updates resume without any manual Read.
 #[test]
-#[ignore = "requires OPC UA server at OPCUA_TEST_URL"]
+#[ignore = "requires CODESYS at 127.0.0.1:4840"]
 fn ua_subscription_resumes_after_reconnect() {
-    let gateway = Gateway::new();
-    let session = next_id();
-
-    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        connect(&gateway, session);
-        configure_subscription(&gateway, session);
-        let r = add_batch(&gateway, session, &[CURRENT_TIME.to_string()], 1);
-        assert!(r[0].1.is_ok(), "add failed: {:?}", r[0].1);
-
-        // A pure push arrives on the first connection.
-        let v = push_value(&gateway, session, ItemKey::FIRST, Duration::from_secs(5));
-        println!("PRE_RECONNECT push key=1 value={:?}", v.value);
-        assert!(matches!(v.value, Value::DateTime(_)));
-
-        // Drop the client side and reconnect the same session id.
-        send(&gateway, session, CommandKind::Disconnect);
-        // Drain any buffered events from the old session while it tears down.
-        std::thread::sleep(Duration::from_millis(300));
-        connect(&gateway, session);
-        println!("RECONNECTED session={session}");
-
-        // Re-subscribe the item on the recreated session.
-        configure_subscription(&gateway, session);
-        let r = add_batch(&gateway, session, &[CURRENT_TIME.to_string()], 1);
-        assert!(r[0].1.is_ok(), "re-add failed: {:?}", r[0].1);
-
-        // Pushed updates must resume after reconnect.
-        let v2 = push_value(&gateway, session, ItemKey::FIRST, Duration::from_secs(5));
-        println!("POST_RECONNECT push key=1 value={:?}", v2.value);
-        assert!(
-            matches!(v2.value, Value::DateTime(_)),
-            "push must resume after reconnect, got {:?}",
-            v2.value
-        );
-        println!("PUSH_RECONNECT_OK subscription re-established after reconnect");
-    }));
-
-    send(&gateway, session, CommandKind::Disconnect);
-    if let Err(payload) = run {
-        std::panic::resume_unwind(payload);
-    }
+    let mut session = LiveSession::new();
+    session.add(ItemKey::FIRST, CURRENT_TIME, false);
+    assert!(matches!(
+        session.push(ItemKey::FIRST, None).value,
+        Value::DateTime(_)
+    ));
+    let request = session.send(CommandKind::Disconnect);
+    assert!(matches!(
+        session.reply(request),
+        EventKind::Disconnected { .. }
+    ));
+    session.pending.clear();
+    session.connect();
+    session.add(ItemKey::FIRST, CURRENT_TIME, false);
+    assert!(matches!(
+        session.push(ItemKey::FIRST, None).value,
+        Value::DateTime(_)
+    ));
 }

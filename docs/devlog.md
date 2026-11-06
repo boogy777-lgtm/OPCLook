@@ -1,3 +1,86 @@
+## 2026-11-05 — N4 production switch закрыт
+
+N1.LICENSE закрыт решением владельца, не юридическим анализом. Windows DA
+переведён на native Softing без feature-развилки; legacy `da.rs`, `com.rs`,
+`da_variant.rs` и `opc/` удалены; `vt_name` сохранён в `vt.rs`. Vendored no-hook
+x86 bridge (`native/softing-da/lib/i686-pc-windows-msvc`, pinned SDK 5130e763 +
+два reviewed patch + official OPCF inputs) позволяет `cargo build --release`
+без `SOFTING_RUNTIME_LIB_DIR`; сборка PASS 3m13s.
+
+Найден и исправлен discovery-дефект: устаревшая 32-битная запись
+`opcdaclientopcda.OPC.1` с отсутствующим CLSID давала
+`REGDB_E_CLASSNOTREG` и скрывала все серверы. Runtime теперь пропускает
+неразрешимые ProgID и ставит flag bit 1; Rust логирует skip. До фикса
+`sdk_gateway_live` 0/1 (`DaServerListHostUnavailable`, `Native(-2147221164)`),
+после — 1/1 2.16 с, fixture найден, strict cleanup PASS. Дополнительно:
+reconnect 1/1 0.44 с, remove/re-add 1/1 0.28 с, isolation 1/1 0.79 с,
+pending shutdown 1/1 5.52 с; у всех cleanup PASS.
+
+Offline без env: backend 292/0/1 за 73.46 с; root 269, UI 262+21+16+19, CLI 21,
+S03 2/2; CODESYS smoke/search/write 2/2, 2/2, 1/1. Remote/vendor DA и
+production Async — внешние residuals; N4 production switch закрыт.
+
+## 2026-11-05 — N6: индекс и границы
+
+Добавлены [построчный индекс](testing/acquisition-evidence-matrix.md) и
+[exact-head CI checklist](testing/n6-exact-head-ci.md), уточнены DA legacy/native
+и CLI/GUI defaults. Исторические receipts и mock не повышены до нового live.
+Измерены fmt PASS, `cargo test -j 2` PASS (root 269, UI 262+21+16+19,
+CLI 21, S03 2/2), backend 322/0/1 за 79.85 с, CODESYS search 2/2 (включая
+localhost), smoke 2/2, write 1/1; известные #12 остаются OPEN. N3 не повторён.
+N1.LICENSE позже закрыт владельцем; N4 на момент N6 был OPEN и позже закрыт
+(см. выше), строка о default legacy историческая.
+CI точного commit pending: незакоммиченные изменения, push не разрешён.
+
+## 2026-11-05 — итог N3–N5: N3.LIFETIME и N5 закрыты (N4 тогда OPEN; закрыт позже)
+
+Три последовательных агента GPT-6.1 Terra High. N3.LIFETIME закрыт в локальном
+fixture scope: реальные Win32 SDK/COM тесты reconnect 1/1 0.38 с, remove/re-add
+1/1 0.27 с, session isolation 1/1 0.87 с, pending shutdown 1/1 5.88 с, strict
+cleanup PASS. Покрыты held callback 88 через Disconnect + same-ID новый
+Connect/registration, отсутствие 88 в новом epoch, 77→99, FreshRead99 и
+bounded pending shutdown 5.0005272 с. Remote/other-server остаются внешними
+гейтами, локальный proof не назван remote.
+
+N5 закрыт в scope SDK ownership/duplicate audit: O01–O28/OF01–OF12 crosswalk,
+второго Publish/ACK/Republish/Transfer/alias owner нет, удалён мёртвый wrapper
+`report_negotiated`, CLI/UI показывают requested/revised lifetime/keepalive с
+unknown/invalid. Sample-server maxAge/negotiated 2/2, filter/interval 3/3,
+limits 2/2. Остаточные O02–O09/O11–O12/O17/O22 и CODESYS-specific/wire gaps
+остаются видимыми для R2.6/recovery.
+
+N4 OPEN: N1.LICENSE, SDK/no-hook packaging и SDK-less build, production Async,
+remote OPCEnum/DCOM/auth, vendor/physical DA interop, parity. Default legacy и
+COM data-plane не менялись. Текущее дерево: root 269 + UI 262+21+16+19 + CLI 21
++ s03 2/2; backend 322/0/1 (80.69 с); fmt PASS; CODESYS ua_smoke 2/2, ua_search
+2/2, ua_write 1/1, reconnect 1/1. Коммитов и push нет.
+
+## 2026-11-05 — N5: consumers и crosswalk, история до финального verdict
+
+Добавлена [карта](testing/ua-n5-partial-audit.md) O01–O28/OF01–OF12, с
+границами старых receipts. CLI и UI теперь сохраняют отдельно requested и
+revised lifetime/keepalive; invalid и unknown различимы. Backend sample-server
+проверки 2/2 maxAge/negotiated, 3/3 filter/interval, 2/2 limits не выдаются за
+CODESYS. Код не вводит ещё одного Publish/recovery владельца. Открыты отдельные
+O cases и CODESYS-specific evidence; подробности — status и карта.
+
+## 2026-11-05 — N5 частичный аудит, OPEN
+
+Удалён мёртвый wrapper `report_negotiated`; факты по-прежнему отправляет
+`report_negotiated_at`. [Карта](testing/ua-n5-partial-audit.md) отделяет
+SDK ownership от продуктовых политик и незакрытых вопросов. Это не утверждение,
+что другие дубликаты отсутствуют. CODESYS, fmt и workspace результаты — в
+[status](status.md); в общем поисковом запуске ошибочно использован localhost.
+
+## 2026-11-05 — N4 readiness, без переключения
+
+Решение: не включать native по умолчанию и не удалять legacy до закрытия
+license, SDK packaging/SDK-less build, production Async, remote/vendor,
+оставшихся lifetime и parity gates. [Инвентаризация](testing/native-sdk/n4-switch-readiness.md)
+отделяет общие router/codec/VT и системные WinAPI/helper от legacy OPC COM.
+Код не менялся, новых тестовых измерений нет; локальные N3 результаты не
+расширяются на remote или юридическое разрешение.
+
 ## 2026-11-01 — пара33: native gate принят; SDK audit ограничен
 
 Exact code `d401c27dbed157632425a48e11481062422a52e3` прошёл9/9:
@@ -2046,3 +2129,158 @@ S03 wire no-repeat остаётся открытым: существующий p
 Необходим independent observer с positive control и корректным framing.
 SDK pins/default legacy DA/Async Unsupported/N4 неизменны. Остановленный
 SDK mutation/drain diagnostic не повторялся.
+## 2026-11-05 — N3.LIFETIME: сверка существующего overlap gate
+
+Class: локальный SDK subscription/COM через Gateway; invariant: старый
+callback88 не становится значением нового epoch того же SessionId. Выбран
+существующий `sdk_late_reconnect_live`, поскольку он уже делает Disconnect,
+Connect и registration при held callback, затем 77→99 push, FreshRead99 и
+строгий cleanup. Следующее расширение — отдельные teardown failure/timeout и
+другие серверы, а не копия этого сценария. Проверка 88 нового epoch теперь
+выполняется и при ожидании любых коррелированных ответов; это усиление oracle,
+а не воспроизведённый production дефект. Исправлен тестовый deadline, который
+раньше не проверялся при постоянном потоке событий; добавлена проверка с
+истёкшим deadline и непустой очередью, а drain получил предел 10 с. Новый
+negative case пока не исполнялся с SDK; before/fail — вывод по исходнику, не
+измеренный результат. Подтверждённого production дефекта при source
+audit нет; production код и SDK pins не менялись. Старый Disconnect reply тест
+ожидает после release: независимое завершение teardown до release не доказано.
+
+Исторический `d401c27d`: оба COM inputs 1/1, strict cleanup PASS; это не новый
+результат `b4bc724`. На этом хосте SDK pin проверен, CMake Win32 и MIDL proxy
+прошли, но server/client build завершился C1083 `atlbase.h`: VS 2026 Build
+Tools без найденного ATL. Новый live run 0; локальная проверка OPEN. Общий
+N3.LIFETIME и N4 открыты. Установка компонентов без команды не производилась.
+
+Измеренные проверки Windows i686: fmt PASS; `cargo test -j 2` PASS;
+backend 322 passed / 1 ignored / 0 failed за 98.35 с; UA smoke 2/2 за 0.32 с.
+Последний использует живой сервер, остальные native tests без feature — 0 tests.
+Hook-enabled `cargo check` изменённого live target под i686 PASS; native link,
+исполнение negative case и COM не проверены.
+## 2026-11-05 — N3: fixture собрана, ошибка COM registration
+
+После установки ATL Win32 fixture и hook-enabled bridge собраны с VS 2026 и
+SDK 5130e763, два штатных CI patch. Найдены server EXE, proxy DLL, bridge LIB и
+core probe EXE. Реальный `run-interop.py` вызван для core probe и отдельно для
+reconnect gate: каждый остановился до старта fixture, `regsvr32 /s` exit 5,
+затем `/u` exit 5, launcher exit 1. Cleanup не подтверждён; проверить registry
+после запуска с повышенными правами. Это не результат SDK callback test.
+Token Medium Integrity, Administrators deny-only; повышенный запуск штатного
+launcher ещё необходим. Общий N3.LIFETIME и N4 OPEN.
+Все четыре запрошенных hook-enabled live targets слинкованы i686 с `--no-run`
+за 2м08с; результат исполнения этим не заменяется.
+## 2026-11-05 — N3: локальный реальный SDK proof
+
+Повышенный штатный launcher на SDK 5130e763, Win32, SDK OPC inputs и двух CI
+patches: reconnect 1/1 0.38с, remove/readd 1/1 0.27с, две сессии 1/1 0.87с,
+pending shutdown 1/1 5.88с. В каждом отдельном запуске server exit0,
+unregister и `Local DA COM fixture and cleanup: PASS`. Reconnect доказывает
+88 held → Disconnect + новый Connect/registration того же SessionId → release
+→ 77→99/FreshRead99 без 88 в новом epoch. Старый Disconnect reply ожидается
+после release. В reconnect test намеренный caught panic проверяет deadline
+на непустой очереди; отдельного измеренного before-run нет.
+
+Isolation: B читает42, пишет и читает77, пока device Write A удержан. Shutdown:
+DA TimedOut/UA Joined за 5.0005272с, host Busy до release, затем write outcome
+и SDK finish. Локальный pair33 gate закрыт, но общий N3.LIFETIME OPEN: иные
+failure/timeout races, никогда не вернувшийся SDK и remote/other servers не
+проверены. Логи в `D:\opclook-native\*.log`; ранняя ошибка regsvr32 5
+устранена elevated запуском, не переименована в успех. Production/N4 без смены.
+Повторный backend suite: 322 passed / 0 failed / 1 ignored за 78.82с;
+live targets без feature выполняют 0 тестов. Fmt и diff-check прошли.
+# 2026-11-05 — N4 in progress
+
+Owner closed N1.LICENSE by decision, not legal analysis. The exact old OPC
+grant and release notices are not established. Windows DA selection is being
+migrated to the existing Softing SDK; preserve system networking/UAC. Remote
+OPCEnum/DCOM/auth and vendor interoperability are not accepted; production Async
+remains Unsupported. N4 is OPEN until this tree has passed its build and gates.
+The no-hook Win32 archives were rebuilt with the official OPCF inputs rather
+than vendoring the hook-enabled legacy-control libraries. Hook-enabled local
+gates: reconnect 1/1 after an SDK event deadline retry; pending shutdown 1/1;
+gateway 0/1 due to the fixture missing from discovery. Unregister commands
+completed. Cause of gateway failure is not established; do not count this as
+production discovery acceptance.
+## 2026-11-05 — #12 harness / N5 CODESYS continuation
+
+Class: test-side assumptions, routes R00/R03/R04/R08; SDK protocol owners unchanged.
+Inv: discovery uses Discovery; Variables preserves Object navigation; only an
+operator-designated disposable scalar may be written, with acknowledged restore
+and Good readback on unwind. N+1: explicit local LDS, not broad mDNS, and direct
+CODESYS negotiated-fact evidence. Defects documented in #12 reproduced historically;
+fresh before-run was not performed. No production-UA defect claimed.
+
+Changed four live test files: owner fixes, exact NodeId union oracle, explicit
+missing-fixture errors, and a correlated bounded event inbox/cleanup scope.
+No PLC writes performed: no approved `OPCUA_TEST_WRITE_NODE`; default arbitrary
+probing `ua_write` deliberately excluded. Restore guards 3/3 offline, read-only
+CODESYS 19 distinct passed including negotiated metadata 1/1 (1000 ms, 60/20, sampling
+1000 ms, queue 1). LDS and write prerequisite runs failed visibly, not PASS.
+No localhost endpoint test. No commit/push; exact-head CI and external DA/Async
+gates remain open. Existing #12 updated once after noninteractive Git credential
+lookup succeeded; evidence: [issue-12-update](testing/issue-12-update.md).
+Full offline PASS: root lib 269, UI 262+16+21+19, CLI 21, S03 2/2
+(Cargo 171.61 s); backend 292/0/1 (unit 72.03 s, Cargo 85.80 s), native feature
+targets 0 (not interop). After final helper edits, offline guards 3/3 and live
+subscription 3/3 + typed security 2/2 PASS. Fmt and diff-check PASS.
+## 2026-11-05 — write follow-up stopped at safety gate
+
+Read-only CODESYS browse + local source archive/XML review found candidate
+MAIN_PRG.reserve_int, CLI Read 1/Good, local INT ReadWrite. Source identifies a
+cmd/state bench placeholder, not a proven disposable non-controlling register.
+IDE bridge unavailable; active-project/no-downstream-binding proof missing.
+Stopped before mutation: 0 PLC Writes, 0 new write-push executions; no restore
+needed. Request operator-designated disposable scalar or explicit candidate
+safety confirmation. Remote DA remains an external blocker without a stand,
+not acceptance. Previous test counts unchanged; no commit/push or PLC changes.
+## 2026-11-05 — CMD follow-up blocked before baseline
+
+User authorized CMD mutation/state observation. Candidate from earlier live
+tree: GVL_Emulator_Additions.Cmd_ChokePanelActive / ChokePanelActiveSwitch.
+Two fresh CLI Reads failed with BadCommunicationError/TCP ConnectionRefused10061
+at 127.0.0.1:4840; no baseline/target/state transition measured. 0 Writes,
+0 write-push executions, no restore needed. No PLC configuration/logic/startup
+changes. Local runtime availability is the current blocker; remote DA remains
+OPEN without a stand. Previous test counts were not rerun.
+## 2026-11-05 — new Session policy live blocker #21
+
+After runtime startup, four CMD/state baseline CLI Reads timed out (Auto and
+explicit None/None). Numeric discovery 1/1 PASS (0.11 s); current read-only
+CurrentTime push 0/1 FAILED (25.05 s), retained SDK Stopped status 2153054208 =
+0x80550000 BadSecurityPolicyRejected before Connected. Locked SDK status source
+checked; root cause/phase unknown. Baselines unknown, 0 Writes/no restore needed;
+no PLC/security/config/runtime changes. New failure outside original #12 filed
+as #21; [evidence](testing/codesys-policy-blocker.md). Remote DA OPEN, no stand.
+## 2026-11-05 — console-runtime CMD proof accepted locally
+
+Fresh CMD/state baselines0/0 Good. Added exact-pair minimal pulse test: accepted
+target1 at10.5219ms, restore0 at20.9832ms from start, Good readback; 1/1 1.29s.
+After independent CLI restore confirmation, original OPCUA_TEST_WRITE_NODE test
+passed1/1 2.16s: subscription push1 Good, restore0/Good. CLI after both confirms
+CMD0/state0 Good. Only CMD written (2 targets+2 restores), no state/other tags
+or PLC/security settings changed. State transition semantics not inferred.
+Fresh guard3/3, fmt/diff-check PASS, full suite not repeated. Owner reports
+wrong LocalSystem mode fixed via console user-profile runtime; #21 local blocker
+absent, not a client security fix. [Proof](testing/codesys-cmd-write-proof.md).
+Remote DA OPEN/no stand, production Async and exact-head CI remain open.
+## 2026-11-05 — full permitted UA suite / disk blocker
+
+Serial numeric endpoint: CODESYS22 passed/1 failed (LDS missing), 1 hostname
+case excluded by restriction; sample/proxy S03 separately2/2. All binaries
+actually ran after LDS fail; no demo expiry observed. Approved CMD only;
+process finally guards independently verified restored0/Good, state0/Good.
+Cleanup retains actually used I4 fixture APIs, adds scoped compatibility lint
+annotations, cfg(test) UI scope metadata, and clear hooks/no-env build error.
+Actual build.rs regression before2failed subcases→after5methods PASS.
+First Cargo rebuild blocked by C: ENOSPC/LNK1180, not accepted. Only own failed
+linker PDB deleted; source/foreign dirty changes intact. D: isolated retry PASS:
+production build185.06s/0Rustwarnings, backend292/0/1(unit97.97s/Cargo173.00s),
+root269/UI262+16+21+19/CLI21/S03sample2/guards3(Cargo164.80s), hooks-negative
+expected101/exact diagnostic, hook19exe actualSDK link --no-run27.50s,
+native-live/lease stand build9.13s, stand fact/mock5/5, fmt/diff-check PASS.
+0 used I4 APIs deleted; scoped compatibility annotations remove5production
+diagnostics, test-only Scope removes UI warning. Standalone probe unused-API
+warnings remain, no blanket suppression. #12 CLOSED completed, existing comment
+updated without duplicates; explicit
+LDS/mDNS external gate, no full unfiltered/COM/remote/CI acceptance.
+[Evidence](testing/ua-full-live-2026-11-05.md).

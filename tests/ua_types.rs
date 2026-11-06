@@ -217,16 +217,16 @@ fn ua_type_support_reads_without_panic_and_handles_unknown_types() {
 
 #[test]
 #[ignore = "requires OPC UA server at OPCUA_TEST_URL"]
-fn ua_variable_filter_browse_returns_variables_only() {
+fn ua_variable_filter_browse_preserves_variables_and_navigation_objects() {
     with_session(|gateway, session| {
         let children = browse(gateway, session, "i=85");
-        let variables_in_root: Vec<BrowseNode> = children
+        let variables_in_root: std::collections::BTreeSet<_> = children
             .iter()
             .filter(|n| n.kind == NodeKind::Item)
-            .cloned()
+            .map(|node| node.node_id.clone())
             .collect();
-        // If the root already has direct Variables, a filtered browse of root
-        // must return the same set as the unfiltered one.
+        // Retain direct Variable identities from the unfiltered root. The
+        // Variables filter also keeps Object folders for navigation.
         let filtered = wait_for(
             gateway,
             Command {
@@ -249,19 +249,42 @@ fn ua_variable_filter_browse_returns_variables_only() {
             EventKind::Browse { children, .. } => children,
             other => panic!("filtered browse failed: {other:?}"),
         };
-        // Every returned node must be a Variable (NodeKind::Item).
-        assert!(
-            filtered_children.iter().all(|n| n.kind == NodeKind::Item),
-            "filter=Some(2) returned non-Variables: {:?}",
-            filtered_children
+        // Variables intentionally includes Object folders. Compare identities,
+        // not counts, and independently browse Objects to validate navigation.
+        let objects = wait_for(
+            gateway,
+            Command {
+                request_id: opclook::bff::model::RequestId::new(next_id()),
+                owner: opclook::bff::model::Owner::Session(
+                    opclook::bff::model::SessionId::new(session).unwrap(),
+                ),
+                protocol: Protocol::OpcUa,
+                kind: CommandKind::Browse {
+                    node_id: "i=85".to_string(),
+                    filter: opclook::bff::model::NodeClassFilter::Objects,
+                    view_id: None,
+                },
+            },
+            Duration::from_secs(20),
+            |kind| matches!(kind, EventKind::Browse { .. } | EventKind::Error { .. }),
+        )
+        .expect("objects browse timeout");
+        let objects = match objects.kind {
+            EventKind::Browse { children, .. } => children,
+            other => panic!("objects browse failed: {other:?}"),
+        };
+        let ids = |nodes: &[BrowseNode]| {
+            nodes
                 .iter()
-                .filter(|n| n.kind != NodeKind::Item)
-                .collect::<Vec<_>>()
-        );
+                .map(|node| node.node_id.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        let mut expected = variables_in_root;
+        expected.extend(ids(&objects));
         assert_eq!(
-            filtered_children.len(),
-            variables_in_root.len(),
-            "variable-filtered browse must match the unfiltered Variable set",
+            ids(&filtered_children),
+            expected,
+            "Variables must return exactly Variables plus navigation Objects",
         );
     });
 }

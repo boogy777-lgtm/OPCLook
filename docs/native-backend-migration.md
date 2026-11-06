@@ -1,5 +1,20 @@
 # R2.NATIVE — обязательная миграция на нативные OPC-клиентские библиотеки
 
+**N6 PARTIAL / exact-head CI pending (2026-11-05):**
+[построчный индекс](testing/acquisition-evidence-matrix.md) и
+[CI checklist](testing/n6-exact-head-ci.md). Текущая база `b4bc724` с
+незакоммиченными N3/N4/N5/N6 изменениями не имеет точного commit SHA.
+
+**N1.LICENSE — CLOSED BY OWNER DECISION (2026-11-05):** это не юридический
+анализ; grant и release notices остаются неразрешёнными.
+
+**N4 CLOSED, production switch (2026-11-05):** Windows DA всегда использует
+native Softing adapter; legacy OPC COM data-plane удалён. Vendored no-hook x86
+bridge позволяет собирать проект без `SOFTING_RUNTIME_LIB_DIR`. Локальные
+fixture gates и discovery regression пройдены. Remote OPCEnum/DCOM/auth,
+независимый vendor/physical DA и production Async остаются внешними
+residuals; [N4 readiness](testing/native-sdk/n4-switch-readiness.md).
+
 Дата: 2026-10-30. Основание: прямое указание владельца проекта.
 Статус: требование и план миграции; замена runtime этим коммитом не выполнена.
 Вход: [routing table](llm-update-routing.md).
@@ -116,6 +131,28 @@ license closure ещё требуют проверки. Production DA не за�
 | N5 | UA: использовать имеющийся SDK API/config, удалить доказанные дубликаты |
 | N6 | Настройки соединения, truth tables, status/devlog/audit и CI точного HEAD |
 
+### Статус 2026-11-05
+
+**N3.LIFETIME — CLOSED, local fixture scope.** Реальные Win32 SDK/COM тесты
+reconnect 1/1, remove/re-add 1/1, session isolation 1/1, pending shutdown 1/1,
+strict cleanup PASS; покрыт held callback через Disconnect и same-ID новый
+Connect/registration. Remote/vendor/other-server остаются внешними гейтами.
+
+**N5 — CLOSED, audit scope.** Locked `async-opcua` 0.19 свёрнут с
+O01–O28/OF01–OF12; второго Publish/ACK/Republish/Transfer/alias owner нет;
+мёртвый wrapper `report_negotiated` удалён; requested/revised lifetime/keepalive
+наблюдаемы в CLI/UI. Остаточные protocol gaps перечислены в
+[карте](testing/ua-n5-partial-audit.md) и отнесены к R2.6/recovery.
+
+**N4 — CLOSED, production switch.** Windows DA selector всегда использует
+`softing_da.rs`; legacy `da.rs`, `com.rs`, `da_variant.rs` и `opc/` удалены.
+Vendored no-hook x86 bridge из pinned SDK с двумя patches и official OPCF
+inputs лежит в `native/softing-da/lib/i686-pc-windows-msvc`; `build.rs`
+использует его без `SOFTING_RUNTIME_LIB_DIR`. Локальные gates: gateway 1/1,
+reconnect 1/1, remove/re-add 1/1, isolation 1/1, pending shutdown 1/1,
+strict cleanup PASS. Remote/vendor DA и production Async остаются внешними
+residuals, не блокирующими production switch; [N4 readiness](testing/native-sdk/n4-switch-readiness.md).
+
 Не вводить два постоянных backend одновременно для одних и тех же тегов.
 Изолированное сравнение на тестовом сервере разрешено.
 Удаление старых файлов идёт только после анализа их использования; системные
@@ -136,3 +173,9 @@ Production paths UA и DA используют native SDK. В OPCLook не ос�
 mapping VT_I4. Empty callback сохраняет envelope; сырой per-item HRESULT ещё
 не связан с terminal Event. Последний callback не является очередью. Реальное
 FFI wiring, session identity и live interop не доказаны; N2/N3/N4 открыты.
+### N4 update 2026-11-05
+
+Windows DA uses the native SDK with the vendored x86 bridge and no legacy
+fallback. The production switch and local gates are closed; remote/vendor DA and
+production Async remain external residuals. N1.LICENSE is closed by owner
+decision, not legal analysis.
