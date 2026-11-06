@@ -22,7 +22,7 @@ fn fixture() -> App {
                 requested_publishing_ms: 1000,
                 requested_lifetime: 30,
                 requested_keepalive: 10,
-                revised: Some(UaRevisedSubscription::from_sdk(1250, 30, 10)),
+                revised: Some(UaRevisedSubscription::from_sdk(1250, 10, 10)),
                 items: vec![UaMonitoredParameters {
                     key: ItemKey::FIRST,
                     requested_sampling_ms: -1.0,
@@ -50,12 +50,49 @@ fn requested_and_revised_values_are_visible_without_dispatch() {
             .is_some()
     );
     assert!(
+        h.query_by_label("Lifetime: requested 30, revised 10; keepalive: requested 10, revised 10")
+            .is_some()
+    );
+    assert!(
+        h.query_by_label("Revised parameters are invalid for scheduling")
+            .is_some()
+    );
+    assert!(
         h.query_by_label(
             "Key 1: sampling requested -1, revised 125.5; queue requested 2, revised 3"
         )
         .is_some()
     );
     assert!(h.state().dispatched_for_test().is_empty());
+}
+
+#[test]
+fn missing_revised_counts_are_shown_as_unknown() {
+    let mut app = fixture();
+    app.on_event_for_test_at(
+        SessionId::FIRST,
+        EventKind::UaSubscriptionParameters {
+            subscriptions: vec![UaSubscriptionParameters {
+                subscription_id: 17,
+                requested_publishing_ms: 1000,
+                requested_lifetime: 30,
+                requested_keepalive: 10,
+                revised: None,
+                items: Vec::new(),
+            }],
+        },
+    );
+    let mut h = Harness::builder()
+        .with_size([1200.0, 900.0])
+        .with_accessibility_check(false)
+        .allow_missing_glyphs()
+        .build_ui_state(|ui, app: &mut App| opclook::ui::draw(app, ui), app);
+    h.run_steps(8);
+    assert!(h.query_by_label("Lifetime: requested 30, revised No SDK facts available; keepalive: requested 10, revised No SDK facts available").is_some());
+    assert!(
+        h.query_by_label("Revised parameters are invalid for scheduling")
+            .is_none()
+    );
 }
 
 #[cfg(feature = "ui-snapshots")]

@@ -86,6 +86,30 @@ pub(super) fn acquisition_dialog(app: &mut App, ui: &mut egui::Ui) {
                             Tr::UaPublishingFacts,
                             &[&sub.requested_publishing_ms, &revised],
                         ));
+                        let unknown = tr(lang, Tr::UaNegotiatedUnknown);
+                        let lifetime = sub
+                            .revised
+                            .as_ref()
+                            .map(|v| v.lifetime.to_string())
+                            .unwrap_or_else(|| unknown.to_string());
+                        let keepalive = sub
+                            .revised
+                            .as_ref()
+                            .map(|v| v.keepalive.to_string())
+                            .unwrap_or_else(|| unknown.to_string());
+                        ui.label(fmt(
+                            lang,
+                            Tr::UaSubscriptionCounts,
+                            &[
+                                &sub.requested_lifetime,
+                                &lifetime,
+                                &sub.requested_keepalive,
+                                &keepalive,
+                            ],
+                        ));
+                        if sub.revised.as_ref().is_some_and(|v| !v.valid) {
+                            ui.label(tr(lang, Tr::UaRevisedInvalid));
+                        }
                         egui::ScrollArea::vertical()
                             .id_salt(("ua-negotiated-items", sub.subscription_id))
                             .max_height(120.0)

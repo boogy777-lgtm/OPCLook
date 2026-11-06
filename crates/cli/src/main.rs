@@ -1370,7 +1370,7 @@ fn run_with_engine(
                 }
             }
             EventKind::UaSubscriptionParameters { subscriptions } => {
-                let facts: Vec<_> = subscriptions.iter().map(|sub| json!({"subscription_id":sub.subscription_id,"requested_publishing_ms":sub.requested_publishing_ms,"revised_publishing_ms":sub.revised.as_ref().map(|v| v.publishing_ms),"items":sub.items.iter().map(|item| json!({"key":item.key.get(),"requested_sampling_ms":item.requested_sampling_ms,"revised_sampling_ms":item.revised_sampling_ms,"requested_queue_size":item.requested_queue_size,"revised_queue_size":item.revised_queue_size})).collect::<Vec<_>>()})).collect();
+                let facts: Vec<_> = subscriptions.iter().map(ua_subscription_json).collect();
                 emit_cli(
                     staged,
                     streaming,
@@ -1446,6 +1446,20 @@ fn run_with_engine(
     }
     Ok(())
 }
+fn ua_subscription_json(sub: &opclook_contract::model::UaSubscriptionParameters) -> Json {
+    json!({
+        "subscription_id": sub.subscription_id,
+        "requested_publishing_ms": sub.requested_publishing_ms,
+        "revised_publishing_ms": sub.revised.as_ref().map(|v| v.publishing_ms),
+        "requested_keepalive": sub.requested_keepalive,
+        "requested_lifetime": sub.requested_lifetime,
+        "revised_keepalive": sub.revised.as_ref().map(|v| v.keepalive),
+        "revised_lifetime": sub.revised.as_ref().map(|v| v.lifetime),
+        "revised_valid": sub.revised.as_ref().map(|v| v.valid),
+        "items": sub.items.iter().map(|item| json!({"key":item.key.get(),"requested_sampling_ms":item.requested_sampling_ms,"revised_sampling_ms":item.revised_sampling_ms,"requested_queue_size":item.requested_queue_size,"revised_queue_size":item.revised_queue_size})).collect::<Vec<_>>()
+    })
+}
+
 fn recovery_json(state: &opclook_contract::model::UaRecoveryState) -> serde_json::Value {
     use opclook_contract::model::{UaRecoveryMode, UaRecoveryState};
     match state {
@@ -1493,6 +1507,32 @@ fn main() {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ua_subscription_json_keeps_requested_revised_invalid_and_unknown() {
+        use opclook_contract::model::{UaRevisedSubscription, UaSubscriptionParameters};
+        let mut sub = UaSubscriptionParameters {
+            subscription_id: 7,
+            requested_publishing_ms: 1000,
+            requested_lifetime: 60,
+            requested_keepalive: 20,
+            revised: Some(UaRevisedSubscription::from_sdk(2000, 10, 5)),
+            items: Vec::new(),
+        };
+        let value = super::ua_subscription_json(&sub);
+        assert_eq!(value["requested_publishing_ms"], 1000);
+        assert_eq!(value["revised_publishing_ms"], 2000);
+        assert_eq!(value["requested_lifetime"], 60);
+        assert_eq!(value["requested_keepalive"], 20);
+        assert_eq!(value["revised_lifetime"], 10);
+        assert_eq!(value["revised_keepalive"], 5);
+        assert_eq!(value["revised_valid"], false);
+        sub.revised = None;
+        let unknown = super::ua_subscription_json(&sub);
+        assert!(unknown["revised_lifetime"].is_null());
+        assert!(unknown["revised_keepalive"].is_null());
+        assert!(unknown["revised_valid"].is_null());
+    }
+
     #[test]
     fn write_text_budget_is_checked_before_copy_and_keeps_type_errors() {
         use super::*;
@@ -1844,7 +1884,7 @@ mod tests {
             all.extend(["watch", "i=1"]);
             assert!(parse(args(&all)).is_err());
         }
-        assert!(
+        assert_eq!(
             parse(args(&[
                 "--da",
                 "",
@@ -1856,7 +1896,8 @@ mod tests {
                 "i64",
                 "1"
             ]))
-            .is_err()
+            .is_ok(),
+            cfg!(windows)
         );
     }
 

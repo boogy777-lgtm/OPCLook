@@ -530,6 +530,8 @@ translation_keys! {
     UaSamplingDefaultHint,
     UaNegotiatedUnknown,
     UaPublishingFacts,
+    UaSubscriptionCounts,
+    UaRevisedInvalid,
     UaSamplingFacts,
     CanonicalDaType,
     ServerDataType,
@@ -1365,6 +1367,10 @@ fn ru(key: Tr) -> &'static str {
         UaSamplingDefaultHint => "−1 запрашивает интервал публикации подписки",
         UaNegotiatedUnknown => "Нет сведений SDK",
         UaPublishingFacts => "Публикация: запрос {0}, пересмотрено {1}",
+        UaSubscriptionCounts => {
+            "Время жизни: запрос {0}, пересмотрено {1}; keepalive: запрос {2}, пересмотрено {3}"
+        }
+        UaRevisedInvalid => "Пересмотренные параметры недопустимы для планирования",
         UaSamplingFacts => {
             "Ключ {0}: выборка запрос {1}, пересмотрено {2}; очередь запрос {3}, пересмотрено {4}"
         }
@@ -2121,6 +2127,10 @@ fn en(key: Tr) -> &'static str {
         UaSamplingDefaultHint => "−1 requests the subscription publishing interval",
         UaNegotiatedUnknown => "No SDK facts available",
         UaPublishingFacts => "Publishing: requested {0}, revised {1}",
+        UaSubscriptionCounts => {
+            "Lifetime: requested {0}, revised {1}; keepalive: requested {2}, revised {3}"
+        }
+        UaRevisedInvalid => "Revised parameters are invalid for scheduling",
         UaSamplingFacts => {
             "Key {0}: sampling requested {1}, revised {2}; queue requested {3}, revised {4}"
         }
@@ -2843,6 +2853,8 @@ fn zh(key: Tr) -> &'static str {
         UaSamplingDefaultHint => "−1 请求使用订阅发布间隔",
         UaNegotiatedUnknown => "没有 SDK 数据",
         UaPublishingFacts => "发布：请求 {0}，修订 {1}",
+        UaSubscriptionCounts => "生命周期：请求 {0}，修订 {1}；保活：请求 {2}，修订 {3}",
+        UaRevisedInvalid => "修订参数不适用于调度",
         UaSamplingFacts => "键 {0}：采样请求 {1}，修订 {2}；队列请求 {3}，修订 {4}",
         ReadOnly => "信号为只读 (无法写入)",
         CanonicalDaType => "规范 DA 类型: {0}",

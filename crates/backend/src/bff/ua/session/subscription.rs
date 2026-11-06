@@ -804,11 +804,6 @@ impl UaSession {
     }
 
     /// Publish only facts held by the SDK, scoped to this connection epoch.
-    pub(in crate::bff::ua) fn report_negotiated(&self, tx: &Sender<Event>) {
-        let revision = self.recovery.borrow().0;
-        self.report_negotiated_at(tx, revision);
-    }
-
     pub(in crate::bff::ua) fn report_negotiated_at(&self, tx: &Sender<Event>, revision: u64) {
         use crate::bff::model::{
             UaMonitoredParameters, UaRevisedSubscription, UaSubscriptionParameters,

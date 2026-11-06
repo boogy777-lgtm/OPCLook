@@ -1,5 +1,11 @@
 # R2.6 / R07 UA recovery: acceptance ledger
 
+N5 is **CLOSED in its SDK ownership/audit scope**: the [N5 O/OF map](ua-n5-partial-audit.md)
+records owners, evidence and explicit gaps, and no second Publish/recovery/alias
+owner was found. The residual recovery/protocol gaps below remain open for
+R2.6/R07; N5 closure does not replace this ledger's production recovery gates or
+claim full CODESYS-specific negotiated/filter/limits/initial acceptance.
+
 **Scope and source:** this ledger separates current application behavior from experiments updated on 2026-10-31, including the reviewed readiness/drain research packet. It is not a claim that the whole R2.6/R07 plan is complete. The application uses the locked crates.io `async-opcua` client 0.19; the installed client VCS receipt identifies `9ad28fc011002398f2e8a95696a50408a14531d9` ([source audit](ua-sdk-0.19-recovery-audit.md)). The SDK owns UA connection, Publish, callback and subscription transfer/recreation. OPCLook does not add an independent Publish or replay owner.
 
 **Evidence labels:** “source” is inspected code; “unit” is an actual code-path test with a controlled boundary; “live” is a measured local SDK/sample-server run; “research” means an isolated, unshipped patch or test stand. Live results are individual measured scenarios, not guarantees for all servers or platforms. None of the research SDK or server patches changes the production pin.
